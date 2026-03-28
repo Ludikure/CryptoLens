@@ -34,37 +34,37 @@ struct IndicatorTableView: View {
                 .background(Color(.systemGray5))
 
                 // Rows
-                row("RSI") { r in
+                row("RSI", tooltip: Tooltips.rsi) { r in
                     if let rsi = r.rsi {
                         Text(String(format: "%.1f", rsi))
                             .foregroundStyle(rsiColor(rsi))
                     } else { dash }
                 }
-                row("Stoch RSI") { r in
+                row("Stoch RSI", tooltip: Tooltips.stochRSI) { r in
                     if let s = r.stochRSI {
                         Text("\(Int(s.k))/\(Int(s.d))")
                             .foregroundStyle(rsiColor(s.k))
                     } else { dash }
                 }
-                row("MACD Hist") { r in
+                row("MACD Hist", tooltip: Tooltips.macd) { r in
                     if let m = r.macd {
                         Text(String(format: "%.1f", m.histogram))
                             .foregroundStyle(m.histogram > 0 ? .green : .red)
                     } else { dash }
                 }
-                row("ADX") { r in
+                row("ADX", tooltip: Tooltips.adx) { r in
                     if let a = r.adx {
                         Text("\(Int(a.adx)) \(a.direction == "Bullish" ? "↑" : "↓")")
                             .foregroundStyle(a.direction == "Bullish" ? .green : .red)
                     } else { dash }
                 }
-                row("BB %B") { r in
+                row("BB %B", tooltip: Tooltips.bollingerBands) { r in
                     if let bb = r.bollingerBands {
                         Text(String(format: "%.2f", bb.percentB))
                             .foregroundStyle(bb.percentB > 1 ? .red : (bb.percentB < 0 ? .green : .primary))
                     } else { dash }
                 }
-                row("Volume") { r in
+                row("Volume", tooltip: Tooltips.volume) { r in
                     if let vol = r.volumeRatio {
                         Text(String(format: "%.1fx", vol))
                             .foregroundStyle(vol > 2 ? .orange : .primary)
@@ -81,7 +81,7 @@ struct IndicatorTableView: View {
                         }
                     } else { dash }
                 }
-                row("Divergence", isLast: !hasStockIndicators) { r in
+                row("Divergence", tooltip: Tooltips.divergence, isLast: !hasStockIndicators) { r in
                     if let div = r.divergence {
                         Text(div.contains("bullish") ? "Bull ⚡" : "Bear ⚡")
                             .foregroundStyle(div.contains("bullish") ? .green : .red)
@@ -140,11 +140,16 @@ struct IndicatorTableView: View {
     }
 
     @ViewBuilder
-    private func row(_ label: String, isLast: Bool = false, @ViewBuilder value: @escaping (IndicatorResult) -> some View) -> some View {
+    private func row(_ label: String, tooltip: String? = nil, isLast: Bool = false, @ViewBuilder value: @escaping (IndicatorResult) -> some View) -> some View {
         HStack(spacing: 0) {
-            Text(label)
-                .foregroundStyle(.secondary)
-                .frame(width: 76, alignment: .leading)
+            HStack(spacing: 3) {
+                Text(label)
+                    .foregroundStyle(.secondary)
+                if let tip = tooltip {
+                    InfoTooltip(title: label, explanation: tip)
+                }
+            }
+            .frame(width: 76, alignment: .leading)
             ForEach(results) { r in
                 value(r)
                     .frame(maxWidth: .infinity)

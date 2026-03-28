@@ -104,6 +104,32 @@ class AnalysisService: ObservableObject {
                 stockSentiment = await yahoo.fetchStockSentiment(symbol: symbol)
             }
 
+            // Enhanced stock fundamentals
+            if var si = stockInfo, market == .stock {
+                if let enhanced = await yahoo.fetchEnhancedFundamentals(symbol: symbol) {
+                    si.analystTargetMean = enhanced["targetMeanPrice"] as? Double
+                    si.analystTargetHigh = enhanced["targetHighPrice"] as? Double
+                    si.analystTargetLow = enhanced["targetLowPrice"] as? Double
+                    si.analystCount = enhanced["numberOfAnalystOpinions"] as? Int
+                    si.analystRating = enhanced["recommendationKey"] as? String
+                    si.analystRatingScore = enhanced["recommendationMean"] as? Double
+                    si.revenueGrowthYoY = (enhanced["revenueGrowth"] as? Double).map { $0 * 100 }
+                    si.earningsGrowthYoY = (enhanced["earningsGrowth"] as? Double).map { $0 * 100 }
+                    si.consecutiveBeats = enhanced["consecutiveBeats"] as? Int
+                    si.avgEarningsSurprise = enhanced["avgSurprise"] as? Double
+                    si.lastEarningsSurprise = enhanced["lastSurprise"] as? Double
+                    si.insiderBuyCount6m = enhanced["insiderBuys"] as? Int
+                    si.insiderSellCount6m = enhanced["insiderSells"] as? Int
+                    si.insiderNetBuying = enhanced["insiderNetBuying"] as? Bool
+                }
+                if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
+                    si.sectorETF = comp.etf
+                    si.relativeStrength1d = comp.relStrength
+                    si.outperformingSector = comp.outperforming
+                }
+                stockInfo = si
+            }
+
             // Crypto derivatives (fails gracefully if geo-blocked)
             var derivData: DerivativesData? = nil
             var positioning: PositioningSnapshot? = nil
@@ -166,6 +192,32 @@ class AnalysisService: ObservableObject {
             if stockInfo != nil && market == .stock {
                 stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
                 stockSentiment = await yahoo.fetchStockSentiment(symbol: symbol)
+            }
+
+            // Enhanced stock fundamentals
+            if var si = stockInfo, market == .stock {
+                if let enhanced = await yahoo.fetchEnhancedFundamentals(symbol: symbol) {
+                    si.analystTargetMean = enhanced["targetMeanPrice"] as? Double
+                    si.analystTargetHigh = enhanced["targetHighPrice"] as? Double
+                    si.analystTargetLow = enhanced["targetLowPrice"] as? Double
+                    si.analystCount = enhanced["numberOfAnalystOpinions"] as? Int
+                    si.analystRating = enhanced["recommendationKey"] as? String
+                    si.analystRatingScore = enhanced["recommendationMean"] as? Double
+                    si.revenueGrowthYoY = (enhanced["revenueGrowth"] as? Double).map { $0 * 100 }
+                    si.earningsGrowthYoY = (enhanced["earningsGrowth"] as? Double).map { $0 * 100 }
+                    si.consecutiveBeats = enhanced["consecutiveBeats"] as? Int
+                    si.avgEarningsSurprise = enhanced["avgSurprise"] as? Double
+                    si.lastEarningsSurprise = enhanced["lastSurprise"] as? Double
+                    si.insiderBuyCount6m = enhanced["insiderBuys"] as? Int
+                    si.insiderSellCount6m = enhanced["insiderSells"] as? Int
+                    si.insiderNetBuying = enhanced["insiderNetBuying"] as? Bool
+                }
+                if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
+                    si.sectorETF = comp.etf
+                    si.relativeStrength1d = comp.relStrength
+                    si.outperformingSector = comp.outperforming
+                }
+                stockInfo = si
             }
 
             // Crypto derivatives

@@ -84,6 +84,14 @@ enum AnalysisPrompt {
             - 52-WEEK POSITION: Context for S/R and trend health.
             - EARNINGS: Within 2 weeks = flag it. Setups can be invalidated by earnings regardless of technicals.
             These update daily/biweekly, not real-time. Factor in staleness.
+
+            ENHANCED FUNDAMENTALS (if provided):
+            - ANALYST TARGETS: Price below target = institutional upside expected. Near/above = limited upside, need catalyst.
+            - EARNINGS HISTORY: Consecutive beats raise the bar. Approaching earnings within 2 weeks = flag risk.
+            - GROWTH: Accelerating revenue + pullback = high conviction dip buy. Declining growth + breakdown = confirms weakness.
+            - SECTOR: Outperforming sector = relative strength, dips get bought. Underperforming = something wrong, rallies get sold.
+            - INSIDER BUYING: Cluster buying is the strongest fundamental buy signal. Weight heavily if at technical support.
+            Fundamentals don't override technicals — they add conviction or caution.
             """
         }
     }
@@ -134,6 +142,36 @@ enum AnalysisPrompt {
                 if days > 0 { parts.append("Earnings in \(days)d") }
             }
             lines.append("Fundamentals: \(parts.joined(separator: " | "))")
+
+            // Analyst targets
+            if let target = si.analystTargetMean, let count = si.analystCount {
+                let currentPrice = indicators.first?.price ?? 0
+                let pctFromTarget = currentPrice > 0 ? ((target - currentPrice) / currentPrice) * 100 : 0
+                var analystLine = "Analysts: \(count) covering, Mean Target \(Formatters.formatPrice(target)) (\(Formatters.formatPercent(pctFromTarget)))"
+                if let rating = si.analystRating { analystLine += ", Rating: \(rating)" }
+                lines.append(analystLine)
+            }
+            // Earnings history
+            if let beats = si.consecutiveBeats {
+                var earningsLine = "Earnings: Beat \(beats)/4 quarters"
+                if let avg = si.avgEarningsSurprise { earningsLine += ", Avg Surprise \(Formatters.formatPercent(avg))" }
+                lines.append(earningsLine)
+            }
+            // Growth
+            if let revGrowth = si.revenueGrowthYoY {
+                var growthLine = "Growth: Revenue \(Formatters.formatPercent(revGrowth)) YoY"
+                if let trend = si.growthTrend { growthLine += " (\(trend))" }
+                if let epsGrowth = si.earningsGrowthYoY { growthLine += " | EPS \(Formatters.formatPercent(epsGrowth)) YoY" }
+                lines.append(growthLine)
+            }
+            // Insider activity
+            if let buys = si.insiderBuyCount6m, let sells = si.insiderSellCount6m {
+                lines.append("Insiders (6mo): \(buys) buys / \(sells) sells — \(si.insiderNetBuying == true ? "Net buying" : "Net selling")")
+            }
+            // Sector comparison
+            if let etf = si.sectorETF, let rs = si.relativeStrength1d {
+                lines.append("Sector: \(si.sector ?? "N/A") (\(etf)) — \(si.outperformingSector == true ? "Outperforming" : "Underperforming") by \(Formatters.formatPercent(abs(rs)))")
+            }
         }
 
         // Stock sentiment (stocks only)

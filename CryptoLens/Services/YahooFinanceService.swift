@@ -183,6 +183,114 @@ class YahooFinanceService {
         } catch { return nil }
     }
 
+    // MARK: - Enhanced Fundamentals
+
+    private static let sectorETFs: [String: String] = [
+        "Technology": "XLK", "Healthcare": "XLV", "Financial Services": "XLF",
+        "Consumer Cyclical": "XLY", "Consumer Defensive": "XLP", "Energy": "XLE",
+        "Industrials": "XLI", "Basic Materials": "XLB", "Utilities": "XLU",
+        "Real Estate": "XLRE", "Communication Services": "XLC",
+    ]
+
+    /// Fetch enhanced fundamentals from quoteSummary (analyst targets, earnings history, insider transactions, growth).
+    func fetchEnhancedFundamentals(symbol: String) async -> [String: Any]? {
+        let modules = "financialData,earningsHistory,insiderTransactions,defaultKeyStatistics,price"
+        guard let url = URL(string: "\(Constants.yahooBaseURL)/v10/finance/quoteSummary/\(symbol)?modules=\(modules)") else { return nil }
+        do {
+            let (data, _) = try await session.data(from: url)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let qs = json["quoteSummary"] as? [String: Any],
+                  let results = qs["result"] as? [[String: Any]],
+                  let first = results.first else { return nil }
+
+            var out = [String: Any]()
+
+            // financialData: analyst targets, recommendation, growth
+            if let fd = first["financialData"] as? [String: Any] {
+                if let v = fd["targetMeanPrice"] as? [String: Any] { out["targetMeanPrice"] = v["raw"] as? Double }
+                if let v = fd["targetHighPrice"] as? [String: Any] { out["targetHighPrice"] = v["raw"] as? Double }
+                if let v = fd["targetLowPrice"] as? [String: Any] { out["targetLowPrice"] = v["raw"] as? Double }
+                if let v = fd["numberOfAnalystOpinions"] as? [String: Any] { out["numberOfAnalystOpinions"] = v["raw"] as? Int }
+                if let v = fd["recommendationMean"] as? [String: Any] { out["recommendationMean"] = v["raw"] as? Double }
+                out["recommendationKey"] = fd["recommendationKey"] as? String
+                if let v = fd["revenueGrowth"] as? [String: Any] { out["revenueGrowth"] = v["raw"] as? Double }
+                if let v = fd["earningsGrowth"] as? [String: Any] { out["earningsGrowth"] = v["raw"] as? Double }
+            }
+
+            // earningsHistory: consecutive beats, avg surprise
+            if let eh = first["earningsHistory"] as? [String: Any],
+               let history = eh["history"] as? [[String: Any]] {
+                var beats = 0
+                var totalSurprise = 0.0
+                var count = 0
+                var lastSurprise: Double?
+                // History is ordered oldest→newest
+                var consecutiveFromRecent = 0
+                var stillCounting = true
+                for quarter in history.reversed() {
+                    let estimate = (quarter["epsEstimate"] as? [String: Any])?["raw"] as? Double
+                    let actual = (quarter["epsActual"] as? [String: Any])?["raw"] as? Double
+                    let surprise = (quarter["surprisePercent"] as? [String: Any])?["raw"] as? Double
+                    if count == 0 { lastSurprise = surprise }
+                    if let s = surprise {
+                        totalSurprise += s
+                        count += 1
+                    }
+                    if let est = estimate, let act = actual, act > est {
+                        beats += 1
+                        if stillCounting { consecutiveFromRecent += 1 }
+                    } else {
+                        stillCounting = false
+                    }
+                }
+                out["consecutiveBeats"] = consecutiveFromRecent
+                out["avgSurprise"] = count > 0 ? (totalSurprise / Double(count)) * 100 : nil
+                out["lastSurprise"] = lastSurprise.map { $0 * 100 }
+            }
+
+            // insiderTransactions: count buys vs sells in last 6 months
+            if let it = first["insiderTransactions"] as? [String: Any],
+               let transactions = it["transactions"] as? [[String: Any]] {
+                let sixMonthsAgo = Date().addingTimeInterval(-180 * 24 * 3600)
+                var buys = 0
+                var sells = 0
+                for tx in transactions {
+                    if let dateDict = tx["startDate"] as? [String: Any],
+                       let raw = dateDict["raw"] as? Int {
+                        let txDate = Date(timeIntervalSince1970: Double(raw))
+                        guard txDate >= sixMonthsAgo else { continue }
+                    }
+                    if let shares = tx["shares"] as? [String: Any],
+                       let shareCount = shares["raw"] as? Int {
+                        if shareCount > 0 { buys += 1 }
+                        else if shareCount < 0 { sells += 1 }
+                    }
+                }
+                out["insiderBuys"] = buys
+                out["insiderSells"] = sells
+                out["insiderNetBuying"] = buys > sells
+            }
+
+            return out.isEmpty ? nil : out
+        } catch { return nil }
+    }
+
+    /// Compare stock 1-day performance vs sector ETF.
+    func fetchSectorComparison(symbol: String, sector: String?) async -> (etf: String, relStrength: Double, outperforming: Bool)? {
+        guard let sector = sector, let etf = Self.sectorETFs[sector] else { return nil }
+        do {
+            async let stockCandles = fetchCandles(symbol: symbol, interval: "1d", range: "5d")
+            async let etfCandles = fetchCandles(symbol: etf, interval: "1d", range: "5d")
+            let sc = try await stockCandles
+            let ec = try await etfCandles
+            guard sc.count >= 2, ec.count >= 2 else { return nil }
+            let stockChange = ((sc.last!.close - sc[sc.count - 2].close) / sc[sc.count - 2].close) * 100
+            let etfChange = ((ec.last!.close - ec[ec.count - 2].close) / ec[ec.count - 2].close) * 100
+            let relStrength = stockChange - etfChange
+            return (etf: etf, relStrength: relStrength, outperforming: relStrength > 0)
+        } catch { return nil }
+    }
+
     // MARK: - Private
 
     private func defaultRange(for interval: String) -> String {

@@ -53,9 +53,10 @@ struct DerivativesCardView: View {
 
     private var fundingRow: some View {
         HStack {
-            Text("Funding Rate")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text("Funding Rate").font(.subheadline).foregroundStyle(.secondary)
+                InfoTooltip(title: "Funding Rate", explanation: Tooltips.fundingRate)
+            }
             Spacer()
             Text(formatPercent(data.fundingRatePercent))
                 .font(.subheadline.monospacedDigit())
@@ -65,9 +66,10 @@ struct DerivativesCardView: View {
 
     private var openInterestRow: some View {
         HStack {
-            Text("Open Interest")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text("Open Interest").font(.subheadline).foregroundStyle(.secondary)
+                InfoTooltip(title: "Open Interest", explanation: Tooltips.openInterest)
+            }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text(formatLargeUSD(data.openInterestUSD))
@@ -84,9 +86,10 @@ struct DerivativesCardView: View {
     private var longShortRow: some View {
         VStack(spacing: 4) {
             HStack {
-                Text("L/S Ratio")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 3) {
+                    Text("L/S Ratio").font(.subheadline).foregroundStyle(.secondary)
+                    InfoTooltip(title: "Long/Short Ratio", explanation: Tooltips.longShortRatio)
+                }
                 Spacer()
                 Text("\(String(format: "%.1f", data.globalLongPercent))% / \(String(format: "%.1f", data.globalShortPercent))%")
                     .font(.subheadline.monospacedDigit())
@@ -106,9 +109,10 @@ struct DerivativesCardView: View {
 
     private var topTraderRow: some View {
         HStack {
-            Text("Top Traders")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text("Top Traders").font(.subheadline).foregroundStyle(.secondary)
+                InfoTooltip(title: "Top Trader Ratio", explanation: Tooltips.topTraderRatio)
+            }
             Spacer()
             Text("\(String(format: "%.1f", data.topTraderLongPercent))%L / \(String(format: "%.1f", data.topTraderShortPercent))%S")
                 .font(.subheadline.monospacedDigit())
@@ -118,9 +122,10 @@ struct DerivativesCardView: View {
 
     private var takerFlowRow: some View {
         HStack {
-            Text("Taker Flow")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 3) {
+                Text("Taker Flow").font(.subheadline).foregroundStyle(.secondary)
+                InfoTooltip(title: "Taker Volume", explanation: Tooltips.takerVolume)
+            }
             Spacer()
             Text(String(format: "%.2f", data.takerBuySellRatio))
                 .font(.subheadline.monospacedDigit())

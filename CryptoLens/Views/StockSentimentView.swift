@@ -12,8 +12,10 @@ struct StockSentimentView: View {
             // VIX
             if let vix = sentiment.vix {
                 HStack {
-                    Text("VIX")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        Text("VIX").font(.caption).foregroundStyle(.secondary)
+                        InfoTooltip(title: "VIX", explanation: Tooltips.vix)
+                    }
                     Spacer()
                     Text(String(format: "%.1f", vix))
                         .font(.callout).fontWeight(.semibold)
@@ -30,8 +32,10 @@ struct StockSentimentView: View {
             // Short Interest
             if let shortPct = sentiment.shortPercentOfFloat {
                 HStack {
-                    Text("Short Interest")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        Text("Short Interest").font(.caption).foregroundStyle(.secondary)
+                        InfoTooltip(title: "Short Interest", explanation: Tooltips.shortInterest)
+                    }
                     Spacer()
                     Text(String(format: "%.1f%% of float", shortPct))
                         .font(.caption).fontWeight(.semibold)
@@ -54,8 +58,10 @@ struct StockSentimentView: View {
             // 52-Week Position
             VStack(spacing: 4) {
                 HStack {
-                    Text("52-Week Position")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        Text("52-Week Position").font(.caption).foregroundStyle(.secondary)
+                        InfoTooltip(title: "52-Week Range", explanation: Tooltips.fiftyTwoWeekRange)
+                    }
                     Spacer()
                     Text(String(format: "%.0f%%", sentiment.fiftyTwoWeekPosition))
                         .font(.caption).fontWeight(.semibold)
@@ -79,8 +85,10 @@ struct StockSentimentView: View {
             // Put/Call Ratio
             if let pcr = sentiment.putCallRatio {
                 HStack {
-                    Text("Put/Call Ratio")
-                        .font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 3) {
+                        Text("Put/Call Ratio").font(.caption).foregroundStyle(.secondary)
+                        InfoTooltip(title: "Put/Call Ratio", explanation: Tooltips.putCallRatio)
+                    }
                     Spacer()
                     Text(String(format: "%.2f", pcr))
                         .font(.caption).fontWeight(.semibold)
