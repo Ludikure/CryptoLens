@@ -17,7 +17,9 @@ enum BackgroundRefreshManager {
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
+            #if DEBUG
             print("[MarketScope] BG schedule failed: \(error)")
+            #endif
         }
     }
 

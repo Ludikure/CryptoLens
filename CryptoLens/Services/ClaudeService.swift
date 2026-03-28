@@ -10,8 +10,8 @@ class ClaudeService: AIProvider {
         self.model = model
     }
 
-    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil) async throws -> ClaudeAnalysisResponse {
-        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning, stockSentiment: stockSentiment)
+    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil, economicEvents: [EconomicEvent] = []) async throws -> ClaudeAnalysisResponse {
+        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning, stockSentiment: stockSentiment, economicEvents: economicEvents)
 
         var request = URLRequest(url: URL(string: Constants.claudeAPIURL)!)
         request.httpMethod = "POST"
@@ -53,7 +53,9 @@ class ClaudeService: AIProvider {
                 }
 
                 let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+                #if DEBUG
                 print("[MarketScope] Claude API \(code) (attempt \(attempt + 1)): \(errorBody)")
+                #endif
 
                 if code == 429 || code == 529 || code >= 500 {
                     lastError = ClaudeError.apiError(code, errorBody)

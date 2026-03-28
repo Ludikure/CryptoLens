@@ -18,6 +18,17 @@ enum YahooError: LocalizedError {
 
 class YahooFinanceService {
     private let session: URLSession
+    private var lastRequestTime: Date?
+
+    private func throttle(minInterval: TimeInterval = 1.0) async {
+        if let last = lastRequestTime {
+            let elapsed = Date().timeIntervalSince(last)
+            if elapsed < minInterval {
+                try? await Task.sleep(nanoseconds: UInt64((minInterval - elapsed) * 1_000_000_000))
+            }
+        }
+        lastRequestTime = Date()
+    }
 
     init() {
         let config = URLSessionConfiguration.default
@@ -27,6 +38,7 @@ class YahooFinanceService {
 
     /// Fetch OHLCV candles from Yahoo Finance.
     func fetchCandles(symbol: String, interval: String, range: String? = nil) async throws -> [Candle] {
+        await throttle()
         var components = URLComponents(string: "\(Constants.yahooBaseURL)/v8/finance/chart/\(symbol)")!
 
         // Default ranges per interval
@@ -50,6 +62,7 @@ class YahooFinanceService {
 
     /// Fetch stock quote with fundamentals.
     func fetchQuote(symbol: String) async throws -> StockInfo {
+        await throttle()
         var components = URLComponents(string: "\(Constants.yahooBaseURL)/v8/finance/chart/\(symbol)")!
         components.queryItems = [
             URLQueryItem(name: "interval", value: "1d"),
@@ -99,6 +112,7 @@ class YahooFinanceService {
 
     /// Fetch the next earnings date for a stock symbol.
     func fetchEarningsDate(symbol: String) async -> Date? {
+        await throttle()
         guard let url = URL(string: "\(Constants.yahooBaseURL)/v10/finance/quoteSummary/\(symbol)?modules=calendarEvents") else { return nil }
         do {
             let (data, _) = try await session.data(from: url)
@@ -117,6 +131,7 @@ class YahooFinanceService {
 
     /// Fetch stock sentiment data (short interest, VIX, 52-week position).
     func fetchStockSentiment(symbol: String) async -> StockSentimentData? {
+        await throttle()
         // Fetch quote summary for short interest
         async let summaryData = fetchQuoteSummary(symbol: symbol)
         async let vixCandles = fetchVIX()
@@ -194,6 +209,7 @@ class YahooFinanceService {
 
     /// Fetch enhanced fundamentals from quoteSummary (analyst targets, earnings history, insider transactions, growth).
     func fetchEnhancedFundamentals(symbol: String) async -> [String: Any]? {
+        await throttle()
         let modules = "financialData,earningsHistory,insiderTransactions,defaultKeyStatistics,price,earningsTrend,calendarEvents,summaryDetail"
         guard let url = URL(string: "\(Constants.yahooBaseURL)/v10/finance/quoteSummary/\(symbol)?modules=\(modules)") else { return nil }
         do {
@@ -324,6 +340,7 @@ class YahooFinanceService {
 
     /// Compare stock 1-day performance vs sector ETF.
     func fetchSectorComparison(symbol: String, sector: String?) async -> (etf: String, relStrength: Double, outperforming: Bool)? {
+        await throttle()
         guard let sector = sector, let etf = Self.sectorETFs[sector] else { return nil }
         do {
             async let stockCandles = fetchCandles(symbol: symbol, interval: "1d", range: "5d")

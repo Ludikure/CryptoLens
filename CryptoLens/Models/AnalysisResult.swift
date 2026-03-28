@@ -15,6 +15,7 @@ struct AnalysisResult: Identifiable, Codable {
     let derivatives: DerivativesData?      // Crypto only
     let positioning: PositioningSnapshot?  // Crypto only
     let stockSentiment: StockSentimentData? // Stocks only
+    let economicEvents: [EconomicEvent]
     let claudeAnalysis: String
     let tradeSetups: [TradeSetup]
 
@@ -27,6 +28,7 @@ struct AnalysisResult: Identifiable, Codable {
          tf1: IndicatorResult, tf2: IndicatorResult, tf3: IndicatorResult,
          sentiment: CoinInfo? = nil, fearGreed: FearGreedIndex? = nil, stockInfo: StockInfo? = nil,
          derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil,
+         economicEvents: [EconomicEvent] = [],
          claudeAnalysis: String, tradeSetups: [TradeSetup] = []) {
         self.id = UUID()
         self.symbol = symbol
@@ -42,7 +44,29 @@ struct AnalysisResult: Identifiable, Codable {
         self.derivatives = derivatives
         self.positioning = positioning
         self.stockSentiment = stockSentiment
+        self.economicEvents = economicEvents
         self.claudeAnalysis = claudeAnalysis
         self.tradeSetups = tradeSetups
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        symbol = try container.decode(String.self, forKey: .symbol)
+        market = try container.decode(Market.self, forKey: .market)
+        timestamp = try container.decode(Date.self, forKey: .timestamp)
+        analysisTimestamp = try container.decodeIfPresent(Date.self, forKey: .analysisTimestamp)
+        tf1 = try container.decode(IndicatorResult.self, forKey: .tf1)
+        tf2 = try container.decode(IndicatorResult.self, forKey: .tf2)
+        tf3 = try container.decode(IndicatorResult.self, forKey: .tf3)
+        sentiment = try container.decodeIfPresent(CoinInfo.self, forKey: .sentiment)
+        fearGreed = try container.decodeIfPresent(FearGreedIndex.self, forKey: .fearGreed)
+        stockInfo = try container.decodeIfPresent(StockInfo.self, forKey: .stockInfo)
+        derivatives = try container.decodeIfPresent(DerivativesData.self, forKey: .derivatives)
+        positioning = try container.decodeIfPresent(PositioningSnapshot.self, forKey: .positioning)
+        stockSentiment = try container.decodeIfPresent(StockSentimentData.self, forKey: .stockSentiment)
+        economicEvents = (try? container.decodeIfPresent([EconomicEvent].self, forKey: .economicEvents)) ?? []
+        claudeAnalysis = try container.decode(String.self, forKey: .claudeAnalysis)
+        tradeSetups = try container.decode([TradeSetup].self, forKey: .tradeSetups)
     }
 }

@@ -5,6 +5,7 @@ class AnalysisService: ObservableObject {
     let yahoo = YahooFinanceService()
     let derivativesService = DerivativesService()
     let coinGecko = CoinGeckoService()
+    let economicCalendar = EconomicCalendarService()
     var aiProvider: AIProvider?
     @Published var providerType: AIProviderType = .claude
     var alertsStore: AlertsStore?
@@ -147,12 +148,18 @@ class AnalysisService: ObservableObject {
             var positioning: PositioningSnapshot? = nil
             if market == .crypto {
                 derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
+                #if DEBUG
                 print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
+                #endif
                 if let d = derivData {
                     positioning = PositioningAnalyzer.analyze(data: d)
+                    #if DEBUG
                     print("[MarketScope] Positioning: \(positioning?.crowding.rawValue ?? "nil"), squeeze: \(positioning?.squeezeRisk.level ?? "nil")")
+                    #endif
                 }
             }
+
+            let events = await economicCalendar.highImpactUpcoming()
 
             let previous = resultsBySymbol[symbol]
             let result = AnalysisResult(
@@ -167,6 +174,7 @@ class AnalysisService: ObservableObject {
                 derivatives: derivData,
                 positioning: positioning,
                 stockSentiment: stockSentiment,
+                economicEvents: events,
                 claudeAnalysis: previous?.claudeAnalysis ?? "",
                 tradeSetups: previous?.tradeSetups ?? []
             )
@@ -253,12 +261,18 @@ class AnalysisService: ObservableObject {
             var positioning: PositioningSnapshot? = nil
             if market == .crypto {
                 derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
+                #if DEBUG
                 print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
+                #endif
                 if let d = derivData {
                     positioning = PositioningAnalyzer.analyze(data: d)
+                    #if DEBUG
                     print("[MarketScope] Positioning: \(positioning?.crowding.rawValue ?? "nil"), squeeze: \(positioning?.squeezeRisk.level ?? "nil")")
+                    #endif
                 }
             }
+
+            let events = await economicCalendar.highImpactUpcoming()
 
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
@@ -272,7 +286,8 @@ class AnalysisService: ObservableObject {
                     stockInfo: stockInfo,
                     derivatives: derivData,
                     positioning: positioning,
-                    stockSentiment: stockSentiment
+                    stockSentiment: stockSentiment,
+                    economicEvents: events
                 )
                 claudeAnalysis = response.markdown
                 tradeSetups = response.setups
@@ -294,6 +309,7 @@ class AnalysisService: ObservableObject {
                 derivatives: derivData,
                 positioning: positioning,
                 stockSentiment: stockSentiment,
+                economicEvents: events,
                 claudeAnalysis: claudeAnalysis,
                 tradeSetups: tradeSetups
             )
@@ -363,7 +379,9 @@ class AnalysisService: ObservableObject {
                 let data = try JSONEncoder().encode(result)
                 try data.write(to: url, options: .atomic)
             } catch {
+                #if DEBUG
                 print("[MarketLens] Cache save failed: \(error)")
+                #endif
             }
         }
     }

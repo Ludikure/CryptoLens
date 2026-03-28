@@ -33,7 +33,9 @@ class BinanceService {
             URLQueryItem(name: "limit", value: String(limit)),
         ]
 
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await RetryHelper.withRetry {
+            try await self.session.data(from: components.url!)
+        }
 
         if let httpResponse = response as? HTTPURLResponse {
             if httpResponse.statusCode == 429 { throw BinanceError.rateLimited }

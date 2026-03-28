@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var apiKey = ""
     @State private var showKey = false
     @State private var autoAlerts = UserDefaults.standard.object(forKey: "auto_alerts_enabled") as? Bool ?? false
+    @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
 
     var body: some View {
         NavigationStack {
@@ -78,6 +79,15 @@ struct SettingsView: View {
                     Text("Alerts")
                 } footer: {
                     Text("When enabled, pulling to refresh analysis will automatically create price alerts for Entry, Stop Loss, and Take Profit levels from AI trade setups.")
+                }
+
+                Section("Appearance") {
+                    Picker("Theme", selection: $colorSchemeOverride) {
+                        Text("System").tag("system")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
                 }
 
                 Section("About") {

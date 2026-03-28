@@ -4,6 +4,7 @@ enum Formatters {
     private static let priceFormatter: NumberFormatter = {
         let f = NumberFormatter()
         f.numberStyle = .decimal
+        f.locale = Locale(identifier: "en_US")
         f.minimumFractionDigits = 2
         f.maximumFractionDigits = 2
         return f

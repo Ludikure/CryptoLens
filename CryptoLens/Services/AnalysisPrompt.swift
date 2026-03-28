@@ -59,6 +59,8 @@ enum AnalysisPrompt {
         ```
         If no valid setup, output empty array: `[]`
         Use actual prices from the data. This JSON is machine-parsed to create alerts.
+
+        ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them. These can invalidate any technical setup. Recommend waiting for the event to pass or adjusting stop placement for increased volatility.
         """
 
         if market == .crypto {
@@ -124,7 +126,8 @@ enum AnalysisPrompt {
 
     static func buildUserPrompt(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String,
                                 stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil,
-                                positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil) -> String {
+                                positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil,
+                                economicEvents: [EconomicEvent] = []) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         if let s = sentiment {
@@ -240,6 +243,17 @@ enum AnalysisPrompt {
             }
         }
 
+        if !economicEvents.isEmpty {
+            lines.append("")
+            lines.append("=== UPCOMING ECONOMIC EVENTS ===")
+            for event in economicEvents {
+                var line = "\(event.title) (\(event.country)) — \(event.date.formatted(date: .abbreviated, time: .shortened))"
+                if let forecast = event.forecast, !forecast.isEmpty { line += " | Exp: \(forecast)" }
+                if event.isWithin48Hours { line += " ⚠️ WITHIN 48H" }
+                lines.append(line)
+            }
+        }
+
         lines.append("")
 
         for ind in indicators {
@@ -338,7 +352,9 @@ enum AnalysisPrompt {
         do {
             return try JSONDecoder().decode([TradeSetup].self, from: data)
         } catch {
+            #if DEBUG
             print("[MarketScope] Setup parse failed: \(error)")
+            #endif
             return []
         }
     }

@@ -80,7 +80,9 @@ class AlertsStore: ObservableObject {
     static func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error = error {
+                #if DEBUG
                 print("[MarketScope] Notification permission error: \(error)")
+                #endif
             }
         }
     }

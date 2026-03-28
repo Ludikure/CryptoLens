@@ -3,6 +3,17 @@ import Foundation
 class CoinGeckoService {
     private let session: URLSession
     private var cache: [String: (info: CoinInfo, fetched: Date)] = [:]
+    private var lastRequestTime: Date?
+
+    private func throttle(minInterval: TimeInterval = 2.0) async {
+        if let last = lastRequestTime {
+            let elapsed = Date().timeIntervalSince(last)
+            if elapsed < minInterval {
+                try? await Task.sleep(nanoseconds: UInt64((minInterval - elapsed) * 1_000_000_000))
+            }
+        }
+        lastRequestTime = Date()
+    }
 
     private static var symbolToId: [String: String] {
         Dictionary(uniqueKeysWithValues: Constants.allCoins.map { ($0.id, $0.geckoId) })
@@ -16,6 +27,7 @@ class CoinGeckoService {
 
     func fetchSentiment(symbol: String) async throws -> CoinInfo? {
         guard let geckoId = Self.symbolToId[symbol] else { return nil }
+        await throttle()
 
         // Check cache
         if let cached = cache[geckoId], Date().timeIntervalSince(cached.fetched) < Constants.sentimentCacheDuration {
@@ -60,6 +72,7 @@ class CoinGeckoService {
 
     /// Fetch Fear & Greed Index from alternative.me
     func fetchFearGreed() async -> FearGreedIndex? {
+        await throttle()
         // Check cache
         if let cached = fearGreedCache, Date().timeIntervalSince(cached.1) < Constants.sentimentCacheDuration {
             return cached.0

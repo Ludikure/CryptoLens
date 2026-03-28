@@ -16,18 +16,24 @@ class DerivativesService {
         // Try Binance Futures first (full data, needs VPN in US)
         let binanceData = await fetchFromBinance(symbol: sym)
         if let data = binanceData {
+            #if DEBUG
             print("[MarketScope] Binance derivatives: OK (L/S: \(data.globalLongPercent)/\(data.globalShortPercent))")
+            #endif
 
             // If L/S is default 50/50, the /futures/data/ endpoints were geo-blocked
             if data.globalLongPercent == 50.0 && data.globalShortPercent == 50.0 {
+                #if DEBUG
                 print("[MarketScope] Binance /futures/data/ geo-blocked, supplementing with CoinGecko...")
+                #endif
                 // CoinGecko doesn't have L/S, but at least we have Binance funding + OI
             }
             return data
         }
 
         // Binance fully blocked — fall back to CoinGecko (works from US, limited data)
+        #if DEBUG
         print("[MarketScope] Binance Futures blocked, trying CoinGecko...")
+        #endif
         return await fetchFromCoinGecko(symbol: sym)
     }
 
@@ -72,7 +78,9 @@ class DerivativesService {
         do {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                #if DEBUG
                 print("[MarketScope] CoinGecko derivatives: HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+                #endif
                 return nil
             }
             guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
@@ -84,7 +92,9 @@ class DerivativesService {
                 ($0["market"] as? String)?.lowercased().contains("binance") == true &&
                 ($0["contract_type"] as? String) == "perpetual"
             }) else {
+                #if DEBUG
                 print("[MarketScope] CoinGecko: no match for \(ticker)")
+                #endif
                 return nil
             }
 
@@ -96,7 +106,9 @@ class DerivativesService {
 
             let premium = indexPrice > 0 ? ((price - indexPrice) / indexPrice) * 100 : 0
 
+            #if DEBUG
             print("[MarketScope] CoinGecko derivatives: OK (funding: \(fundingRate), OI: $\(Int(openInterestUSD)))")
+            #endif
 
             return DerivativesData(
                 fundingRate: fundingRate / 100, // CoinGecko returns as percentage
@@ -119,7 +131,9 @@ class DerivativesService {
                 takerSellVolume: 0
             )
         } catch {
+            #if DEBUG
             print("[MarketScope] CoinGecko derivatives error: \(error.localizedDescription)")
+            #endif
             return nil
         }
     }
@@ -208,12 +222,16 @@ class DerivativesService {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse else { return nil }
             guard http.statusCode == 200 else {
+                #if DEBUG
                 print("[MarketScope] HTTP \(http.statusCode) for \(url.host ?? "")\(url.path)")
+                #endif
                 return nil
             }
             return try JSONSerialization.jsonObject(with: data) as? [String: Any]
         } catch {
+            #if DEBUG
             print("[MarketScope] Network error for \(url.host ?? ""): \(error.localizedDescription)")
+            #endif
             return nil
         }
     }
@@ -224,12 +242,16 @@ class DerivativesService {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse else { return nil }
             guard http.statusCode == 200 else {
+                #if DEBUG
                 print("[MarketScope] HTTP \(http.statusCode) for \(url.host ?? "")\(url.path)")
+                #endif
                 return nil
             }
             return try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
         } catch {
+            #if DEBUG
             print("[MarketScope] Network error for \(url.host ?? ""): \(error.localizedDescription)")
+            #endif
             return nil
         }
     }

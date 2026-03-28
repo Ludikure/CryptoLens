@@ -94,7 +94,27 @@ struct AnalysisView: View {
                 // Trailing: share
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if service.lastResult != nil {
-                        ShareLink(item: shareText) {
+                        Menu {
+                            ShareLink(item: shareText) {
+                                Label("Share as Text", systemImage: "doc.text")
+                            }
+                            Button {
+                                if let result = service.lastResult,
+                                   let pdfData = renderAnalysisPDF(result: result) {
+                                    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("MarketScope_Analysis.pdf")
+                                    try? pdfData.write(to: tempURL)
+                                    if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                                       let root = scene.windows.first?.rootViewController {
+                                        var top = root
+                                        while let p = top.presentedViewController { top = p }
+                                        let vc = UIActivityViewController(activityItems: [tempURL], applicationActivities: nil)
+                                        top.present(vc, animated: true)
+                                    }
+                                }
+                            } label: {
+                                Label("Share as PDF", systemImage: "doc.richtext")
+                            }
+                        } label: {
                             Image(systemName: "square.and.arrow.up")
                         }
                     }
@@ -140,6 +160,7 @@ struct AnalysisView: View {
                                 .foregroundStyle(isSelected ? .white : .primary)
                                 .background(isSelected ? Color.accentColor : Color(.systemGray5), in: Capsule())
                         }
+                        .accessibilityLabel("\(asset.ticker), \(isSelected ? "selected" : "not selected")")
                         .id(asset.id)
                     }
                 }
@@ -168,8 +189,56 @@ struct AnalysisView: View {
         .padding()
     }
 
+    private var biasChanges: [String] {
+        guard let result = service.lastResult else { return [] }
+        let history = AnalysisHistoryStore.load(symbol: result.symbol)
+        guard history.count >= 2 else { return [] }
+        let prev = history[1] // index 0 is current, 1 is previous
+        var changes = [String]()
+        if result.tf1.bias != prev.tf1.bias { changes.append("\(result.tf1.label) flipped to \(result.tf1.bias)") }
+        if result.tf2.bias != prev.tf2.bias { changes.append("\(result.tf2.label) flipped to \(result.tf2.bias)") }
+        if result.tf3.bias != prev.tf3.bias { changes.append("\(result.tf3.label) flipped to \(result.tf3.bias)") }
+        return changes
+    }
+
     @ViewBuilder
     private func resultViews(_ result: AnalysisResult) -> some View {
+        // Stale data banner
+        if Date().timeIntervalSince(result.timestamp) > 300 {
+            let mins = Int(Date().timeIntervalSince(result.timestamp) / 60)
+            HStack(spacing: 6) {
+                Image(systemName: "clock.badge.exclamationmark")
+                    .font(.caption)
+                Text("Data from \(mins)m ago \u{00B7} Pull to refresh")
+                    .font(.caption)
+            }
+            .foregroundStyle(.orange)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+        }
+
+        // Bias changes from previous analysis
+        if !biasChanges.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(biasChanges, id: \.self) { change in
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.caption2)
+                        Text(change)
+                            .font(.caption)
+                    }
+                    .foregroundStyle(.orange)
+                }
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+        }
+
         PriceHeaderView(result: result)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
@@ -195,6 +264,12 @@ struct AnalysisView: View {
         // Derivatives positioning (crypto only)
         if let d = result.derivatives, let p = result.positioning {
             DerivativesCardView(data: d, snapshot: p)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
+        // Economic calendar
+        if !result.economicEvents.isEmpty {
+            EconomicCalendarView(events: result.economicEvents)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
@@ -329,6 +404,7 @@ struct BiasPill: View {
                 .padding(.vertical, 3)
                 .background(color, in: Capsule())
         }
+        .accessibilityLabel("\(label) bias: \(shortBias)")
     }
 }
 
@@ -399,6 +475,7 @@ private struct ConfidenceSummaryView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityLabel(summaryText)
     }
 
     private var gaugeGradient: LinearGradient {

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var alertsStore: AlertsStore
+    @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
 
     var body: some View {
         TabView {
@@ -18,5 +19,6 @@ struct ContentView: View {
                     Label("Settings", systemImage: "gear")
                 }
         }
+        .preferredColorScheme(colorSchemeOverride == "light" ? .light : colorSchemeOverride == "dark" ? .dark : nil)
     }
 }
