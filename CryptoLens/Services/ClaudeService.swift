@@ -10,8 +10,8 @@ class ClaudeService: AIProvider {
         self.model = model
     }
 
-    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil) async throws -> ClaudeAnalysisResponse {
-        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning)
+    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil) async throws -> ClaudeAnalysisResponse {
+        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning, stockSentiment: stockSentiment)
 
         var request = URLRequest(url: URL(string: Constants.claudeAPIURL)!)
         request.httpMethod = "POST"
@@ -22,7 +22,7 @@ class ClaudeService: AIProvider {
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 2500,
-            "temperature": 0.2,
+            "temperature": 0,
             "system": AnalysisPrompt.systemPrompt(market: market),
             "messages": [
                 ["role": "user", "content": prompt]

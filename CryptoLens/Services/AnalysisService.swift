@@ -98,8 +98,10 @@ class AnalysisService: ObservableObject {
             let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
             let fearGreed = await coinGecko.fetchFearGreed()
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
+            var stockSentiment: StockSentimentData? = nil
             if stockInfo != nil && market == .stock {
                 stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
+                stockSentiment = await yahoo.fetchStockSentiment(symbol: symbol)
             }
 
             // Crypto derivatives (fails gracefully if geo-blocked)
@@ -122,6 +124,7 @@ class AnalysisService: ObservableObject {
                 stockInfo: stockInfo,
                 derivatives: derivData,
                 positioning: positioning,
+                stockSentiment: stockSentiment,
                 claudeAnalysis: previous?.claudeAnalysis ?? "",
                 tradeSetups: previous?.tradeSetups ?? []
             )
@@ -159,8 +162,10 @@ class AnalysisService: ObservableObject {
             let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
             let fearGreed = await coinGecko.fetchFearGreed()
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
+            var stockSentiment: StockSentimentData? = nil
             if stockInfo != nil && market == .stock {
                 stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
+                stockSentiment = await yahoo.fetchStockSentiment(symbol: symbol)
             }
 
             // Crypto derivatives
@@ -182,7 +187,8 @@ class AnalysisService: ObservableObject {
                     market: market,
                     stockInfo: stockInfo,
                     derivatives: derivData,
-                    positioning: positioning
+                    positioning: positioning,
+                    stockSentiment: stockSentiment
                 )
                 claudeAnalysis = response.markdown
                 tradeSetups = response.setups
@@ -203,6 +209,7 @@ class AnalysisService: ObservableObject {
                 stockInfo: stockInfo,
                 derivatives: derivData,
                 positioning: positioning,
+                stockSentiment: stockSentiment,
                 claudeAnalysis: claudeAnalysis,
                 tradeSetups: tradeSetups
             )

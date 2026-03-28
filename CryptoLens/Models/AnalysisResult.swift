@@ -12,8 +12,9 @@ struct AnalysisResult: Identifiable, Codable {
     let sentiment: CoinInfo?              // Crypto only
     let fearGreed: FearGreedIndex?        // Global
     let stockInfo: StockInfo?             // Stocks only
-    let derivatives: DerivativesData?     // Crypto only
-    let positioning: PositioningSnapshot? // Crypto only
+    let derivatives: DerivativesData?      // Crypto only
+    let positioning: PositioningSnapshot?  // Crypto only
+    let stockSentiment: StockSentimentData? // Stocks only
     let claudeAnalysis: String
     let tradeSetups: [TradeSetup]
 
@@ -25,7 +26,7 @@ struct AnalysisResult: Identifiable, Codable {
     init(symbol: String, market: Market = .crypto, timestamp: Date, analysisTimestamp: Date? = nil,
          tf1: IndicatorResult, tf2: IndicatorResult, tf3: IndicatorResult,
          sentiment: CoinInfo? = nil, fearGreed: FearGreedIndex? = nil, stockInfo: StockInfo? = nil,
-         derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil,
+         derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil,
          claudeAnalysis: String, tradeSetups: [TradeSetup] = []) {
         self.id = UUID()
         self.symbol = symbol
@@ -40,6 +41,7 @@ struct AnalysisResult: Identifiable, Codable {
         self.stockInfo = stockInfo
         self.derivatives = derivatives
         self.positioning = positioning
+        self.stockSentiment = stockSentiment
         self.claudeAnalysis = claudeAnalysis
         self.tradeSetups = tradeSetups
     }

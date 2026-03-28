@@ -10,8 +10,8 @@ class GeminiService: AIProvider {
         self.model = model
     }
 
-    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil) async throws -> ClaudeAnalysisResponse {
-        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning)
+    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil) async throws -> ClaudeAnalysisResponse {
+        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning, stockSentiment: stockSentiment)
 
         let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)")!
         var request = URLRequest(url: url)
@@ -25,7 +25,7 @@ class GeminiService: AIProvider {
             ],
             "generationConfig": [
                 "maxOutputTokens": 2500,
-                "temperature": 0.2,
+                "temperature": 0,
             ]
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

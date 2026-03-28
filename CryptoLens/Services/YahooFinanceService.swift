@@ -115,6 +115,74 @@ class YahooFinanceService {
         } catch { return nil }
     }
 
+    /// Fetch stock sentiment data (short interest, VIX, 52-week position).
+    func fetchStockSentiment(symbol: String) async -> StockSentimentData? {
+        // Fetch quote summary for short interest
+        async let summaryData = fetchQuoteSummary(symbol: symbol)
+        async let vixCandles = fetchVIX()
+
+        let summary = await summaryData
+        let vix = await vixCandles
+
+        let shortPctOfFloat = summary?["shortPercentOfFloat"] as? Double
+        let shortRatio = summary?["shortRatio"] as? Double
+        let high52 = summary?["fiftyTwoWeekHigh"] as? Double ?? 0
+        let low52 = summary?["fiftyTwoWeekLow"] as? Double ?? 0
+        let price = summary?["regularMarketPrice"] as? Double ?? 0
+
+        let position52w: Double = (high52 > low52 && high52 > 0) ? ((price - low52) / (high52 - low52)) * 100 : 50
+
+        let vixValue = vix?.close
+        let vixPrev = vix?.open
+        let vixChange = (vixValue != nil && vixPrev != nil && vixPrev! > 0) ? ((vixValue! - vixPrev!) / vixPrev!) * 100 : nil
+
+        return StockSentimentData(
+            shortPercentOfFloat: shortPctOfFloat.map { $0 * 100 }, // Convert to percentage
+            shortRatio: shortRatio,
+            vix: vixValue,
+            vixChange: vixChange,
+            vixLevel: StockSentimentData.vixClassification(vixValue ?? 20),
+            fiftyTwoWeekPosition: position52w,
+            putCallRatio: nil // CBOE integration TODO
+        )
+    }
+
+    private func fetchQuoteSummary(symbol: String) async -> [String: Any]? {
+        let modules = "defaultKeyStatistics,price"
+        guard let url = URL(string: "\(Constants.yahooBaseURL)/v10/finance/quoteSummary/\(symbol)?modules=\(modules)") else { return nil }
+        do {
+            let (data, _) = try await session.data(from: url)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let qs = json["quoteSummary"] as? [String: Any],
+                  let results = qs["result"] as? [[String: Any]],
+                  let first = results.first else { return nil }
+
+            var out = [String: Any]()
+
+            // defaultKeyStatistics: shortPercentOfFloat, shortRatio
+            if let stats = first["defaultKeyStatistics"] as? [String: Any] {
+                if let spf = stats["shortPercentOfFloat"] as? [String: Any] { out["shortPercentOfFloat"] = spf["raw"] as? Double }
+                if let sr = stats["shortRatio"] as? [String: Any] { out["shortRatio"] = sr["raw"] as? Double }
+            }
+
+            // price: regularMarketPrice, fiftyTwoWeekHigh/Low
+            if let price = first["price"] as? [String: Any] {
+                if let rmp = price["regularMarketPrice"] as? [String: Any] { out["regularMarketPrice"] = rmp["raw"] as? Double }
+                if let h = price["fiftyTwoWeekHigh"] as? [String: Any] { out["fiftyTwoWeekHigh"] = h["raw"] as? Double }
+                if let l = price["fiftyTwoWeekLow"] as? [String: Any] { out["fiftyTwoWeekLow"] = l["raw"] as? Double }
+            }
+
+            return out
+        } catch { return nil }
+    }
+
+    private func fetchVIX() async -> Candle? {
+        do {
+            let candles = try await fetchCandles(symbol: "%5EVIX", interval: "1d", range: "5d")
+            return candles.last
+        } catch { return nil }
+    }
+
     // MARK: - Private
 
     private func defaultRange(for interval: String) -> String {

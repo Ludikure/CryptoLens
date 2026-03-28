@@ -76,6 +76,14 @@ enum AnalysisPrompt {
             - Volume U-shaped intraday: high at open/close is normal, high midday is significant.
             - If fundamentals provided (P/E, earnings proximity), factor them in.
             - Timeframes: \(tf.trend) (trend), \(tf.bias) (bias), \(tf.entry) (entry).
+
+            STOCK SENTIMENT DATA (if provided):
+            - VIX: Market fear gauge. >30 = extreme fear (historically bullish). <15 = complacency (watch for pullback).
+            - SHORT INTEREST: High short % of float (>10%) = crowded shorts, squeeze potential. Days to cover > 5 = shorts trapped.
+            - PUT/CALL RATIO: High (>1.0) = bearish sentiment, contrarian buy. Low (<0.7) = complacent.
+            - 52-WEEK POSITION: Context for S/R and trend health.
+            - EARNINGS: Within 2 weeks = flag it. Setups can be invalidated by earnings regardless of technicals.
+            These update daily/biweekly, not real-time. Factor in staleness.
             """
         }
     }
@@ -106,7 +114,7 @@ enum AnalysisPrompt {
 
     static func buildUserPrompt(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String,
                                 stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil,
-                                positioning: PositioningSnapshot? = nil) -> String {
+                                positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         if let s = sentiment {
@@ -126,6 +134,26 @@ enum AnalysisPrompt {
                 if days > 0 { parts.append("Earnings in \(days)d") }
             }
             lines.append("Fundamentals: \(parts.joined(separator: " | "))")
+        }
+
+        // Stock sentiment (stocks only)
+        if let ss = stockSentiment {
+            lines.append("")
+            lines.append("=== STOCK SENTIMENT ===")
+            if let vix = ss.vix {
+                lines.append("VIX: \(String(format: "%.1f", vix)) (\(ss.vixLevel))\(ss.vixChange.map { String(format: " %+.1f%%", $0) } ?? "")")
+            }
+            if let shortPct = ss.shortPercentOfFloat {
+                var shortLine = "Short Interest: \(String(format: "%.1f%%", shortPct)) of float"
+                if let daysToC = ss.shortRatio { shortLine += ", Days to Cover: \(String(format: "%.1f", daysToC))" }
+                if shortPct > 20 { shortLine += " — HEAVILY SHORTED, squeeze candidate" }
+                else if shortPct > 10 { shortLine += " — elevated" }
+                lines.append(shortLine)
+            }
+            lines.append("52-Week Position: \(String(format: "%.0f%%", ss.fiftyTwoWeekPosition)) (0%=52w low, 100%=52w high)")
+            if let pcr = ss.putCallRatio {
+                lines.append("Put/Call Ratio: \(String(format: "%.2f", pcr))\(pcr > 1.0 ? " — bearish sentiment" : (pcr < 0.7 ? " — complacent" : ""))")
+            }
         }
 
         // Derivatives positioning (crypto only)

@@ -35,8 +35,8 @@ struct AnalysisView: View {
                             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 16))
                     }
 
-                    if service.isLoading {
-                        ShimmerPlaceholder(result: service.lastResult != nil)
+                    if service.isLoading && service.lastResult == nil {
+                        ShimmerPlaceholder(result: false)
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                             .id(viewId)
                     }
@@ -183,6 +183,12 @@ struct AnalysisView: View {
         }
         if let si = result.stockInfo {
             StockInfoView(stockInfo: si, symbol: result.symbol)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
+        // Stock sentiment (stocks only)
+        if let ss = result.stockSentiment {
+            StockSentimentView(sentiment: ss)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
