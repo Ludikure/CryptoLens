@@ -5,8 +5,10 @@ struct AlertsView: View {
     @EnvironmentObject var service: AnalysisService
     @State private var showCreateAlert = false
 
-    private var longSetups: [SetupGroup] { groupedSetups(direction: "LONG") }
-    private var shortSetups: [SetupGroup] { groupedSetups(direction: "SHORT") }
+    private var allSetups: [SetupGroup] {
+        (groupedSetups(direction: "LONG") + groupedSetups(direction: "SHORT"))
+            .sorted { ($0.alerts.first?.createdAt ?? .distantPast) > ($1.alerts.first?.createdAt ?? .distantPast) }
+    }
     private var customAlerts: [PriceAlert] {
         alertsStore.alerts.filter { !$0.note.contains("LONG") && !$0.note.contains("SHORT") && !$0.triggered }
     }
@@ -16,14 +18,8 @@ struct AlertsView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    ForEach(longSetups) { group in
-                        SetupCard(group: group, direction: "LONG") {
-                            withAnimation(.easeOut(duration: 0.25)) { removeGroup(group) }
-                        }
-                    }
-
-                    ForEach(shortSetups) { group in
-                        SetupCard(group: group, direction: "SHORT") {
+                    ForEach(allSetups) { group in
+                        SetupCard(group: group, direction: group.direction) {
                             withAnimation(.easeOut(duration: 0.25)) { removeGroup(group) }
                         }
                     }
@@ -95,11 +91,25 @@ struct AlertsView: View {
                 orphans[alert.symbol, default: []].append(alert)
             }
         }
-        var result = groups.map { sid, alerts in
-            SetupGroup(setupId: sid, direction: direction, alerts: alerts.sorted { alertOrder($0.note) < alertOrder($1.note) })
+
+        // Helper to find matching TradeSetup and current price for a symbol
+        func lookupSetup(symbol: String, direction: String) -> (TradeSetup?, Double?) {
+            guard let result = service.cachedResults[symbol] else { return (nil, nil) }
+            let setup = result.tradeSetups.first { $0.direction == direction }
+            return (setup, result.daily.price)
+        }
+
+        var result = groups.map { sid, alerts -> SetupGroup in
+            let sorted = alerts.sorted { alertOrder($0.note) < alertOrder($1.note) }
+            let symbol = sorted.first?.symbol ?? ""
+            let (setup, price) = lookupSetup(symbol: symbol, direction: direction)
+            return SetupGroup(setupId: sid, direction: direction, alerts: sorted, setup: setup, currentPrice: price)
         }
         for (_, alerts) in orphans {
-            result.append(SetupGroup(setupId: UUID(), direction: direction, alerts: alerts.sorted { alertOrder($0.note) < alertOrder($1.note) }))
+            let sorted = alerts.sorted { alertOrder($0.note) < alertOrder($1.note) }
+            let symbol = sorted.first?.symbol ?? ""
+            let (setup, price) = lookupSetup(symbol: symbol, direction: direction)
+            result.append(SetupGroup(setupId: UUID(), direction: direction, alerts: sorted, setup: setup, currentPrice: price))
         }
         return result.sorted { ($0.alerts.first?.createdAt ?? .distantPast) > ($1.alerts.first?.createdAt ?? .distantPast) }
     }
@@ -134,6 +144,8 @@ private struct SetupGroup: Identifiable {
     let setupId: UUID
     let direction: String
     let alerts: [PriceAlert]
+    let setup: TradeSetup?
+    let currentPrice: Double?
     var id: UUID { setupId }
 }
 
@@ -146,7 +158,10 @@ private struct SetupCard: View {
 
     private var accentColor: Color { direction == "LONG" ? .green : .red }
     private var icon: String { direction == "LONG" ? "arrow.up.right" : "arrow.down.right" }
-    private var coinName: String { Constants.coin(for: group.alerts.first?.symbol ?? "")?.name ?? "" }
+    private var assetName: String {
+        let sym = group.alerts.first?.symbol ?? ""
+        return Constants.asset(for: sym)?.name ?? sym
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -154,10 +169,13 @@ private struct SetupCard: View {
             HStack {
                 Image(systemName: icon).font(.caption).fontWeight(.bold)
                 Text("\(direction) Setup").font(.subheadline).fontWeight(.bold)
-                Text("·").foregroundStyle(.secondary)
-                Text(coinName).font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary)
+                Text("\u{00B7}").foregroundStyle(.secondary)
+                Text(assetName).font(.subheadline).fontWeight(.medium).foregroundStyle(.secondary)
                 Spacer()
-                Button(action: onDismiss) {
+                Button(action: {
+                    HapticManager.impact(.light)
+                    onDismiss()
+                }) {
                     Image(systemName: "xmark").font(.caption2).fontWeight(.bold)
                         .foregroundStyle(.secondary).padding(5)
                         .background(Color(.systemGray5), in: Circle())
@@ -170,9 +188,10 @@ private struct SetupCard: View {
             VStack(spacing: 0) {
                 // Header row
                 HStack(spacing: 0) {
-                    Text("Level").frame(width: 90, alignment: .leading)
+                    Text("Level").frame(width: 70, alignment: .leading)
                     Spacer()
-                    Text("Price").frame(width: 120, alignment: .trailing)
+                    Text("Price").frame(width: 100, alignment: .trailing)
+                    Text("R:R").frame(width: 50, alignment: .trailing)
                     Text("").frame(width: 24)
                 }
                 .font(.caption).fontWeight(.bold).foregroundStyle(.secondary)
@@ -186,24 +205,40 @@ private struct SetupCard: View {
                         .replacingOccurrences(of: "SHORT ", with: "")
                     let badgeColor = colorFor(label)
 
-                    HStack(spacing: 0) {
-                        // Level badge (colored, like analysis **Entry** etc.)
-                        Text(label)
-                            .font(.caption).fontWeight(.bold)
-                            .foregroundStyle(badgeColor)
-                            .frame(width: 90, alignment: .leading)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 0) {
+                            // Level badge
+                            Text(label)
+                                .font(.caption).fontWeight(.bold)
+                                .foregroundStyle(badgeColor)
+                                .frame(width: 70, alignment: .leading)
 
-                        Spacer()
+                            Spacer()
 
-                        // Price
-                        Text(Formatters.formatPrice(alert.targetPrice))
-                            .font(.callout).fontWeight(.medium).monospacedDigit()
-                            .frame(width: 120, alignment: .trailing)
+                            // Price + distance
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text(Formatters.formatPrice(alert.targetPrice))
+                                    .font(.callout).fontWeight(.medium).monospacedDigit()
+                                if let price = group.currentPrice, price > 0 {
+                                    let dist = alert.targetPrice - price
+                                    let pct = (dist / price) * 100
+                                    Text("\(Formatters.formatPrice(abs(dist))) (\(String(format: "%.1f%%", abs(pct))))")
+                                        .font(.caption2).foregroundStyle(.tertiary)
+                                }
+                            }
+                            .frame(width: 100, alignment: .trailing)
 
-                        // Direction indicator
-                        Text(alert.condition.symbol)
-                            .font(.caption).foregroundStyle(.tertiary)
-                            .frame(width: 24, alignment: .trailing)
+                            // R:R column
+                            Text(rrText(for: label))
+                                .font(.caption).fontWeight(.medium).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .frame(width: 50, alignment: .trailing)
+
+                            // Direction indicator
+                            Text(alert.condition.symbol)
+                                .font(.caption).foregroundStyle(.tertiary)
+                                .frame(width: 24, alignment: .trailing)
+                        }
                     }
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .background(badgeColor.opacity(0.06))
@@ -217,6 +252,19 @@ private struct SetupCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.systemGray4), lineWidth: 0.5))
+    }
+
+    private func rrText(for label: String) -> String {
+        guard let setup = group.setup else { return "\u{2014}" }
+        let l = label.lowercased()
+        if l.contains("tp1") {
+            return String(format: "1:%.1f", setup.rrTP1)
+        } else if l.contains("tp2"), let rr = setup.rrTP2 {
+            return String(format: "1:%.1f", rr)
+        } else if l.contains("tp3"), let rr = setup.rrTP3 {
+            return String(format: "1:%.1f", rr)
+        }
+        return "\u{2014}"
     }
 
     private func colorFor(_ label: String) -> Color {
@@ -234,16 +282,19 @@ private struct CustomAlertCard: View {
     let alert: PriceAlert
     let onDismiss: () -> Void
     var body: some View {
-        let coinName = Constants.coin(for: alert.symbol)?.ticker ?? alert.symbol
+        let assetName = Constants.asset(for: alert.symbol)?.ticker ?? alert.symbol
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(coinName).font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
+                Text(assetName).font(.caption).fontWeight(.semibold).foregroundStyle(.secondary)
                 Text("\(alert.condition.symbol) \(Formatters.formatPrice(alert.targetPrice))")
                     .font(.subheadline).fontWeight(.medium)
                 if !alert.note.isEmpty { Text(alert.note).font(.caption2).foregroundStyle(.tertiary) }
             }
             Spacer()
-            Button(action: onDismiss) {
+            Button(action: {
+                HapticManager.impact(.light)
+                onDismiss()
+            }) {
                 Image(systemName: "xmark").font(.caption2).fontWeight(.bold).foregroundStyle(.secondary)
                     .padding(6).background(Color(.systemGray5), in: Circle())
             }
@@ -257,11 +308,11 @@ private struct TriggeredRow: View {
     let alert: PriceAlert
     let onDismiss: () -> Void
     var body: some View {
-        let coinName = Constants.coin(for: alert.symbol)?.ticker ?? alert.symbol
+        let assetName = Constants.asset(for: alert.symbol)?.ticker ?? alert.symbol
         let label = alert.note.replacingOccurrences(of: "LONG ", with: "").replacingOccurrences(of: "SHORT ", with: "")
         HStack(spacing: 8) {
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.caption)
-            Text(coinName).font(.caption).foregroundStyle(.tertiary)
+            Text(assetName).font(.caption).foregroundStyle(.tertiary)
             Text(label).font(.caption2).foregroundStyle(.tertiary)
             Text(Formatters.formatPrice(alert.targetPrice)).font(.caption).foregroundStyle(.tertiary).monospacedDigit()
             Spacer()

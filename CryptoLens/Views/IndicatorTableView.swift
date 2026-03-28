@@ -3,6 +3,10 @@ import SwiftUI
 struct IndicatorTableView: View {
     let results: [IndicatorResult]
 
+    private var hasStockIndicators: Bool {
+        results.contains { $0.obv != nil }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Indicators")
@@ -77,11 +81,44 @@ struct IndicatorTableView: View {
                         }
                     } else { dash }
                 }
-                row("Divergence", isLast: true) { r in
+                row("Divergence", isLast: !hasStockIndicators) { r in
                     if let div = r.divergence {
                         Text(div.contains("bullish") ? "Bull ⚡" : "Bear ⚡")
                             .foregroundStyle(div.contains("bullish") ? .green : .red)
                     } else { Text("—").foregroundStyle(.quaternary) }
+                }
+
+                // Stock-only rows (shown only if data present)
+                if hasStockIndicators {
+                    row("OBV") { r in
+                        if let obv = r.obv {
+                            Text(obv.trend)
+                                .foregroundStyle(obv.trend == "Rising" ? .green : (obv.trend == "Falling" ? .red : .secondary))
+                        } else { dash }
+                    }
+                    row("A/D Line") { r in
+                        if let ad = r.adLine {
+                            Text(ad.trend)
+                                .foregroundStyle(ad.trend == "Accumulation" ? .green : .red)
+                        } else { dash }
+                    }
+                    row("SMA Cross") { r in
+                        if let cross = r.smaCross {
+                            if let recent = cross.recentCross {
+                                Text(recent.contains("Golden") ? "Golden ✦" : "Death ✦")
+                                    .foregroundStyle(recent.contains("Golden") ? .green : .red)
+                            } else {
+                                Text(cross.sma50 > cross.sma200 ? "50>200" : "50<200")
+                                    .foregroundStyle(cross.sma50 > cross.sma200 ? .green : .red)
+                            }
+                        } else { dash }
+                    }
+                    row("Liquidity", isLast: true) { r in
+                        if let addv = r.addv {
+                            Text(addv.liquidity)
+                                .foregroundStyle(addv.liquidity == "Very Low" || addv.liquidity == "Low" ? .orange : .secondary)
+                        } else { dash }
+                    }
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))

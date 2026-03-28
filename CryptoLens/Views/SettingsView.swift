@@ -3,47 +3,67 @@ import Security
 
 struct SettingsView: View {
     @EnvironmentObject var service: AnalysisService
+    @State private var selectedProvider: AIProviderType = .claude
+    @State private var selectedModel: String = ""
     @State private var apiKey = ""
-    @State private var useHaiku = false
     @State private var showKey = false
 
     var body: some View {
         NavigationStack {
             Form {
+                // Provider selection
+                Section("AI Provider") {
+                    Picker("Provider", selection: $selectedProvider) {
+                        ForEach(AIProviderType.allCases) { type in
+                            Text(type.displayName).tag(type)
+                        }
+                    }
+                    .onChange(of: selectedProvider) {
+                        loadKeyForProvider()
+                    }
+                }
+
+                // API Key
                 Section {
                     HStack {
                         if showKey {
-                            TextField("sk-ant-...", text: $apiKey)
+                            TextField(keyPlaceholder, text: $apiKey)
                                 .font(.system(.body, design: .monospaced))
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
                         } else {
-                            SecureField("sk-ant-...", text: $apiKey)
+                            SecureField(keyPlaceholder, text: $apiKey)
                                 .font(.system(.body, design: .monospaced))
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
                         }
-                        Button {
-                            showKey.toggle()
-                        } label: {
+                        Button { showKey.toggle() } label: {
                             Image(systemName: showKey ? "eye.slash" : "eye")
                         }
                     }
                     Button("Save API Key") {
-                        KeychainHelper.save(key: "claude_api_key", value: apiKey)
+                        KeychainHelper.save(key: selectedProvider.keychainKey, value: apiKey)
+                        UserDefaults.standard.set(selectedProvider.rawValue, forKey: "ai_provider")
                         configureService()
                     }
                     .disabled(apiKey.isEmpty)
                 } header: {
-                    Text("Claude API Key")
+                    Text("\(selectedProvider.displayName) API Key")
                 } footer: {
                     Text("Your key is stored securely in the iOS Keychain.")
                 }
 
+                // Model selection
                 Section("Model") {
-                    Toggle("Use Haiku (faster, cheaper)", isOn: $useHaiku)
-                        .onChange(of: useHaiku) { configureService() }
-                    Text(useHaiku ? Constants.haikuModel : Constants.defaultModel)
+                    Picker("Model", selection: $selectedModel) {
+                        ForEach(selectedProvider.models, id: \.id) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                    .onChange(of: selectedModel) {
+                        configureService()
+                    }
+                    Text(selectedModel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -52,31 +72,50 @@ struct SettingsView: View {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("1.0")
-                            .foregroundStyle(.secondary)
+                        Text("1.0").foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Active Provider")
+                        Spacer()
+                        Text(service.providerType.displayName).foregroundStyle(.secondary)
                     }
                 }
             }
             .navigationTitle("Settings")
             .onAppear {
-                // Load from Keychain first, fall back to build-time xcconfig key
-                if let saved = KeychainHelper.load(key: "claude_api_key"), !saved.isEmpty {
-                    apiKey = saved
-                } else if let buildKey = Bundle.main.infoDictionary?["ClaudeAPIKey"] as? String,
-                          !buildKey.isEmpty, buildKey != "your-key-here" {
-                    apiKey = buildKey
-                    KeychainHelper.save(key: "claude_api_key", value: buildKey)
+                selectedProvider = service.providerType
+                loadKeyForProvider()
+                if selectedModel.isEmpty {
+                    selectedModel = selectedProvider.models[0].id
                 }
-                configureService()
             }
         }
     }
 
+    private var keyPlaceholder: String {
+        switch selectedProvider {
+        case .claude: return "sk-ant-..."
+        case .gemini: return "AIza..."
+        }
+    }
+
+    private func loadKeyForProvider() {
+        apiKey = KeychainHelper.load(key: selectedProvider.keychainKey) ?? ""
+        if apiKey.isEmpty {
+            if let buildKey = Bundle.main.infoDictionary?[selectedProvider.infoPlistKey] as? String,
+               !buildKey.isEmpty, !buildKey.contains("API_KEY") {
+                apiKey = buildKey
+            }
+        }
+        if selectedModel.isEmpty || !selectedProvider.models.contains(where: { $0.id == selectedModel }) {
+            selectedModel = selectedProvider.models[0].id
+        }
+    }
+
     private func configureService() {
-        let key = KeychainHelper.load(key: "claude_api_key") ?? apiKey
-        guard !key.isEmpty else { return }
-        let model = useHaiku ? Constants.haikuModel : Constants.defaultModel
-        service.configure(apiKey: key, model: model)
+        guard !apiKey.isEmpty else { return }
+        service.configure(provider: selectedProvider, apiKey: apiKey, model: selectedModel)
+        UserDefaults.standard.set(selectedProvider.rawValue, forKey: "ai_provider")
     }
 }
 

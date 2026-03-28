@@ -37,6 +37,10 @@ class AlertsStore: ObservableObject {
         alerts.removeAll { $0.setupId == id }
     }
 
+    func removeAlerts(forSymbol symbol: String) {
+        alerts.removeAll { $0.symbol == symbol }
+    }
+
     func clearAll() {
         alerts.removeAll()
     }
@@ -76,7 +80,7 @@ class AlertsStore: ObservableObject {
     static func requestPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
             if let error = error {
-                print("[CryptoLens] Notification permission error: \(error)")
+                print("[MarketScope] Notification permission error: \(error)")
             }
         }
     }

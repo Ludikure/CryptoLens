@@ -58,6 +58,32 @@ class CoinGeckoService {
         return info
     }
 
+    /// Fetch Fear & Greed Index from alternative.me
+    func fetchFearGreed() async -> FearGreedIndex? {
+        // Check cache
+        if let cached = fearGreedCache, Date().timeIntervalSince(cached.1) < Constants.sentimentCacheDuration {
+            return cached.0
+        }
+        do {
+            let url = URL(string: "https://api.alternative.me/fng/?limit=1")!
+            let (data, _) = try await session.data(from: url)
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dataArr = json["data"] as? [[String: Any]],
+                  let first = dataArr.first,
+                  let valueStr = first["value"] as? String,
+                  let value = Int(valueStr),
+                  let classification = first["value_classification"] as? String
+            else { return nil }
+            let result = FearGreedIndex(value: value, classification: classification)
+            fearGreedCache = (result, Date())
+            return result
+        } catch {
+            return nil
+        }
+    }
+
+    private var fearGreedCache: (FearGreedIndex, Date)?
+
     private func doubleFromMarket(_ data: [String: Any], key: String) -> Double {
         if let nested = data[key] as? [String: Any] {
             return (nested["usd"] as? NSNumber)?.doubleValue ?? 0

@@ -1,7 +1,7 @@
 import Foundation
 
 enum IndicatorEngine {
-    static func computeAll(candles: [Candle], timeframe: String, label: String) -> IndicatorResult {
+    static func computeAll(candles: [Candle], timeframe: String, label: String, market: Market = .crypto) -> IndicatorResult {
         let closes = candles.map(\.close)
         let highs = candles.map(\.high)
         let lows = candles.map(\.low)
@@ -9,7 +9,7 @@ enum IndicatorEngine {
         let volumes = candles.map(\.volume)
         let current = closes.last ?? 0
 
-        // Indicators
+        // Common indicators
         let rsi = RSI.compute(closes: closes)
         let rsiSeries = RSI.computeSeries(closes: closes)
         let validRSI = rsiSeries.compactMap { $0 }
@@ -40,6 +40,21 @@ enum IndicatorEngine {
         let avgVol: Double? = volumes.count >= 20 ? volumes.suffix(20).reduce(0, +) / 20.0 : nil
         let volRatio: Double? = avgVol.map { (volumes.last! / $0).rounded(toPlaces: 2) }
 
+        // Stock-only indicators
+        var obv: OBVResult? = nil
+        var adLine: ADLineResult? = nil
+        var smaCross: SMACrossResult? = nil
+        var gap: GapResult? = nil
+        var addv: ADDVResult? = nil
+
+        if market == .stock {
+            obv = OBV.compute(closes: closes, volumes: volumes)
+            adLine = AccumulationDistribution.compute(highs: highs, lows: lows, closes: closes, volumes: volumes)
+            smaCross = SMACross.detect(closes: closes)
+            gap = GapAnalysis.detect(opens: opens, closes: closes)
+            addv = ADDV.compute(closes: closes, volumes: volumes)
+        }
+
         // Composite bias score
         var bullish = 0
         var bearish = 0
@@ -56,6 +71,11 @@ enum IndicatorEngine {
         }
         if let a = adx {
             if a.direction == "Bullish" { bullish += 1 } else { bearish += 1 }
+        }
+        // Stock-only bias signals
+        if market == .stock {
+            if let o = obv, o.trend == "Rising" { bullish += 1 } else if obv?.trend == "Falling" { bearish += 1 }
+            if let ad = adLine, ad.trend == "Accumulation" { bullish += 1 } else if adLine?.trend == "Distribution" { bearish += 1 }
         }
 
         let total = bullish + bearish
@@ -89,7 +109,12 @@ enum IndicatorEngine {
             volumeRatio: volRatio,
             divergence: divergence,
             bias: bias,
-            bullPercent: bullPct.rounded(toPlaces: 1)
+            bullPercent: bullPct.rounded(toPlaces: 1),
+            obv: obv,
+            adLine: adLine,
+            smaCross: smaCross,
+            gap: gap,
+            addv: addv
         )
     }
 }

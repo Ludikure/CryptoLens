@@ -6,12 +6,19 @@ struct TimestampBar: View {
     let analysisTimestamp: Date?
 
     @State private var now = Date()
+    @State private var pulse = false
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HStack(spacing: 16) {
             // Data freshness
             HStack(spacing: 4) {
+                Circle()
+                    .fill(.green)
+                    .frame(width: 6, height: 6)
+                    .opacity(pulse ? 1.0 : 0.3)
+                    .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: pulse)
+                    .onAppear { pulse = true }
                 Image(systemName: "chart.bar")
                     .font(.caption2)
                 Text("Data: \(agoText(from: dataTimestamp))")

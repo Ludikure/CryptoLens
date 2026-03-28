@@ -37,6 +37,17 @@ struct TradeSetup: Codable, Identifiable {
         self.reasoning = reasoning
     }
 
+    var risk: Double { abs(entry - stopLoss) }
+
+    func rrRatio(for tp: Double) -> Double {
+        guard risk > 0 else { return 0 }
+        return abs(tp - entry) / risk
+    }
+
+    var rrTP1: Double { rrRatio(for: tp1) }
+    var rrTP2: Double? { tp2.map { rrRatio(for: $0) } }
+    var rrTP3: Double? { tp3.map { rrRatio(for: $0) } }
+
     /// Generate price alerts for this setup.
     /// `currentPrice` is needed to determine the correct alert direction
     /// (alert fires when price crosses the target FROM the current side).

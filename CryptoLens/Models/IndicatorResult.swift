@@ -67,6 +67,39 @@ struct PatternResult: Codable {
     let signal: String
 }
 
+// MARK: - Stock-only indicator results
+
+struct OBVResult: Codable {
+    let current: Double
+    let trend: String          // "Rising", "Falling", "Flat"
+    let divergence: String?    // "bullish (...)" or "bearish (...)"
+}
+
+struct ADLineResult: Codable {
+    let current: Double
+    let trend: String          // "Accumulation" or "Distribution"
+}
+
+struct SMACrossResult: Codable {
+    let sma50: Double
+    let sma200: Double
+    let status: String         // "50 > 200 (bullish)" etc.
+    let recentCross: String?   // "Golden Cross" or "Death Cross"
+}
+
+struct GapResult: Codable {
+    let direction: String      // "Gap Up" or "Gap Down"
+    let gapPercent: Double
+    let previousClose: Double
+    let openPrice: Double
+    let filled: Bool
+}
+
+struct ADDVResult: Codable {
+    let averageDollarVolume: Double
+    let liquidity: String      // "Very High", "High", "Moderate", "Low", "Very Low"
+}
+
 struct IndicatorResult: Identifiable, Codable {
     let id: UUID
     let timeframe: String
@@ -91,8 +124,14 @@ struct IndicatorResult: Identifiable, Codable {
     let divergence: String?
     let bias: String
     let bullPercent: Double
+    // Stock-only indicators (nil for crypto)
+    let obv: OBVResult?
+    let adLine: ADLineResult?
+    let smaCross: SMACrossResult?
+    let gap: GapResult?
+    let addv: ADDVResult?
 
-    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double) {
+    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil) {
         self.id = UUID()
         self.timeframe = timeframe
         self.label = label
@@ -116,5 +155,10 @@ struct IndicatorResult: Identifiable, Codable {
         self.divergence = divergence
         self.bias = bias
         self.bullPercent = bullPercent
+        self.obv = obv
+        self.adLine = adLine
+        self.smaCross = smaCross
+        self.gap = gap
+        self.addv = addv
     }
 }

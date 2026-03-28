@@ -6,12 +6,16 @@ struct AnalysisView: View {
     @State private var selectedSymbol = Constants.allCoins[0].id
     @State private var showPicker = false
 
-    private var selectedCoin: CoinDefinition? {
-        Constants.coin(for: selectedSymbol)
+    private var selectedAssetName: String {
+        Constants.asset(for: selectedSymbol)?.name ?? selectedSymbol
     }
 
-    private var favoriteCoins: [CoinDefinition] {
-        favorites.orderedFavorites.compactMap { Constants.coin(for: $0) }
+    private var favoriteAssets: [(id: String, ticker: String)] {
+        favorites.orderedFavorites.compactMap { sym in
+            if let c = Constants.coin(for: sym) { return (c.id, c.ticker) }
+            if let s = Constants.stock(for: sym) { return (s.id, s.ticker) }
+            return nil
+        }
     }
 
     var body: some View {
@@ -19,13 +23,19 @@ struct AnalysisView: View {
             List {
                 Section {
                     // Favorite pills
-                    if !favoriteCoins.isEmpty {
+                    if !favoriteAssets.isEmpty {
                         favoritePills
-                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 0, trailing: 16))
+                    }
+
+                    // Freshness timers
+                    if let result = service.lastResult {
+                        TimestampBar(dataTimestamp: result.timestamp, analysisTimestamp: result.analysisTimestamp)
+                            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 16))
                     }
 
                     if service.isLoading {
-                        loadingView
+                        ShimmerPlaceholder(result: service.lastResult != nil)
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     }
 
@@ -49,7 +59,10 @@ struct AnalysisView: View {
             .listStyle(.plain)
             .background(Color(.systemGroupedBackground))
             .scrollContentBackground(.hidden)
-            .refreshable { await service.runFullAnalysis(symbol: selectedSymbol) }
+            .refreshable {
+                await service.runFullAnalysis(symbol: selectedSymbol)
+                HapticManager.notification(.success)
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Leading: favorite star
@@ -66,7 +79,7 @@ struct AnalysisView: View {
                 ToolbarItem(placement: .principal) {
                     Button { showPicker = true } label: {
                         HStack(spacing: 4) {
-                            Text(selectedCoin?.name ?? "Select Coin")
+                            Text(selectedAssetName)
                                 .font(.headline)
                                 .lineLimit(1)
                             Image(systemName: "chevron.down")
@@ -92,6 +105,7 @@ struct AnalysisView: View {
                 Task { await service.selectSymbol(selectedSymbol) }
             }
             .onChange(of: selectedSymbol) {
+                HapticManager.selection()
                 Task { await service.selectSymbol(selectedSymbol) }
             }
         }
@@ -103,14 +117,14 @@ struct AnalysisView: View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(favoriteCoins) { coin in
-                        let isSelected = coin.id == selectedSymbol
+                    ForEach(favoriteAssets, id: \.id) { asset in
+                        let isSelected = asset.id == selectedSymbol
                         Button {
                             withAnimation(.easeInOut(duration: 0.2)) {
-                                selectedSymbol = coin.id
+                                selectedSymbol = asset.id
                             }
                         } label: {
-                            Text(coin.ticker)
+                            Text(asset.ticker)
                                 .font(.caption)
                                 .fontWeight(isSelected ? .semibold : .regular)
                                 .lineLimit(1)
@@ -119,7 +133,7 @@ struct AnalysisView: View {
                                 .foregroundStyle(isSelected ? .white : .primary)
                                 .background(isSelected ? Color.accentColor : Color(.systemGray5), in: Capsule())
                         }
-                        .id(coin.id)
+                        .id(asset.id)
                     }
                 }
             }
@@ -135,18 +149,6 @@ struct AnalysisView: View {
     }
 
     // MARK: - Subviews
-
-    private var loadingView: some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .scaleEffect(1.2)
-            Text(service.loadingStatus)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-    }
 
     private func errorView(_ error: String) -> some View {
         VStack(spacing: 8) {
@@ -169,7 +171,20 @@ struct AnalysisView: View {
         PriceHeaderView(result: result)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
-        IndicatorTableView(results: [result.daily, result.h4, result.h1])
+        ConfidenceSummaryView(result: result)
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+        // Market-specific: Fear & Greed for crypto, Stock info for stocks
+        if let fg = result.fearGreed {
+            FearGreedView(index: fg)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+        if let si = result.stockInfo {
+            StockInfoView(stockInfo: si, symbol: result.symbol)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
+        IndicatorTableView(results: [result.tf1, result.tf2, result.tf3])
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
         ClaudeAnalysisView(markdown: result.claudeAnalysis)
@@ -180,8 +195,8 @@ struct AnalysisView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
-        TimestampBar(dataTimestamp: result.timestamp, analysisTimestamp: result.analysisTimestamp)
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+        Spacer().frame(height: 4)
+            .listRowInsets(EdgeInsets())
     }
 
     private var emptyView: some View {
@@ -189,7 +204,7 @@ struct AnalysisView: View {
             Image(systemName: "chart.bar.xaxis")
                 .font(.system(size: 44))
                 .foregroundStyle(.tertiary)
-            Text("Tap \(Image(systemName: "arrow.clockwise")) to analyze \(selectedCoin?.name ?? "coin")")
+            Text("Tap \(Image(systemName: "arrow.clockwise")) to analyze \(selectedAssetName)")
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
         }
@@ -216,7 +231,7 @@ struct AnalysisView: View {
             text += "\nADX: \(Int(a.adx)) \(a.direction) / \(Int(a4.adx)) \(a4.direction) / \(Int(a1.adx)) \(a1.direction)"
         }
         text += "\n\n--- Claude Analysis ---\n\n\(r.claudeAnalysis)"
-        text += "\n\nGenerated by CryptoLens"
+        text += "\n\nGenerated by MarketScope"
         return text
     }
 }
@@ -299,5 +314,83 @@ struct BiasPill: View {
                 .padding(.vertical, 3)
                 .background(color, in: Capsule())
         }
+    }
+}
+
+// MARK: - Confidence Summary
+
+private struct ConfidenceSummaryView: View {
+    let result: AnalysisResult
+
+    private var biases: [String] { [result.daily.bias, result.h4.bias, result.h1.bias] }
+    private var bullishCount: Int { biases.filter { $0.contains("Bullish") }.count }
+    private var bearishCount: Int { biases.filter { $0.contains("Bearish") }.count }
+    private var total: Int { biases.count }
+
+    private var avgBullPercent: Double {
+        (result.daily.bullPercent + result.h4.bullPercent + result.h1.bullPercent) / 3.0
+    }
+
+    private var summaryText: String {
+        if bullishCount > bearishCount {
+            return "\(bullishCount)/\(total) Bullish"
+        } else if bearishCount > bullishCount {
+            return "\(bearishCount)/\(total) Bearish"
+        } else {
+            return "Mixed"
+        }
+    }
+
+    private var summaryColor: Color {
+        if bullishCount > bearishCount { return .green }
+        if bearishCount > bullishCount { return .red }
+        return .gray
+    }
+
+    private var summaryIcon: String {
+        if bullishCount > bearishCount { return "arrow.up.circle.fill" }
+        if bearishCount > bullishCount { return "arrow.down.circle.fill" }
+        return "equal.circle.fill"
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: summaryIcon)
+                .font(.title3)
+                .foregroundStyle(summaryColor)
+
+            Text(summaryText)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundStyle(summaryColor)
+
+            Spacer()
+
+            // Capsule gauge
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color(.systemGray5))
+                    .frame(width: 80, height: 8)
+                Capsule()
+                    .fill(gaugeGradient)
+                    .frame(width: max(4, 80 * avgBullPercent / 100.0), height: 8)
+            }
+
+            Text("\(Int(avgBullPercent))%")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var gaugeGradient: LinearGradient {
+        LinearGradient(
+            colors: [.red, .orange, .green],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 }

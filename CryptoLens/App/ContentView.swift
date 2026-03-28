@@ -13,10 +13,6 @@ struct ContentView: View {
                 .tabItem {
                     Label("Alerts", systemImage: alertsStore.activeAlerts.isEmpty ? "bell" : "bell.badge")
                 }
-            PositionCalculatorView()
-                .tabItem {
-                    Label("Calculator", systemImage: "plusminus")
-                }
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gear")

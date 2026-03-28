@@ -2,7 +2,7 @@ import Foundation
 import BackgroundTasks
 
 enum BackgroundRefreshManager {
-    static let taskIdentifier = "com.ludikure.CryptoLens.priceCheck"
+    static let taskIdentifier = "com.ludikure.MarketScope.priceCheck"
 
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in
@@ -17,7 +17,7 @@ enum BackgroundRefreshManager {
         do {
             try BGTaskScheduler.shared.submit(request)
         } catch {
-            print("[CryptoLens] BG schedule failed: \(error)")
+            print("[MarketScope] BG schedule failed: \(error)")
         }
     }
 

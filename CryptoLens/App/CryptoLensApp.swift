@@ -1,10 +1,11 @@
 import SwiftUI
 
 @main
-struct CryptoLensApp: App {
+struct MarketScopeApp: App {
     @StateObject private var analysisService = AnalysisService()
     @StateObject private var favoritesStore = FavoritesStore()
     @StateObject private var alertsStore = AlertsStore()
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         BackgroundRefreshManager.register()
@@ -20,6 +21,18 @@ struct CryptoLensApp: App {
                 .onAppear { analysisService.alertsStore = alertsStore }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                     BackgroundRefreshManager.schedule()
+                }
+                .onChange(of: scenePhase) { _, newPhase in
+                    switch newPhase {
+                    case .active:
+                        if let symbol = analysisService.currentSymbol {
+                            analysisService.startAutoRefresh(symbol: symbol)
+                        }
+                    case .background:
+                        analysisService.stopAutoRefresh()
+                    default:
+                        break
+                    }
                 }
         }
     }

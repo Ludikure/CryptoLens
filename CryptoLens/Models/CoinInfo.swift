@@ -15,3 +15,8 @@ struct CoinInfo: Codable {
     let high24h: Double
     let low24h: Double
 }
+
+struct FearGreedIndex: Codable {
+    let value: Int              // 0-100
+    let classification: String  // "Extreme Fear", "Fear", "Neutral", "Greed", "Extreme Greed"
+}
