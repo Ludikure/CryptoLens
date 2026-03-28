@@ -2,7 +2,7 @@ import Foundation
 import BackgroundTasks
 
 enum BackgroundRefreshManager {
-    static let taskIdentifier = "com.ludikure.MarketScope.priceCheck"
+    static let taskIdentifier = "com.ludikure.CryptoLens.priceCheck"
 
     static func register() {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: taskIdentifier, using: nil) { task in

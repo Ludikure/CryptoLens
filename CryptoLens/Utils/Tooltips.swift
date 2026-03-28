@@ -37,6 +37,8 @@ enum Tooltips {
     static let revenueGrowth = "YoY revenue/earnings growth. >20% + pullback = dip buy opportunity. Accelerating = strongest signal. Decelerating = often precedes selloffs."
     static let sectorComparison = "Performance vs sector ETF. Outperforming = institutional preference, dips bought faster. Underperforming = something wrong, rallies get sold."
     static let insiderTransactions = "Executive buy/sell activity. Insiders buy for one reason — conviction. Cluster buying (3+ in 30 days) is the strongest fundamental buy signal."
+    static let estimateRevisions = "Whether analysts are revising earnings estimates up or down. Upward revisions = improving outlook, price follows. Downward = deteriorating. Revision momentum leads price by days/weeks."
+    static let exDividendDate = "Date stock trades without next dividend. Stock gaps down by dividend amount. Within 5 days = factor into stops. Don't mistake for a technical breakdown."
 
     // Trade Setup
     static let riskReward = "Risk vs reward. 1:2 = risk $1 to make $2. Minimum 1:2 means you can be wrong half the time and still profit."

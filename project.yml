@@ -36,15 +36,15 @@ targets:
         ClaudeAPIKey: $(CLAUDE_API_KEY)
         GeminiAPIKey: $(GEMINI_API_KEY)
         BGTaskSchedulerPermittedIdentifiers:
-          - com.ludikure.MarketScope.priceCheck
+          - com.ludikure.CryptoLens.priceCheck
         UIBackgroundModes:
           - fetch
     settings:
       base:
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        CURRENT_PROJECT_VERSION: "2"
         SWIFT_EMIT_LOC_STRINGS: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.MarketScope
+        PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""
     scheme:

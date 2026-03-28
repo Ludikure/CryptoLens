@@ -121,6 +121,18 @@ class AnalysisService: ObservableObject {
                     si.insiderBuyCount6m = enhanced["insiderBuys"] as? Int
                     si.insiderSellCount6m = enhanced["insiderSells"] as? Int
                     si.insiderNetBuying = enhanced["insiderNetBuying"] as? Bool
+                    si.epsEstimateCurrent = enhanced["epsEstimateCurrent"] as? Double
+                    si.epsEstimate90dAgo = enhanced["epsEstimate90dAgo"] as? Double
+                    si.revisionDirection = enhanced["revisionDirection"] as? String
+                    si.upRevisions30d = enhanced["upRevisions30d"] as? Int
+                    si.downRevisions30d = enhanced["downRevisions30d"] as? Int
+                    if let exDivRaw = enhanced["exDividendDate"] as? Int {
+                        let exDate = Date(timeIntervalSince1970: Double(exDivRaw))
+                        si.exDividendDate = exDate
+                        let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 999
+                        si.exDividendWarning = days >= 0 && days <= 5
+                    }
+                    si.dividendRate = enhanced["dividendRate"] as? Double
                 }
                 if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
                     si.sectorETF = comp.etf
@@ -135,7 +147,11 @@ class AnalysisService: ObservableObject {
             var positioning: PositioningSnapshot? = nil
             if market == .crypto {
                 derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
-                if let d = derivData { positioning = PositioningAnalyzer.analyze(data: d) }
+                print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
+                if let d = derivData {
+                    positioning = PositioningAnalyzer.analyze(data: d)
+                    print("[MarketScope] Positioning: \(positioning?.crowding.rawValue ?? "nil"), squeeze: \(positioning?.squeezeRisk.level ?? "nil")")
+                }
             }
 
             let previous = resultsBySymbol[symbol]
@@ -211,6 +227,18 @@ class AnalysisService: ObservableObject {
                     si.insiderBuyCount6m = enhanced["insiderBuys"] as? Int
                     si.insiderSellCount6m = enhanced["insiderSells"] as? Int
                     si.insiderNetBuying = enhanced["insiderNetBuying"] as? Bool
+                    si.epsEstimateCurrent = enhanced["epsEstimateCurrent"] as? Double
+                    si.epsEstimate90dAgo = enhanced["epsEstimate90dAgo"] as? Double
+                    si.revisionDirection = enhanced["revisionDirection"] as? String
+                    si.upRevisions30d = enhanced["upRevisions30d"] as? Int
+                    si.downRevisions30d = enhanced["downRevisions30d"] as? Int
+                    if let exDivRaw = enhanced["exDividendDate"] as? Int {
+                        let exDate = Date(timeIntervalSince1970: Double(exDivRaw))
+                        si.exDividendDate = exDate
+                        let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 999
+                        si.exDividendWarning = days >= 0 && days <= 5
+                    }
+                    si.dividendRate = enhanced["dividendRate"] as? Double
                 }
                 if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
                     si.sectorETF = comp.etf
@@ -225,7 +253,11 @@ class AnalysisService: ObservableObject {
             var positioning: PositioningSnapshot? = nil
             if market == .crypto {
                 derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
-                if let d = derivData { positioning = PositioningAnalyzer.analyze(data: d) }
+                print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
+                if let d = derivData {
+                    positioning = PositioningAnalyzer.analyze(data: d)
+                    print("[MarketScope] Positioning: \(positioning?.crowding.rawValue ?? "nil"), squeeze: \(positioning?.squeezeRisk.level ?? "nil")")
+                }
             }
 
             let claudeAnalysis: String
@@ -271,8 +303,7 @@ class AnalysisService: ObservableObject {
                 lastResult = result
                 isLoading = false
                 loadingStatus = ""
-                if let store = alertsStore {
-                    // Only clear alerts for THIS symbol, keep others
+                if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
                     store.removeAlerts(forSymbol: symbol)
                     if !tradeSetups.isEmpty {
                         let price = result.daily.price

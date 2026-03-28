@@ -5,6 +5,11 @@ struct DerivativesCardView: View {
     let data: DerivativesData
     let snapshot: PositioningSnapshot
 
+    // Hide rows with default/unavailable data
+    private var hasRealLSData: Bool { data.globalLongPercent != 50.0 || data.globalShortPercent != 50.0 }
+    private var hasRealTopTraderData: Bool { data.topTraderLongPercent != 50.0 || data.topTraderShortPercent != 50.0 }
+    private var hasRealTakerData: Bool { data.takerBuySellRatio != 1.0 || data.takerBuyVolume > 0 }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // Header
@@ -23,9 +28,9 @@ struct DerivativesCardView: View {
             VStack(spacing: 8) {
                 fundingRow
                 openInterestRow
-                longShortRow
-                topTraderRow
-                takerFlowRow
+                if hasRealLSData { longShortRow }
+                if hasRealTopTraderData { topTraderRow }
+                if hasRealTakerData { takerFlowRow }
             }
 
             // Signals

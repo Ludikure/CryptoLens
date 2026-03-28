@@ -3,7 +3,6 @@ import Foundation
 class DerivativesService {
     private let session: URLSession
     private let binanceURL = "https://fapi.binance.com"
-    private let bybitURL = "https://api.bybit.com"
 
     init() {
         let config = URLSessionConfiguration.default
@@ -14,12 +13,22 @@ class DerivativesService {
     func fetchDerivativesData(symbol: String) async -> DerivativesData? {
         let sym = symbol.uppercased()
 
-        // Try Binance first, fall back to Bybit if geo-blocked
-        if let data = await fetchFromBinance(symbol: sym) {
+        // Try Binance Futures first (full data, needs VPN in US)
+        let binanceData = await fetchFromBinance(symbol: sym)
+        if let data = binanceData {
+            print("[MarketScope] Binance derivatives: OK (L/S: \(data.globalLongPercent)/\(data.globalShortPercent))")
+
+            // If L/S is default 50/50, the /futures/data/ endpoints were geo-blocked
+            if data.globalLongPercent == 50.0 && data.globalShortPercent == 50.0 {
+                print("[MarketScope] Binance /futures/data/ geo-blocked, supplementing with CoinGecko...")
+                // CoinGecko doesn't have L/S, but at least we have Binance funding + OI
+            }
             return data
         }
-        print("[MarketScope] Binance Futures unavailable, trying Bybit...")
-        return await fetchFromBybit(symbol: sym)
+
+        // Binance fully blocked — fall back to CoinGecko (works from US, limited data)
+        print("[MarketScope] Binance Futures blocked, trying CoinGecko...")
+        return await fetchFromCoinGecko(symbol: sym)
     }
 
     // MARK: - Binance Futures
@@ -48,86 +57,71 @@ class DerivativesService {
         return buildResult(
             fundingRate: fr, markPrice: mp, indexPrice: ip, openInterest: oiVal,
             fundingHistory: parseBinanceFundingHistory(fh),
-            oiHistory: parseBinanceOIHistory(oih, markPrice: mp),
+            oiHistory: parseBinanceOIHistory(oih),
             globalLS: parseBinanceLS(gls),
             topTraderLS: parseBinanceLS(ttls),
             takerData: parseBinanceTaker(tr)
         )
     }
 
-    // MARK: - Bybit Fallback
+    // MARK: - CoinGecko Fallback (works from US)
 
-    private func fetchFromBybit(symbol: String) async -> DerivativesData? {
-        // Bybit v5 API — all data from tickers + separate endpoints
-        async let ticker = fetchJSON("\(bybitURL)/v5/market/tickers?category=linear&symbol=\(symbol)")
-        async let oiHistory = fetchJSON("\(bybitURL)/v5/market/open-interest?category=linear&symbol=\(symbol)&intervalTime=4h&limit=6")
-        async let lsRatio = fetchJSON("\(bybitURL)/v5/market/account-ratio?category=linear&symbol=\(symbol)&period=1h&limit=1")
-
-        let (tickerResp, oiResp, lsResp) = await (ticker, oiHistory, lsRatio)
-
-        // Parse ticker
-        guard let tickerResp = tickerResp,
-              let result = tickerResp["result"] as? [String: Any],
-              let list = result["list"] as? [[String: Any]],
-              let t = list.first,
-              let frStr = t["fundingRate"] as? String, let fr = Double(frStr),
-              let mpStr = t["markPrice"] as? String, let mp = Double(mpStr),
-              let ipStr = t["indexPrice"] as? String, let ip = Double(ipStr),
-              let oiStr = t["openInterest"] as? String, let oiVal = Double(oiStr)
-        else { return nil }
-
-        // OI history
-        var oiChange4h: Double? = nil
-        var oiChange24h: Double? = nil
-        if let oiResp = oiResp,
-           let oiResult = oiResp["result"] as? [String: Any],
-           let oiList = oiResult["list"] as? [[String: Any]], oiList.count >= 2 {
-            // Bybit returns newest first
-            if let latestStr = oiList.first?["openInterest"] as? String, let latest = Double(latestStr),
-               let prevStr = oiList[1]["openInterest"] as? String, let prev = Double(prevStr), prev > 0 {
-                oiChange4h = ((latest - prev) / prev) * 100
+    private func fetchFromCoinGecko(symbol: String) async -> DerivativesData? {
+        // CoinGecko derivatives endpoint — aggregates from Binance Futures
+        guard let url = URL(string: "https://api.coingecko.com/api/v3/derivatives?include_tickers=unexpired") else { return nil }
+        do {
+            let (data, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                print("[MarketScope] CoinGecko derivatives: HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")
+                return nil
             }
-            if oiList.count >= 6,
-               let latestStr = oiList.first?["openInterest"] as? String, let latest = Double(latestStr),
-               let oldStr = oiList[5]["openInterest"] as? String, let old = Double(oldStr), old > 0 {
-                oiChange24h = ((latest - old) / old) * 100
+            guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+
+            // Find the BTCUSDT perpetual on Binance Futures
+            let ticker = symbol.replacingOccurrences(of: "USDT", with: "").uppercased() + "USDT"
+            guard let match = array.first(where: {
+                ($0["symbol"] as? String)?.uppercased() == ticker &&
+                ($0["market"] as? String)?.lowercased().contains("binance") == true &&
+                ($0["contract_type"] as? String) == "perpetual"
+            }) else {
+                print("[MarketScope] CoinGecko: no match for \(ticker)")
+                return nil
             }
+
+            let price = match["price"] as? Double ?? 0
+            let indexPrice = match["index"] as? Double ?? price
+            let fundingRate = match["funding_rate"] as? Double ?? 0
+            let openInterestUSD = match["open_interest"] as? Double ?? 0
+            let openInterest = price > 0 ? openInterestUSD / price : 0
+
+            let premium = indexPrice > 0 ? ((price - indexPrice) / indexPrice) * 100 : 0
+
+            print("[MarketScope] CoinGecko derivatives: OK (funding: \(fundingRate), OI: $\(Int(openInterestUSD)))")
+
+            return DerivativesData(
+                fundingRate: fundingRate / 100, // CoinGecko returns as percentage
+                fundingRatePercent: fundingRate,
+                fundingHistory: [],
+                avgFundingRate: fundingRate / 100,
+                markPrice: price,
+                indexPrice: indexPrice,
+                markIndexPremium: premium,
+                openInterest: openInterest,
+                openInterestUSD: openInterestUSD,
+                oiChange4h: nil,
+                oiChange24h: nil,
+                globalLongPercent: 50, // Not available from CoinGecko
+                globalShortPercent: 50,
+                topTraderLongPercent: 50,
+                topTraderShortPercent: 50,
+                takerBuySellRatio: 1.0,
+                takerBuyVolume: 0,
+                takerSellVolume: 0
+            )
+        } catch {
+            print("[MarketScope] CoinGecko derivatives error: \(error.localizedDescription)")
+            return nil
         }
-
-        // L/S ratio
-        var longPct = 50.0, shortPct = 50.0
-        if let lsResp = lsResp,
-           let lsResult = lsResp["result"] as? [String: Any],
-           let lsList = lsResult["list"] as? [[String: Any]],
-           let ls = lsList.first,
-           let buyStr = ls["buyRatio"] as? String, let buy = Double(buyStr),
-           let sellStr = ls["sellRatio"] as? String, let sell = Double(sellStr) {
-            longPct = buy * 100
-            shortPct = sell * 100
-        }
-
-        let premium = ip > 0 ? ((mp - ip) / ip) * 100 : 0
-
-        return DerivativesData(
-            fundingRate: fr,
-            fundingRatePercent: fr * 100,
-            fundingHistory: [],
-            avgFundingRate: fr,
-            markPrice: mp,
-            indexPrice: ip,
-            markIndexPremium: premium,
-            openInterest: oiVal,
-            openInterestUSD: oiVal * mp,
-            oiChange4h: oiChange4h,
-            oiChange24h: oiChange24h,
-            globalLongPercent: longPct,
-            globalShortPercent: shortPct,
-            topTraderLongPercent: 50, // Bybit doesn't expose top trader ratio
-            topTraderShortPercent: 50,
-            takerBuySellRatio: 1.0, // Not available in basic Bybit API
-            takerBuyVolume: 0,
-            takerSellVolume: 0
-        )
     }
 
     // MARK: - Binance Parsers
@@ -142,7 +136,7 @@ class DerivativesService {
         }
     }
 
-    private func parseBinanceOIHistory(_ oih: [[String: Any]]?, markPrice: Double) -> (change4h: Double?, change24h: Double?) {
+    private func parseBinanceOIHistory(_ oih: [[String: Any]]?) -> (change4h: Double?, change24h: Double?) {
         guard let oih = oih, oih.count >= 2 else { return (nil, nil) }
         var change4h: Double? = nil
         var change24h: Double? = nil
@@ -212,17 +206,31 @@ class DerivativesService {
         guard let url = URL(string: urlString) else { return nil }
         do {
             let (data, response) = try await session.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            guard let http = response as? HTTPURLResponse else { return nil }
+            guard http.statusCode == 200 else {
+                print("[MarketScope] HTTP \(http.statusCode) for \(url.host ?? "")\(url.path)")
+                return nil
+            }
             return try JSONSerialization.jsonObject(with: data) as? [String: Any]
-        } catch { return nil }
+        } catch {
+            print("[MarketScope] Network error for \(url.host ?? ""): \(error.localizedDescription)")
+            return nil
+        }
     }
 
     private func fetchJSONArray(_ urlString: String) async -> [[String: Any]]? {
         guard let url = URL(string: urlString) else { return nil }
         do {
             let (data, response) = try await session.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            guard let http = response as? HTTPURLResponse else { return nil }
+            guard http.statusCode == 200 else {
+                print("[MarketScope] HTTP \(http.statusCode) for \(url.host ?? "")\(url.path)")
+                return nil
+            }
             return try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        } catch { return nil }
+        } catch {
+            print("[MarketScope] Network error for \(url.host ?? ""): \(error.localizedDescription)")
+            return nil
+        }
     }
 }

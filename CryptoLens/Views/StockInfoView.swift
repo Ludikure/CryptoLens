@@ -106,6 +106,48 @@ struct StockInfoView: View {
                 }
             }
 
+            // Estimate revisions
+            if let current = stockInfo.epsEstimateCurrent, let ago = stockInfo.epsEstimate90dAgo, ago != 0 {
+                let changePct = ((current - ago) / abs(ago)) * 100
+                HStack {
+                    HStack(spacing: 3) {
+                        Text("Est. Revisions").font(.caption).foregroundStyle(.secondary)
+                        InfoTooltip(title: "Estimate Revisions", explanation: Tooltips.estimateRevisions)
+                    }
+                    Spacer()
+                    Text("\(Formatters.formatPercent(changePct)) 90d")
+                        .font(.caption).fontWeight(.semibold)
+                        .foregroundStyle(changePct > 0 ? .green : (changePct < 0 ? .red : .secondary))
+                    if let up = stockInfo.upRevisions30d, let down = stockInfo.downRevisions30d {
+                        Text("\(up)↑ \(down)↓")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Ex-dividend
+            if let exDate = stockInfo.exDividendDate, exDate > Date() {
+                let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 0
+                HStack {
+                    HStack(spacing: 3) {
+                        Text("Ex-Dividend").font(.caption).foregroundStyle(.secondary)
+                        InfoTooltip(title: "Ex-Dividend Date", explanation: Tooltips.exDividendDate)
+                    }
+                    Spacer()
+                    Text("\(days)d")
+                        .font(.caption).fontWeight(.semibold)
+                        .foregroundStyle(stockInfo.exDividendWarning == true ? .orange : .secondary)
+                    if let rate = stockInfo.dividendRate {
+                        Text("$\(String(format: "%.2f", rate))/yr")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if stockInfo.exDividendWarning == true {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2).foregroundStyle(.orange)
+                    }
+                }
+            }
+
             // Sector comparison
             if let etf = stockInfo.sectorETF, let rs = stockInfo.relativeStrength1d {
                 HStack {

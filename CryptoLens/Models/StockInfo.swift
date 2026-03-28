@@ -40,4 +40,16 @@ struct StockInfo: Codable {
     var sectorETF: String?
     var relativeStrength1d: Double?
     var outperformingSector: Bool?
+
+    // Estimate Revisions
+    var epsEstimateCurrent: Double?
+    var epsEstimate90dAgo: Double?
+    var revisionDirection: String?      // "strongUp", "up", "flat", "down", "strongDown"
+    var upRevisions30d: Int?
+    var downRevisions30d: Int?
+
+    // Dividend
+    var exDividendDate: Date?
+    var dividendRate: Double?           // Annual $ per share
+    var exDividendWarning: Bool?        // true if ex-date within 5 trading days
 }

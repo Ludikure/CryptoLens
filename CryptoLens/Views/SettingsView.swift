@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var selectedModel: String = ""
     @State private var apiKey = ""
     @State private var showKey = false
+    @State private var autoAlerts = UserDefaults.standard.object(forKey: "auto_alerts_enabled") as? Bool ?? false
 
     var body: some View {
         NavigationStack {
@@ -66,6 +67,17 @@ struct SettingsView: View {
                     Text(selectedModel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle("Auto-generate alerts from trade setups", isOn: $autoAlerts)
+                        .onChange(of: autoAlerts) {
+                            UserDefaults.standard.set(autoAlerts, forKey: "auto_alerts_enabled")
+                        }
+                } header: {
+                    Text("Alerts")
+                } footer: {
+                    Text("When enabled, pulling to refresh analysis will automatically create price alerts for Entry, Stop Loss, and Take Profit levels from AI trade setups.")
                 }
 
                 Section("About") {

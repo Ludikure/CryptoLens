@@ -91,6 +91,8 @@ enum AnalysisPrompt {
             - GROWTH: Accelerating revenue + pullback = high conviction dip buy. Declining growth + breakdown = confirms weakness.
             - SECTOR: Outperforming sector = relative strength, dips get bought. Underperforming = something wrong, rallies get sold.
             - INSIDER BUYING: Cluster buying is the strongest fundamental buy signal. Weight heavily if at technical support.
+            - EX-DIVIDEND: If within 5 trading days, flag it. Stock gaps down by dividend amount on ex-date — don't mistake for breakdown.
+            - ESTIMATE REVISIONS: Analysts revising up over 90 days = improving outlook. Revising down = deteriorating. Revision momentum leads price.
             Fundamentals don't override technicals — they add conviction or caution.
             """
         }
@@ -168,6 +170,24 @@ enum AnalysisPrompt {
             if let buys = si.insiderBuyCount6m, let sells = si.insiderSellCount6m {
                 lines.append("Insiders (6mo): \(buys) buys / \(sells) sells — \(si.insiderNetBuying == true ? "Net buying" : "Net selling")")
             }
+            // Estimate revisions
+            if let current = si.epsEstimateCurrent, let ago = si.epsEstimate90dAgo, ago != 0 {
+                let changePct = ((current - ago) / abs(ago)) * 100
+                var revLine = "Estimate Revisions (90d): EPS est \(Formatters.formatPrice(ago)) → \(Formatters.formatPrice(current)) (\(Formatters.formatPercent(changePct)))"
+                if let dir = si.revisionDirection { revLine += " \(dir)" }
+                if let up = si.upRevisions30d, let down = si.downRevisions30d {
+                    revLine += " | 30d: \(up) up, \(down) down"
+                }
+                lines.append(revLine)
+            }
+            // Ex-dividend
+            if let exDate = si.exDividendDate, exDate > Date() {
+                let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 0
+                var divLine = "Ex-Dividend: \(exDate.formatted(date: .abbreviated, time: .omitted)) (\(days)d)"
+                if let rate = si.dividendRate { divLine += " $\(String(format: "%.2f", rate))/yr" }
+                if si.exDividendWarning == true { divLine += " ⚠️ WITHIN 5 DAYS" }
+                lines.append(divLine)
+            }
             // Sector comparison
             if let etf = si.sectorETF, let rs = si.relativeStrength1d {
                 lines.append("Sector: \(si.sector ?? "N/A") (\(etf)) — \(si.outperformingSector == true ? "Outperforming" : "Underperforming") by \(Formatters.formatPercent(abs(rs)))")
@@ -200,9 +220,15 @@ enum AnalysisPrompt {
             lines.append("=== DERIVATIVES POSITIONING ===")
             lines.append("Funding Rate: \(String(format: "%.4f%%", d.fundingRatePercent)) (avg last 10: \(String(format: "%.4f%%", d.avgFundingRate * 100))) — \(p.fundingSentiment)")
             lines.append("Open Interest: \(Formatters.formatVolume(d.openInterestUSD))\(d.oiChange4h.map { String(format: " (4h: %+.1f%%)", $0) } ?? "")\(d.oiChange24h.map { String(format: " (24h: %+.1f%%)", $0) } ?? "") — \(p.oiTrend.rawValue)")
-            lines.append("Global L/S: Long \(Int(d.globalLongPercent))% / Short \(Int(d.globalShortPercent))% — \(p.crowding.rawValue)")
-            lines.append("Top Traders: Long \(Int(d.topTraderLongPercent))% / Short \(Int(d.topTraderShortPercent))% — \(p.smartMoneyBias)")
-            lines.append("Taker Buy/Sell: \(String(format: "%.2f", d.takerBuySellRatio)) — \(p.takerPressure)")
+            if d.globalLongPercent != 50 || d.globalShortPercent != 50 {
+                lines.append("Global L/S: Long \(Int(d.globalLongPercent))% / Short \(Int(d.globalShortPercent))% — \(p.crowding.rawValue)")
+            }
+            if d.topTraderLongPercent != 50 || d.topTraderShortPercent != 50 {
+                lines.append("Top Traders: Long \(Int(d.topTraderLongPercent))% / Short \(Int(d.topTraderShortPercent))% — \(p.smartMoneyBias)")
+            }
+            if d.takerBuySellRatio != 1.0 || d.takerBuyVolume > 0 {
+                lines.append("Taker Buy/Sell: \(String(format: "%.2f", d.takerBuySellRatio)) — \(p.takerPressure)")
+            }
             if p.squeezeRisk.level != "NONE" {
                 lines.append("Squeeze Risk: \(p.squeezeRisk.level) \(p.squeezeRisk.direction)")
             }

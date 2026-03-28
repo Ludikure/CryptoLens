@@ -194,7 +194,7 @@ class YahooFinanceService {
 
     /// Fetch enhanced fundamentals from quoteSummary (analyst targets, earnings history, insider transactions, growth).
     func fetchEnhancedFundamentals(symbol: String) async -> [String: Any]? {
-        let modules = "financialData,earningsHistory,insiderTransactions,defaultKeyStatistics,price"
+        let modules = "financialData,earningsHistory,insiderTransactions,defaultKeyStatistics,price,earningsTrend,calendarEvents,summaryDetail"
         guard let url = URL(string: "\(Constants.yahooBaseURL)/v10/finance/quoteSummary/\(symbol)?modules=\(modules)") else { return nil }
         do {
             let (data, _) = try await session.data(from: url)
@@ -269,6 +269,53 @@ class YahooFinanceService {
                 out["insiderBuys"] = buys
                 out["insiderSells"] = sells
                 out["insiderNetBuying"] = buys > sells
+            }
+
+            // earningsTrend: EPS estimates and revision counts
+            if let et = first["earningsTrend"] as? [String: Any],
+               let trend = et["trend"] as? [[String: Any]] {
+                // Find current quarter (first entry usually)
+                if let currentQ = trend.first {
+                    if let est = currentQ["earningsEstimate"] as? [String: Any] {
+                        if let current = (est["avg"] as? [String: Any])?["raw"] as? Double {
+                            out["epsEstimateCurrent"] = current
+                        }
+                    }
+                    // Revision counts
+                    if let revisions = currentQ["epsTrend"] as? [String: Any] {
+                        if let d90 = (revisions["90daysAgo"] as? [String: Any])?["raw"] as? Double {
+                            out["epsEstimate90dAgo"] = d90
+                        }
+                    }
+                }
+                // Try to get revision counts from epsTrend
+                if let currentQ = trend.first,
+                   let epsRevisions = currentQ["epsRevisions"] as? [String: Any] {
+                    out["upRevisions30d"] = (epsRevisions["upLast30days"] as? [String: Any])?["raw"] as? Int
+                    out["downRevisions30d"] = (epsRevisions["downLast30days"] as? [String: Any])?["raw"] as? Int
+                }
+            }
+
+            // Compute revision direction
+            if let current = out["epsEstimateCurrent"] as? Double,
+               let ago90 = out["epsEstimate90dAgo"] as? Double, ago90 != 0 {
+                let changePct = ((current - ago90) / abs(ago90)) * 100
+                if changePct > 5 { out["revisionDirection"] = "strongUp" }
+                else if changePct > 1 { out["revisionDirection"] = "up" }
+                else if changePct < -5 { out["revisionDirection"] = "strongDown" }
+                else if changePct < -1 { out["revisionDirection"] = "down" }
+                else { out["revisionDirection"] = "flat" }
+            }
+
+            // summaryDetail: ex-dividend date and dividend rate
+            if let sd = first["summaryDetail"] as? [String: Any] {
+                if let exDiv = sd["exDividendDate"] as? [String: Any],
+                   let raw = exDiv["raw"] as? Int {
+                    out["exDividendDate"] = raw  // Unix timestamp
+                }
+                if let divRate = sd["dividendRate"] as? [String: Any] {
+                    out["dividendRate"] = divRate["raw"] as? Double
+                }
             }
 
             return out.isEmpty ? nil : out

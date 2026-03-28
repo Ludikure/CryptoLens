@@ -198,10 +198,11 @@ struct AnalysisView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
-        IndicatorTableView(results: [result.tf1, result.tf2, result.tf3])
+        // AI Analysis (visible early so users see pull-to-refresh hint)
+        ClaudeAnalysisView(markdown: result.claudeAnalysis)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
-        ClaudeAnalysisView(markdown: result.claudeAnalysis)
+        IndicatorTableView(results: [result.tf1, result.tf2, result.tf3])
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
         if let sentiment = result.sentiment {
