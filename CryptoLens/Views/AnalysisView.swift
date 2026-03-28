@@ -5,6 +5,7 @@ struct AnalysisView: View {
     @EnvironmentObject var favorites: FavoritesStore
     @State private var selectedSymbol = Constants.allCoins[0].id
     @State private var showPicker = false
+    @State private var viewId = UUID()
 
     private var selectedAssetName: String {
         Constants.asset(for: selectedSymbol)?.name ?? selectedSymbol
@@ -37,6 +38,7 @@ struct AnalysisView: View {
                     if service.isLoading {
                         ShimmerPlaceholder(result: service.lastResult != nil)
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                            .id(viewId)
                     }
 
                     if let error = service.error {
@@ -89,7 +91,7 @@ struct AnalysisView: View {
                     }
                 }
 
-                // Trailing: share (pull-to-refresh handles reload)
+                // Trailing: share
                 ToolbarItem(placement: .navigationBarTrailing) {
                     if service.lastResult != nil {
                         ShareLink(item: shareText) {
@@ -102,7 +104,12 @@ struct AnalysisView: View {
                 CoinPickerView(selectedSymbol: $selectedSymbol)
             }
             .onAppear {
-                Task { await service.selectSymbol(selectedSymbol) }
+                // Force recreate loading animation when returning to tab
+                viewId = UUID()
+                // Only select on first appear or if symbol changed while away
+                if service.currentSymbol != selectedSymbol {
+                    Task { await service.selectSymbol(selectedSymbol) }
+                }
             }
             .onChange(of: selectedSymbol) {
                 HapticManager.selection()
@@ -138,12 +145,7 @@ struct AnalysisView: View {
                 }
             }
             .onChange(of: selectedSymbol) {
-                withAnimation { proxy.scrollTo(selectedSymbol, anchor: .center) }
-            }
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    proxy.scrollTo(selectedSymbol, anchor: .center)
-                }
+                proxy.scrollTo(selectedSymbol, anchor: .center)
             }
         }
     }
@@ -181,6 +183,12 @@ struct AnalysisView: View {
         }
         if let si = result.stockInfo {
             StockInfoView(stockInfo: si, symbol: result.symbol)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
+        // Derivatives positioning (crypto only)
+        if let d = result.derivatives, let p = result.positioning {
+            DerivativesCardView(data: d, snapshot: p)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
@@ -394,3 +402,4 @@ private struct ConfidenceSummaryView: View {
         )
     }
 }
+

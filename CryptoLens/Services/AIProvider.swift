@@ -3,7 +3,7 @@ import Foundation
 /// Abstraction for AI analysis providers (Claude, Gemini, etc.)
 protocol AIProvider {
     var displayName: String { get }
-    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market, stockInfo: StockInfo?) async throws -> ClaudeAnalysisResponse
+    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market, stockInfo: StockInfo?, derivatives: DerivativesData?, positioning: PositioningSnapshot?) async throws -> ClaudeAnalysisResponse
 }
 
 enum AIProviderType: String, Codable, CaseIterable, Identifiable {
@@ -22,8 +22,9 @@ enum AIProviderType: String, Codable, CaseIterable, Identifiable {
     var models: [(id: String, name: String)] {
         switch self {
         case .claude: return [
-            (Constants.defaultModel, "Sonnet (recommended)"),
-            (Constants.haikuModel, "Haiku (faster, cheaper)"),
+            ("claude-sonnet-4-6", "Sonnet 4.6 (recommended)"),
+            ("claude-opus-4-6", "Opus 4.6 (most capable)"),
+            (Constants.haikuModel, "Haiku 4.5 (faster, cheaper)"),
         ]
         case .gemini: return [
             ("gemini-2.5-flash", "Gemini 2.5 Flash"),

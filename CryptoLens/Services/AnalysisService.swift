@@ -3,6 +3,7 @@ import Foundation
 class AnalysisService: ObservableObject {
     let binance = BinanceService()
     let yahoo = YahooFinanceService()
+    let derivativesService = DerivativesService()
     let coinGecko = CoinGeckoService()
     var aiProvider: AIProvider?
     @Published var providerType: AIProviderType = .claude
@@ -67,7 +68,7 @@ class AnalysisService: ObservableObject {
 
     func startAutoRefresh(symbol: String) {
         refreshTimer?.cancel()
-        currentSymbol = symbol
+        Task { @MainActor in currentSymbol = symbol }
         refreshTimer = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000) // 60s
@@ -101,6 +102,14 @@ class AnalysisService: ObservableObject {
                 stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
             }
 
+            // Crypto derivatives (fails gracefully if geo-blocked)
+            var derivData: DerivativesData? = nil
+            var positioning: PositioningSnapshot? = nil
+            if market == .crypto {
+                derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
+                if let d = derivData { positioning = PositioningAnalyzer.analyze(data: d) }
+            }
+
             let previous = resultsBySymbol[symbol]
             let result = AnalysisResult(
                 symbol: symbol,
@@ -111,6 +120,8 @@ class AnalysisService: ObservableObject {
                 sentiment: sentiment,
                 fearGreed: fearGreed,
                 stockInfo: stockInfo,
+                derivatives: derivData,
+                positioning: positioning,
                 claudeAnalysis: previous?.claudeAnalysis ?? "",
                 tradeSetups: previous?.tradeSetups ?? []
             )
@@ -152,6 +163,14 @@ class AnalysisService: ObservableObject {
                 stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
             }
 
+            // Crypto derivatives
+            var derivData: DerivativesData? = nil
+            var positioning: PositioningSnapshot? = nil
+            if market == .crypto {
+                derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
+                if let d = derivData { positioning = PositioningAnalyzer.analyze(data: d) }
+            }
+
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
             if let provider = aiProvider {
@@ -161,7 +180,9 @@ class AnalysisService: ObservableObject {
                     sentiment: sentiment,
                     symbol: symbol,
                     market: market,
-                    stockInfo: stockInfo
+                    stockInfo: stockInfo,
+                    derivatives: derivData,
+                    positioning: positioning
                 )
                 claudeAnalysis = response.markdown
                 tradeSetups = response.setups
@@ -180,6 +201,8 @@ class AnalysisService: ObservableObject {
                 sentiment: sentiment,
                 fearGreed: fearGreed,
                 stockInfo: stockInfo,
+                derivatives: derivData,
+                positioning: positioning,
                 claudeAnalysis: claudeAnalysis,
                 tradeSetups: tradeSetups
             )

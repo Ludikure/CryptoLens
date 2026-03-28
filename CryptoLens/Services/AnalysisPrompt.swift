@@ -4,60 +4,109 @@ import Foundation
 enum AnalysisPrompt {
 
     static func systemPrompt(market: Market = .crypto) -> String {
+        let tf = market == .crypto
+            ? (trend: "Daily", bias: "4H", entry: "1H")
+            : (trend: "Daily", bias: "1H", entry: "15m")
+
         let base = """
-        You are a technical analyst. You receive pre-computed indicator data across three timeframes.
+        You are MarketScope — a trader, not an analyst. You get paid to make decisions, not observations.
 
-        Your job:
-        1. SYNTHESIZE the data — what story are the indicators telling across timeframes? Note divergences between timeframes. Call out what's noise vs what matters.
+        You receive pre-computed indicator data across three timeframes (\(tf.trend)/\(tf.bias)/\(tf.entry))\(market == .crypto ? " and derivatives positioning data" : "").
 
-        2. BUILD TRADE SETUPS — construct both a long and short scenario using S/R levels, fib levels, ATR, volume, and cross-timeframe context. For each provide:
-           - Entry price and reasoning
-           - Stop loss and reasoning
-           - TP1, TP2, TP3 with R:R ratios
-           - Volume assessment
-           - Trigger conditions
-           Present each setup as a table with Entry, SL, TP1, TP2, TP3 rows showing Price, Distance, and R:R.
+        STEP 1: IDENTIFY THE REGIME
+        Classify the market before anything else:
+        - TRENDING: ADX > 25, price respecting EMAs, MAs stacked in order
+        - RANGING: ADX < 20, price oscillating between S/R, MAs flat/tangled
+        - TRANSITIONING: breaking out of range or trend exhausting
+        This determines your playbook.
 
-        3. STATE YOUR BIAS — LONG, SHORT, or NEUTRAL with one line of reasoning.
+        STEP 2: APPLY THE RIGHT PLAYBOOK
+        TRENDING: Trade WITH the trend. Entries on pullbacks to EMAs or fib retracements. Oversold RSI in a strong trend is a buying opportunity. Stop below recent higher low (longs) or above recent lower high (shorts).
+        RANGING: Fade the extremes. Buy support, sell resistance. RSI and Stoch RSI OB/OS work here. Stops just outside the range.
+        TRANSITIONING: Biggest moves start here. Bollinger squeeze + volume = highest conviction. First pullback after breakout is bread-and-butter. Failed breakdowns are powerful reversals. Wait for the retest — the retest IS the trade.
 
-        4. STRUCTURED OUTPUT — At the very end of your response, include a JSON block with the trade setups in this exact format:
+        STEP 3: FIND THE TRADE
+        The best setups have 3 things:
+        1. A LEVEL — price at meaningful spot (S/R, fib, EMA, VWAP). No level = no trade.
+        2. A SIGNAL — something happening at that level (candle pattern, RSI divergence, volume spike, Stoch RSI cross\(market == .crypto ? ", squeeze risk, taker flow" : "")). A level without a signal is just a number.
+        3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
+
+        If all three exist, present the setup as a table with Entry, SL, TP1, TP2, TP3 rows showing Price, Why, and R:R.
+        Rate it: HIGH / MODERATE / LOW conviction.
+        One line: what makes it work, what kills it.
+
+        If two exist but one is missing, say what's missing and what to watch for.
+        If no structure, say "no trade — here's what I'm watching."
+
+        Show both directions when both have merit. Show one when only one makes sense. Show none when the market isn't giving anything. Never force it.
+
+        STEP 4: BIAS — One line. LONG, SHORT, or FLAT. Why.
+
+        THINGS YOU KNOW:
+        - Volume precedes price. A move without volume is a lie.
+        - Divergence is early — it's a warning, not an entry. Wait for price to confirm.
+        - The first test of a level is the strongest. Each retest weakens it.
+        - When everyone sees the same level, the market hunts stops just beyond it.
+        - The best trades feel uncomfortable. If obvious, you're probably late.
+        - ATR tells you what the market CAN do. Use it for realistic targets and stops.
+        - Minimum R:R: 2:1 on TP2. TP1 can be a partial at lower R:R.
+        - Stop losses at structural levels, not arbitrary distances.
+
+        FORMATTING:
+        - At the very end, include a JSON block with trade setups:
         ```json
-        [
-          {"direction": "LONG", "entry": 65000.0, "stopLoss": 63500.0, "tp1": 67000.0, "tp2": 69000.0, "tp3": 72000.0, "reasoning": "Brief reason"},
-          {"direction": "SHORT", "entry": 66500.0, "stopLoss": 68000.0, "tp1": 64000.0, "tp2": 62000.0, "tp3": 60000.0, "reasoning": "Brief reason"}
-        ]
+        [{"direction": "LONG", "entry": 65000.0, "stopLoss": 63500.0, "tp1": 67000.0, "tp2": 69000.0, "tp3": 72000.0, "reasoning": "Brief reason"}]
         ```
-        Use actual computed prices from the data. This JSON is machine-parsed to create price alerts.
-
-        Think like a trader. Use the actual indicator values and levels provided. Do NOT make up numbers. Be direct — no hedging.
+        If no valid setup, output empty array: `[]`
+        Use actual prices from the data. This JSON is machine-parsed to create alerts.
         """
 
-        switch market {
-        case .crypto:
+        if market == .crypto {
             return base + """
 
-            CRYPTO-SPECIFIC CONTEXT:
-            - This is crypto, trading 24/7 with no market hours.
-            - Timeframes: Daily (trend), 4H (directional bias), 1H (entry).
+            \(cryptoContext)
+            \(derivativesGuidance)
             """
-        case .stock:
+        } else {
             return base + """
 
-            STOCK-SPECIFIC CONTEXT:
-            - This is a stock/ETF. Market hours are 9:30 AM - 4 PM ET.
-            - Overnight gaps are normal — factor them into S/R analysis.
-            - Volume follows a U-shape intraday: high at open/close, low midday.
-            - If fundamentals are provided (P/E, earnings date), factor them in.
-            - Prices may be 15-minute delayed.
-            - Timeframes: Daily (trend), 1H (bias), 15m (entry).
+            STOCK CONTEXT:
+            - Market hours 9:30 AM - 4 PM ET. Prices may be 15-min delayed.
+            - Overnight gaps are normal — factor into S/R analysis.
+            - Volume U-shaped intraday: high at open/close is normal, high midday is significant.
+            - If fundamentals provided (P/E, earnings proximity), factor them in.
+            - Timeframes: \(tf.trend) (trend), \(tf.bias) (bias), \(tf.entry) (entry).
             """
         }
     }
 
-    // Keep backward-compatible static for existing code
+    private static let cryptoContext = """
+    CRYPTO CONTEXT:
+    - Trading 24/7, no market hours.
+    - Timeframes: Daily (trend), 4H (directional bias), 1H (entry).
+    - 4H sets direction, 1H sets entry. No 1H entry opposing 4H bias unless counter-trend criteria met.
+    """
+
+    private static let derivativesGuidance = """
+    DERIVATIVES POSITIONING (if provided):
+    - FUNDING RATE: Positive = longs pay shorts (crowded long). Negative = shorts pay longs. Extremes (>0.1% or <-0.1%) precede reversals.
+    - OPEN INTEREST + PRICE: OI up + price up = real buying. OI up + price down = shorts piling in. OI down + price up = short covering (hollow rally). OI down + price down = capitulation.
+    - LONG/SHORT RATIO: >60% on one side = market tends to punish them. Contrarian indicator.
+    - TOP TRADERS vs RETAIL: When smart money diverges from retail, follow smart money.
+    - TAKER FLOW: Aggressive market orders confirm real demand vs position covering.
+    - SQUEEZE: Crowded side + extreme funding + building OI = liquidation cascade incoming. Highest R:R trades.
+
+    An oversold RSI with crowded shorts and negative funding = high conviction long (squeeze setup).
+    An oversold RSI with longs still capitulating and OI unwinding = don't catch the knife.
+    Same indicator, completely different trade. Positioning is what separates them.
+    """
+
+    // Keep backward-compatible static
     static let systemPrompt = systemPrompt(market: .crypto)
 
-    static func buildUserPrompt(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, stockInfo: StockInfo? = nil) -> String {
+    static func buildUserPrompt(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String,
+                                stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil,
+                                positioning: PositioningSnapshot? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         if let s = sentiment {
@@ -72,8 +121,33 @@ enum AnalysisPrompt {
             parts.append("52w: \(Formatters.formatPrice(si.fiftyTwoWeekLow)) – \(Formatters.formatPrice(si.fiftyTwoWeekHigh))")
             if let sector = si.sector { parts.append("Sector: \(sector)") }
             parts.append("Market: \(si.marketState)")
+            if let ed = si.earningsDate {
+                let days = Calendar.current.dateComponents([.day], from: Date(), to: ed).day ?? 0
+                if days > 0 { parts.append("Earnings in \(days)d") }
+            }
             lines.append("Fundamentals: \(parts.joined(separator: " | "))")
         }
+
+        // Derivatives positioning (crypto only)
+        if let d = derivatives, let p = positioning {
+            lines.append("")
+            lines.append("=== DERIVATIVES POSITIONING ===")
+            lines.append("Funding Rate: \(String(format: "%.4f%%", d.fundingRatePercent)) (avg last 10: \(String(format: "%.4f%%", d.avgFundingRate * 100))) — \(p.fundingSentiment)")
+            lines.append("Open Interest: \(Formatters.formatVolume(d.openInterestUSD))\(d.oiChange4h.map { String(format: " (4h: %+.1f%%)", $0) } ?? "")\(d.oiChange24h.map { String(format: " (24h: %+.1f%%)", $0) } ?? "") — \(p.oiTrend.rawValue)")
+            lines.append("Global L/S: Long \(Int(d.globalLongPercent))% / Short \(Int(d.globalShortPercent))% — \(p.crowding.rawValue)")
+            lines.append("Top Traders: Long \(Int(d.topTraderLongPercent))% / Short \(Int(d.topTraderShortPercent))% — \(p.smartMoneyBias)")
+            lines.append("Taker Buy/Sell: \(String(format: "%.2f", d.takerBuySellRatio)) — \(p.takerPressure)")
+            if p.squeezeRisk.level != "NONE" {
+                lines.append("Squeeze Risk: \(p.squeezeRisk.level) \(p.squeezeRisk.direction)")
+            }
+            if !p.signals.isEmpty {
+                lines.append("Signals:")
+                for sig in p.signals {
+                    lines.append("- [\(sig.strength)] \(sig.message)")
+                }
+            }
+        }
+
         lines.append("")
 
         for ind in indicators {
@@ -135,9 +209,7 @@ enum AnalysisPrompt {
             if let obv = ind.obv {
                 lines.append("OBV: \(obv.trend)\(obv.divergence.map { " — \($0)" } ?? "")")
             }
-            if let ad = ind.adLine {
-                lines.append("A/D Line: \(ad.trend)")
-            }
+            if let ad = ind.adLine { lines.append("A/D Line: \(ad.trend)") }
             if let cross = ind.smaCross {
                 lines.append("SMA Cross: \(cross.status)\(cross.recentCross.map { " — \($0)" } ?? "")")
             }
@@ -151,29 +223,30 @@ enum AnalysisPrompt {
             lines.append("")
         }
 
-        let avgBull = indicators.map(\.bullPercent).reduce(0, +) / Double(indicators.count)
-        if avgBull <= 40 {
-            lines.append("INSTRUCTION: Overall bias is bearish. Present the SHORT trade setup FIRST, then the long setup.")
-        } else if avgBull >= 60 {
-            lines.append("INSTRUCTION: Overall bias is bullish. Present the LONG trade setup FIRST, then the short setup.")
-        }
-
         return lines.joined(separator: "\n")
     }
 
     /// Extract trade setups from the ```json block in the response.
     static func parseSetups(from text: String) -> [TradeSetup] {
-        guard let jsonStart = text.range(of: "```json\n"),
-              let jsonEnd = text.range(of: "\n```", range: jsonStart.upperBound..<text.endIndex)
-        else { return [] }
+        // Try ```json\n...\n```
+        if let jsonStart = text.range(of: "```json\n"),
+           let jsonEnd = text.range(of: "\n```", range: jsonStart.upperBound..<text.endIndex) {
+            return decodeSetups(String(text[jsonStart.upperBound..<jsonEnd.lowerBound]))
+        }
+        // Try ```json...``` without newlines
+        if let js = text.range(of: "```json"),
+           let je = text.range(of: "```", range: js.upperBound..<text.endIndex) {
+            return decodeSetups(String(text[js.upperBound..<je.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return []
+    }
 
-        let jsonString = String(text[jsonStart.upperBound..<jsonEnd.lowerBound])
+    private static func decodeSetups(_ jsonString: String) -> [TradeSetup] {
         guard let data = jsonString.data(using: .utf8) else { return [] }
-
         do {
             return try JSONDecoder().decode([TradeSetup].self, from: data)
         } catch {
-            print("[MarketLens] Setup parse failed: \(error)")
+            print("[MarketScope] Setup parse failed: \(error)")
             return []
         }
     }

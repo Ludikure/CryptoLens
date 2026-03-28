@@ -10,8 +10,8 @@ class ClaudeService: AIProvider {
         self.model = model
     }
 
-    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil) async throws -> ClaudeAnalysisResponse {
-        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo)
+    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil) async throws -> ClaudeAnalysisResponse {
+        let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning)
 
         var request = URLRequest(url: URL(string: Constants.claudeAPIURL)!)
         request.httpMethod = "POST"

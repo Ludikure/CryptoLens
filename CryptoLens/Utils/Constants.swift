@@ -18,7 +18,7 @@ enum Constants {
     static let yahooBaseURL = "https://query1.finance.yahoo.com"
     static let claudeAPIURL = "https://api.anthropic.com/v1/messages"
     static let claudeAPIVersion = "2023-06-01"
-    static let defaultModel = "claude-sonnet-4-20250514"
+    static let defaultModel = "claude-sonnet-4-6"
     static let haikuModel = "claude-haiku-4-5-20251001"
 
     // MARK: - Crypto

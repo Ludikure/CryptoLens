@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		013DA6AEB813102D16159585 /* DerivativesCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AE108B1457B5F3BB52077EF /* DerivativesCardView.swift */; };
 		025CECD33B0FB1C0E039B85D /* MovingAverages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D378C87BB8F05A35A542FE5 /* MovingAverages.swift */; };
 		03C6B035B02D347830E85E19 /* ShimmerModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37A622A7632909155C34F191 /* ShimmerModifier.swift */; };
 		0536BF3C68DE7FA0FF600EC7 /* AlertsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D71998F783820C9E88C9D533 /* AlertsStore.swift */; };
@@ -23,6 +24,7 @@
 		2720DFD9514AD90629E838C0 /* BollingerBands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1CF837C126DFFF6C4C67F0 /* BollingerBands.swift */; };
 		28C17907B776E97E558A7380 /* MarketHours.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91A2649852593EF35667B3E2 /* MarketHours.swift */; };
 		326096D60B4A374B7625C959 /* SentimentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02DC95AF0031BFDF1DFF203 /* SentimentView.swift */; };
+		3AEFEA62C6D9828A0776B27D /* PositioningSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 751F6418841B0076E433CBE6 /* PositioningSnapshot.swift */; };
 		4022873D15F6D82DC37F348F /* ViewToImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE9477E64E7199714B3CC77 /* ViewToImage.swift */; };
 		4289A8040BC41C7DFDC45778 /* AIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714F80BAAC4263133724FD5B /* AIProvider.swift */; };
 		453071FE065A474BB06375C3 /* AlertsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CD9FF6F190A00C9532669B /* AlertsView.swift */; };
@@ -31,6 +33,7 @@
 		49248B7514292C369167B8DB /* Candle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 049DFBBCC9A22BB296B0D816 /* Candle.swift */; };
 		5C7FDA370C9AE19DFA2D31E3 /* BackgroundRefreshManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD5DC1D4B6985572D77BF179 /* BackgroundRefreshManager.swift */; };
 		62795D11B0D1547323A7837D /* IndicatorTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACC70EF9EA70BD6354CD915 /* IndicatorTableView.swift */; };
+		645957246AA55759B2DBDC92 /* DerivativesData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 082FF9FCE52776C592BFE849 /* DerivativesData.swift */; };
 		68B6B1452B61E92287BDC954 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF9F2D5B4EE3347239ADBDC /* ContentView.swift */; };
 		6DE53F66061EF7D655663561 /* GeminiService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265CADECA7DA8D2B4EC1B20A /* GeminiService.swift */; };
 		6F7BB3AED8D48BDF7D2253FD /* ATR.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9782B049170E42032D87F710 /* ATR.swift */; };
@@ -54,10 +57,12 @@
 		C6A387FD4277EB50F0F09E3C /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 240E25E0B2FC9470C9FD86AF /* Formatters.swift */; };
 		C6BB796BC7207CC9E1E8E40D /* IndicatorResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = D572EBDCAE105716B5604679 /* IndicatorResult.swift */; };
 		C739724A940DA8439E24C910 /* ClaudeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 789F2DF1B44B021D2E901B4D /* ClaudeService.swift */; };
+		C913646ED2A7A8CFA8C39BB7 /* PositioningAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B08599D1603C5AB66273B24 /* PositioningAnalyzer.swift */; };
 		D0C2CE72945639081504B1BA /* StockIndicators.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC38D2043EA9CDE3ADA8BD14 /* StockIndicators.swift */; };
 		D6C409FE7FFB821922F77556 /* VWAP.swift in Sources */ = {isa = PBXBuildFile; fileRef = D491749D3AAE2A4A1C55903B /* VWAP.swift */; };
 		DD41AFA234F03EFA66B4D337 /* MACD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8251FCFAA56BF737CFEDAC8B /* MACD.swift */; };
 		E120E3822144D196C3381E48 /* TimestampBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFF49A906FD9BA3F4B4CF2A /* TimestampBar.swift */; };
+		E4989A837359692E3648E5B1 /* DerivativesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8829EA677390B0BFA2AACCC2 /* DerivativesService.swift */; };
 		E9E67799FFCDABFF60631C0A /* CoinPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C188735F2331F1002B4B991 /* CoinPickerView.swift */; };
 		F1FB71F4392ECE4C66D1D8D0 /* CoinGeckoService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6C40E0EF0FD7E88BF65CDA4 /* CoinGeckoService.swift */; };
 		F1FF18EB4962C1D652E9202C /* CandlePatterns.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF20818F07C5B0411D0974B8 /* CandlePatterns.swift */; };
@@ -67,6 +72,8 @@
 /* Begin PBXFileReference section */
 		026EE4E09E43FF634D4E9AE7 /* BinanceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinanceService.swift; sourceTree = "<group>"; };
 		049DFBBCC9A22BB296B0D816 /* Candle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Candle.swift; sourceTree = "<group>"; };
+		082FF9FCE52776C592BFE849 /* DerivativesData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesData.swift; sourceTree = "<group>"; };
+		0B08599D1603C5AB66273B24 /* PositioningAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningAnalyzer.swift; sourceTree = "<group>"; };
 		0BB3A257C06C78BA23D12112 /* AnalysisResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisResult.swift; sourceTree = "<group>"; };
 		1D96C0465266CF918A8844FA /* AnalysisHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisHistoryStore.swift; sourceTree = "<group>"; };
 		1FBD8705FBB2C73758106E5E /* RSIDivergence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSIDivergence.swift; sourceTree = "<group>"; };
@@ -89,11 +96,14 @@
 		712D5923C993CB356F7E558C /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
 		714F80BAAC4263133724FD5B /* AIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvider.swift; sourceTree = "<group>"; };
 		7202C20B67FFB645DBDABA14 /* PriceAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceAlert.swift; sourceTree = "<group>"; };
+		751F6418841B0076E433CBE6 /* PositioningSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningSnapshot.swift; sourceTree = "<group>"; };
 		789F2DF1B44B021D2E901B4D /* ClaudeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeService.swift; sourceTree = "<group>"; };
 		8251FCFAA56BF737CFEDAC8B /* MACD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MACD.swift; sourceTree = "<group>"; };
 		84D908C74E2725C15BE1CCCB /* HapticManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
+		8829EA677390B0BFA2AACCC2 /* DerivativesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesService.swift; sourceTree = "<group>"; };
 		91A2649852593EF35667B3E2 /* MarketHours.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketHours.swift; sourceTree = "<group>"; };
 		9782B049170E42032D87F710 /* ATR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ATR.swift; sourceTree = "<group>"; };
+		9AE108B1457B5F3BB52077EF /* DerivativesCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesCardView.swift; sourceTree = "<group>"; };
 		9C188735F2331F1002B4B991 /* CoinPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinPickerView.swift; sourceTree = "<group>"; };
 		9D9485756A0FD554CED7F18F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A07B5B9A385FA8990590F4BB /* Fibonacci.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Fibonacci.swift; sourceTree = "<group>"; };
@@ -155,6 +165,7 @@
 				026EE4E09E43FF634D4E9AE7 /* BinanceService.swift */,
 				789F2DF1B44B021D2E901B4D /* ClaudeService.swift */,
 				C6C40E0EF0FD7E88BF65CDA4 /* CoinGeckoService.swift */,
+				8829EA677390B0BFA2AACCC2 /* DerivativesService.swift */,
 				712D5923C993CB356F7E558C /* FavoritesStore.swift */,
 				265CADECA7DA8D2B4EC1B20A /* GeminiService.swift */,
 				DC9A005B372BCAA04AAAE663 /* YahooFinanceService.swift */,
@@ -179,6 +190,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		581D3B9FE4AC6237854E80CB /* Analysis */ = {
+			isa = PBXGroup;
+			children = (
+				0B08599D1603C5AB66273B24 /* PositioningAnalyzer.swift */,
+			);
+			path = Analysis;
+			sourceTree = "<group>";
+		};
 		6B2F66AD008C4C14684E2941 = {
 			isa = PBXGroup;
 			children = (
@@ -192,6 +211,7 @@
 			isa = PBXGroup;
 			children = (
 				9D9485756A0FD554CED7F18F /* Info.plist */,
+				581D3B9FE4AC6237854E80CB /* Analysis */,
 				4CF7D6987A77D3586955CCA8 /* App */,
 				C26FE3774B5721CF21E42E92 /* Indicators */,
 				D78263014D0439F3A50F2CDC /* Models */,
@@ -212,6 +232,7 @@
 				26719ECFE581DAFEED10F299 /* AnalysisView.swift */,
 				3CEBC7A6029CF08B65BAF4A4 /* ClaudeAnalysisView.swift */,
 				9C188735F2331F1002B4B991 /* CoinPickerView.swift */,
+				9AE108B1457B5F3BB52077EF /* DerivativesCardView.swift */,
 				EC50FD5E89801E8670B98C86 /* FearGreedView.swift */,
 				4ACC70EF9EA70BD6354CD915 /* IndicatorTableView.swift */,
 				D02DC95AF0031BFDF1DFF203 /* SentimentView.swift */,
@@ -250,8 +271,10 @@
 				0BB3A257C06C78BA23D12112 /* AnalysisResult.swift */,
 				049DFBBCC9A22BB296B0D816 /* Candle.swift */,
 				29ADC5116EA585594CD2E515 /* CoinInfo.swift */,
+				082FF9FCE52776C592BFE849 /* DerivativesData.swift */,
 				D572EBDCAE105716B5604679 /* IndicatorResult.swift */,
 				B016B993A2BC2F6E0DFA2C22 /* Market.swift */,
+				751F6418841B0076E433CBE6 /* PositioningSnapshot.swift */,
 				7202C20B67FFB645DBDABA14 /* PriceAlert.swift */,
 				FC47550CD92B9388BB0D39AC /* StockInfo.swift */,
 				EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */,
@@ -368,6 +391,9 @@
 				09D02660E4C18D8A6CD520C1 /* Constants.swift in Sources */,
 				68B6B1452B61E92287BDC954 /* ContentView.swift in Sources */,
 				0B074A729A333B3D2633AC73 /* CryptoLensApp.swift in Sources */,
+				013DA6AEB813102D16159585 /* DerivativesCardView.swift in Sources */,
+				645957246AA55759B2DBDC92 /* DerivativesData.swift in Sources */,
+				E4989A837359692E3648E5B1 /* DerivativesService.swift in Sources */,
 				1DD589421F6653D764A6D74B /* FavoritesStore.swift in Sources */,
 				8D4CAF99FFD787EAFF31DDBC /* FearGreedView.swift in Sources */,
 				AA47E6DBA31F580FFCAB5CD9 /* Fibonacci.swift in Sources */,
@@ -380,6 +406,8 @@
 				143344CDABBCFD511DE2E4C8 /* Market.swift in Sources */,
 				28C17907B776E97E558A7380 /* MarketHours.swift in Sources */,
 				025CECD33B0FB1C0E039B85D /* MovingAverages.swift in Sources */,
+				C913646ED2A7A8CFA8C39BB7 /* PositioningAnalyzer.swift in Sources */,
+				3AEFEA62C6D9828A0776B27D /* PositioningSnapshot.swift in Sources */,
 				47D438CE90710F3741D9FA74 /* PriceAlert.swift in Sources */,
 				223A902641D57D1AE1F97CA6 /* RSI.swift in Sources */,
 				A39ADE6F0E0D5C262F9CEBC5 /* RSIDivergence.swift in Sources */,

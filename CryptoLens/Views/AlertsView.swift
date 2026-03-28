@@ -335,10 +335,17 @@ struct CreateAlertView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Coin") {
-                    Picker("Coin", selection: $selectedSymbol) {
-                        ForEach(Constants.allCoins) { coin in
-                            Text("\(coin.name) (\(coin.ticker))").tag(coin.id)
+                Section("Asset") {
+                    Picker("Asset", selection: $selectedSymbol) {
+                        Section("Crypto") {
+                            ForEach(Constants.allCoins) { coin in
+                                Text("\(coin.name) (\(coin.ticker))").tag(coin.id)
+                            }
+                        }
+                        Section("Stocks & ETFs") {
+                            ForEach(Constants.defaultStocks) { stock in
+                                Text("\(stock.name) (\(stock.ticker))").tag(stock.id)
+                            }
                         }
                     }
                 }
