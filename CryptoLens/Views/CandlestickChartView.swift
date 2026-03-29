@@ -188,9 +188,9 @@ private struct CandlestickCanvas: View {
                     }
 
                     // Pattern annotation on last candle
-                    if !candlePatterns.isEmpty {
+                    if let firstPattern = candlePatterns.first, let lastCandle = candles.last {
                         let lastX = step * CGFloat(candles.count - 1) + step / 2
-                        let lastHigh = priceY(candles.last!.high, height: chartHeight)
+                        let lastHigh = priceY(lastCandle.high, height: chartHeight)
                         let isBullish = candlePatterns.contains { $0.signal.lowercased().contains("bullish") }
 
                         Circle()
@@ -198,7 +198,7 @@ private struct CandlestickCanvas: View {
                             .frame(width: 6, height: 6)
                             .position(x: lastX, y: lastHigh - 8)
 
-                        Text(candlePatterns.first!.pattern)
+                        Text(firstPattern.pattern)
                             .font(.system(size: 7, weight: .semibold))
                             .foregroundStyle(isBullish ? .green : .red)
                             .position(x: lastX, y: lastHigh - 18)

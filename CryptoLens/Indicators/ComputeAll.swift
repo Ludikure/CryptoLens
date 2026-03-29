@@ -38,7 +38,7 @@ enum IndicatorEngine {
 
         // Volume ratio
         let avgVol: Double? = volumes.count >= 20 ? volumes.suffix(20).reduce(0, +) / 20.0 : nil
-        let volRatio: Double? = avgVol.map { (volumes.last! / $0).rounded(toPlaces: 2) }
+        let volRatio: Double? = avgVol.flatMap { avg in volumes.last.map { ($0 / avg).rounded(toPlaces: 2) } }
 
         // Stock-only indicators
         var obv: OBVResult? = nil

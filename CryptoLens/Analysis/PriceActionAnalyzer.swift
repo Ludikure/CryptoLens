@@ -107,8 +107,9 @@ enum PriceActionAnalyzer {
 
         let highs = recent.map(\.high)
         let lows = recent.map(\.low)
-        let rangeHigh = highs.max()!
-        let rangeLow = lows.min()!
+        guard let rangeHigh = highs.max(), let rangeLow = lows.min() else {
+            return PriceStructure(regime: "insufficient_data", rangePercent: 0, rangeHigh: 0, rangeLow: 0, candleCount: recent.count)
+        }
         let range = rangeHigh - rangeLow
         let avgClose = recent.map(\.close).reduce(0, +) / Double(recent.count)
         let rangePercent = avgClose > 0 ? (range / avgClose) * 100 : 0
@@ -129,8 +130,12 @@ enum PriceActionAnalyzer {
         let closes = recent.map(\.close)
         let hlCount = countHigherLows(recent)
         let lhCount = countLowerHighs(recent)
-        let isUptrend = closes.last! > closes.first! && hlCount >= period / 2
-        let isDowntrend = closes.last! < closes.first! && lhCount >= period / 2
+        guard let lastClose = closes.last, let firstClose = closes.first else {
+            return PriceStructure(regime: "choppy", rangePercent: rangePercent.rounded(toPlaces: 1),
+                                  rangeHigh: rangeHigh, rangeLow: rangeLow, candleCount: recent.count)
+        }
+        let isUptrend = lastClose > firstClose && hlCount >= period / 2
+        let isDowntrend = lastClose < firstClose && lhCount >= period / 2
 
         let regime: String
         if isUptrend { regime = "trending_up" }
@@ -184,8 +189,8 @@ enum PriceActionAnalyzer {
         let recentRSI = Array(rsiValues.suffix(3))
         let rsiSlope: Double
         let rsiDirection: String
-        if recentRSI.count >= 2 {
-            rsiSlope = recentRSI.last! - recentRSI.first!
+        if recentRSI.count >= 2, let rsiLast = recentRSI.last, let rsiFirst = recentRSI.first {
+            rsiSlope = rsiLast - rsiFirst
             rsiDirection = abs(rsiSlope) < 2 ? "flat" : (rsiSlope > 0 ? "rising" : "falling")
         } else {
             rsiSlope = 0
@@ -225,9 +230,7 @@ enum PriceActionAnalyzer {
         // MACD histogram direction
         let recentHist = Array(macdHist.suffix(3))
         let macdHistDirection: String
-        if recentHist.count >= 2 {
-            let histLast = recentHist.last!
-            let histFirst = recentHist.first!
+        if recentHist.count >= 2, let histLast = recentHist.last, let histFirst = recentHist.first {
             if abs(histLast) > abs(histFirst) && histLast > 0 { macdHistDirection = "expanding_bullish" }
             else if abs(histLast) > abs(histFirst) && histLast < 0 { macdHistDirection = "expanding_bearish" }
             else if abs(histLast) < abs(histFirst) { macdHistDirection = "contracting" }

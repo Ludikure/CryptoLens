@@ -94,6 +94,12 @@ enum AnalysisPrompt {
         } else {
             return base + """
 
+            MACRO CONTEXT (if provided):
+            - DXY (USD Index): Dollar up = headwind for equities and commodities. Dollar down = tailwind. Strong inverse correlation.
+            - 10Y Treasury Yield: Rising = growth stocks pressured, value/financials benefit. Falling = growth stocks benefit.
+            - 2Y/10Y Spread: Negative (inverted) = recession signal. Steepening = risk-on environment. Flat = transition/caution.
+            - Factor these into conviction. A bullish technical setup in a rising-rate, strong-dollar environment deserves lower conviction.
+
             STOCK CONTEXT:
             - Market hours 9:30 AM - 4 PM ET. Prices may be 15-min delayed.
             - Overnight gaps are normal — factor into S/R analysis.
@@ -149,7 +155,7 @@ enum AnalysisPrompt {
     static func buildUserPrompt(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String,
                                 stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil,
                                 positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil,
-                                economicEvents: [EconomicEvent] = []) -> String {
+                                economicEvents: [EconomicEvent] = [], macro: MacroSnapshot? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         if let s = sentiment {
@@ -239,7 +245,31 @@ enum AnalysisPrompt {
             }
         }
 
+        // Macro context (DXY, Treasury yields)
+        if let m = macro {
+            lines.append("")
+            lines.append("=== MACRO CONTEXT ===")
+            if let dxy = m.dxy, let trend = m.dollarTrend {
+                var dxyLine = "USD (via EUR/USD \(String(format: "%.4f", dxy))): \(trend)"
+                if let change = m.dxyChange { dxyLine += " (\(String(format: "%+.2f%%", change)))" }
+                lines.append(dxyLine)
+            }
+            if let t10 = m.treasury10Y {
+                lines.append("10Y Treasury Yield: \(String(format: "%.2f%%", t10))")
+            }
+            if let t2 = m.treasury2Y {
+                lines.append("Short-Term Rate (13w T-Bill): \(String(format: "%.2f%%", t2))")
+            }
+            if let spread = m.yieldSpread {
+                let status = spread < 0 ? "INVERTED — recession signal" : (spread < 0.5 ? "Flat — caution" : "Normal")
+                lines.append("10Y vs Short-Term Spread: \(String(format: "%.2f%%", spread)) (\(status))")
+            }
+        }
+
         // Derivatives positioning (crypto only)
+        #if DEBUG
+        print("[MarketScope] [\(symbol)] Prompt: derivatives=\(derivatives != nil), positioning=\(positioning != nil), events=\(economicEvents.count), macro=\(macro != nil)")
+        #endif
         if let d = derivatives, let p = positioning {
             lines.append("")
             lines.append("=== DERIVATIVES POSITIONING ===")
@@ -263,8 +293,18 @@ enum AnalysisPrompt {
                     lines.append("- [\(sig.strength)] \(sig.message)")
                 }
             }
+            #if DEBUG
+            print("[MarketScope] Prompt: Funding=\(d.fundingRatePercent), OI=$\(d.openInterestUSD), L/S=\(d.globalLongPercent)/\(d.globalShortPercent)")
+            #endif
+        } else {
+            #if DEBUG
+            print("[MarketScope] [\(symbol)] Prompt: NO derivatives (expected for stocks)")
+            #endif
         }
 
+        #if DEBUG
+        print("[MarketScope] [\(symbol)] \(economicEvents.count) economic events")
+        #endif
         if !economicEvents.isEmpty {
             lines.append("")
             lines.append("=== UPCOMING ECONOMIC EVENTS ===")
@@ -288,6 +328,20 @@ enum AnalysisPrompt {
                     lines.append("")
                 }
             }
+        }
+
+        // Weekly trend context (derived from daily candles)
+        if let daily = indicators.first, daily.candles.count >= 5 {
+            let weekCandles = Array(daily.candles.suffix(5))
+            let weekOpen = weekCandles.first?.open ?? 0
+            let weekClose = weekCandles.last?.close ?? 0
+            let weekHigh = weekCandles.map(\.high).max() ?? 0
+            let weekLow = weekCandles.map(\.low).min() ?? 0
+            let weekChange = weekOpen > 0 ? ((weekClose - weekOpen) / weekOpen) * 100 : 0
+            let weekTrend = weekChange > 1 ? "Bullish" : (weekChange < -1 ? "Bearish" : "Neutral")
+            lines.append("")
+            lines.append("=== WEEKLY CONTEXT (last 5 daily candles) ===")
+            lines.append("Trend: \(weekTrend) (\(String(format: "%+.1f%%", weekChange))), Range: \(Formatters.formatPrice(weekLow)) – \(Formatters.formatPrice(weekHigh))")
         }
 
         lines.append("")
@@ -381,7 +435,13 @@ enum AnalysisPrompt {
             }
         }
 
-        return lines.joined(separator: "\n")
+        let prompt = lines.joined(separator: "\n")
+        #if DEBUG
+        print("[MarketScope] [\(symbol)] Prompt built: \(prompt.count) chars, \(lines.count) lines")
+        let sections = prompt.components(separatedBy: "===").count - 1
+        print("[MarketScope] [\(symbol)] Sections: \(sections)")
+        #endif
+        return prompt
     }
 
     private static func fmt(_ price: Double) -> String {

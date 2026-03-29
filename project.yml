@@ -1,4 +1,9 @@
 name: MarketScope
+settings:
+  base:
+    DEAD_CODE_STRIPPING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
 options:
   bundleIdPrefix: com.ludikure
   deploymentTarget:
@@ -16,7 +21,7 @@ targets:
     info:
       path: CryptoLens/Info.plist
       properties:
-        CFBundleVersion: "3"
+        CFBundleVersion: "4"
         CFBundleDisplayName: MarketScope
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -36,6 +41,7 @@ targets:
         UIRequiresFullScreen: false
         ClaudeAPIKey: $(CLAUDE_API_KEY)
         GeminiAPIKey: $(GEMINI_API_KEY)
+        TwelveDataAPIKey: $(TWELVE_DATA_API_KEY)
         BGTaskSchedulerPermittedIdentifiers:
           - com.ludikure.CryptoLens.priceCheck
         UIBackgroundModes:
@@ -43,7 +49,7 @@ targets:
     settings:
       base:
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
         SWIFT_EMIT_LOC_STRINGS: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens
         CODE_SIGN_STYLE: Automatic
@@ -71,13 +77,14 @@ targets:
     info:
       path: MarketScopeWidget/Info.plist
       properties:
+        CFBundleVersion: "4"
         CFBundleDisplayName: MarketScope Widget
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
       base:
         MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "3"
+        CURRENT_PROJECT_VERSION: "4"
         PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens.widget
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""

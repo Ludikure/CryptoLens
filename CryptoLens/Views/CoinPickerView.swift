@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CoinPickerView: View {
     @EnvironmentObject var favorites: FavoritesStore
+    @EnvironmentObject var service: AnalysisService
     @Binding var selectedSymbol: String
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
@@ -197,6 +198,9 @@ struct CoinPickerView: View {
                 }
                 Button {
                     favorites.toggleFavorite(id)
+                    if favorites.isFavorite(id) && service.resultsBySymbol[id] == nil {
+                        Task { await service.refreshIndicators(symbol: id) }
+                    }
                 } label: {
                     Image(systemName: favorites.isFavorite(id) ? "star.fill" : "star")
                         .foregroundStyle(favorites.isFavorite(id) ? .yellow : .secondary)

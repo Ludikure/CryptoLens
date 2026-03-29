@@ -7,6 +7,7 @@ class AnalysisService: ObservableObject {
     let derivativesService = DerivativesService()
     let coinGecko = CoinGeckoService()
     let economicCalendar = EconomicCalendarService()
+    let macroData = MacroDataService()
     var aiProvider: AIProvider?
     @Published var providerType: AIProviderType = .claude
     var alertsStore: AlertsStore?
@@ -153,6 +154,13 @@ class AnalysisService: ObservableObject {
                         si.exDividendWarning = days >= 0 && days <= 5
                     }
                     si.dividendRate = enhanced["dividendRate"] as? Double
+                    // Core fundamentals
+                    if let mc = enhanced["marketCap"] as? Double { si.marketCap = mc }
+                    if let pe = enhanced["peRatio"] as? Double { si.peRatio = pe }
+                    if let eps = enhanced["eps"] as? Double { si.eps = eps }
+                    if let dy = enhanced["dividendYield"] as? Double { si.dividendYield = dy }
+                    if let s = enhanced["sector"] as? String { si.sector = s }
+                    if let ind = enhanced["industry"] as? String { si.industry = ind }
                 }
                 if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
                     si.sectorETF = comp.etf
@@ -279,6 +287,13 @@ class AnalysisService: ObservableObject {
                         si.exDividendWarning = days >= 0 && days <= 5
                     }
                     si.dividendRate = enhanced["dividendRate"] as? Double
+                    // Core fundamentals
+                    if let mc = enhanced["marketCap"] as? Double { si.marketCap = mc }
+                    if let pe = enhanced["peRatio"] as? Double { si.peRatio = pe }
+                    if let eps = enhanced["eps"] as? Double { si.eps = eps }
+                    if let dy = enhanced["dividendYield"] as? Double { si.dividendYield = dy }
+                    if let s = enhanced["sector"] as? String { si.sector = s }
+                    if let ind = enhanced["industry"] as? String { si.industry = ind }
                 }
                 if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
                     si.sectorETF = comp.etf
@@ -288,11 +303,17 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
-            // Crypto derivatives
+            // Crypto derivatives (fall back to cached if fresh fetch fails)
             var derivData: DerivativesData? = nil
             var positioning: PositioningSnapshot? = nil
             if market == .crypto {
                 derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
+                if derivData == nil, let cached = resultsBySymbol[symbol] {
+                    derivData = cached.derivatives
+                    #if DEBUG
+                    print("[MarketScope] Derivatives fresh fetch nil, using cached")
+                    #endif
+                }
                 #if DEBUG
                 print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
                 #endif
@@ -305,6 +326,7 @@ class AnalysisService: ObservableObject {
             }
 
             let events = await economicCalendar.highImpactUpcoming()
+            let macroSnapshot = await macroData.fetchMacroSnapshot()
 
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
@@ -322,7 +344,8 @@ class AnalysisService: ObservableObject {
                     derivatives: derivData,
                     positioning: positioning,
                     stockSentiment: stockSentiment,
-                    economicEvents: events
+                    economicEvents: events,
+                    macro: macroSnapshot
                 )
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown
@@ -355,6 +378,7 @@ class AnalysisService: ObservableObject {
             isLoading = false
             loadingStatus = ""
             aiLoadingPhase = .idle
+            isAIStale = false
             if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
                 store.removeAlerts(forSymbol: symbol)
                 if !tradeSetups.isEmpty {

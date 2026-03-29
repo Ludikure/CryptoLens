@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -53,6 +53,7 @@
 		886C826421E91C65A95538D2 /* SharedDataManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87D801CCA8235626DE669D05 /* SharedDataManager.swift */; };
 		8D4CAF99FFD787EAFF31DDBC /* FearGreedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC50FD5E89801E8670B98C86 /* FearGreedView.swift */; };
 		8DCCC17FEC3849A966204B07 /* RetryHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A66FEE5F0128956976944289 /* RetryHelper.swift */; };
+		8FBDB414578031715BF63F96 /* MacroDataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09AAF6BFAA40D31F154B42C7 /* MacroDataService.swift */; };
 		9167E1BA530041645544057F /* TradeSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */; };
 		94551F3646473CFCB6FAA4A0 /* AnalysisHistoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D96C0465266CF918A8844FA /* AnalysisHistoryStore.swift */; };
 		98F95BD1C597F29D6F1C6D0E /* SupportResistance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5239836A784598A484FF83B4 /* SupportResistance.swift */; };
@@ -118,6 +119,7 @@
 		049DFBBCC9A22BB296B0D816 /* Candle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Candle.swift; sourceTree = "<group>"; };
 		082FF9FCE52776C592BFE849 /* DerivativesData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesData.swift; sourceTree = "<group>"; };
 		092DF23B357D97EB5420DC31 /* StockSentimentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockSentimentView.swift; sourceTree = "<group>"; };
+		09AAF6BFAA40D31F154B42C7 /* MacroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroDataService.swift; sourceTree = "<group>"; };
 		0B08599D1603C5AB66273B24 /* PositioningAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningAnalyzer.swift; sourceTree = "<group>"; };
 		0BB3A257C06C78BA23D12112 /* AnalysisResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisResult.swift; sourceTree = "<group>"; };
 		1D96C0465266CF918A8844FA /* AnalysisHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisHistoryStore.swift; sourceTree = "<group>"; };
@@ -147,7 +149,7 @@
 		712D5923C993CB356F7E558C /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
 		714F80BAAC4263133724FD5B /* AIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvider.swift; sourceTree = "<group>"; };
 		7202C20B67FFB645DBDABA14 /* PriceAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceAlert.swift; sourceTree = "<group>"; };
-		726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MarketScopeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = MarketScopeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		73C4840E1BE2BA2B2ABB66C9 /* MarketScopeWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MarketScopeWidget.entitlements; sourceTree = "<group>"; };
 		751F6418841B0076E433CBE6 /* PositioningSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningSnapshot.swift; sourceTree = "<group>"; };
 		789F2DF1B44B021D2E901B4D /* ClaudeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeService.swift; sourceTree = "<group>"; };
@@ -186,7 +188,7 @@
 		D9907CD74121F972E8463CDC /* ComputeAll.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComputeAll.swift; sourceTree = "<group>"; };
 		DC9A005B372BCAA04AAAE663 /* YahooFinanceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YahooFinanceService.swift; sourceTree = "<group>"; };
 		DD5DC1D4B6985572D77BF179 /* BackgroundRefreshManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRefreshManager.swift; sourceTree = "<group>"; };
-		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E687573C82B61768A3DA2604 /* AnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisService.swift; sourceTree = "<group>"; };
 		EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeSetup.swift; sourceTree = "<group>"; };
 		EC50FD5E89801E8670B98C86 /* FearGreedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FearGreedView.swift; sourceTree = "<group>"; };
@@ -234,6 +236,7 @@
 				8165A07DFF6E9010BBFA1091 /* EconomicCalendarService.swift */,
 				712D5923C993CB356F7E558C /* FavoritesStore.swift */,
 				265CADECA7DA8D2B4EC1B20A /* GeminiService.swift */,
+				09AAF6BFAA40D31F154B42C7 /* MacroDataService.swift */,
 				608D366EBB5762F3FAEB5E7B /* NavigationCoordinator.swift */,
 				9C98ABE8F402ADB12ADC93C4 /* PushService.swift */,
 				87D801CCA8235626DE669D05 /* SharedDataManager.swift */,
@@ -434,12 +437,14 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					184F1203E8466CCEFB5FAB44 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 					93CC97B8BC093C4D3073CED7 = {
+						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -454,6 +459,7 @@
 			);
 			mainGroup = 6B2F66AD008C4C14684E2941;
 			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -524,6 +530,7 @@
 				62795D11B0D1547323A7837D /* IndicatorTableView.swift in Sources */,
 				52D9347C7ADB28DF90D6E1E3 /* InfoTooltip.swift in Sources */,
 				DD41AFA234F03EFA66B4D337 /* MACD.swift in Sources */,
+				8FBDB414578031715BF63F96 /* MacroDataService.swift in Sources */,
 				143344CDABBCFD511DE2E4C8 /* Market.swift in Sources */,
 				28C17907B776E97E558A7380 /* MarketHours.swift in Sources */,
 				025CECD33B0FB1C0E039B85D /* MovingAverages.swift in Sources */,
@@ -581,6 +588,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -611,8 +619,8 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 6AS729C9FR;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -629,7 +637,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
@@ -640,6 +647,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -670,8 +678,8 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 6AS729C9FR;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -695,7 +703,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
@@ -710,7 +717,8 @@
 				CODE_SIGN_ENTITLEMENTS = MarketScope.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = CryptoLens/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -729,7 +737,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MarketScopeWidget/MarketScopeWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = MarketScopeWidget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -749,7 +758,8 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = MarketScopeWidget/MarketScopeWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = MarketScopeWidget/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -772,7 +782,8 @@
 				CODE_SIGN_ENTITLEMENTS = MarketScope.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 3;
+				CURRENT_PROJECT_VERSION = 4;
+				DEVELOPMENT_TEAM = "";
 				INFOPLIST_FILE = CryptoLens/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -23,11 +23,13 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>3</string>
+	<string>4</string>
 	<key>ClaudeAPIKey</key>
 	<string>$(CLAUDE_API_KEY)</string>
 	<key>GeminiAPIKey</key>
 	<string>$(GEMINI_API_KEY)</string>
+	<key>TwelveDataAPIKey</key>
+	<string>$(TWELVE_DATA_API_KEY)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

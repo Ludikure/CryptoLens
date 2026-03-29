@@ -85,6 +85,10 @@ struct AnalysisView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         withAnimation { favorites.toggleFavorite(selectedSymbol) }
+                        // Prefetch if newly added and not cached
+                        if favorites.isFavorite(selectedSymbol) && service.resultsBySymbol[selectedSymbol] == nil {
+                            Task { await service.refreshIndicators(symbol: selectedSymbol) }
+                        }
                     } label: {
                         Image(systemName: favorites.isFavorite(selectedSymbol) ? "star.fill" : "star")
                             .foregroundStyle(favorites.isFavorite(selectedSymbol) ? .yellow : Color(.label))
@@ -276,6 +280,30 @@ struct AnalysisView: View {
 
         ConfidenceSummaryView(result: result)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+        // Run Analysis button (prominent, near top)
+        if result.claudeAnalysis.isEmpty || service.isAIStale {
+            Button {
+                Task { await service.runFullAnalysis(symbol: selectedSymbol) }
+            } label: {
+                HStack(spacing: 8) {
+                    if service.aiLoadingPhase != .idle {
+                        ProgressView().controlSize(.small)
+                        Text(service.aiLoadingPhase == .waitingForResponse ? "Analyzing..." : "Preparing...")
+                            .font(.subheadline).fontWeight(.semibold)
+                    } else {
+                        Image(systemName: "sparkles")
+                        Text(service.isAIStale ? "Refresh AI Analysis" : "Run AI Analysis")
+                            .font(.subheadline).fontWeight(.semibold)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(service.aiLoadingPhase != .idle)
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
 
         // Candlestick chart
         if !result.tf1.candles.isEmpty {

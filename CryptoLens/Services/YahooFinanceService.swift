@@ -210,7 +210,7 @@ class YahooFinanceService {
     /// Fetch enhanced fundamentals from quoteSummary (analyst targets, earnings history, insider transactions, growth).
     func fetchEnhancedFundamentals(symbol: String) async -> [String: Any]? {
         await throttle()
-        let modules = "financialData,earningsHistory,insiderTransactions,defaultKeyStatistics,price,earningsTrend,calendarEvents,summaryDetail"
+        let modules = "financialData,earningsHistory,insiderTransactions,defaultKeyStatistics,price,earningsTrend,calendarEvents,summaryDetail,summaryProfile"
         guard let url = URL(string: "\(Constants.yahooBaseURL)/v10/finance/quoteSummary/\(symbol)?modules=\(modules)") else { return nil }
         do {
             let (data, _) = try await session.data(from: url)
@@ -220,6 +220,27 @@ class YahooFinanceService {
                   let first = results.first else { return nil }
 
             var out = [String: Any]()
+
+            // price module: marketCap, sector
+            if let price = first["price"] as? [String: Any] {
+                if let mc = price["marketCap"] as? [String: Any] { out["marketCap"] = mc["raw"] as? Double }
+            }
+
+            // defaultKeyStatistics: P/E, EPS, dividendYield, sector
+            if let dks = first["defaultKeyStatistics"] as? [String: Any] {
+                if let pe = dks["forwardPE"] as? [String: Any] { out["peRatio"] = pe["raw"] as? Double }
+                if let pe = dks["trailingEps"] as? [String: Any] { out["eps"] = pe["raw"] as? Double }
+            }
+
+            // summaryProfile: sector, industry (if available in modules)
+            if let sp = first["summaryProfile"] as? [String: Any] {
+                out["sector"] = sp["sector"] as? String
+                out["industry"] = sp["industry"] as? String
+            }
+            // summaryDetail: dividendYield
+            if let sd = first["summaryDetail"] as? [String: Any] {
+                if let dy = sd["dividendYield"] as? [String: Any] { out["dividendYield"] = (dy["raw"] as? Double).map { $0 * 100 } }
+            }
 
             // financialData: analyst targets, recommendation, growth
             if let fd = first["financialData"] as? [String: Any] {
