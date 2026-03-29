@@ -42,6 +42,29 @@ enum AnalysisPrompt {
 
         STEP 4: BIAS — One line. LONG, SHORT, or FLAT. Why.
 
+        ENTRY RULES:
+        1. Primary entries must be near current price, anchored to the nearest meaningful level (S/R, fib, EMA) that price is actually interacting with. Check the Price Action Summary and recent candles to confirm price is near or moving toward the proposed entry.
+        2. If the best setup requires waiting for a pullback, breakout, or retest, present it as a conditional: "Enter at $X on confirmation of Y." Label it clearly as a conditional setup, separate from any current-price setup.
+        3. Calculate R:R honestly from realistic levels. Minimum acceptable R:R is 1:1.5. If no setup meets 1:1.5 from a realistic entry, say "no trade" and state what conditions would create a setup.
+        4. Before proposing any entry, verify: Is price near this level or moving toward it? Is this entry within 1x ATR of current price? If further, explain specifically why waiting for that level is worth it. Does recent candle data support this level holding?
+        5. Never move an entry to force R:R compliance. The entry comes from structure. R:R is a consequence, not a target.
+
+        PRICE ACTION SUMMARY:
+        You receive a "Price Action Summary" section computed from raw candle data. It tells you the current regime (trending/consolidating/choppy), the shape of any consolidation, momentum direction for RSI/Stoch RSI/MACD, Stoch RSI cross recency, volume trend, and candle patterns with their position context.
+        Use this as your starting framework. It answers "what is price doing RIGHT NOW."
+        Key things the summary gives you that indicators alone don't:
+        - RSI at 30 and RISING is very different from RSI at 30 and FALLING
+        - A fresh Stoch RSI bullish cross (2 candles ago) is a signal. A stale one (8 candles ago) is history.
+        - MACD histogram expanding bearish = momentum accelerating down. Contracting = momentum fading, reversal may be forming.
+        - Volume increasing on a move = conviction. Decreasing = fading, the move may not hold.
+        - "Hammer at support ($65,730)" is a trade trigger. "Hammer in space" is noise.
+
+        CANDLE VERIFICATION:
+        Recent candles (5 per timeframe) are included. Before finalizing any entry:
+        - Is your proposed entry within the recent candle range?
+        - If price shows no momentum toward the entry level, the entry is unrealistic — revise or wait.
+        - If the current candle is forming near a key level with a pattern, that's a stronger signal than a completed pattern several candles ago.
+
         THINGS YOU KNOW:
         - Volume precedes price. A move without volume is a lie.
         - Divergence is early — it's a warning, not an entry. Wait for price to confirm.
@@ -49,7 +72,6 @@ enum AnalysisPrompt {
         - When everyone sees the same level, the market hunts stops just beyond it.
         - The best trades feel uncomfortable. If obvious, you're probably late.
         - ATR tells you what the market CAN do. Use it for realistic targets and stops.
-        - Minimum R:R: 2:1 on TP2. TP1 can be a partial at lower R:R.
         - Stop losses at structural levels, not arbitrary distances.
 
         FORMATTING:
@@ -254,6 +276,20 @@ enum AnalysisPrompt {
             }
         }
 
+        // Price Action Summary (computed from candle data)
+        let summaries = indicators.map { PriceActionAnalyzer.analyze(indicator: $0) }
+        let hasSummary = summaries.contains { !$0.summaryText.isEmpty && $0.regime.regime != "insufficient_data" }
+        if hasSummary {
+            lines.append("")
+            lines.append("=== PRICE ACTION SUMMARY ===")
+            for summary in summaries {
+                if summary.regime.regime != "insufficient_data" {
+                    lines.append(summary.summaryText)
+                    lines.append("")
+                }
+            }
+        }
+
         lines.append("")
 
         for ind in indicators {
@@ -329,7 +365,27 @@ enum AnalysisPrompt {
             lines.append("")
         }
 
+        // Recent candles (5 closed + 1 forming per timeframe)
+        let hasCandles = indicators.contains { !$0.candles.isEmpty }
+        if hasCandles {
+            lines.append("=== RECENT CANDLES ===")
+            for ind in indicators {
+                let recent = Array(ind.candles.suffix(6))
+                guard !recent.isEmpty else { continue }
+                lines.append("\(ind.label) (last \(recent.count), newest first, format: [O, H, L, C, Vol]):")
+                for (i, c) in recent.reversed().enumerated() {
+                    let forming = i == 0 ? " (forming)" : ""
+                    lines.append("\(i + 1). [\(fmt(c.open)), \(fmt(c.high)), \(fmt(c.low)), \(fmt(c.close)), \(String(format: "%.0f", c.volume))]\(forming)")
+                }
+                lines.append("")
+            }
+        }
+
         return lines.joined(separator: "\n")
+    }
+
+    private static func fmt(_ price: Double) -> String {
+        Formatters.formatPrice(price)
     }
 
     /// Extract trade setups from the ```json block in the response.

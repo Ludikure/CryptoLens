@@ -2,24 +2,105 @@ import SwiftUI
 
 struct ClaudeAnalysisView: View {
     let markdown: String
+    var aiLoadingPhase: AnalysisService.AILoadingPhase = .idle
+    var isStale: Bool = false
+    var onRunAnalysis: (() -> Void)?
+
+    private var isAILoading: Bool { aiLoadingPhase != .idle }
+
+    private var phaseLabel: String {
+        switch aiLoadingPhase {
+        case .idle: return ""
+        case .preparingPrompt: return "Preparing analysis..."
+        case .waitingForResponse: return "Waiting for Claude..."
+        case .parsingResponse: return "Processing response..."
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Analysis", systemImage: "text.quote")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-
-            if markdown.isEmpty {
-                Text("Pull down to run Claude analysis")
+            HStack {
+                Label("Analysis", systemImage: "text.quote")
                     .font(.subheadline)
-                    .foregroundStyle(.tertiary)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if isStale && !isAILoading && !markdown.isEmpty && !markdown.contains("not configured") {
+                    Button {
+                        onRunAnalysis?()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Outdated")
+                                .font(.caption2)
+                                .fontWeight(.semibold)
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+
+            if markdown.isEmpty && !isAILoading {
+                VStack(spacing: 10) {
+                    Image(systemName: "brain")
+                        .font(.title2)
+                        .foregroundStyle(.tertiary)
+                    Text("No AI analysis yet")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if let onRunAnalysis {
+                        Button {
+                            onRunAnalysis()
+                        } label: {
+                            Label("Run Analysis", systemImage: "sparkles")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
             } else if markdown.contains("not configured") {
                 Text(markdown)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                MarkdownContentView(markdown: cleanedMarkdown)
+                ZStack(alignment: .top) {
+                    if !markdown.isEmpty {
+                        MarkdownContentView(markdown: cleanedMarkdown)
+                            .opacity(isAILoading ? 0.3 : 1.0)
+                    }
+
+                    if isAILoading {
+                        VStack(spacing: 12) {
+                            ProgressView()
+                                .controlSize(.regular)
+                            Text(phaseLabel)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            // Shimmer skeleton lines
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(0..<4, id: \.self) { i in
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(Color(.systemGray5))
+                                        .frame(height: 12)
+                                        .frame(maxWidth: [280, 220, 260, 180][i])
+                                        .shimmer()
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, markdown.isEmpty ? 0 : 40)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.3), value: isAILoading)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

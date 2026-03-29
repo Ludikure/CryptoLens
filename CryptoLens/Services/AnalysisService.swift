@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 class AnalysisService: ObservableObject {
     let binance = BinanceService()
     let yahoo = YahooFinanceService()
@@ -16,10 +17,16 @@ class AnalysisService: ObservableObject {
     @Published var error: String?
     @Published var currentMarket: Market = .crypto
     @Published var currentSymbol: String?
+    @Published var aiLoadingPhase: AILoadingPhase = .idle
+    @Published var isAIStale = false
+
+    enum AILoadingPhase: Equatable {
+        case idle, preparingPrompt, waitingForResponse, parsingResponse
+    }
 
     private var refreshTimer: Task<Void, Never>?
 
-    private(set) var resultsBySymbol: [String: AnalysisResult] = [:]
+    @Published private(set) var resultsBySymbol: [String: AnalysisResult] = [:]
     var cachedResults: [String: AnalysisResult] { resultsBySymbol }
 
     private static var cacheDir: URL {
@@ -50,26 +57,40 @@ class AnalysisService: ObservableObject {
     /// Switch to a symbol — show cached instantly, then refresh.
     func selectSymbol(_ symbol: String) async {
         let market = marketFor(symbol)
-        await MainActor.run { currentMarket = market }
+        currentMarket = market
 
         if let cached = resultsBySymbol[symbol] {
-            await MainActor.run { lastResult = cached; error = nil }
+            lastResult = cached; error = nil
         } else if let diskCached = loadCache(symbol: symbol) {
             resultsBySymbol[symbol] = diskCached
-            await MainActor.run { lastResult = diskCached; error = nil }
+            lastResult = diskCached; error = nil
         } else {
-            await MainActor.run { lastResult = nil; error = nil }
+            lastResult = nil; error = nil
         }
 
         await refreshIndicators(symbol: symbol)
         startAutoRefresh(symbol: symbol)
     }
 
+    /// Prefetch indicators for all favorites that aren't cached yet.
+    func prefetchFavorites(_ symbols: [String]) {
+        Task {
+            for symbol in symbols where resultsBySymbol[symbol] == nil {
+                // Load from disk first
+                if let diskCached = loadCache(symbol: symbol) {
+                    resultsBySymbol[symbol] = diskCached
+                } else {
+                    await refreshIndicators(symbol: symbol)
+                }
+            }
+        }
+    }
+
     // MARK: - Auto-Refresh
 
     func startAutoRefresh(symbol: String) {
         refreshTimer?.cancel()
-        Task { @MainActor in currentSymbol = symbol }
+        currentSymbol = symbol
         refreshTimer = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000) // 60s
@@ -88,11 +109,9 @@ class AnalysisService: ObservableObject {
 
     func refreshIndicators(symbol: String) async {
         let market = marketFor(symbol)
-        await MainActor.run {
-            isLoading = true
-            loadingStatus = "Fetching market data..."
-            error = nil
-        }
+        isLoading = true
+        loadingStatus = "Fetching market data..."
+        error = nil
 
         do {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
@@ -180,19 +199,34 @@ class AnalysisService: ObservableObject {
             )
 
             resultsBySymbol[symbol] = result
-            await MainActor.run {
+            // Only update displayed result if this is the active symbol
+            if symbol == currentSymbol {
                 lastResult = result
                 isLoading = false
                 loadingStatus = ""
-                alertsStore?.checkAlerts(prices: [symbol: result.daily.price])
+                isAIStale = !result.claudeAnalysis.isEmpty && !result.claudeAnalysis.contains("not configured") && (result.analysisTimestamp == nil || result.timestamp.timeIntervalSince(result.analysisTimestamp!) > 600)
             }
+            alertsStore?.checkAlerts(prices: [symbol: result.daily.price])
             saveCache(result)
 
+            // Update widget shared data
+            let favs = (try? JSONDecoder().decode([String].self, from: UserDefaults.standard.data(forKey: "favorite_coins") ?? Data())) ?? []
+            SharedDataManager.writeLatest(results: resultsBySymbol, favorites: favs)
+
+            // Bias flip notification
+            if let prev = previous,
+               prev.daily.bias != result.daily.bias,
+               UserDefaults.standard.bool(forKey: "notify_bias_flips") {
+                let ticker = Constants.asset(for: symbol)?.ticker ?? symbol
+                BiasNotificationManager.send(ticker: ticker, oldBias: prev.daily.bias, newBias: result.daily.bias)
+            }
+
         } catch {
-            await MainActor.run {
+            if symbol == currentSymbol {
                 self.error = error.localizedDescription
                 self.isLoading = false
                 self.loadingStatus = ""
+                self.aiLoadingPhase = .idle
             }
         }
     }
@@ -201,11 +235,9 @@ class AnalysisService: ObservableObject {
 
     func runFullAnalysis(symbol: String) async {
         let market = marketFor(symbol)
-        await MainActor.run {
-            isLoading = true
-            loadingStatus = "Fetching market data..."
-            error = nil
-        }
+        isLoading = true
+        loadingStatus = "Fetching market data..."
+        error = nil
 
         do {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
@@ -277,7 +309,10 @@ class AnalysisService: ObservableObject {
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
             if let provider = aiProvider {
-                await MainActor.run { loadingStatus = "Analyzing with \(provider.displayName)..." }
+                aiLoadingPhase = .preparingPrompt
+                loadingStatus = "Preparing analysis..."
+                aiLoadingPhase = .waitingForResponse
+                loadingStatus = "Analyzing with \(provider.displayName)..."
                 let response = try await provider.analyze(
                     indicators: [tf1, tf2, tf3],
                     sentiment: sentiment,
@@ -289,6 +324,7 @@ class AnalysisService: ObservableObject {
                     stockSentiment: stockSentiment,
                     economicEvents: events
                 )
+                aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown
                 tradeSetups = response.setups
             } else {
@@ -315,28 +351,26 @@ class AnalysisService: ObservableObject {
             )
 
             resultsBySymbol[symbol] = result
-            await MainActor.run {
-                lastResult = result
-                isLoading = false
-                loadingStatus = ""
-                if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
-                    store.removeAlerts(forSymbol: symbol)
-                    if !tradeSetups.isEmpty {
-                        let price = result.daily.price
-                        for alert in tradeSetups.flatMap({ $0.toAlerts(symbol: symbol, currentPrice: price) }) {
-                            store.addAlert(alert)
-                        }
+            lastResult = result
+            isLoading = false
+            loadingStatus = ""
+            aiLoadingPhase = .idle
+            if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
+                store.removeAlerts(forSymbol: symbol)
+                if !tradeSetups.isEmpty {
+                    let price = result.daily.price
+                    for alert in tradeSetups.flatMap({ $0.toAlerts(symbol: symbol, currentPrice: price) }) {
+                        store.addAlert(alert)
                     }
                 }
             }
             saveCache(result)
 
         } catch {
-            await MainActor.run {
-                self.error = error.localizedDescription
-                self.isLoading = false
-                self.loadingStatus = ""
-            }
+            self.error = error.localizedDescription
+            self.isLoading = false
+            self.loadingStatus = ""
+            self.aiLoadingPhase = .idle
         }
     }
 

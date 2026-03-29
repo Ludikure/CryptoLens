@@ -87,6 +87,18 @@ enum IndicatorEngine {
         else if bullPct <= 40 { bias = "Bearish" }
         else { bias = "Neutral" }
 
+        // Retain last 50 candles for chart display
+        let chartCandles = Array(candles.suffix(50))
+
+        // Series data for price action analysis (last 10 values each)
+        let rsiSeriesData = Array(validRSI.suffix(10))
+        let stochSeries = StochasticRSI.computeSeries(closes: closes, count: 10)
+        let macdHistSeriesData = MACD.computeHistSeries(closes: closes, count: 10)
+
+        // EMA series aligned with chart candles (last 50)
+        let ema20SeriesData = Array(ema20List.suffix(50))
+        let ema50SeriesData = Array(ema50List.suffix(50))
+
         return IndicatorResult(
             timeframe: timeframe,
             label: label,
@@ -114,7 +126,14 @@ enum IndicatorEngine {
             adLine: adLine,
             smaCross: smaCross,
             gap: gap,
-            addv: addv
+            addv: addv,
+            candles: chartCandles,
+            rsiSeries: rsiSeriesData,
+            stochKSeries: stochSeries.k,
+            stochDSeries: stochSeries.d,
+            macdHistSeries: macdHistSeriesData,
+            ema20Series: ema20SeriesData,
+            ema50Series: ema50SeriesData
         )
     }
 }

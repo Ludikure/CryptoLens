@@ -3,6 +3,7 @@ import SwiftUI
 struct AlertsView: View {
     @EnvironmentObject var alertsStore: AlertsStore
     @EnvironmentObject var service: AnalysisService
+    @EnvironmentObject var coordinator: NavigationCoordinator
     @State private var showCreateAlert = false
 
     private var allSetups: [SetupGroup] {
@@ -19,9 +20,14 @@ struct AlertsView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     ForEach(allSetups) { group in
-                        SetupCard(group: group, direction: group.direction) {
+                        SetupCard(group: group, direction: group.direction, onDismiss: {
                             withAnimation(.easeOut(duration: 0.25)) { removeGroup(group) }
-                        }
+                        }, onViewAnalysis: {
+                            let symbol = group.alerts.first?.symbol ?? ""
+                            if !symbol.isEmpty {
+                                coordinator.navigateToAnalysis(symbol: symbol)
+                            }
+                        })
                     }
 
                     ForEach(customAlerts) { alert in
@@ -155,6 +161,8 @@ private struct SetupCard: View {
     let group: SetupGroup
     let direction: String
     let onDismiss: () -> Void
+    var onViewAnalysis: (() -> Void)?
+    @State private var showReasoning = false
 
     private var accentColor: Color { direction == "LONG" ? .green : .red }
     private var icon: String { direction == "LONG" ? "arrow.up.right" : "arrow.down.right" }
@@ -249,6 +257,54 @@ private struct SetupCard: View {
                 }
             }
             .background(Color(.secondarySystemGroupedBackground))
+
+            // Reasoning + View Analysis
+            VStack(spacing: 0) {
+                if let reasoning = group.setup?.reasoning, !reasoning.isEmpty {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.2)) { showReasoning.toggle() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "lightbulb").font(.caption2)
+                            Text("Reasoning")
+                                .font(.caption2).fontWeight(.semibold)
+                            Spacer()
+                            Text(showReasoning ? "Hide" : "Show")
+                                .font(.caption2)
+                            Image(systemName: showReasoning ? "chevron.up" : "chevron.down")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderless)
+
+                    if showReasoning {
+                        Text(reasoning)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 14).padding(.bottom, 8)
+                            .transition(.opacity)
+                    }
+                }
+
+                if let onViewAnalysis {
+                    Divider().padding(.leading, 14)
+                    Button {
+                        onViewAnalysis()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chart.line.uptrend.xyaxis").font(.caption2)
+                            Text("View Analysis").font(.caption2).fontWeight(.semibold)
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption2)
+                        }
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.systemGray4), lineWidth: 0.5))

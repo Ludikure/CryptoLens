@@ -4,3 +4,12 @@ compatibility_date = "2024-01-01"
 
 [observability]
 enabled = true
+
+# KV namespace for storing alerts and device tokens
+[[kv_namespaces]]
+binding = "ALERTS"
+id = "47bf1cd0e1504e89a52b413b3ed67d76"
+
+# Cron trigger — check alerts every minute
+[triggers]
+crons = ["*/5 * * * *"]

@@ -91,5 +91,7 @@ class AlertsStore: ObservableObject {
         if let data = try? JSONEncoder().encode(alerts) {
             UserDefaults.standard.set(data, forKey: key)
         }
+        // Sync to Cloudflare Worker for server-side push
+        PushService.syncAlerts(alerts)
     }
 }

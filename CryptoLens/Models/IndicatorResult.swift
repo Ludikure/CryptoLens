@@ -130,8 +130,16 @@ struct IndicatorResult: Identifiable, Codable {
     let smaCross: SMACrossResult?
     let gap: GapResult?
     let addv: ADDVResult?
+    let candles: [Candle]
+    // Series data for momentum analysis (not persisted to cache)
+    let rsiSeries: [Double]
+    let stochKSeries: [Double]
+    let stochDSeries: [Double]
+    let macdHistSeries: [Double]
+    let ema20Series: [Double]
+    let ema50Series: [Double]
 
-    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil) {
+    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = []) {
         self.id = UUID()
         self.timeframe = timeframe
         self.label = label
@@ -160,5 +168,51 @@ struct IndicatorResult: Identifiable, Codable {
         self.smaCross = smaCross
         self.gap = gap
         self.addv = addv
+        self.candles = candles
+        self.rsiSeries = rsiSeries
+        self.stochKSeries = stochKSeries
+        self.stochDSeries = stochDSeries
+        self.macdHistSeries = macdHistSeries
+        self.ema20Series = ema20Series
+        self.ema50Series = ema50Series
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        timeframe = try container.decode(String.self, forKey: .timeframe)
+        label = try container.decode(String.self, forKey: .label)
+        price = try container.decode(Double.self, forKey: .price)
+        rsi = try container.decodeIfPresent(Double.self, forKey: .rsi)
+        stochRSI = try container.decodeIfPresent(StochRSIResult.self, forKey: .stochRSI)
+        macd = try container.decodeIfPresent(MACDResult.self, forKey: .macd)
+        adx = try container.decodeIfPresent(ADXResult.self, forKey: .adx)
+        bollingerBands = try container.decodeIfPresent(BollingerResult.self, forKey: .bollingerBands)
+        atr = try container.decodeIfPresent(ATRResult.self, forKey: .atr)
+        ema20 = try container.decodeIfPresent(Double.self, forKey: .ema20)
+        ema50 = try container.decodeIfPresent(Double.self, forKey: .ema50)
+        ema200 = try container.decodeIfPresent(Double.self, forKey: .ema200)
+        sma50 = try container.decodeIfPresent(Double.self, forKey: .sma50)
+        sma200 = try container.decodeIfPresent(Double.self, forKey: .sma200)
+        vwap = try container.decodeIfPresent(VWAPResult.self, forKey: .vwap)
+        fibonacci = try container.decodeIfPresent(FibResult.self, forKey: .fibonacci)
+        supportResistance = try container.decode(SRResult.self, forKey: .supportResistance)
+        candlePatterns = try container.decode([PatternResult].self, forKey: .candlePatterns)
+        volumeRatio = try container.decodeIfPresent(Double.self, forKey: .volumeRatio)
+        divergence = try container.decodeIfPresent(String.self, forKey: .divergence)
+        bias = try container.decode(String.self, forKey: .bias)
+        bullPercent = try container.decode(Double.self, forKey: .bullPercent)
+        obv = try container.decodeIfPresent(OBVResult.self, forKey: .obv)
+        adLine = try container.decodeIfPresent(ADLineResult.self, forKey: .adLine)
+        smaCross = try container.decodeIfPresent(SMACrossResult.self, forKey: .smaCross)
+        gap = try container.decodeIfPresent(GapResult.self, forKey: .gap)
+        addv = try container.decodeIfPresent(ADDVResult.self, forKey: .addv)
+        candles = (try? container.decodeIfPresent([Candle].self, forKey: .candles)) ?? []
+        rsiSeries = (try? container.decodeIfPresent([Double].self, forKey: .rsiSeries)) ?? []
+        stochKSeries = (try? container.decodeIfPresent([Double].self, forKey: .stochKSeries)) ?? []
+        stochDSeries = (try? container.decodeIfPresent([Double].self, forKey: .stochDSeries)) ?? []
+        macdHistSeries = (try? container.decodeIfPresent([Double].self, forKey: .macdHistSeries)) ?? []
+        ema20Series = (try? container.decodeIfPresent([Double].self, forKey: .ema20Series)) ?? []
+        ema50Series = (try? container.decodeIfPresent([Double].self, forKey: .ema50Series)) ?? []
     }
 }

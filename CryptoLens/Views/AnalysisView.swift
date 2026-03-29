@@ -3,9 +3,12 @@ import SwiftUI
 struct AnalysisView: View {
     @EnvironmentObject var service: AnalysisService
     @EnvironmentObject var favorites: FavoritesStore
+    @EnvironmentObject var coordinator: NavigationCoordinator
     @State private var selectedSymbol = Constants.allCoins[0].id
     @State private var showPicker = false
+    @State private var showWatchlist = false
     @State private var viewId = UUID()
+    @State private var activeSection = "overview"
 
     private var selectedAssetName: String {
         Constants.asset(for: selectedSymbol)?.name ?? selectedSymbol
@@ -21,7 +24,18 @@ struct AnalysisView: View {
 
     var body: some View {
         NavigationStack {
+            ScrollViewReader { scrollProxy in
             List {
+                // Section bar (pinned)
+                if service.lastResult != nil {
+                    AnalysisSectionBar(activeSection: $activeSection) { section in
+                        withAnimation { scrollProxy.scrollTo(section, anchor: .top) }
+                    }
+                    .listRowInsets(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 12))
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color(.systemGroupedBackground))
+                }
+
                 Section {
                     // Favorite pills
                     if !favoriteAssets.isEmpty {
@@ -77,6 +91,13 @@ struct AnalysisView: View {
                     }
                 }
 
+                // Watchlist grid
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { showWatchlist = true } label: {
+                        Image(systemName: "square.grid.2x2")
+                    }
+                }
+
                 // Center: coin name + chevron (opens picker)
                 ToolbarItem(placement: .principal) {
                     Button { showPicker = true } label: {
@@ -123,6 +144,9 @@ struct AnalysisView: View {
             .sheet(isPresented: $showPicker) {
                 CoinPickerView(selectedSymbol: $selectedSymbol)
             }
+            .sheet(isPresented: $showWatchlist) {
+                WatchlistView(selectedSymbol: $selectedSymbol)
+            }
             .onAppear {
                 // Force recreate loading animation when returning to tab
                 viewId = UUID()
@@ -135,6 +159,13 @@ struct AnalysisView: View {
                 HapticManager.selection()
                 Task { await service.selectSymbol(selectedSymbol) }
             }
+            .onChange(of: coordinator.pendingSymbol) {
+                if let symbol = coordinator.pendingSymbol {
+                    selectedSymbol = symbol
+                    coordinator.pendingSymbol = nil
+                }
+            }
+            } // ScrollViewReader
         }
     }
 
@@ -240,10 +271,22 @@ struct AnalysisView: View {
         }
 
         PriceHeaderView(result: result)
+            .id("overview")
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
         ConfidenceSummaryView(result: result)
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+        // Candlestick chart
+        if !result.tf1.candles.isEmpty {
+            CandlestickChartView(results: [result.tf1, result.tf2, result.tf3])
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
+        // Market section anchor
+        Color.clear.frame(height: 0)
+            .id("market")
+            .listRowInsets(EdgeInsets())
 
         // Market-specific: Fear & Greed for crypto, Stock info for stocks
         if let fg = result.fearGreed {
@@ -274,10 +317,14 @@ struct AnalysisView: View {
         }
 
         // AI Analysis (visible early so users see pull-to-refresh hint)
-        ClaudeAnalysisView(markdown: result.claudeAnalysis)
+        ClaudeAnalysisView(markdown: result.claudeAnalysis, aiLoadingPhase: service.aiLoadingPhase, isStale: service.isAIStale, onRunAnalysis: {
+            Task { await service.runFullAnalysis(symbol: selectedSymbol) }
+        })
+            .id("ai")
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
         IndicatorTableView(results: [result.tf1, result.tf2, result.tf3])
+            .id("indicators")
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
         if let sentiment = result.sentiment {
@@ -285,7 +332,7 @@ struct AnalysisView: View {
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
-        Spacer().frame(height: 4)
+        Spacer().frame(height: 40)
             .listRowInsets(EdgeInsets())
     }
 

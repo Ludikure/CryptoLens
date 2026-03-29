@@ -81,6 +81,17 @@ struct SettingsView: View {
                     Text("When enabled, pulling to refresh analysis will automatically create price alerts for Entry, Stop Loss, and Take Profit levels from AI trade setups.")
                 }
 
+                Section {
+                    Toggle("Notify on bias changes", isOn: Binding(
+                        get: { UserDefaults.standard.bool(forKey: "notify_bias_flips") },
+                        set: { UserDefaults.standard.set($0, forKey: "notify_bias_flips") }
+                    ))
+                } header: {
+                    Text("Notifications")
+                } footer: {
+                    Text("Get notified when a favorited asset's daily bias changes (e.g., Bearish \u{2192} Bullish).")
+                }
+
                 Section("Appearance") {
                     Picker("Theme", selection: $colorSchemeOverride) {
                         Text("System").tag("system")
