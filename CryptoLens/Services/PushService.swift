@@ -61,9 +61,41 @@ enum PushService {
     }
 
     /// Register device without push token (just to get auth token on first launch).
+    /// Register with retry (up to 3 attempts with backoff).
+    /// Called on launch and before any authenticated request if token is missing.
     static func ensureRegistered() {
         guard authToken == nil else { return }
         Task {
+            for attempt in 0..<3 {
+                if attempt > 0 {
+                    try? await Task.sleep(for: .seconds(Double(attempt) * 5))
+                }
+                guard let url = URL(string: "\(workerURL)/register") else { return }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+                request.httpBody = try? JSONSerialization.data(withJSONObject: [:] as [String: String])
+
+                if let (data, response) = try? await URLSession.shared.data(for: request),
+                   let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let serverToken = json["authToken"] as? String {
+                    authToken = serverToken
+                    await MainActor.run { ConnectionStatus.shared.workerAuth = .ok }
+                    return
+                }
+            }
+            await MainActor.run { ConnectionStatus.shared.workerAuth = .error }
+        }
+    }
+
+    /// Call before any authenticated worker request — retries registration if needed.
+    static func ensureAuth() async {
+        if authToken != nil { return }
+        await MainActor.run { ConnectionStatus.shared.workerAuth = .pending }
+        for attempt in 0..<2 {
+            if attempt > 0 { try? await Task.sleep(for: .seconds(3)) }
             guard let url = URL(string: "\(workerURL)/register") else { return }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -71,19 +103,31 @@ enum PushService {
             request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
             request.httpBody = try? JSONSerialization.data(withJSONObject: [:] as [String: String])
 
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let serverToken = json["authToken"] as? String
-            else { return }
-
-            authToken = serverToken
+            if let (data, response) = try? await URLSession.shared.data(for: request),
+               let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let serverToken = json["authToken"] as? String {
+                authToken = serverToken
+                await MainActor.run { ConnectionStatus.shared.workerAuth = .ok }
+                return
+            }
         }
+        await MainActor.run { ConnectionStatus.shared.workerAuth = .error }
     }
 
-    /// Sync current alerts to the worker.
+    /// Sync current alerts to the worker. Marks pending if offline.
     static func syncAlerts(_ alerts: [PriceAlert]) {
         Task {
+            let offline = await MainActor.run { NetworkMonitor.shared.isOffline }
+            if offline {
+                await MainActor.run {
+                    ConnectionStatus.shared.alertSync = .pending
+                    ConnectionStatus.shared.pendingOfflineChanges = true
+                }
+                return
+            }
+
+            await ensureAuth()
             guard let url = URL(string: "\(workerURL)/alerts") else { return }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -102,7 +146,15 @@ enum PushService {
             }
 
             request.httpBody = try? JSONSerialization.data(withJSONObject: ["alerts": payload])
-            _ = try? await URLSession.shared.data(for: request)
+            if let (_, response) = try? await URLSession.shared.data(for: request),
+               let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                await MainActor.run {
+                    ConnectionStatus.shared.alertSync = .ok
+                    ConnectionStatus.shared.pendingOfflineChanges = false
+                }
+            } else {
+                await MainActor.run { ConnectionStatus.shared.alertSync = .error }
+            }
         }
     }
 }

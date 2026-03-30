@@ -60,6 +60,7 @@ class MacroDataService {
 
             cachedSnapshot = snapshot
             lastFetch = Date()
+            ConnectionStatus.shared.macro = .ok
 
             #if DEBUG
             print("[MarketScope] Macro: EUR/USD=\(eurusd ?? 0), USD \(dollarTrend ?? "?"), 10Y=\(t10y ?? 0)%, 2Y=\(t2y ?? 0)%")
@@ -67,6 +68,7 @@ class MacroDataService {
 
             return snapshot
         } catch {
+            ConnectionStatus.shared.macro = .error
             #if DEBUG
             print("[MarketScope] Macro fetch error: \(error)")
             #endif

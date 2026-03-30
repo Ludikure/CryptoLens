@@ -44,6 +44,7 @@ struct MarketScopeApp: App {
                 .onAppear {
                     analysisService.alertsStore = alertsStore
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)
+                    alertsStore.syncFromServer()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                     BackgroundRefreshManager.schedule()
@@ -54,6 +55,7 @@ struct MarketScopeApp: App {
                         if let symbol = analysisService.currentSymbol {
                             analysisService.startAutoRefresh(symbol: symbol)
                         }
+                        alertsStore.syncFromServer()
                     case .background:
                         analysisService.stopAutoRefresh()
                     default:

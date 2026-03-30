@@ -235,8 +235,10 @@ export default {
           if (resp.ok) {
             const quote = await resp.json() as Record<string, any>;
             if (!quote.code) {
-              data.eurusd = parseFloat(quote.close as string) || null;
-              data.eurusdChange = parseFloat(quote.percent_change as string) || null;
+              const close = parseFloat(quote.close as string);
+              data.eurusd = isNaN(close) ? null : close;
+              const change = parseFloat(quote.percent_change as string);
+              data.eurusdChange = isNaN(change) ? null : change;
             }
           }
         } catch { /* skip */ }

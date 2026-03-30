@@ -45,6 +45,40 @@ class AlertsStore: ObservableObject {
         alerts.removeAll()
     }
 
+    /// Pull server-side triggered state to prevent local re-triggers.
+    func syncFromServer() {
+        Task {
+            await PushService.ensureAuth()
+            guard let url = URL(string: "\(PushService.workerURL)/alerts") else { return }
+            var request = URLRequest(url: url)
+            PushService.addAuthHeaders(&request)
+
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let serverAlerts = try? JSONDecoder().decode([ServerAlert].self, from: data)
+            else { return }
+
+            let triggeredIds = Set(serverAlerts.filter(\.triggered).map(\.id))
+            guard !triggeredIds.isEmpty else { return }
+
+            await MainActor.run {
+                var changed = false
+                for i in alerts.indices where !alerts[i].triggered {
+                    if triggeredIds.contains(alerts[i].id.uuidString) {
+                        alerts[i].triggered = true
+                        changed = true
+                    }
+                }
+                if changed { save() }
+            }
+        }
+    }
+
+    private struct ServerAlert: Codable {
+        let id: String
+        let triggered: Bool
+    }
+
     /// Check all active alerts against current prices and fire notifications.
     func checkAlerts(prices: [String: Double]) {
         var changed = false

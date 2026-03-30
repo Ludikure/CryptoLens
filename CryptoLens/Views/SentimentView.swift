@@ -12,10 +12,10 @@ struct SentimentView: View {
                 .foregroundStyle(.secondary)
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
-                sentimentItem("24h", value: info.priceChangePercentage24h)
-                sentimentItem("7d", value: info.priceChangePercentage7d)
-                sentimentItem("14d", value: info.priceChangePercentage14d)
-                sentimentItem("30d", value: info.priceChangePercentage30d)
+                sentimentItem("24h", value: info.priceChangePercentage24h ?? 0)
+                sentimentItem("7d", value: info.priceChangePercentage7d ?? 0)
+                sentimentItem("14d", value: info.priceChangePercentage14d ?? 0)
+                sentimentItem("30d", value: info.priceChangePercentage30d ?? 0)
             }
 
             Divider()

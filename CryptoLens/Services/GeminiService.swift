@@ -17,6 +17,7 @@ class GeminiService: AIProvider {
         let system = AnalysisPrompt.systemPrompt(market: market)
 
         // Route through worker proxy — API key stays server-side
+        await PushService.ensureAuth()
         guard let url = URL(string: "\(workerURL)/analyze") else {
             throw GeminiError.apiError(0, "Invalid worker URL")
         }

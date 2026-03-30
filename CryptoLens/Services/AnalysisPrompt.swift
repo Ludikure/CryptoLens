@@ -194,7 +194,12 @@ enum AnalysisPrompt {
         var lines = ["Symbol: \(symbol)"]
 
         if let s = sentiment {
-            lines.append("Sentiment: 24h: \(Formatters.formatPercent(s.priceChangePercentage24h)), 7d: \(Formatters.formatPercent(s.priceChangePercentage7d)), 30d: \(Formatters.formatPercent(s.priceChangePercentage30d)), ATH distance: \(Formatters.formatPercent(s.athChangePercentage))")
+            var sentParts = [String]()
+            if let v = s.priceChangePercentage24h { sentParts.append("24h: \(Formatters.formatPercent(v))") }
+            if let v = s.priceChangePercentage7d { sentParts.append("7d: \(Formatters.formatPercent(v))") }
+            if let v = s.priceChangePercentage30d { sentParts.append("30d: \(Formatters.formatPercent(v))") }
+            sentParts.append("ATH distance: \(Formatters.formatPercent(s.athChangePercentage))")
+            lines.append("Sentiment: \(sentParts.joined(separator: ", "))")
         }
 
         if let si = stockInfo {

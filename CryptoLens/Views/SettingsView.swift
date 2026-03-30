@@ -3,17 +3,49 @@ import Security
 
 struct SettingsView: View {
     @EnvironmentObject var service: AnalysisService
+    @ObservedObject var status = ConnectionStatus.shared
+    @ObservedObject var network = NetworkMonitor.shared
     @State private var selectedProvider: AIProviderType = .claude
     @State private var selectedModel: String = ""
-    @State private var apiKey = ""
-    @State private var showKey = false
     @State private var autoAlerts = UserDefaults.standard.object(forKey: "auto_alerts_enabled") as? Bool ?? false
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
 
     var body: some View {
         NavigationStack {
             Form {
-                // Provider selection
+                // Connection status
+                Section {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(statusColor)
+                            .frame(width: 8, height: 8)
+                        Text(status.overallState)
+                            .font(.subheadline)
+                        Spacer()
+                        if status.pendingOfflineChanges {
+                            Text("Pending sync")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.12), in: Capsule())
+                        }
+                    }
+
+                    // Source health badges
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
+                        sourceBadge("Binance", state: status.binance)
+                        sourceBadge("Yahoo", state: status.yahoo)
+                        sourceBadge("Macro", state: status.macro)
+                        sourceBadge("AI", state: status.ai)
+                        sourceBadge("Alerts", state: status.alertSync)
+                        sourceBadge("Auth", state: status.workerAuth)
+                    }
+                } header: {
+                    Text("Status")
+                }
+
+                // AI Provider + Model
                 Section("AI Provider") {
                     Picker("Provider", selection: $selectedProvider) {
                         ForEach(AIProviderType.allCases) { type in
@@ -21,42 +53,10 @@ struct SettingsView: View {
                         }
                     }
                     .onChange(of: selectedProvider) {
-                        loadKeyForProvider()
-                    }
-                }
-
-                // API Key
-                Section {
-                    HStack {
-                        if showKey {
-                            TextField(keyPlaceholder, text: $apiKey)
-                                .font(.system(.body, design: .monospaced))
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        } else {
-                            SecureField(keyPlaceholder, text: $apiKey)
-                                .font(.system(.body, design: .monospaced))
-                                .autocorrectionDisabled()
-                                .textInputAutocapitalization(.never)
-                        }
-                        Button { showKey.toggle() } label: {
-                            Image(systemName: showKey ? "eye.slash" : "eye")
-                        }
-                    }
-                    Button("Save API Key") {
-                        KeychainHelper.save(key: selectedProvider.keychainKey, value: apiKey)
-                        UserDefaults.standard.set(selectedProvider.rawValue, forKey: "ai_provider")
+                        updateModel()
                         configureService()
                     }
-                    .disabled(apiKey.isEmpty)
-                } header: {
-                    Text("\(selectedProvider.displayName) API Key")
-                } footer: {
-                    Text("Your key is stored securely in the iOS Keychain.")
-                }
 
-                // Model selection
-                Section("Model") {
                     Picker("Model", selection: $selectedModel) {
                         ForEach(selectedProvider.models, id: \.id) { model in
                             Text(model.name).tag(model.id)
@@ -65,11 +65,9 @@ struct SettingsView: View {
                     .onChange(of: selectedModel) {
                         configureService()
                     }
-                    Text(selectedModel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
+                // Alerts
                 Section {
                     Toggle("Auto-generate alerts from trade setups", isOn: $autoAlerts)
                         .onChange(of: autoAlerts) {
@@ -78,9 +76,10 @@ struct SettingsView: View {
                 } header: {
                     Text("Alerts")
                 } footer: {
-                    Text("When enabled, pulling to refresh analysis will automatically create price alerts for Entry, Stop Loss, and Take Profit levels from AI trade setups.")
+                    Text("When enabled, running AI analysis will automatically create price alerts for Entry, Stop Loss, and Take Profit levels.")
                 }
 
+                // Notifications
                 Section {
                     Toggle("Notify on bias changes", isOn: Binding(
                         get: { UserDefaults.standard.bool(forKey: "notify_bias_flips") },
@@ -92,6 +91,7 @@ struct SettingsView: View {
                     Text("Get notified when a favorited asset's daily bias changes (e.g., Bearish \u{2192} Bullish).")
                 }
 
+                // Appearance
                 Section("Appearance") {
                     Picker("Theme", selection: $colorSchemeOverride) {
                         Text("System").tag("system")
@@ -101,6 +101,7 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
+                // About
                 Section("About") {
                     HStack {
                         Text("Version")
@@ -113,19 +114,15 @@ struct SettingsView: View {
                         Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1")
                             .foregroundStyle(.secondary)
                     }
-                    HStack {
-                        Text("Active Provider")
-                        Spacer()
-                        Text(service.providerType.displayName).foregroundStyle(.secondary)
-                    }
                 }
 
                 Section {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack(spacing: 10) {
-                            Image(systemName: "chart.line.uptrend.xyaxis")
-                                .font(.title2)
-                                .foregroundStyle(Color.accentColor)
+                            Image("SplashLogo")
+                                .resizable()
+                                .frame(width: 40, height: 40)
+                                .clipShape(RoundedRectangle(cornerRadius: 9))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("MarketScope")
                                     .font(.headline)
@@ -135,23 +132,9 @@ struct SettingsView: View {
                             }
                         }
 
-                        Text("MarketScope computes 13+ technical indicators locally across three timeframes and uses AI to synthesize trade setups with entry, stop loss, and take profit levels.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
                         Divider()
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            featureRow(icon: "chart.bar", text: "Crypto (Binance) + Stocks/ETFs (Yahoo Finance)")
-                            featureRow(icon: "brain", text: "AI analysis via Claude or Gemini")
-                            featureRow(icon: "bell.badge", text: "Auto-generated trade setup alerts")
-                            featureRow(icon: "clock.arrow.circlepath", text: "60s auto-refresh with historical cache")
-                            featureRow(icon: "magnifyingglass", text: "Search any stock ticker")
-                        }
-
-                        Divider()
-
-                        Text("Data Sources: Binance, Yahoo Finance, CoinGecko, Alternative.me\nPrices may be delayed up to 15 minutes for stocks.")
+                        Text("Data Sources: Binance, Yahoo Finance, CoinGecko, Twelve Data\nAI: Claude (Anthropic), Gemini (Google)")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
 
@@ -160,56 +143,45 @@ struct SettingsView: View {
                             .foregroundStyle(.tertiary)
                     }
                     .padding(.vertical, 4)
-                } header: {
-                    Text("About MarketScope")
                 }
             }
             .navigationTitle("Settings")
             .onAppear {
                 selectedProvider = service.providerType
-                loadKeyForProvider()
-                if selectedModel.isEmpty {
-                    selectedModel = selectedProvider.models[0].id
-                }
+                updateModel()
             }
         }
     }
 
-    private func featureRow(icon: String, text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .font(.caption)
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 16)
-            Text(text)
-                .font(.caption)
+    private var statusColor: Color {
+        switch status.overallColor {
+        case "green": return .green
+        case "orange": return .orange
+        case "red": return .red
+        default: return .gray
+        }
+    }
+
+    private func sourceBadge(_ name: String, state: ConnectionStatus.SourceState) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(state == .ok ? .green : (state == .error ? .red : (state == .pending ? .orange : .gray)))
+                .frame(width: 6, height: 6)
+            Text(name)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var keyPlaceholder: String {
-        switch selectedProvider {
-        case .claude: return "sk-ant-..."
-        case .gemini: return "AIza..."
-        }
-    }
-
-    private func loadKeyForProvider() {
-        apiKey = KeychainHelper.load(key: selectedProvider.keychainKey) ?? ""
-        if apiKey.isEmpty {
-            if let buildKey = Bundle.main.infoDictionary?[selectedProvider.infoPlistKey] as? String,
-               !buildKey.isEmpty, !buildKey.contains("API_KEY") {
-                apiKey = buildKey
-            }
-        }
+    private func updateModel() {
         if selectedModel.isEmpty || !selectedProvider.models.contains(where: { $0.id == selectedModel }) {
             selectedModel = selectedProvider.models[0].id
         }
     }
 
     private func configureService() {
-        guard !apiKey.isEmpty else { return }
-        service.configure(provider: selectedProvider, apiKey: apiKey, model: selectedModel)
+        service.configure(provider: selectedProvider, apiKey: "", model: selectedModel)
         UserDefaults.standard.set(selectedProvider.rawValue, forKey: "ai_provider")
     }
 }

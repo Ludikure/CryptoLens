@@ -23,6 +23,7 @@ class ClaudeService: AIProvider {
     // MARK: - Worker Proxy (production)
 
     private func analyzeViaWorker(prompt: String, system: String) async throws -> ClaudeAnalysisResponse {
+        await PushService.ensureAuth()
         guard let url = URL(string: "\(workerURL)/analyze") else {
             throw ClaudeError.apiError(0, "Invalid worker URL")
         }

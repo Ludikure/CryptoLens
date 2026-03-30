@@ -7,11 +7,11 @@ struct CoinInfo: Codable {
     let athDate: String
     let marketCap: Double
     let totalVolume: Double
-    let priceChange24h: Double
-    let priceChangePercentage24h: Double
-    let priceChangePercentage7d: Double
-    let priceChangePercentage14d: Double
-    let priceChangePercentage30d: Double
+    let priceChange24h: Double?
+    let priceChangePercentage24h: Double?
+    let priceChangePercentage7d: Double?
+    let priceChangePercentage14d: Double?
+    let priceChangePercentage30d: Double?
     let high24h: Double
     let low24h: Double
 }

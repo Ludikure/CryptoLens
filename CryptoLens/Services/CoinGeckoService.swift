@@ -58,11 +58,11 @@ class CoinGeckoService {
             athDate: stringFromMarket(marketData, key: "ath_date"),
             marketCap: doubleFromMarket(marketData, key: "market_cap"),
             totalVolume: doubleFromMarket(marketData, key: "total_volume"),
-            priceChange24h: (marketData["price_change_24h"] as? NSNumber)?.doubleValue ?? 0,
-            priceChangePercentage24h: (marketData["price_change_percentage_24h"] as? NSNumber)?.doubleValue ?? 0,
-            priceChangePercentage7d: (marketData["price_change_percentage_7d"] as? NSNumber)?.doubleValue ?? 0,
-            priceChangePercentage14d: (marketData["price_change_percentage_14d"] as? NSNumber)?.doubleValue ?? 0,
-            priceChangePercentage30d: (marketData["price_change_percentage_30d"] as? NSNumber)?.doubleValue ?? 0,
+            priceChange24h: (marketData["price_change_24h"] as? NSNumber)?.doubleValue,
+            priceChangePercentage24h: (marketData["price_change_percentage_24h"] as? NSNumber)?.doubleValue,
+            priceChangePercentage7d: (marketData["price_change_percentage_7d"] as? NSNumber)?.doubleValue,
+            priceChangePercentage14d: (marketData["price_change_percentage_14d"] as? NSNumber)?.doubleValue,
+            priceChangePercentage30d: (marketData["price_change_percentage_30d"] as? NSNumber)?.doubleValue,
             high24h: doubleFromMarket(marketData, key: "high_24h"),
             low24h: doubleFromMarket(marketData, key: "low_24h")
         )

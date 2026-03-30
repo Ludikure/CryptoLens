@@ -169,6 +169,8 @@ class AnalysisService: ObservableObject {
 
         do {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
+            if market == .crypto { ConnectionStatus.shared.binance = .ok }
+            else { ConnectionStatus.shared.yahoo = .ok }
             let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
             let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
@@ -286,8 +288,11 @@ class AnalysisService: ObservableObject {
             #if DEBUG
             print("[MarketScope] [\(symbol)] refreshIndicators error: \(error)")
             #endif
+            let market = marketFor(symbol)
+            if market == .crypto { ConnectionStatus.shared.binance = .error }
+            else { ConnectionStatus.shared.yahoo = .error }
+
             if symbol == currentSymbol {
-                // Don't show transient errors if we have cached data
                 if resultsBySymbol[symbol] != nil {
                     isLoading = false
                     loadingStatus = ""
