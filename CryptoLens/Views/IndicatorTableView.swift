@@ -2,6 +2,7 @@ import SwiftUI
 
 struct IndicatorTableView: View {
     let results: [IndicatorResult]
+    @State private var expanded = false
 
     private var hasStockIndicators: Bool {
         results.contains { $0.obv != nil }
@@ -9,13 +10,41 @@ struct IndicatorTableView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Indicators")
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 8)
-                .padding(.horizontal, 4)
+            // Collapsed header — always visible
+            Button {
+                withAnimation(.easeOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Text("Indicators")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
 
+                    Spacer()
+
+                    // Compact bias summary when collapsed
+                    if !expanded {
+                        HStack(spacing: 4) {
+                            ForEach(results) { r in
+                                Text(r.label.replacingOccurrences(of: " (Trend)", with: "").replacingOccurrences(of: " (Bias)", with: "").replacingOccurrences(of: " (Entry)", with: ""))
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(biasColor(r.bias))
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(biasColor(r.bias).opacity(0.12), in: Capsule())
+                            }
+                        }
+                    }
+
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 4)
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
             VStack(spacing: 0) {
                 // Header
                 HStack(spacing: 0) {
@@ -90,19 +119,19 @@ struct IndicatorTableView: View {
 
                 // Stock-only rows (shown only if data present)
                 if hasStockIndicators {
-                    row("OBV") { r in
+                    row("OBV", tooltip: "On Balance Volume — tracks cumulative volume flow. Rising = buying pressure. Falling = selling. Divergence from price = reversal warning.") { r in
                         if let obv = r.obv {
                             Text(obv.trend)
                                 .foregroundStyle(obv.trend == "Rising" ? .green : (obv.trend == "Falling" ? .red : .secondary))
                         } else { dash }
                     }
-                    row("A/D Line") { r in
+                    row("A/D Line", tooltip: "Accumulation/Distribution — measures money flow based on where price closes within its range. Accumulation = smart money buying. Distribution = selling.") { r in
                         if let ad = r.adLine {
                             Text(ad.trend)
                                 .foregroundStyle(ad.trend == "Accumulation" ? .green : .red)
                         } else { dash }
                     }
-                    row("SMA Cross") { r in
+                    row("SMA Cross", tooltip: "50-day vs 200-day SMA. Golden Cross (50 crosses above 200) = bullish long-term signal. Death Cross (50 below 200) = bearish. Lagging indicator — confirms trend.") { r in
                         if let cross = r.smaCross {
                             if let recent = cross.recentCross {
                                 Text(recent.contains("Golden") ? "Golden ✦" : "Death ✦")
@@ -113,7 +142,7 @@ struct IndicatorTableView: View {
                             }
                         } else { dash }
                     }
-                    row("Liquidity", isLast: true) { r in
+                    row("Liquidity", tooltip: "Average Daily Dollar Volume — how easily you can enter/exit. Very High = tight spreads. Low = slippage risk, wider stops needed.", isLast: true) { r in
                         if let addv = r.addv {
                             Text(addv.liquidity)
                                 .foregroundStyle(addv.liquidity == "Very Low" || addv.liquidity == "Low" ? .orange : .secondary)
@@ -123,10 +152,18 @@ struct IndicatorTableView: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.systemGray4), lineWidth: 0.5))
+            .padding(.top, 8)
+            } // if expanded
         }
         .font(.caption)
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func biasColor(_ bias: String) -> Color {
+        if bias.contains("Bullish") { return .green }
+        if bias.contains("Bearish") { return .red }
+        return .gray
     }
 
     private var dash: some View {

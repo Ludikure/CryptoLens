@@ -98,6 +98,7 @@ enum IndicatorEngine {
         // EMA series aligned with chart candles (last 50)
         let ema20SeriesData = Array(ema20List.suffix(50))
         let ema50SeriesData = Array(ema50List.suffix(50))
+        let ema200SeriesData = Array(ema200List.suffix(50))
 
         return IndicatorResult(
             timeframe: timeframe,
@@ -133,7 +134,8 @@ enum IndicatorEngine {
             stochDSeries: stochSeries.d,
             macdHistSeries: macdHistSeriesData,
             ema20Series: ema20SeriesData,
-            ema50Series: ema50SeriesData
+            ema50Series: ema50SeriesData,
+            ema200Series: ema200SeriesData
         )
     }
 }

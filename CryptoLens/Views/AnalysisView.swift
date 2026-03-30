@@ -14,6 +14,12 @@ struct AnalysisView: View {
         Constants.asset(for: selectedSymbol)?.name ?? selectedSymbol
     }
 
+    /// Only show result if it matches the selected symbol — prevents stale cross-symbol data.
+    private var currentResult: AnalysisResult? {
+        guard let result = service.lastResult, result.symbol == selectedSymbol else { return nil }
+        return result
+    }
+
     private var favoriteAssets: [(id: String, ticker: String)] {
         favorites.orderedFavorites.compactMap { sym in
             if let c = Constants.coin(for: sym) { return (c.id, c.ticker) }
@@ -27,7 +33,7 @@ struct AnalysisView: View {
             ScrollViewReader { scrollProxy in
             List {
                 // Section bar (pinned)
-                if service.lastResult != nil {
+                if currentResult != nil {
                     AnalysisSectionBar(activeSection: $activeSection) { section in
                         withAnimation { scrollProxy.scrollTo(section, anchor: .top) }
                     }
@@ -43,13 +49,28 @@ struct AnalysisView: View {
                             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 0, trailing: 16))
                     }
 
+                    // Offline banner
+                    if NetworkMonitor.shared.isOffline {
+                        HStack(spacing: 6) {
+                            Image(systemName: "wifi.slash")
+                                .font(.caption)
+                            Text("No internet connection")
+                                .font(.caption)
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+                        .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+                    }
+
                     // Freshness timers
-                    if let result = service.lastResult {
+                    if let result = currentResult {
                         TimestampBar(dataTimestamp: result.timestamp, analysisTimestamp: result.analysisTimestamp)
                             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 4, trailing: 16))
                     }
 
-                    if service.isLoading && service.lastResult == nil {
+                    if service.isLoading && currentResult == nil {
                         ShimmerPlaceholder(result: false)
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                             .id(viewId)
@@ -60,11 +81,11 @@ struct AnalysisView: View {
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     }
 
-                    if let result = service.lastResult {
+                    if let result = currentResult {
                         resultViews(result)
                     }
 
-                    if !service.isLoading && service.lastResult == nil && service.error == nil {
+                    if !service.isLoading && currentResult == nil && service.error == nil {
                         emptyView
                             .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
                     }
@@ -85,9 +106,9 @@ struct AnalysisView: View {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         withAnimation { favorites.toggleFavorite(selectedSymbol) }
-                        // Prefetch if newly added and not cached
+                        // Quick fetch if newly added and not cached
                         if favorites.isFavorite(selectedSymbol) && service.resultsBySymbol[selectedSymbol] == nil {
-                            Task { await service.refreshIndicators(symbol: selectedSymbol) }
+                            Task { await service.quickFetch(symbol: selectedSymbol) }
                         }
                     } label: {
                         Image(systemName: favorites.isFavorite(selectedSymbol) ? "star.fill" : "star")
@@ -102,13 +123,12 @@ struct AnalysisView: View {
                     }
                 }
 
-                // Center: coin name + chevron (opens picker)
+                // Center: ticker + chevron (opens picker)
                 ToolbarItem(placement: .principal) {
                     Button { showPicker = true } label: {
                         HStack(spacing: 4) {
-                            Text(selectedAssetName)
+                            Text(Constants.asset(for: selectedSymbol)?.ticker ?? selectedSymbol)
                                 .font(.headline)
-                                .lineLimit(1)
                             Image(systemName: "chevron.down")
                                 .font(.caption2)
                         }
@@ -116,15 +136,36 @@ struct AnalysisView: View {
                     }
                 }
 
+                // Trailing: AI analysis button
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        HapticManager.impact(.medium)
+                        Task { await service.runFullAnalysis(symbol: selectedSymbol) }
+                    } label: {
+                        if service.aiLoadingPhase != .idle {
+                            ProgressView()
+                                .controlSize(.small)
+                                .transition(.opacity)
+                        } else {
+                            Image(systemName: "sparkles")
+                                .symbolEffect(.pulse, isActive: service.isAIStale || currentResult?.claudeAnalysis.isEmpty == true)
+                                .foregroundStyle(service.isAIStale || currentResult?.claudeAnalysis.isEmpty == true ? Color.accentColor : Color(.label))
+                                .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: service.aiLoadingPhase)
+                    .disabled(service.aiLoadingPhase != .idle)
+                }
+
                 // Trailing: share
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if service.lastResult != nil {
+                    if currentResult != nil {
                         Menu {
                             ShareLink(item: shareText) {
                                 Label("Share as Text", systemImage: "doc.text")
                             }
                             Button {
-                                if let result = service.lastResult,
+                                if let result = currentResult,
                                    let pdfData = renderAnalysisPDF(result: result) {
                                     let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("MarketScope_Analysis.pdf")
                                     try? pdfData.write(to: tempURL)
@@ -225,7 +266,7 @@ struct AnalysisView: View {
     }
 
     private var biasChanges: [String] {
-        guard let result = service.lastResult else { return [] }
+        guard let result = currentResult else { return [] }
         let history = AnalysisHistoryStore.load(symbol: result.symbol)
         guard history.count >= 2 else { return [] }
         let prev = history[1] // index 0 is current, 1 is previous
@@ -278,51 +319,26 @@ struct AnalysisView: View {
             .id("overview")
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
-        ConfidenceSummaryView(result: result)
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-
-        // Run Analysis button (prominent, near top)
-        if result.claudeAnalysis.isEmpty || service.isAIStale {
-            Button {
-                Task { await service.runFullAnalysis(symbol: selectedSymbol) }
-            } label: {
-                HStack(spacing: 8) {
-                    if service.aiLoadingPhase != .idle {
-                        ProgressView().controlSize(.small)
-                        Text(service.aiLoadingPhase == .waitingForResponse ? "Analyzing..." : "Preparing...")
-                            .font(.subheadline).fontWeight(.semibold)
-                    } else {
-                        Image(systemName: "sparkles")
-                        Text(service.isAIStale ? "Refresh AI Analysis" : "Run AI Analysis")
-                            .font(.subheadline).fontWeight(.semibold)
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(service.aiLoadingPhase != .idle)
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-        }
-
         // Candlestick chart
         if !result.tf1.candles.isEmpty {
             CandlestickChartView(results: [result.tf1, result.tf2, result.tf3])
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
-        // Market section anchor
-        Color.clear.frame(height: 0)
-            .id("market")
-            .listRowInsets(EdgeInsets())
+        // Indicators (collapsed by default)
+        IndicatorTableView(results: [result.tf1, result.tf2, result.tf3])
+            .id("indicators")
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
         // Market-specific: Fear & Greed for crypto, Stock info for stocks
         if let fg = result.fearGreed {
             FearGreedView(index: fg)
+                .id("market")
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
         if let si = result.stockInfo {
             StockInfoView(stockInfo: si, symbol: result.symbol)
+                .id(result.fearGreed == nil ? "market" : "stockinfo")
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
@@ -351,9 +367,15 @@ struct AnalysisView: View {
             .id("ai")
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
-        IndicatorTableView(results: [result.tf1, result.tf2, result.tf3])
-            .id("indicators")
+        // Trade setup charts
+        ForEach(result.tradeSetups) { setup in
+            TradeSetupChartView(
+                candles: result.tf3.candles,  // Entry timeframe candles
+                setup: setup,
+                currentPrice: result.daily.price
+            )
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
 
         if let sentiment = result.sentiment {
             SentimentView(info: sentiment, symbol: result.symbol)
@@ -377,7 +399,7 @@ struct AnalysisView: View {
     }
 
     private var shareText: String {
-        guard let r = service.lastResult else { return "" }
+        guard let r = currentResult else { return "" }
         var text = """
         \(r.symbol) Analysis — \(r.timestamp.formatted(date: .abbreviated, time: .shortened))
 

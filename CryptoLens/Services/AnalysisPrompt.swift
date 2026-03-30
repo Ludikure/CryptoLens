@@ -74,15 +74,50 @@ enum AnalysisPrompt {
         - ATR tells you what the market CAN do. Use it for realistic targets and stops.
         - Stop losses at structural levels, not arbitrary distances.
 
-        FORMATTING:
-        - At the very end, include a JSON block with trade setups:
+        OUTPUT FORMAT (follow this structure exactly):
+
+        ## Market Regime
+        One line: TRENDING / RANGING / TRANSITIONING. Why (reference ADX, MAs, price action summary).
+
+        ## Key Levels
+        Bullet list of the 3-5 most important levels (S/R, fib, EMA) with prices. Mark which ones price is near.
+
+        ## Trade Setup
+        If a setup exists, present as a markdown table:
+        | Level | Price | Why | R:R |
+        |-------|-------|-----|-----|
+        | Entry | $X | reason | - |
+        | Stop Loss | $X | reason | - |
+        | TP1 | $X | reason | 1:X |
+        | TP2 | $X | reason | 1:X |
+        | TP3 | $X | reason | 1:X |
+
+        Conviction: HIGH / MODERATE / LOW
+        One line: what makes it work. One line: what kills it.
+        If no valid setup: "No trade — watching for [specific conditions]."
+
+        ## Bias
+        One line. LONG, SHORT, or FLAT. Why.
+
+        ## Risk Factors
+        Bullet list: upcoming events, macro headwinds/tailwinds, key invalidation levels.
+
+        ---
+        At the very end, include a JSON block with trade setups:
         ```json
         [{"direction": "LONG", "entry": 65000.0, "stopLoss": 63500.0, "tp1": 67000.0, "tp2": 69000.0, "tp3": 72000.0, "reasoning": "Brief reason"}]
         ```
         If no valid setup, output empty array: `[]`
         Use actual prices from the data. This JSON is machine-parsed to create alerts.
 
-        ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them. These can invalidate any technical setup. Recommend waiting for the event to pass or adjusting stop placement for increased volatility.
+        IMPORTANT FORMATTING RULES:
+        - Keep it concise. No filler, no restating indicator values the user can already see.
+        - Use ## headers exactly as shown above. The app parses these for collapsible sections.
+        - Tables must use markdown pipe syntax with header row.
+        - Do NOT list every indicator value — synthesize them into a narrative.
+        - Maximum 400 words before the JSON block.
+
+        ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
         """
 
         if market == .crypto {
@@ -362,7 +397,7 @@ enum AnalysisPrompt {
                 lines.append("ADX: \(adx.adx) (\(adx.strength), \(adx.direction)) +DI: \(adx.plusDI) -DI: \(adx.minusDI)")
             }
             if let bb = ind.bollingerBands {
-                lines.append("BB: %B \(bb.percentB), BW \(bb.bandwidth)%\(bb.squeeze ? " SQUEEZE" : "")")
+                lines.append("BB: Upper=\(Formatters.formatPrice(bb.upper)) Mid=\(Formatters.formatPrice(bb.middle)) Lower=\(Formatters.formatPrice(bb.lower)) | %B \(bb.percentB), BW \(bb.bandwidth)%\(bb.squeeze ? " SQUEEZE" : "")")
             }
             if let atr = ind.atr {
                 lines.append("ATR: \(Formatters.formatPrice(atr.atr)) (\(atr.atrPercent)%)")
@@ -372,11 +407,13 @@ enum AnalysisPrompt {
             if let e20 = ind.ema20 { maParts.append("EMA20=\(Formatters.formatPrice(e20))") }
             if let e50 = ind.ema50 { maParts.append("EMA50=\(Formatters.formatPrice(e50))") }
             if let e200 = ind.ema200 { maParts.append("EMA200=\(Formatters.formatPrice(e200))") }
+            if let s50 = ind.sma50 { maParts.append("SMA50=\(Formatters.formatPrice(s50))") }
+            if let s200 = ind.sma200 { maParts.append("SMA200=\(Formatters.formatPrice(s200))") }
             if !maParts.isEmpty { lines.append("MAs: \(maParts.joined(separator: " "))") }
 
             if let e20 = ind.ema20, let e50 = ind.ema50, let e200 = ind.ema200 {
-                if e20 > e50 && e50 > e200 { lines.append("Structure: Bullish (20 > 50 > 200)") }
-                else if e20 < e50 && e50 < e200 { lines.append("Structure: Bearish (20 < 50 < 200)") }
+                if e20 > e50 && e50 > e200 { lines.append("Structure: Bullish (EMA 20 > 50 > 200)") }
+                else if e20 < e50 && e50 < e200 { lines.append("Structure: Bearish (EMA 20 < 50 < 200)") }
                 else { lines.append("Structure: Mixed") }
             }
 
@@ -453,13 +490,26 @@ enum AnalysisPrompt {
         // Try ```json\n...\n```
         if let jsonStart = text.range(of: "```json\n"),
            let jsonEnd = text.range(of: "\n```", range: jsonStart.upperBound..<text.endIndex) {
-            return decodeSetups(String(text[jsonStart.upperBound..<jsonEnd.lowerBound]))
+            let json = String(text[jsonStart.upperBound..<jsonEnd.lowerBound])
+            let setups = decodeSetups(json)
+            #if DEBUG
+            print("[MarketScope] Parsed \(setups.count) setups from JSON block (\(json.count) chars)")
+            #endif
+            return setups
         }
         // Try ```json...``` without newlines
         if let js = text.range(of: "```json"),
            let je = text.range(of: "```", range: js.upperBound..<text.endIndex) {
-            return decodeSetups(String(text[js.upperBound..<je.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines))
+            let json = String(text[js.upperBound..<je.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let setups = decodeSetups(json)
+            #if DEBUG
+            print("[MarketScope] Parsed \(setups.count) setups from inline JSON (\(json.count) chars)")
+            #endif
+            return setups
         }
+        #if DEBUG
+        print("[MarketScope] No JSON block found in response")
+        #endif
         return []
     }
 

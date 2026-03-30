@@ -26,17 +26,21 @@ struct MarketScopeApp: App {
     init() {
         BackgroundRefreshManager.register()
         AlertsStore.requestPermission()
-        // Register for remote push notifications
         UIApplication.shared.registerForRemoteNotifications()
+        PushService.ensureRegistered()
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(analysisService)
-                .environmentObject(favoritesStore)
-                .environmentObject(alertsStore)
-                .environmentObject(navigationCoordinator)
+            ZStack {
+                ContentView()
+                    .environmentObject(analysisService)
+                    .environmentObject(favoritesStore)
+                    .environmentObject(alertsStore)
+                    .environmentObject(navigationCoordinator)
+
+                SplashView()
+            }
                 .onAppear {
                     analysisService.alertsStore = alertsStore
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)

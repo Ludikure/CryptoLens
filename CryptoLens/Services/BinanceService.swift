@@ -26,15 +26,20 @@ class BinanceService {
     }
 
     func fetchCandles(symbol: String, interval: String, limit: Int = 300) async throws -> [Candle] {
-        var components = URLComponents(string: "\(Constants.binanceBaseURL)/klines")!
+        guard var components = URLComponents(string: "\(Constants.binanceBaseURL)/klines") else {
+            throw BinanceError.networkError("Invalid URL")
+        }
         components.queryItems = [
             URLQueryItem(name: "symbol", value: symbol),
             URLQueryItem(name: "interval", value: interval),
             URLQueryItem(name: "limit", value: String(limit)),
         ]
+        guard let url = components.url else {
+            throw BinanceError.networkError("Invalid URL")
+        }
 
         let (data, response) = try await RetryHelper.withRetry {
-            try await self.session.data(from: components.url!)
+            try await self.session.data(from: url)
         }
 
         if let httpResponse = response as? HTTPURLResponse {

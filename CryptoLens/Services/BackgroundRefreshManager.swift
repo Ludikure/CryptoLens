@@ -49,13 +49,19 @@ enum BackgroundRefreshManager {
         // Get unique symbols that have active alerts
         let symbols = Set(activeAlerts.map(\.symbol))
         let binance = BinanceService()
+        let yahoo = YahooFinanceService()
         var prices = [String: Double]()
 
         for symbol in symbols {
             do {
-                let candles = try await binance.fetchCandles(symbol: symbol, interval: "1m", limit: 1)
-                if let last = candles.last {
-                    prices[symbol] = last.close
+                if symbol.hasSuffix("USDT") {
+                    // Crypto — use Binance
+                    let candles = try await binance.fetchCandles(symbol: symbol, interval: "1m", limit: 1)
+                    if let last = candles.last { prices[symbol] = last.close }
+                } else {
+                    // Stock — use Yahoo
+                    let candles = try await yahoo.fetchCandles(symbol: symbol, interval: "1d", range: "1d")
+                    if let last = candles.last { prices[symbol] = last.close }
                 }
             } catch {
                 // Skip failed fetches

@@ -39,7 +39,9 @@ class YahooFinanceService {
     /// Fetch OHLCV candles from Yahoo Finance.
     func fetchCandles(symbol: String, interval: String, range: String? = nil) async throws -> [Candle] {
         await throttle()
-        var components = URLComponents(string: "\(Constants.yahooBaseURL)/v8/finance/chart/\(symbol)")!
+        guard var components = URLComponents(string: "\(Constants.yahooBaseURL)/v8/finance/chart/\(symbol)") else {
+            throw YahooError.networkError("Invalid URL for \(symbol)")
+        }
 
         // Default ranges per interval
         let effectiveRange = range ?? defaultRange(for: interval)
@@ -47,8 +49,11 @@ class YahooFinanceService {
             URLQueryItem(name: "interval", value: interval),
             URLQueryItem(name: "range", value: effectiveRange),
         ]
+        guard let url = components.url else {
+            throw YahooError.networkError("Invalid URL for \(symbol)")
+        }
 
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: url)
 
         if let httpResponse = response as? HTTPURLResponse {
             if httpResponse.statusCode == 404 { throw YahooError.invalidSymbol }
@@ -63,13 +68,18 @@ class YahooFinanceService {
     /// Fetch stock quote with fundamentals.
     func fetchQuote(symbol: String) async throws -> StockInfo {
         await throttle()
-        var components = URLComponents(string: "\(Constants.yahooBaseURL)/v8/finance/chart/\(symbol)")!
+        guard var components = URLComponents(string: "\(Constants.yahooBaseURL)/v8/finance/chart/\(symbol)") else {
+            throw YahooError.networkError("Invalid URL for \(symbol)")
+        }
         components.queryItems = [
             URLQueryItem(name: "interval", value: "1d"),
             URLQueryItem(name: "range", value: "5d"),
         ]
+        guard let url = components.url else {
+            throw YahooError.networkError("Invalid URL for \(symbol)")
+        }
 
-        let (data, response) = try await session.data(from: components.url!)
+        let (data, response) = try await session.data(from: url)
         if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
             throw YahooError.networkError("HTTP \(httpResponse.statusCode)")
         }
@@ -132,12 +142,14 @@ class YahooFinanceService {
     /// Fetch stock sentiment data (short interest, VIX, 52-week position).
     func fetchStockSentiment(symbol: String) async -> StockSentimentData? {
         await throttle()
-        // Fetch quote summary for short interest
+        // Fetch quote summary for short interest, VIX, and put/call
         async let summaryData = fetchQuoteSummary(symbol: symbol)
         async let vixCandles = fetchVIX()
+        async let pcRatio = fetchPutCallRatio(symbol: symbol)
 
         let summary = await summaryData
         let vix = await vixCandles
+        let putCall = await pcRatio
 
         let shortPctOfFloat = summary?["shortPercentOfFloat"] as? Double
         let shortRatio = summary?["shortRatio"] as? Double
@@ -158,7 +170,7 @@ class YahooFinanceService {
             vixChange: vixChange,
             vixLevel: StockSentimentData.vixClassification(vixValue ?? 20),
             fiftyTwoWeekPosition: position52w,
-            putCallRatio: nil // CBOE integration TODO
+            putCallRatio: putCall
         )
     }
 
@@ -188,6 +200,34 @@ class YahooFinanceService {
             }
 
             return out
+        } catch { return nil }
+    }
+
+    /// Compute put/call ratio from nearest-expiry options chain open interest.
+    private func fetchPutCallRatio(symbol: String) async -> Double? {
+        await throttle()
+        guard let url = URL(string: "\(Constants.yahooBaseURL)/v7/finance/options/\(symbol)") else { return nil }
+        do {
+            let (data, response) = try await session.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) { return nil }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let chain = json["optionChain"] as? [String: Any],
+                  let results = chain["result"] as? [[String: Any]],
+                  let first = results.first,
+                  let options = first["options"] as? [[String: Any]],
+                  let nearest = options.first,
+                  let puts = nearest["puts"] as? [[String: Any]],
+                  let calls = nearest["calls"] as? [[String: Any]]
+            else { return nil }
+
+            let putOI = puts.reduce(0) { $0 + (($1["openInterest"] as? Int) ?? 0) }
+            let callOI = calls.reduce(0) { $0 + (($1["openInterest"] as? Int) ?? 0) }
+            guard callOI > 0 else { return nil }
+            let ratio = Double(putOI) / Double(callOI)
+            #if DEBUG
+            print("[MarketScope] [\(symbol)] Put/Call: putOI=\(putOI), callOI=\(callOI), ratio=\(String(format: "%.2f", ratio))")
+            #endif
+            return ratio.rounded(toPlaces: 2)
         } catch { return nil }
     }
 

@@ -59,6 +59,7 @@ class AnalysisService: ObservableObject {
     func selectSymbol(_ symbol: String) async {
         let market = marketFor(symbol)
         currentMarket = market
+        currentSymbol = symbol
 
         if let cached = resultsBySymbol[symbol] {
             lastResult = cached; error = nil
@@ -73,17 +74,51 @@ class AnalysisService: ObservableObject {
         startAutoRefresh(symbol: symbol)
     }
 
-    /// Prefetch indicators for all favorites that aren't cached yet.
+    /// Prefetch data for all favorites that aren't cached yet.
+    /// First pass: quick fetch (daily only) for fast watchlist population.
+    /// Second pass: full refresh in background.
     func prefetchFavorites(_ symbols: [String]) {
         Task {
+            // Pass 1: disk cache or quick fetch
             for symbol in symbols where resultsBySymbol[symbol] == nil {
-                // Load from disk first
                 if let diskCached = loadCache(symbol: symbol) {
                     resultsBySymbol[symbol] = diskCached
                 } else {
-                    await refreshIndicators(symbol: symbol)
+                    await quickFetch(symbol: symbol)
                 }
             }
+            // Pass 2: full refresh for stale/quick-fetched data (lower priority)
+            for symbol in symbols where symbol != currentSymbol {
+                await refreshIndicators(symbol: symbol)
+            }
+        }
+    }
+
+    /// Lightweight fetch — only daily candles + indicators for watchlist card.
+    func quickFetch(symbol: String) async {
+        guard resultsBySymbol[symbol] == nil else { return }
+        guard !NetworkMonitor.shared.isOffline else { return }
+
+        let market = marketFor(symbol)
+        do {
+            let tf = market.timeframes[0] // Daily only
+            let candles: [Candle]
+            switch market {
+            case .crypto: candles = try await binance.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300)
+            case .stock: candles = try await yahoo.fetchCandles(symbol: symbol, interval: tf.interval)
+            }
+            let tf1 = IndicatorEngine.computeAll(candles: candles, timeframe: tf.interval, label: tf.label, market: market)
+
+            let result = AnalysisResult(
+                symbol: symbol, market: market, timestamp: Date(),
+                tf1: tf1, tf2: tf1, tf3: tf1,  // Same data for all 3 — placeholder until full refresh
+                claudeAnalysis: "", tradeSetups: []
+            )
+            resultsBySymbol[symbol] = result
+        } catch {
+            #if DEBUG
+            print("[MarketScope] [\(symbol)] quickFetch failed: \(error)")
+            #endif
         }
     }
 
@@ -109,15 +144,33 @@ class AnalysisService: ObservableObject {
     // MARK: - Quick refresh: indicators only
 
     func refreshIndicators(symbol: String) async {
+        // Skip if offline and we have cached data
+        if NetworkMonitor.shared.isOffline {
+            if resultsBySymbol[symbol] != nil {
+                #if DEBUG
+                print("[MarketScope] [\(symbol)] Offline — using cached data")
+                #endif
+                return
+            }
+            if symbol == currentSymbol {
+                error = "No internet connection"
+                isLoading = false
+            }
+            return
+        }
+
         let market = marketFor(symbol)
-        isLoading = true
-        loadingStatus = "Fetching market data..."
+        // Only show loading indicator if no cached data exists
+        if resultsBySymbol[symbol] == nil {
+            isLoading = true
+            loadingStatus = "Fetching market data..."
+        }
         error = nil
 
         do {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
             let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
-            let fearGreed = await coinGecko.fetchFearGreed()
+            let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
             var stockSentiment: StockSentimentData? = nil
             if stockInfo != nil && market == .stock {
@@ -230,10 +283,19 @@ class AnalysisService: ObservableObject {
             }
 
         } catch {
+            #if DEBUG
+            print("[MarketScope] [\(symbol)] refreshIndicators error: \(error)")
+            #endif
             if symbol == currentSymbol {
-                self.error = error.localizedDescription
-                self.isLoading = false
-                self.loadingStatus = ""
+                // Don't show transient errors if we have cached data
+                if resultsBySymbol[symbol] != nil {
+                    isLoading = false
+                    loadingStatus = ""
+                } else {
+                    self.error = error.localizedDescription
+                    self.isLoading = false
+                    self.loadingStatus = ""
+                }
                 self.aiLoadingPhase = .idle
             }
         }
@@ -242,15 +304,22 @@ class AnalysisService: ObservableObject {
     // MARK: - Full analysis: indicators + AI
 
     func runFullAnalysis(symbol: String) async {
+        if NetworkMonitor.shared.isOffline {
+            error = "No internet connection. Connect to a network and try again."
+            aiLoadingPhase = .idle
+            return
+        }
+
         let market = marketFor(symbol)
         isLoading = true
         loadingStatus = "Fetching market data..."
+        aiLoadingPhase = .preparingPrompt
         error = nil
 
         do {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
             let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
-            let fearGreed = await coinGecko.fetchFearGreed()
+            let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
             var stockSentiment: StockSentimentData? = nil
             if stockInfo != nil && market == .stock {
@@ -331,8 +400,6 @@ class AnalysisService: ObservableObject {
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
             if let provider = aiProvider {
-                aiLoadingPhase = .preparingPrompt
-                loadingStatus = "Preparing analysis..."
                 aiLoadingPhase = .waitingForResponse
                 loadingStatus = "Analyzing with \(provider.displayName)..."
                 let response = try await provider.analyze(
@@ -455,21 +522,14 @@ class AnalysisService: ObservableObject {
     }
 
     private func autoConfigureKey() {
+        // All AI calls go through the worker proxy — no local API keys needed.
+        // Configure with empty key; ClaudeService uses the worker, not direct API.
         if let savedProvider = UserDefaults.standard.string(forKey: "ai_provider"),
            let type = AIProviderType(rawValue: savedProvider) {
             providerType = type
         }
-        for type in [providerType] + AIProviderType.allCases.filter({ $0 != providerType }) {
-            if let buildKey = Bundle.main.infoDictionary?[type.infoPlistKey] as? String,
-               !buildKey.isEmpty, !buildKey.contains("API_KEY"), buildKey != "your-key-here" {
-                KeychainHelper.save(key: type.keychainKey, value: buildKey)
-                configure(provider: type, apiKey: buildKey, model: type.models[0].id)
-                return
-            }
-            if let saved = KeychainHelper.load(key: type.keychainKey), !saved.isEmpty {
-                configure(provider: type, apiKey: saved, model: type.models[0].id)
-                return
-            }
-        }
+        let type = providerType
+        let model = type.models[0].id
+        configure(provider: type, apiKey: "", model: model)
     }
 }

@@ -138,8 +138,9 @@ struct IndicatorResult: Identifiable, Codable {
     let macdHistSeries: [Double]
     let ema20Series: [Double]
     let ema50Series: [Double]
+    let ema200Series: [Double]
 
-    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = []) {
+    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = []) {
         self.id = UUID()
         self.timeframe = timeframe
         self.label = label
@@ -175,6 +176,7 @@ struct IndicatorResult: Identifiable, Codable {
         self.macdHistSeries = macdHistSeries
         self.ema20Series = ema20Series
         self.ema50Series = ema50Series
+        self.ema200Series = ema200Series
     }
 
     init(from decoder: Decoder) throws {
@@ -214,5 +216,6 @@ struct IndicatorResult: Identifiable, Codable {
         macdHistSeries = (try? container.decodeIfPresent([Double].self, forKey: .macdHistSeries)) ?? []
         ema20Series = (try? container.decodeIfPresent([Double].self, forKey: .ema20Series)) ?? []
         ema50Series = (try? container.decodeIfPresent([Double].self, forKey: .ema50Series)) ?? []
+        ema200Series = (try? container.decodeIfPresent([Double].self, forKey: .ema200Series)) ?? []
     }
 }

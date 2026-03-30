@@ -31,7 +31,7 @@ struct CandlestickChartView: View {
                 .buttonStyle(.borderless)
                 .popover(isPresented: $showOverlayMenu, arrowEdge: .top) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("EMA 20/50", isOn: $showEMA)
+                        Toggle("EMA 20/50/200", isOn: $showEMA)
                         Toggle("Support / Resistance", isOn: $showSR)
                         Toggle("Bollinger Bands", isOn: $showBB)
                     }
@@ -70,6 +70,7 @@ struct CandlestickChartView: View {
                     candles: candles,
                     ema20Series: showEMA ? currentResult.ema20Series : [],
                     ema50Series: showEMA ? currentResult.ema50Series : [],
+                    ema200Series: showEMA ? currentResult.ema200Series : [],
                     supports: showSR ? currentResult.supportResistance.supports : [],
                     resistances: showSR ? currentResult.supportResistance.resistances : [],
                     bollingerUpper: showBB ? currentResult.bollingerBands?.upper : nil,
@@ -94,6 +95,7 @@ private struct CandlestickCanvas: View {
     let candles: [Candle]
     let ema20Series: [Double]
     let ema50Series: [Double]
+    let ema200Series: [Double]
     let supports: [Double]
     let resistances: [Double]
     let bollingerUpper: Double?
@@ -101,6 +103,7 @@ private struct CandlestickCanvas: View {
     let candlePatterns: [PatternResult]
 
     @State private var selectedIndex: Int?
+    @State private var scrubMode = false
 
     // Layout
     private let chartHeight: CGFloat = 180
@@ -159,8 +162,9 @@ private struct CandlestickCanvas: View {
                     }
 
                     // EMA polylines
-                    emaPolyline(series: ema20Series, step: step, height: chartHeight, color: .orange.opacity(0.7))
+                    emaPolyline(series: ema200Series, step: step, height: chartHeight, color: .purple.opacity(0.5))
                     emaPolyline(series: ema50Series, step: step, height: chartHeight, color: .blue.opacity(0.6))
+                    emaPolyline(series: ema20Series, step: step, height: chartHeight, color: .orange.opacity(0.7))
 
                     // Candlesticks
                     ForEach(Array(candles.enumerated()), id: \.offset) { idx, candle in
@@ -227,7 +231,19 @@ private struct CandlestickCanvas: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .gesture(
+                .onTapGesture { location in
+                    let idx = Int(location.x / step)
+                    if idx >= 0 && idx < candles.count {
+                        if selectedIndex == idx {
+                            selectedIndex = nil
+                            scrubMode = false
+                        } else {
+                            selectedIndex = idx
+                            scrubMode = true
+                        }
+                    }
+                }
+                .gesture(scrubMode ?
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
                             let idx = Int(value.location.x / step)
@@ -236,11 +252,14 @@ private struct CandlestickCanvas: View {
                             }
                         }
                         .onEnded { _ in
+                            scrubMode = false
                             selectedIndex = nil
                         }
+                    : nil
                 )
             }
             .frame(height: chartHeight + spacing + volumeHeight)
+            .clipped()
         }
     }
 

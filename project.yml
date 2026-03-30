@@ -4,6 +4,10 @@ settings:
     DEAD_CODE_STRIPPING: YES
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    DEVELOPMENT_TEAM: 6AS729C9FR
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "6"
 options:
   bundleIdPrefix: com.ludikure
   deploymentTarget:
@@ -21,13 +25,15 @@ targets:
     info:
       path: CryptoLens/Info.plist
       properties:
-        CFBundleVersion: "4"
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: MarketScope
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations: {}
         UIApplicationSupportsIndirectInputEvents: true
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: SystemBackground
+          UIImageName: ""
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -39,21 +45,16 @@ targets:
           - UIInterfaceOrientationLandscapeRight
           - UIInterfaceOrientationPortraitUpsideDown
         UIRequiresFullScreen: false
-        ClaudeAPIKey: $(CLAUDE_API_KEY)
-        GeminiAPIKey: $(GEMINI_API_KEY)
-        TwelveDataAPIKey: $(TWELVE_DATA_API_KEY)
+        # API keys removed from bundle — all calls go through worker proxy
         BGTaskSchedulerPermittedIdentifiers:
           - com.ludikure.CryptoLens.priceCheck
         UIBackgroundModes:
           - fetch
     settings:
       base:
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "4"
-        SWIFT_EMIT_LOC_STRINGS: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: 6AS729C9FR
     entitlements:
       path: MarketScope.entitlements
       properties:
@@ -77,18 +78,14 @@ targets:
     info:
       path: MarketScopeWidget/Info.plist
       properties:
-        CFBundleVersion: "4"
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: MarketScope Widget
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
       base:
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "4"
         PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens.widget
         CODE_SIGN_STYLE: Automatic
-        DEVELOPMENT_TEAM: ""
-        SWIFT_EMIT_LOC_STRINGS: YES
     entitlements:
       path: MarketScopeWidget/MarketScopeWidget.entitlements
       properties:

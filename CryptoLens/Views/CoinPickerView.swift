@@ -199,7 +199,7 @@ struct CoinPickerView: View {
                 Button {
                     favorites.toggleFavorite(id)
                     if favorites.isFavorite(id) && service.resultsBySymbol[id] == nil {
-                        Task { await service.refreshIndicators(symbol: id) }
+                        Task { await service.quickFetch(symbol: id) }
                     }
                 } label: {
                     Image(systemName: favorites.isFavorite(id) ? "star.fill" : "star")

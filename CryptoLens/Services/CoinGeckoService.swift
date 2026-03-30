@@ -34,7 +34,7 @@ class CoinGeckoService {
             return cached.info
         }
 
-        var components = URLComponents(string: "\(Constants.coingeckoBaseURL)/coins/\(geckoId)")!
+        guard var components = URLComponents(string: "\(Constants.coingeckoBaseURL)/coins/\(geckoId)") else { return nil }
         components.queryItems = [
             URLQueryItem(name: "localization", value: "false"),
             URLQueryItem(name: "tickers", value: "false"),
@@ -42,8 +42,9 @@ class CoinGeckoService {
             URLQueryItem(name: "developer_data", value: "false"),
             URLQueryItem(name: "sparkline", value: "false"),
         ]
+        guard let url = components.url else { return nil }
 
-        let (data, _) = try await session.data(from: components.url!)
+        let (data, _) = try await session.data(from: url)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
 
         let marketData = json["market_data"] as? [String: Any] ?? [:]
@@ -78,7 +79,7 @@ class CoinGeckoService {
             return cached.0
         }
         do {
-            let url = URL(string: "https://api.alternative.me/fng/?limit=1")!
+            guard let url = URL(string: "https://api.alternative.me/fng/?limit=1") else { return nil }
             let (data, _) = try await session.data(from: url)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let dataArr = json["data"] as? [[String: Any]],

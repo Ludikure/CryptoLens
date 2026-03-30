@@ -3,7 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
 [observability]
-enabled = true
+enabled = false  # Disabled to prevent logging outbound URLs containing API keys
 
 # KV namespace for storing alerts and device tokens
 [[kv_namespaces]]
