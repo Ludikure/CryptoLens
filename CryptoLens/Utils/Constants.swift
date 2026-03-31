@@ -49,7 +49,7 @@ enum Constants {
     // MARK: - Stocks
 
     static let defaultStocks: [AssetDefinition] = [
-        // Mega-cap Tech
+        // Magnificent 7
         AssetDefinition(id: "AAPL", name: "Apple", ticker: "AAPL", market: .stock, color: .gray),
         AssetDefinition(id: "MSFT", name: "Microsoft", ticker: "MSFT", market: .stock, color: .blue),
         AssetDefinition(id: "GOOGL", name: "Alphabet", ticker: "GOOGL", market: .stock, color: .green),
@@ -57,11 +57,16 @@ enum Constants {
         AssetDefinition(id: "META", name: "Meta", ticker: "META", market: .stock, color: .blue),
         AssetDefinition(id: "NVDA", name: "NVIDIA", ticker: "NVDA", market: .stock, color: .green),
         AssetDefinition(id: "TSLA", name: "Tesla", ticker: "TSLA", market: .stock, color: .red),
-        // Tech & Semis
+        // Semiconductors
         AssetDefinition(id: "AMD", name: "AMD", ticker: "AMD", market: .stock, color: .red),
         AssetDefinition(id: "AVGO", name: "Broadcom", ticker: "AVGO", market: .stock, color: .red),
         AssetDefinition(id: "TSM", name: "TSMC", ticker: "TSM", market: .stock, color: .blue),
         AssetDefinition(id: "INTC", name: "Intel", ticker: "INTC", market: .stock, color: .blue),
+        AssetDefinition(id: "QCOM", name: "Qualcomm", ticker: "QCOM", market: .stock, color: .blue),
+        AssetDefinition(id: "MU", name: "Micron", ticker: "MU", market: .stock, color: .blue),
+        AssetDefinition(id: "ARM", name: "ARM Holdings", ticker: "ARM", market: .stock, color: .cyan),
+        AssetDefinition(id: "MRVL", name: "Marvell", ticker: "MRVL", market: .stock, color: .red),
+        // Software & Cloud
         AssetDefinition(id: "ORCL", name: "Oracle", ticker: "ORCL", market: .stock, color: .red),
         AssetDefinition(id: "CRM", name: "Salesforce", ticker: "CRM", market: .stock, color: .blue),
         AssetDefinition(id: "ADBE", name: "Adobe", ticker: "ADBE", market: .stock, color: .red),
@@ -70,21 +75,49 @@ enum Constants {
         AssetDefinition(id: "SHOP", name: "Shopify", ticker: "SHOP", market: .stock, color: .green),
         AssetDefinition(id: "SNOW", name: "Snowflake", ticker: "SNOW", market: .stock, color: .cyan),
         AssetDefinition(id: "UBER", name: "Uber", ticker: "UBER", market: .stock, color: .gray),
+        AssetDefinition(id: "NOW", name: "ServiceNow", ticker: "NOW", market: .stock, color: .green),
+        AssetDefinition(id: "PANW", name: "Palo Alto Networks", ticker: "PANW", market: .stock, color: .red),
+        AssetDefinition(id: "CRWD", name: "CrowdStrike", ticker: "CRWD", market: .stock, color: .red),
+        AssetDefinition(id: "NET", name: "Cloudflare", ticker: "NET", market: .stock, color: .orange),
+        AssetDefinition(id: "DDOG", name: "Datadog", ticker: "DDOG", market: .stock, color: .purple),
+        AssetDefinition(id: "ZS", name: "Zscaler", ticker: "ZS", market: .stock, color: .blue),
+        AssetDefinition(id: "SPOT", name: "Spotify", ticker: "SPOT", market: .stock, color: .green),
+        AssetDefinition(id: "SQ", name: "Block (Square)", ticker: "SQ", market: .stock, color: .gray),
+        AssetDefinition(id: "ABNB", name: "Airbnb", ticker: "ABNB", market: .stock, color: .red),
+        AssetDefinition(id: "DASH", name: "DoorDash", ticker: "DASH", market: .stock, color: .red),
+        // AI, Robotics & eVTOL
+        AssetDefinition(id: "SMCI", name: "Super Micro", ticker: "SMCI", market: .stock, color: .green),
+        AssetDefinition(id: "ACHR", name: "Archer Aviation", ticker: "ACHR", market: .stock, color: .blue),
+        AssetDefinition(id: "AI", name: "C3.ai", ticker: "AI", market: .stock, color: .blue),
+        AssetDefinition(id: "IONQ", name: "IonQ", ticker: "IONQ", market: .stock, color: .purple),
         // Crypto-adjacent
         AssetDefinition(id: "COIN", name: "Coinbase", ticker: "COIN", market: .stock, color: .blue),
         AssetDefinition(id: "MSTR", name: "MicroStrategy", ticker: "MSTR", market: .stock, color: .red),
+        AssetDefinition(id: "MARA", name: "Marathon Digital", ticker: "MARA", market: .stock, color: .indigo),
+        AssetDefinition(id: "RIOT", name: "Riot Platforms", ticker: "RIOT", market: .stock, color: .blue),
         // Finance
         AssetDefinition(id: "JPM", name: "JPMorgan Chase", ticker: "JPM", market: .stock, color: .blue),
         AssetDefinition(id: "V", name: "Visa", ticker: "V", market: .stock, color: .blue),
         AssetDefinition(id: "MA", name: "Mastercard", ticker: "MA", market: .stock, color: .orange),
         AssetDefinition(id: "BAC", name: "Bank of America", ticker: "BAC", market: .stock, color: .red),
         AssetDefinition(id: "GS", name: "Goldman Sachs", ticker: "GS", market: .stock, color: .blue),
-        // Healthcare
+        AssetDefinition(id: "MS", name: "Morgan Stanley", ticker: "MS", market: .stock, color: .blue),
+        AssetDefinition(id: "WFC", name: "Wells Fargo", ticker: "WFC", market: .stock, color: .red),
+        AssetDefinition(id: "C", name: "Citigroup", ticker: "C", market: .stock, color: .blue),
+        AssetDefinition(id: "SCHW", name: "Charles Schwab", ticker: "SCHW", market: .stock, color: .blue),
+        AssetDefinition(id: "BLK", name: "BlackRock", ticker: "BLK", market: .stock, color: .gray),
+        AssetDefinition(id: "AXP", name: "American Express", ticker: "AXP", market: .stock, color: .blue),
+        AssetDefinition(id: "PYPL", name: "PayPal", ticker: "PYPL", market: .stock, color: .blue),
+        // Healthcare & Pharma
         AssetDefinition(id: "UNH", name: "UnitedHealth", ticker: "UNH", market: .stock, color: .blue),
         AssetDefinition(id: "JNJ", name: "Johnson & Johnson", ticker: "JNJ", market: .stock, color: .red),
         AssetDefinition(id: "LLY", name: "Eli Lilly", ticker: "LLY", market: .stock, color: .red),
         AssetDefinition(id: "PFE", name: "Pfizer", ticker: "PFE", market: .stock, color: .blue),
         AssetDefinition(id: "ABBV", name: "AbbVie", ticker: "ABBV", market: .stock, color: .indigo),
+        AssetDefinition(id: "MRK", name: "Merck", ticker: "MRK", market: .stock, color: .cyan),
+        AssetDefinition(id: "TMO", name: "Thermo Fisher", ticker: "TMO", market: .stock, color: .blue),
+        AssetDefinition(id: "ABT", name: "Abbott Labs", ticker: "ABT", market: .stock, color: .blue),
+        AssetDefinition(id: "NVO", name: "Novo Nordisk", ticker: "NVO", market: .stock, color: .blue),
         // Consumer
         AssetDefinition(id: "WMT", name: "Walmart", ticker: "WMT", market: .stock, color: .blue),
         AssetDefinition(id: "COST", name: "Costco", ticker: "COST", market: .stock, color: .red),
@@ -95,14 +128,36 @@ enum Constants {
         AssetDefinition(id: "MCD", name: "McDonald's", ticker: "MCD", market: .stock, color: .yellow),
         AssetDefinition(id: "KO", name: "Coca-Cola", ticker: "KO", market: .stock, color: .red),
         AssetDefinition(id: "PEP", name: "PepsiCo", ticker: "PEP", market: .stock, color: .blue),
-        // Industrial / Energy
+        AssetDefinition(id: "PG", name: "Procter & Gamble", ticker: "PG", market: .stock, color: .blue),
+        AssetDefinition(id: "TGT", name: "Target", ticker: "TGT", market: .stock, color: .red),
+        AssetDefinition(id: "LOW", name: "Lowe's", ticker: "LOW", market: .stock, color: .blue),
+        // Industrial / Defense
         AssetDefinition(id: "BA", name: "Boeing", ticker: "BA", market: .stock, color: .blue),
         AssetDefinition(id: "CAT", name: "Caterpillar", ticker: "CAT", market: .stock, color: .yellow),
+        AssetDefinition(id: "GE", name: "GE Aerospace", ticker: "GE", market: .stock, color: .blue),
+        AssetDefinition(id: "RTX", name: "RTX (Raytheon)", ticker: "RTX", market: .stock, color: .blue),
+        AssetDefinition(id: "LMT", name: "Lockheed Martin", ticker: "LMT", market: .stock, color: .gray),
+        AssetDefinition(id: "UPS", name: "UPS", ticker: "UPS", market: .stock, color: .brown),
+        AssetDefinition(id: "DE", name: "Deere & Co", ticker: "DE", market: .stock, color: .green),
+        // Energy
         AssetDefinition(id: "XOM", name: "ExxonMobil", ticker: "XOM", market: .stock, color: .red),
         AssetDefinition(id: "CVX", name: "Chevron", ticker: "CVX", market: .stock, color: .blue),
-        // Telecom
+        AssetDefinition(id: "COP", name: "ConocoPhillips", ticker: "COP", market: .stock, color: .red),
+        AssetDefinition(id: "SLB", name: "Schlumberger", ticker: "SLB", market: .stock, color: .blue),
+        // Telecom & Utilities
         AssetDefinition(id: "T", name: "AT&T", ticker: "T", market: .stock, color: .cyan),
         AssetDefinition(id: "VZ", name: "Verizon", ticker: "VZ", market: .stock, color: .red),
+        AssetDefinition(id: "TMUS", name: "T-Mobile", ticker: "TMUS", market: .stock, color: .pink),
+        AssetDefinition(id: "NEE", name: "NextEra Energy", ticker: "NEE", market: .stock, color: .blue),
+        // Chinese ADRs
+        AssetDefinition(id: "BABA", name: "Alibaba", ticker: "BABA", market: .stock, color: .orange),
+        AssetDefinition(id: "NIO", name: "NIO", ticker: "NIO", market: .stock, color: .blue),
+        AssetDefinition(id: "PDD", name: "PDD Holdings", ticker: "PDD", market: .stock, color: .orange),
+        AssetDefinition(id: "JD", name: "JD.com", ticker: "JD", market: .stock, color: .red),
+        // Meme / Retail favorites
+        AssetDefinition(id: "GME", name: "GameStop", ticker: "GME", market: .stock, color: .red),
+        AssetDefinition(id: "AMC", name: "AMC Entertainment", ticker: "AMC", market: .stock, color: .red),
+        AssetDefinition(id: "SOFI", name: "SoFi Technologies", ticker: "SOFI", market: .stock, color: .cyan),
         // ETFs — Index
         AssetDefinition(id: "SPY", name: "S&P 500 ETF", ticker: "SPY", market: .stock, color: .indigo),
         AssetDefinition(id: "QQQ", name: "Nasdaq 100 ETF", ticker: "QQQ", market: .stock, color: .purple),
@@ -110,13 +165,17 @@ enum Constants {
         AssetDefinition(id: "DIA", name: "Dow Jones ETF", ticker: "DIA", market: .stock, color: .blue),
         AssetDefinition(id: "VOO", name: "Vanguard S&P 500", ticker: "VOO", market: .stock, color: .indigo),
         AssetDefinition(id: "VTI", name: "Vanguard Total Market", ticker: "VTI", market: .stock, color: .indigo),
-        // ETFs — Sector & Asset
+        // ETFs — Sector & Thematic
         AssetDefinition(id: "GLD", name: "Gold ETF", ticker: "GLD", market: .stock, color: .yellow),
+        AssetDefinition(id: "SLV", name: "Silver ETF", ticker: "SLV", market: .stock, color: .gray),
         AssetDefinition(id: "TLT", name: "20+ Year Treasury", ticker: "TLT", market: .stock, color: .cyan),
-        AssetDefinition(id: "XLF", name: "Financial Sector ETF", ticker: "XLF", market: .stock, color: .green),
-        AssetDefinition(id: "XLE", name: "Energy Sector ETF", ticker: "XLE", market: .stock, color: .orange),
-        AssetDefinition(id: "XLK", name: "Tech Sector ETF", ticker: "XLK", market: .stock, color: .purple),
-        AssetDefinition(id: "ARKK", name: "ARK Innovation ETF", ticker: "ARKK", market: .stock, color: .orange),
+        AssetDefinition(id: "XLF", name: "Financial Sector", ticker: "XLF", market: .stock, color: .green),
+        AssetDefinition(id: "XLE", name: "Energy Sector", ticker: "XLE", market: .stock, color: .orange),
+        AssetDefinition(id: "XLK", name: "Tech Sector", ticker: "XLK", market: .stock, color: .purple),
+        AssetDefinition(id: "XLV", name: "Healthcare Sector", ticker: "XLV", market: .stock, color: .blue),
+        AssetDefinition(id: "ARKK", name: "ARK Innovation", ticker: "ARKK", market: .stock, color: .orange),
+        AssetDefinition(id: "SMH", name: "Semiconductor ETF", ticker: "SMH", market: .stock, color: .indigo),
+        AssetDefinition(id: "SOXX", name: "iShares Semiconductor", ticker: "SOXX", market: .stock, color: .blue),
     ]
 
     // MARK: - Custom stocks (set by FavoritesStore on init)

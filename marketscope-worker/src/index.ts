@@ -197,7 +197,7 @@ export default {
             },
             body: JSON.stringify({
               model,
-              max_tokens: 2500,
+              max_tokens: 4000,
               temperature: 0,
               system: body.system,
               messages: [{ role: 'user', content: body.prompt }],

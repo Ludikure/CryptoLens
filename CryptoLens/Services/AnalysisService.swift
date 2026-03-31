@@ -471,6 +471,14 @@ class AnalysisService: ObservableObject {
             let events = await economicCalendar.highImpactUpcoming()
             let macroSnapshot = await macroData.fetchMacroSnapshot()
 
+            // Weekly context + SPY for stocks (Twelve Data, cached 24h on worker)
+            var weeklyContext: String? = nil
+            var spyContext: String? = nil
+            if market == .stock {
+                weeklyContext = await buildWeeklyContext(symbol: symbol)
+                spyContext = await buildSPYContext()
+            }
+
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
             if let provider = aiProvider {
@@ -486,7 +494,9 @@ class AnalysisService: ObservableObject {
                     positioning: positioning,
                     stockSentiment: stockSentiment,
                     economicEvents: events,
-                    macro: macroSnapshot
+                    macro: macroSnapshot,
+                    weeklyContext: weeklyContext,
+                    spyContext: spyContext
                 )
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown
@@ -537,6 +547,89 @@ class AnalysisService: ObservableObject {
             self.loadingStatus = ""
             self.aiLoadingPhase = .idle
         }
+    }
+
+    // MARK: - Weekly + SPY Context
+
+    private func buildWeeklyContext(symbol: String) async -> String? {
+        guard let candles = try? await twelveData.fetchCandles(symbol: symbol, interval: "1week", limit: 20),
+              candles.count >= 5 else { return nil }
+
+        let result = IndicatorEngine.computeAll(candles: candles, timeframe: "1week", label: "Weekly")
+        var lines = [String]()
+
+        // Trend
+        let recent5 = Array(candles.suffix(5))
+        let greenCount = recent5.filter { $0.close >= $0.open }.count
+        let trend = greenCount >= 4 ? "Bullish (\(greenCount) green weeks)" :
+                    (greenCount <= 1 ? "Bearish (\(5 - greenCount) red weeks)" : "Mixed")
+        lines.append("Weekly Trend: \(trend)")
+
+        // EMA structure
+        if let e20 = result.ema20, let e50 = result.ema50 {
+            if e20 > e50 { lines.append("Weekly EMA: Bullish (20W > 50W)") }
+            else { lines.append("Weekly EMA: Bearish (20W < 50W)") }
+        }
+
+        // RSI
+        if let rsi = result.rsi {
+            lines.append("Weekly RSI: \(String(format: "%.1f", rsi))")
+        }
+
+        // ATR
+        if let atr = result.atr {
+            lines.append("Weekly ATR: \(Formatters.formatPrice(atr.atr)) (\(atr.atrPercent)% avg range)")
+        }
+
+        // S/R from weekly
+        if !result.supportResistance.supports.isEmpty {
+            lines.append("Weekly Support: \(result.supportResistance.supports.prefix(3).map { Formatters.formatPrice($0) }.joined(separator: ", "))")
+        }
+        if !result.supportResistance.resistances.isEmpty {
+            lines.append("Weekly Resistance: \(result.supportResistance.resistances.prefix(3).map { Formatters.formatPrice($0) }.joined(separator: ", "))")
+        }
+
+        // Position in range
+        if let nearSup = result.supportResistance.supports.first,
+           let nearRes = result.supportResistance.resistances.first,
+           nearRes > nearSup {
+            let position = (result.price - nearSup) / (nearRes - nearSup) * 100
+            lines.append("Position in Weekly Range: \(String(format: "%.0f%%", position)) (0%=support, 100%=resistance)")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func buildSPYContext() async -> String? {
+        guard let candles = try? await twelveData.fetchCandles(symbol: "SPY", interval: "1day", limit: 30),
+              let last = candles.last else { return nil }
+
+        let result = IndicatorEngine.computeAll(candles: candles, timeframe: "1d", label: "SPY Daily")
+        var parts = [String]()
+
+        parts.append("\(Formatters.formatPrice(last.close))")
+        if candles.count >= 2 {
+            let prev = candles[candles.count - 2].close
+            let change = prev > 0 ? ((last.close - prev) / prev) * 100 : 0
+            parts.append("(\(String(format: "%+.2f%%", change)))")
+        }
+
+        if let e20 = result.ema20 {
+            parts.append(last.close > e20 ? "above 20D EMA" : "below 20D EMA")
+        }
+        if let rsi = result.rsi {
+            parts.append("RSI \(String(format: "%.0f", rsi))")
+        }
+
+        let trend: String
+        if let e20 = result.ema20, let e50 = result.ema50 {
+            if last.close > e20 && e20 > e50 { trend = "bullish" }
+            else if last.close < e20 && e20 < e50 { trend = "bearish" }
+            else { trend = "mixed" }
+        } else { trend = "unknown" }
+        parts.append("— broad market \(trend)")
+
+        return parts.joined(separator: " ")
     }
 
     // MARK: - Fetch + compute for any market

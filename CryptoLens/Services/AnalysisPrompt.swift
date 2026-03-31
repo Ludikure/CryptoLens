@@ -193,7 +193,8 @@ enum AnalysisPrompt {
     static func buildUserPrompt(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String,
                                 stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil,
                                 positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil,
-                                economicEvents: [EconomicEvent] = [], macro: MacroSnapshot? = nil) -> String {
+                                economicEvents: [EconomicEvent] = [], macro: MacroSnapshot? = nil,
+                                weeklyContext: String? = nil, spyContext: String? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         if let s = sentiment {
@@ -395,8 +396,12 @@ enum AnalysisPrompt {
             }
         }
 
-        // Weekly trend context (derived from daily candles)
-        if let daily = indicators.first, daily.candles.count >= 5 {
+        // Weekly context (real weekly candles if available, else derived from daily)
+        if let wc = weeklyContext {
+            lines.append("")
+            lines.append("=== WEEKLY CONTEXT ===")
+            lines.append(wc)
+        } else if let daily = indicators.first, daily.candles.count >= 5 {
             let weekCandles = Array(daily.candles.suffix(5))
             let weekOpen = weekCandles.first?.open ?? 0
             let weekClose = weekCandles.last?.close ?? 0
@@ -405,8 +410,15 @@ enum AnalysisPrompt {
             let weekChange = weekOpen > 0 ? ((weekClose - weekOpen) / weekOpen) * 100 : 0
             let weekTrend = weekChange > 1 ? "Bullish" : (weekChange < -1 ? "Bearish" : "Neutral")
             lines.append("")
-            lines.append("=== WEEKLY CONTEXT (last 5 daily candles) ===")
+            lines.append("=== WEEKLY CONTEXT (estimated from daily) ===")
             lines.append("Trend: \(weekTrend) (\(String(format: "%+.1f%%", weekChange))), Range: \(Formatters.formatPrice(weekLow)) – \(Formatters.formatPrice(weekHigh))")
+        }
+
+        // SPY market proxy
+        if let spy = spyContext {
+            lines.append("")
+            lines.append("=== BROAD MARKET (SPY) ===")
+            lines.append(spy)
         }
 
         lines.append("")
