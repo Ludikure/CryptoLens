@@ -35,10 +35,10 @@ struct SettingsView: View {
                     // Source health badges
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                         sourceBadge("Binance", state: status.binance)
-                        sourceBadge("Yahoo", state: status.yahoo)
-                        sourceBadge("Macro", state: status.macro)
+                        sourceBadge("TwelveData", state: status.twelveData)
+                        sourceBadge("Finnhub", state: status.finnhub)
+                        sourceBadge("FRED", state: status.macro)
                         sourceBadge("AI", state: status.ai)
-                        sourceBadge("Alerts", state: status.alertSync)
                         sourceBadge("Auth", state: status.workerAuth)
                     }
                 } header: {

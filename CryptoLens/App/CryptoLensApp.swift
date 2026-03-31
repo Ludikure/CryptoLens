@@ -56,6 +56,10 @@ struct MarketScopeApp: App {
                             analysisService.startAutoRefresh(symbol: symbol)
                         }
                         alertsStore.syncFromServer()
+                        // Replay any offline alert changes
+                        if ConnectionStatus.shared.pendingOfflineChanges {
+                            PushService.syncAlerts(alertsStore.alerts)
+                        }
                     case .background:
                         analysisService.stopAutoRefresh()
                     default:

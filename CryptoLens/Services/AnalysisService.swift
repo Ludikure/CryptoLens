@@ -177,7 +177,7 @@ class AnalysisService: ObservableObject {
         do {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
             if market == .crypto { ConnectionStatus.shared.binance = .ok }
-            else { ConnectionStatus.shared.yahoo = .ok }
+            else { ConnectionStatus.shared.twelveData = .ok }
             let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
             let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
@@ -329,7 +329,7 @@ class AnalysisService: ObservableObject {
             #endif
             let market = marketFor(symbol)
             if market == .crypto { ConnectionStatus.shared.binance = .error }
-            else { ConnectionStatus.shared.yahoo = .error }
+            else { ConnectionStatus.shared.twelveData = .error }
 
             if symbol == currentSymbol {
                 if resultsBySymbol[symbol] != nil {
@@ -649,10 +649,12 @@ class AnalysisService: ObservableObject {
 
         case .stock:
             // Twelve Data for candles (native 4H, cached via worker)
-            // Falls back to Yahoo if Twelve Data fails
+            // Falls back to Yahoo if Twelve Data fails (4H degrades to 1H)
             var c1: [Candle]
             var c2: [Candle]
             var c3: [Candle]
+            var tf2Interval = tfs[1].interval
+            var tf2Label = tfs[1].label
             do {
                 async let td1 = twelveData.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
                 async let td2 = twelveData.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
@@ -660,23 +662,28 @@ class AnalysisService: ObservableObject {
                 c1 = try await td1
                 c2 = try await td2
                 c3 = try await td3
-                ConnectionStatus.shared.yahoo = .ok  // Using TD successfully
                 #if DEBUG
                 print("[MarketScope] [\(symbol)] Using Twelve Data candles")
                 #endif
             } catch {
                 #if DEBUG
-                print("[MarketScope] [\(symbol)] Twelve Data failed (\(error)), falling back to Yahoo")
+                print("[MarketScope] [\(symbol)] Twelve Data failed (\(error)), falling back to Yahoo (4H→1H)")
                 #endif
+                // Yahoo doesn't support 4H — degrade to 1H with correct labeling
+                let yahooTf2 = tfs[1].interval == "4h" ? "1h" : tfs[1].interval
+                if tfs[1].interval == "4h" {
+                    tf2Interval = "1h"
+                    tf2Label = "1H (Bias — 4H unavailable)"
+                }
                 async let y1 = yahoo.fetchCandles(symbol: symbol, interval: tfs[0].interval)
-                async let y2 = yahoo.fetchCandles(symbol: symbol, interval: tfs[1].interval == "4h" ? "1h" : tfs[1].interval)
+                async let y2 = yahoo.fetchCandles(symbol: symbol, interval: yahooTf2)
                 async let y3 = yahoo.fetchCandles(symbol: symbol, interval: tfs[2].interval)
                 c1 = try await y1
                 c2 = try await y2
                 c3 = try await y3
             }
             let r1 = IndicatorEngine.computeAll(candles: c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market)
-            let r2 = IndicatorEngine.computeAll(candles: c2, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
+            let r2 = IndicatorEngine.computeAll(candles: c2, timeframe: tf2Interval, label: tf2Label, market: market)
             let r3 = IndicatorEngine.computeAll(candles: c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
             return (r1, r2, r3)
         }

@@ -48,10 +48,12 @@ class ClaudeService: AIProvider {
         }
 
         if httpResp.statusCode == 429 {
+            await MainActor.run { ConnectionStatus.shared.ai = .error }
             throw ClaudeError.apiError(429, "Rate limited. Try again in a few minutes.")
         }
         guard (200...299).contains(httpResp.statusCode) else {
             let errBody = String(data: data, encoding: .utf8) ?? "Unknown error"
+            await MainActor.run { ConnectionStatus.shared.ai = .error }
             throw ClaudeError.apiError(httpResp.statusCode, errBody)
         }
 
@@ -65,6 +67,7 @@ class ClaudeService: AIProvider {
         }
 
         let setups = AnalysisPrompt.parseSetups(from: text)
+        await MainActor.run { ConnectionStatus.shared.ai = .ok }
         return ClaudeAnalysisResponse(markdown: text, setups: setups)
     }
 

@@ -14,17 +14,23 @@ class ConnectionStatus: ObservableObject {
 
     @Published var workerAuth: SourceState = .pending
     @Published var binance: SourceState = .pending
-    @Published var yahoo: SourceState = .pending
+    @Published var twelveData: SourceState = .pending
+    @Published var finnhub: SourceState = .pending
     @Published var macro: SourceState = .pending
     @Published var ai: SourceState = .pending
     @Published var alertSync: SourceState = .ok
     @Published var pendingOfflineChanges = false
 
+    // Legacy compat — views referencing .yahoo
+    var yahoo: SourceState {
+        get { twelveData }
+        set { twelveData = newValue }
+    }
+
     var overallState: String {
         if NetworkMonitor.shared.isOffline { return "Offline" }
         if workerAuth == .pending { return "Connecting..." }
         if workerAuth == .error { return "Auth failed" }
-        if ai == .pending { return "Ready" }
         return "Connected"
     }
 

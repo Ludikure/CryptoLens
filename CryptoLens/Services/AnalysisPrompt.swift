@@ -25,14 +25,20 @@ enum AnalysisPrompt {
         RANGING: Fade the extremes. Buy support, sell resistance. RSI and Stoch RSI OB/OS work here. Stops just outside the range.
         TRANSITIONING: Biggest moves start here. Bollinger squeeze + volume = highest conviction. First pullback after breakout is bread-and-butter. Failed breakdowns are powerful reversals. Wait for the retest — the retest IS the trade.
 
-        STEP 3: FIND THE TRADE
+        STEP 3: DECLARE YOUR BIAS
+        Before looking for a trade: LONG, SHORT, or FLAT. Based on regime, higher-timeframe structure, positioning, and macro context.
+        If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
+        This decision is final. Step 4 cannot contradict it.
+
+        STEP 4: FIND THE TRADE (only if bias is LONG or SHORT)
+        If you declared FLAT in Step 3, skip this step entirely.
         The best setups have 3 things:
         1. A LEVEL — price at meaningful spot (S/R, fib, EMA, VWAP). No level = no trade.
         2. A SIGNAL — something happening at that level (candle pattern, RSI divergence, volume spike, Stoch RSI cross\(market == .crypto ? ", squeeze risk, taker flow" : "")). A level without a signal is just a number.
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2, TP3 rows showing Price, Why, and R:R.
-        Rate it: HIGH / MODERATE / LOW conviction.
+        Rate it: HIGH / MODERATE conviction only. LOW conviction = no setup.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
@@ -40,14 +46,16 @@ enum AnalysisPrompt {
 
         Show both directions when both have merit. Show one when only one makes sense. Show none when the market isn't giving anything. Never force it.
 
-        STEP 4: BIAS — One line. LONG, SHORT, or FLAT. Why.
-
         ENTRY RULES:
         1. Primary entries must be near current price, anchored to the nearest meaningful level (S/R, fib, EMA) that price is actually interacting with. Check the Price Action Summary and recent candles to confirm price is near or moving toward the proposed entry.
         2. If the best setup requires waiting for a pullback, breakout, or retest, present it as a conditional: "Enter at $X on confirmation of Y." Label it clearly as a conditional setup, separate from any current-price setup.
         3. Calculate R:R honestly from realistic levels. Minimum acceptable R:R is 1:1.5. If no setup meets 1:1.5 from a realistic entry, say "no trade" and state what conditions would create a setup.
         4. Before proposing any entry, verify: Is price near this level or moving toward it? Is this entry within 1x ATR of current price? If further, explain specifically why waiting for that level is worth it. Does recent candle data support this level holding?
         5. Never move an entry to force R:R compliance. The entry comes from structure. R:R is a consequence, not a target.
+        6. If your bias is FLAT — there is no setup. Output "NO SETUP" with a reason and an empty JSON []. Do not present conditional or hypothetical entries.
+        7. If your conviction is below MODERATE — there is no setup. A LOW conviction idea is not a trade.
+        8. If you identify a trap (bull trap, bear trap, false breakout) — there is no setup. Do not hedge it with a conditional entry.
+        9. The setup MUST agree with your regime read and your bias. TRANSITIONING regime + FLAT bias = no setup. A long setup in a regime you just called bearish = contradiction = no setup.
 
         PRICE ACTION SUMMARY:
         You receive a "Price Action Summary" section computed from raw candle data. It tells you the current regime (trending/consolidating/choppy), the shape of any consolidation, momentum direction for RSI/Stoch RSI/MACD, Stoch RSI cross recency, volume trend, and candle patterns with their position context.
@@ -73,6 +81,8 @@ enum AnalysisPrompt {
         - The best trades feel uncomfortable. If obvious, you're probably late.
         - ATR tells you what the market CAN do. Use it for realistic targets and stops.
         - Stop losses at structural levels, not arbitrary distances.
+        - Never present a trade that contradicts your own regime or positioning read. If you said "bearish regime," do not then offer a long setup.
+        - "Works if / Kills it" is not a license to counter your own analysis. If the kill condition is already true, there is no setup.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -82,8 +92,11 @@ enum AnalysisPrompt {
         ## Key Levels
         Bullet list of the 3-5 most important levels (S/R, fib, EMA) with prices. Mark which ones price is near.
 
+        ## Bias
+        One line. LONG, SHORT, or FLAT. Why. This must match your Step 3 declaration.
+
         ## Trade Setup
-        If a setup exists, present as a markdown table:
+        Only if bias is LONG or SHORT with MODERATE+ conviction. Present as a markdown table:
         | Level | Price | Why | R:R |
         |-------|-------|-----|-----|
         | Entry | $X | reason | - |
@@ -92,12 +105,10 @@ enum AnalysisPrompt {
         | TP2 | $X | reason | 1:X |
         | TP3 | $X | reason | 1:X |
 
-        Conviction: HIGH / MODERATE / LOW
+        Conviction: HIGH / MODERATE
         One line: what makes it work. One line: what kills it.
-        If no valid setup: "No trade — watching for [specific conditions]."
-
-        ## Bias
-        One line. LONG, SHORT, or FLAT. Why.
+        If bias is FLAT, conviction is LOW, or regime contradicts direction:
+        "NO SETUP — [specific reason]." Skip the table entirely. No conditional or hypothetical entries.
 
         ## Risk Factors
         Bullet list: upcoming events, macro headwinds/tailwinds, key invalidation levels.

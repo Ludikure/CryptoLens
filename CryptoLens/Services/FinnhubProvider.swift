@@ -115,8 +115,12 @@ class FinnhubProvider {
         guard let (data, response) = try? await session.data(for: request),
               let http = response as? HTTPURLResponse,
               (200...299).contains(http.statusCode)
-        else { return nil }
+        else {
+            await MainActor.run { ConnectionStatus.shared.finnhub = .error }
+            return nil
+        }
 
+        await MainActor.run { ConnectionStatus.shared.finnhub = .ok }
         return data
     }
 }
