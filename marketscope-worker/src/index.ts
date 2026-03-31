@@ -10,6 +10,8 @@ export interface Env {
   CLAUDE_API_KEY: string;
   GEMINI_API_KEY: string;
   TWELVE_DATA_API_KEY: string;
+  FINNHUB_API_KEY: string;
+  FRED_API_KEY: string;
 }
 
 interface Alert {
@@ -29,6 +31,8 @@ interface DeviceRegistration {
 const BINANCE_SPOT = 'https://data-api.binance.vision/api/v3';
 const YAHOO_BASE = 'https://query1.finance.yahoo.com';
 const TWELVE_DATA_BASE = 'https://api.twelvedata.com';
+const FINNHUB_BASE = 'https://finnhub.io/api/v1';
+const FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations';
 
 const CORS = {
   'Access-Control-Allow-Origin': 'capacitor://com.ludikure.CryptoLens',
@@ -215,9 +219,103 @@ export default {
       }
     }
 
-    // === Macro Data (cached, shared across all users) ===
+    // === Twelve Data Candles (cached 60s, shared) ===
+    if (path === '/twelvedata/candles') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      const interval = url.searchParams.get('interval')?.replace(/[^0-9a-zA-Z]/g, '') || '1day';
+      const outputsize = Math.min(parseInt(url.searchParams.get('outputsize') || '50'), 300);
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      if (!env.TWELVE_DATA_API_KEY) return json({ error: 'Twelve Data not configured' }, 503);
+
+      const cacheKey = `cache:td:${symbol}:${interval}:${outputsize}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 60_000) return json(parsed.data);
+      }
+
+      try {
+        // Note: Twelve Data requires API key in URL. Server-to-server only.
+        const resp = await fetch(`${TWELVE_DATA_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=${outputsize}&apikey=${env.TWELVE_DATA_API_KEY}`);
+        if (!resp.ok) return json({ error: `Twelve Data ${resp.status}` }, 502);
+        const data = await resp.json();
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 120 });
+        return json(data);
+      } catch {
+        return json({ error: 'Twelve Data fetch failed' }, 502);
+      }
+    }
+
+    // === Twelve Data Quote (cached 60s) ===
+    if (path === '/twelvedata/quote') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      if (!env.TWELVE_DATA_API_KEY) return json({ error: 'Twelve Data not configured' }, 503);
+
+      const cacheKey = `cache:td-quote:${symbol}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 60_000) return json(parsed.data);
+      }
+
+      try {
+        const resp = await fetch(`${TWELVE_DATA_BASE}/quote?symbol=${symbol}&apikey=${env.TWELVE_DATA_API_KEY}`);
+        if (!resp.ok) return json({ error: `Twelve Data ${resp.status}` }, 502);
+        const data = await resp.json();
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 120 });
+        return json(data);
+      } catch {
+        return json({ error: 'Twelve Data fetch failed' }, 502);
+      }
+    }
+
+    // === Finnhub Enrichment (cached 24h for fundamentals, 1h for dynamic) ===
+    if (path.startsWith('/finnhub/')) {
+      const endpoint = path.replace('/finnhub/', '');
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      if (!env.FINNHUB_API_KEY) return json({ error: 'Finnhub not configured' }, 503);
+
+      // Map endpoints to Finnhub URLs and cache TTLs
+      const endpointMap: Record<string, { path: string; ttl: number; params?: string }> = {
+        'recommendation': { path: '/stock/recommendation', ttl: 86400_000 },
+        'metric': { path: '/stock/metric', ttl: 86400_000, params: '&metric=all' },
+        'quote': { path: '/quote', ttl: 60_000 },
+        'earnings': { path: '/calendar/earnings', ttl: 43200_000, params: `&from=${new Date(Date.now() - 30*86400_000).toISOString().split('T')[0]}&to=${new Date(Date.now() + 60*86400_000).toISOString().split('T')[0]}` },
+        'news': { path: '/company-news', ttl: 3600_000, params: `&from=${new Date(Date.now() - 7*86400_000).toISOString().split('T')[0]}&to=${new Date().toISOString().split('T')[0]}` },
+        'peers': { path: '/stock/peers', ttl: 86400_000 },
+        'profile': { path: '/stock/profile2', ttl: 86400_000 },
+      };
+
+      const config = endpointMap[endpoint];
+      if (!config) return json({ error: 'Unknown Finnhub endpoint' }, 404);
+
+      const cacheKey = `cache:fh:${endpoint}:${symbol}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < config.ttl) return json(parsed.data);
+      }
+
+      try {
+        const finnhubUrl = `${FINNHUB_BASE}${config.path}?symbol=${symbol}${config.params || ''}`;
+        const resp = await fetch(finnhubUrl, {
+          headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY },
+        });
+        if (!resp.ok) return json({ error: `Finnhub ${resp.status}` }, 502);
+        const data = await resp.json();
+        const kvTtl = Math.max(Math.ceil(config.ttl / 1000), 60);
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: kvTtl });
+        return json(data);
+      } catch {
+        return json({ error: 'Finnhub fetch failed' }, 502);
+      }
+    }
+
+    // === Macro Data — now powered by FRED (cached 5m, shared) ===
     if (path === '/macro') {
-      const cacheKey = 'cache:macro';
+      const cacheKey = 'cache:macro:v2';
       const cached = await env.ALERTS.get(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
@@ -228,31 +326,39 @@ export default {
 
       const data: Record<string, any> = {};
 
-      if (env.TWELVE_DATA_API_KEY) {
-        try {
-          // Note: Twelve Data requires API key in URL (no header auth). Server-to-server only.
-          const resp = await fetch(`${TWELVE_DATA_BASE}/quote?symbol=EUR/USD&apikey=${env.TWELVE_DATA_API_KEY}`);
-          if (resp.ok) {
-            const quote = await resp.json() as Record<string, any>;
-            if (!quote.code) {
-              const close = parseFloat(quote.close as string);
-              data.eurusd = isNaN(close) ? null : close;
-              const change = parseFloat(quote.percent_change as string);
-              data.eurusdChange = isNaN(change) ? null : change;
+      // FRED API — authoritative source for all macro data
+      if (env.FRED_API_KEY) {
+        const series: [string, string][] = [
+          ['vix', 'VIXCLS'],
+          ['treasury10Y', 'DGS10'],
+          ['treasury2Y', 'DGS2'],
+          ['fedFundsRate', 'FEDFUNDS'],
+          ['usdIndex', 'DTWEXBGS'],
+        ];
+        for (const [key, seriesId] of series) {
+          try {
+            // FRED requires API key in URL. Server-to-server only.
+            const resp = await fetch(`${FRED_BASE}?series_id=${seriesId}&sort_order=desc&limit=2&api_key=${env.FRED_API_KEY}&file_type=json`);
+            if (resp.ok) {
+              const result = await resp.json() as any;
+              const obs = result?.observations;
+              if (obs && obs.length > 0) {
+                // Skip "." values (FRED uses "." for missing/unreported)
+                const latest = obs.find((o: any) => o.value !== '.');
+                if (latest) {
+                  const val = parseFloat(latest.value);
+                  data[key] = isNaN(val) ? null : val;
+                  data[`${key}Date`] = latest.date;
+                }
+              }
             }
-          }
-        } catch { /* skip */ }
+          } catch { /* skip */ }
+        }
       }
 
-      for (const [key, symbol] of [['treasury10Y', '%5ETNX'], ['treasury2Y', '%5EIRX']]) {
-        try {
-          const resp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=2d`);
-          if (resp.ok) {
-            const chart = await resp.json() as any;
-            const price = chart?.chart?.result?.[0]?.meta?.regularMarketPrice;
-            if (price) data[key] = price;
-          }
-        } catch { /* skip */ }
+      // Compute yield spread
+      if (data.treasury10Y != null && data.treasury2Y != null) {
+        data.yieldSpread = Math.round((data.treasury10Y - data.treasury2Y) * 100) / 100;
       }
 
       await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });

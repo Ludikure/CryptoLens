@@ -52,4 +52,12 @@ struct StockInfo: Codable {
     var exDividendDate: Date?
     var dividendRate: Double?           // Annual $ per share
     var exDividendWarning: Bool?        // true if ex-date within 5 trading days
+
+    // Finnhub enrichment
+    var finnhubBuy: Int?
+    var finnhubHold: Int?
+    var finnhubSell: Int?
+    var finnhubStrongBuy: Int?
+    var beta: Double?
+    var newsHeadlines: [String]?
 }

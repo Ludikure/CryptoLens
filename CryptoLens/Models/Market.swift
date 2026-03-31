@@ -17,7 +17,7 @@ enum Market: String, Codable, CaseIterable, Identifiable {
     var timeframes: [(interval: String, label: String)] {
         switch self {
         case .crypto: return [("1d", "Daily (Trend)"), ("4h", "4H (Bias)"), ("1h", "1H (Entry)")]
-        case .stock: return [("1d", "Daily (Trend)"), ("1h", "1H (Bias)"), ("15m", "15m (Entry)")]
+        case .stock: return [("1d", "Daily (Trend)"), ("4h", "4H (Bias)"), ("1h", "1H (Entry)")]
         }
     }
 }

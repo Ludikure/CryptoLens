@@ -1,13 +1,23 @@
 import Foundation
 
 struct MacroSnapshot: Codable {
-    let dxy: Double?
-    let dxyChange: Double?
-    let dollarTrend: String?
+    let vix: Double?
+    let vixDate: String?
     let treasury10Y: Double?
     let treasury2Y: Double?
     let yieldSpread: Double?
+    let fedFundsRate: Double?
+    let usdIndex: Double?
+    let macroRegime: String?
     let timestamp: Date
+
+    // Legacy compat
+    var dxy: Double? { usdIndex }
+    var dxyChange: Double? { nil }
+    var dollarTrend: String? {
+        guard usdIndex != nil else { return nil }
+        return "See USD Index"
+    }
 }
 
 @MainActor
@@ -24,7 +34,6 @@ class MacroDataService {
             return cached
         }
 
-        // Fetch from worker (server caches and proxies both Twelve Data + Yahoo)
         guard let url = URL(string: "\(workerURL)/macro") else { return nil }
 
         do {
@@ -32,29 +41,25 @@ class MacroDataService {
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) { return nil }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
 
-            let eurusd = json["eurusd"] as? Double
-            let eurusdChange = json["eurusdChange"] as? Double
+            let vix = json["vix"] as? Double
             let t10y = json["treasury10Y"] as? Double
             let t2y = json["treasury2Y"] as? Double
+            let spread = json["yieldSpread"] as? Double
+            let fedFunds = json["fedFundsRate"] as? Double
+            let usdIdx = json["usdIndex"] as? Double
 
-            let dollarTrend: String?
-            if let change = eurusdChange {
-                if change > 0.2 { dollarTrend = "Weakening" }
-                else if change < -0.2 { dollarTrend = "Strengthening" }
-                else { dollarTrend = "Flat" }
-            } else {
-                dollarTrend = nil
-            }
-
-            let spread: Double? = if let t10 = t10y, let t2 = t2y { t10 - t2 } else { nil }
+            // Macro regime classification
+            let regime = classifyRegime(vix: vix, spread: spread)
 
             let snapshot = MacroSnapshot(
-                dxy: eurusd,
-                dxyChange: eurusdChange.map { -$0 },
-                dollarTrend: dollarTrend,
+                vix: vix,
+                vixDate: json["vixDate"] as? String,
                 treasury10Y: t10y,
                 treasury2Y: t2y,
                 yieldSpread: spread,
+                fedFundsRate: fedFunds,
+                usdIndex: usdIdx,
+                macroRegime: regime,
                 timestamp: Date()
             )
 
@@ -63,16 +68,25 @@ class MacroDataService {
             ConnectionStatus.shared.macro = .ok
 
             #if DEBUG
-            print("[MarketScope] Macro: EUR/USD=\(eurusd ?? 0), USD \(dollarTrend ?? "?"), 10Y=\(t10y ?? 0)%, 2Y=\(t2y ?? 0)%")
+            print("[MarketScope] Macro: VIX=\(vix ?? 0), 10Y=\(t10y ?? 0)%, 2Y=\(t2y ?? 0)%, USD=\(usdIdx ?? 0), Regime=\(regime ?? "?")")
             #endif
 
             return snapshot
         } catch {
             ConnectionStatus.shared.macro = .error
-            #if DEBUG
-            print("[MarketScope] Macro fetch error: \(error)")
-            #endif
             return nil
         }
+    }
+
+    private func classifyRegime(vix: Double?, spread: Double?) -> String? {
+        guard let v = vix else { return nil }
+        let inverted = (spread ?? 1) < 0
+
+        if v > 35 { return "Crisis" }
+        if v > 25 { return "Elevated Fear" }
+        if v > 15 && inverted { return "Cautious" }
+        if v > 15 { return "Normal" }
+        if !inverted { return "Risk-On" }
+        return "Normal"
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 class DerivativesService {
     private let session: URLSession
     private let binanceURL = "https://fapi.binance.com"
+    private let coinbase = CoinbaseService()
 
     init() {
         let config = URLSessionConfiguration.default
@@ -13,26 +14,31 @@ class DerivativesService {
     func fetchDerivativesData(symbol: String) async -> DerivativesData? {
         let sym = symbol.uppercased()
 
-        // Try Binance Futures first (full data, needs VPN in US)
+        // Tier 1: Binance Futures (full data, needs VPN in US)
         let binanceData = await fetchFromBinance(symbol: sym)
         if let data = binanceData {
             #if DEBUG
             print("[MarketScope] Binance derivatives: OK (L/S: \(data.globalLongPercent)/\(data.globalShortPercent))")
             #endif
-
-            // If L/S is default 50/50, the /futures/data/ endpoints were geo-blocked
             if data.globalLongPercent == 50.0 && data.globalShortPercent == 50.0 {
                 #if DEBUG
-                print("[MarketScope] Binance /futures/data/ geo-blocked, supplementing with CoinGecko...")
+                print("[MarketScope] Binance /futures/data/ geo-blocked, L/S unavailable")
                 #endif
-                // CoinGecko doesn't have L/S, but at least we have Binance funding + OI
             }
             return data
         }
 
-        // Binance fully blocked — fall back to CoinGecko (works from US, limited data)
+        // Tier 2: Coinbase International (US-native, no VPN, funding + OI, no L/S)
         #if DEBUG
-        print("[MarketScope] Binance Futures blocked, trying CoinGecko...")
+        print("[MarketScope] Binance blocked, trying Coinbase...")
+        #endif
+        if let cbData = await coinbase.fetchDerivativesData(symbol: sym) {
+            return cbData
+        }
+
+        // Tier 3: CoinGecko aggregated (last resort)
+        #if DEBUG
+        print("[MarketScope] Coinbase failed, trying CoinGecko...")
         #endif
         return await fetchFromCoinGecko(symbol: sym)
     }

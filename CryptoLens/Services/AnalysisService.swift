@@ -4,6 +4,8 @@ import Foundation
 class AnalysisService: ObservableObject {
     let binance = BinanceService()
     let yahoo = YahooFinanceService()
+    let twelveData = TwelveDataProvider()
+    let finnhub = FinnhubProvider()
     let derivativesService = DerivativesService()
     let coinGecko = CoinGeckoService()
     let economicCalendar = EconomicCalendarService()
@@ -105,7 +107,12 @@ class AnalysisService: ObservableObject {
             let candles: [Candle]
             switch market {
             case .crypto: candles = try await binance.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300)
-            case .stock: candles = try await yahoo.fetchCandles(symbol: symbol, interval: tf.interval)
+            case .stock:
+                if let td = try? await twelveData.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300), !td.isEmpty {
+                    candles = td
+                } else {
+                    candles = try await yahoo.fetchCandles(symbol: symbol, interval: tf.interval)
+                }
             }
             let tf1 = IndicatorEngine.computeAll(candles: candles, timeframe: tf.interval, label: tf.label, market: market)
 
@@ -222,6 +229,38 @@ class AnalysisService: ObservableObject {
                     si.relativeStrength1d = comp.relStrength
                     si.outperformingSector = comp.outperforming
                 }
+                stockInfo = si
+            }
+
+            // Finnhub enrichment (analyst recs, metrics, earnings, news)
+            if var si = stockInfo, market == .stock {
+                async let fhRec = finnhub.fetchRecommendations(symbol: symbol)
+                async let fhMetrics = finnhub.fetchMetrics(symbol: symbol)
+                async let fhEarnings = finnhub.fetchEarnings(symbol: symbol)
+                async let fhNews = finnhub.fetchNews(symbol: symbol)
+
+                if let rec = await fhRec {
+                    si.finnhubBuy = rec.buy + rec.strongBuy
+                    si.finnhubHold = rec.hold
+                    si.finnhubSell = rec.sell + rec.strongSell
+                    si.finnhubStrongBuy = rec.strongBuy
+                    // Override Yahoo analyst count if Finnhub has data
+                    let total = rec.buy + rec.hold + rec.sell + rec.strongBuy + rec.strongSell
+                    if total > 0 { si.analystCount = total }
+                }
+                if let met = await fhMetrics {
+                    // Fill gaps from Yahoo with Finnhub data
+                    if si.peRatio == nil { si.peRatio = met.peRatio }
+                    if si.eps == nil { si.eps = met.eps }
+                    if si.marketCap == nil, let mc = met.marketCap { si.marketCap = mc * 1_000_000 } // Finnhub returns in millions
+                    if si.dividendYield == nil { si.dividendYield = met.dividendYield.map { $0 * 100 } }
+                    si.beta = met.beta
+                }
+                if let earn = await fhEarnings {
+                    if si.earningsDate == nil { si.earningsDate = earn.date }
+                }
+                let news = await fhNews
+                if !news.isEmpty { si.newsHeadlines = news }
                 stockInfo = si
             }
 
@@ -377,6 +416,36 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
+            // Finnhub enrichment for full analysis
+            if var si = stockInfo, market == .stock {
+                async let fhRec = finnhub.fetchRecommendations(symbol: symbol)
+                async let fhMetrics = finnhub.fetchMetrics(symbol: symbol)
+                async let fhEarnings = finnhub.fetchEarnings(symbol: symbol)
+                async let fhNews = finnhub.fetchNews(symbol: symbol)
+
+                if let rec = await fhRec {
+                    si.finnhubBuy = rec.buy + rec.strongBuy
+                    si.finnhubHold = rec.hold
+                    si.finnhubSell = rec.sell + rec.strongSell
+                    si.finnhubStrongBuy = rec.strongBuy
+                    let total = rec.buy + rec.hold + rec.sell + rec.strongBuy + rec.strongSell
+                    if total > 0 { si.analystCount = total }
+                }
+                if let met = await fhMetrics {
+                    if si.peRatio == nil { si.peRatio = met.peRatio }
+                    if si.eps == nil { si.eps = met.eps }
+                    if si.marketCap == nil, let mc = met.marketCap { si.marketCap = mc * 1_000_000 }
+                    if si.dividendYield == nil { si.dividendYield = met.dividendYield.map { $0 * 100 } }
+                    si.beta = met.beta
+                }
+                if let earn = await fhEarnings {
+                    if si.earningsDate == nil { si.earningsDate = earn.date }
+                }
+                let news = await fhNews
+                if !news.isEmpty { si.newsHeadlines = news }
+                stockInfo = si
+            }
+
             // Crypto derivatives (fall back to cached if fresh fetch fails)
             var derivData: DerivativesData? = nil
             var positioning: PositioningSnapshot? = nil
@@ -486,12 +555,36 @@ class AnalysisService: ObservableObject {
             return (r1, r2, r3)
 
         case .stock:
-            async let c1 = yahoo.fetchCandles(symbol: symbol, interval: tfs[0].interval)
-            async let c2 = yahoo.fetchCandles(symbol: symbol, interval: tfs[1].interval)
-            async let c3 = yahoo.fetchCandles(symbol: symbol, interval: tfs[2].interval)
-            let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market)
-            let r2 = IndicatorEngine.computeAll(candles: try await c2, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
-            let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
+            // Twelve Data for candles (native 4H, cached via worker)
+            // Falls back to Yahoo if Twelve Data fails
+            var c1: [Candle]
+            var c2: [Candle]
+            var c3: [Candle]
+            do {
+                async let td1 = twelveData.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
+                async let td2 = twelveData.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
+                async let td3 = twelveData.fetchCandles(symbol: symbol, interval: tfs[2].interval, limit: 300)
+                c1 = try await td1
+                c2 = try await td2
+                c3 = try await td3
+                ConnectionStatus.shared.yahoo = .ok  // Using TD successfully
+                #if DEBUG
+                print("[MarketScope] [\(symbol)] Using Twelve Data candles")
+                #endif
+            } catch {
+                #if DEBUG
+                print("[MarketScope] [\(symbol)] Twelve Data failed (\(error)), falling back to Yahoo")
+                #endif
+                async let y1 = yahoo.fetchCandles(symbol: symbol, interval: tfs[0].interval)
+                async let y2 = yahoo.fetchCandles(symbol: symbol, interval: tfs[1].interval == "4h" ? "1h" : tfs[1].interval)
+                async let y3 = yahoo.fetchCandles(symbol: symbol, interval: tfs[2].interval)
+                c1 = try await y1
+                c2 = try await y2
+                c3 = try await y3
+            }
+            let r1 = IndicatorEngine.computeAll(candles: c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market)
+            let r2 = IndicatorEngine.computeAll(candles: c2, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
+            let r3 = IndicatorEngine.computeAll(candles: c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
             return (r1, r2, r3)
         }
     }

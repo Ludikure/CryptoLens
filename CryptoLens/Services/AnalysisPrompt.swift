@@ -6,7 +6,7 @@ enum AnalysisPrompt {
     static func systemPrompt(market: Market = .crypto) -> String {
         let tf = market == .crypto
             ? (trend: "Daily", bias: "4H", entry: "1H")
-            : (trend: "Daily", bias: "1H", entry: "15m")
+            : (trend: "Daily", bias: "4H", entry: "1H")
 
         let base = """
         You are MarketScope — a trader, not an analyst. You get paid to make decisions, not observations.
@@ -129,11 +129,14 @@ enum AnalysisPrompt {
         } else {
             return base + """
 
-            MACRO CONTEXT (if provided):
-            - DXY (USD Index): Dollar up = headwind for equities and commodities. Dollar down = tailwind. Strong inverse correlation.
-            - 10Y Treasury Yield: Rising = growth stocks pressured, value/financials benefit. Falling = growth stocks benefit.
-            - 2Y/10Y Spread: Negative (inverted) = recession signal. Steepening = risk-on environment. Flat = transition/caution.
-            - Factor these into conviction. A bullish technical setup in a rising-rate, strong-dollar environment deserves lower conviction.
+            MACRO CONTEXT (if provided — from Federal Reserve FRED data):
+            - MACRO REGIME: Risk-On / Normal / Cautious / Elevated Fear / Crisis. This is the single most important macro signal.
+            - VIX: >35 = crisis (no new longs). 25-35 = elevated fear (reduce size). <15 = complacent (watch for pullback).
+            - 10Y YIELD: Rising = growth stocks pressured, value/financials benefit. Falling = growth stocks benefit.
+            - 2Y/10Y SPREAD: Negative (inverted) = recession signal. Positive steepening = risk-on.
+            - FED FUNDS: Higher = restrictive (bearish growth). Lower = accommodative (bullish).
+            - USD INDEX: Dollar up = headwind for equities/commodities. Dollar down = tailwind.
+            - Factor macro regime into conviction. A bullish technical setup in "Elevated Fear" or "Crisis" regime deserves much lower conviction.
 
             STOCK CONTEXT:
             - Market hours 9:30 AM - 4 PM ET. Prices may be 15-min delayed.
@@ -263,6 +266,20 @@ enum AnalysisPrompt {
             if let etf = si.sectorETF, let rs = si.relativeStrength1d {
                 lines.append("Sector: \(si.sector ?? "N/A") (\(etf)) — \(si.outperformingSector == true ? "Outperforming" : "Underperforming") by \(Formatters.formatPercent(abs(rs)))")
             }
+            // Finnhub analyst consensus
+            if let buy = si.finnhubBuy, let hold = si.finnhubHold, let sell = si.finnhubSell {
+                let total = buy + hold + sell
+                if total > 0 {
+                    lines.append("Analyst Consensus: \(buy) Buy, \(hold) Hold, \(sell) Sell (\(total) analysts)")
+                }
+            }
+            if let beta = si.beta {
+                lines.append("Beta: \(String(format: "%.2f", beta))\(beta > 1.5 ? " — HIGH volatility" : (beta < 0.5 ? " — LOW volatility" : ""))")
+            }
+            // Recent news headlines
+            if let news = si.newsHeadlines, !news.isEmpty {
+                lines.append("Recent News: \(news.prefix(3).joined(separator: " | "))")
+            }
         }
 
         // Stock sentiment (stocks only)
@@ -289,20 +306,28 @@ enum AnalysisPrompt {
         if let m = macro {
             lines.append("")
             lines.append("=== MACRO CONTEXT ===")
-            if let dxy = m.dxy, let trend = m.dollarTrend {
-                var dxyLine = "USD (via EUR/USD \(String(format: "%.4f", dxy))): \(trend)"
-                if let change = m.dxyChange { dxyLine += " (\(String(format: "%+.2f%%", change)))" }
-                lines.append(dxyLine)
+            if let regime = m.macroRegime {
+                lines.append("Macro Regime: \(regime)")
+            }
+            if let vix = m.vix {
+                let level = vix > 35 ? "EXTREME FEAR" : (vix > 25 ? "ELEVATED" : (vix < 15 ? "LOW/COMPLACENT" : "NORMAL"))
+                lines.append("VIX: \(String(format: "%.1f", vix)) — \(level)")
             }
             if let t10 = m.treasury10Y {
                 lines.append("10Y Treasury Yield: \(String(format: "%.2f%%", t10))")
             }
             if let t2 = m.treasury2Y {
-                lines.append("Short-Term Rate (13w T-Bill): \(String(format: "%.2f%%", t2))")
+                lines.append("2Y Treasury Yield: \(String(format: "%.2f%%", t2))")
             }
             if let spread = m.yieldSpread {
                 let status = spread < 0 ? "INVERTED — recession signal" : (spread < 0.5 ? "Flat — caution" : "Normal")
-                lines.append("10Y vs Short-Term Spread: \(String(format: "%.2f%%", spread)) (\(status))")
+                lines.append("2Y/10Y Spread: \(String(format: "%.2f%%", spread)) (\(status))")
+            }
+            if let fed = m.fedFundsRate {
+                lines.append("Fed Funds Rate: \(String(format: "%.2f%%", fed))")
+            }
+            if let usd = m.usdIndex {
+                lines.append("USD Index: \(String(format: "%.2f", usd))")
             }
         }
 
