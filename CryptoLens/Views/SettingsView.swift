@@ -134,9 +134,22 @@ struct SettingsView: View {
 
                         Divider()
 
-                        Text("Data Sources: Binance, Yahoo Finance, CoinGecko, Twelve Data\nAI: Claude (Anthropic), Gemini (Google)")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Data Sources")
+                                .font(.caption2).fontWeight(.semibold).foregroundStyle(.secondary)
+                            Text("Stocks: Twelve Data (candles) · Finnhub (fundamentals, analyst recs, news)")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            Text("Crypto: Binance (primary) · Coinbase (fallback) · CoinGecko (tertiary)")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            Text("Macro: FRED (VIX, yields, fed funds, USD index)")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            Text("Sentiment: Yahoo Finance (short interest, put/call, options)")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            Text("Calendar: FairEconomy (economic events)")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                            Text("AI: Claude (Anthropic) · Gemini (Google)")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
 
                         Text("Made by Ludikure")
                             .font(.caption2)

@@ -471,6 +471,12 @@ class AnalysisService: ObservableObject {
             let events = await economicCalendar.highImpactUpcoming()
             let macroSnapshot = await macroData.fetchMacroSnapshot()
 
+            // Spot pressure for crypto (free Binance data)
+            var spotPressure: SpotPressure? = nil
+            if market == .crypto {
+                spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
+            }
+
             // Weekly context + SPY for stocks (Twelve Data, cached 24h on worker)
             var weeklyContext: String? = nil
             var spyContext: String? = nil
@@ -496,7 +502,8 @@ class AnalysisService: ObservableObject {
                     economicEvents: events,
                     macro: macroSnapshot,
                     weeklyContext: weeklyContext,
-                    spyContext: spyContext
+                    spyContext: spyContext,
+                    spotPressure: spotPressure
                 )
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown

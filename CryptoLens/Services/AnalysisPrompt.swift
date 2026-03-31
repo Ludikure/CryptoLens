@@ -196,6 +196,13 @@ enum AnalysisPrompt {
     An oversold RSI with crowded shorts and negative funding = high conviction long (squeeze setup).
     An oversold RSI with longs still capitulating and OI unwinding = don't catch the knife.
     Same indicator, completely different trade. Positioning is what separates them.
+
+    SPOT PRESSURE (if provided):
+    - TAKER BUY RATIO: >0.55 = aggressive buying (crossing the spread to buy). <0.45 = aggressive selling. Who is paying the spread tells you who is urgent.
+    - CVD (Cumulative Volume Delta): Running buy minus sell delta. Rising CVD + falling price = accumulation. Falling CVD + rising price = distribution (hollow rally). CVD divergence from price is a high-conviction signal.
+    - ORDER BOOK: Confirmation only — can be spoofed. Heavy asks + aggressive selling + falling CVD = triple confirmation of selling pressure.
+    - Combined with derivatives: crowded longs + aggressive spot selling + falling CVD = trap confirmed. No setup. Exchange outflows + shorts crowding + negative funding + rising CVD = squeeze setup.
+    - Spot flows confirm or deny derivatives signals. Derivatives show what traders are betting. Spot pressure shows what is actually being bought and sold. When they disagree, follow the spot pressure.
     """
 
     // Keep backward-compatible static
@@ -205,7 +212,8 @@ enum AnalysisPrompt {
                                 stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil,
                                 positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil,
                                 economicEvents: [EconomicEvent] = [], macro: MacroSnapshot? = nil,
-                                weeklyContext: String? = nil, spyContext: String? = nil) -> String {
+                                weeklyContext: String? = nil, spyContext: String? = nil,
+                                spotPressure: SpotPressure? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         if let s = sentiment {
@@ -377,6 +385,17 @@ enum AnalysisPrompt {
             #if DEBUG
             print("[MarketScope] [\(symbol)] Prompt: NO derivatives (expected for stocks)")
             #endif
+        }
+
+        // Spot pressure (crypto only)
+        if let sp = spotPressure {
+            lines.append("")
+            lines.append("=== SPOT PRESSURE ===")
+            lines.append("Taker Buy Ratio (24h): \(String(format: "%.2f", sp.takerBuyRatio)) (\(sp.takerBuyLabel))")
+            lines.append("CVD 24h: \(String(format: "%.1f", sp.cvd24h)) (\(sp.cvdTrend))")
+            if let bookRatio = sp.bookRatio, let bookLabel = sp.bookLabel {
+                lines.append("Order Book: \(String(format: "%.2f", bookRatio)) (\(bookLabel))")
+            }
         }
 
         #if DEBUG
