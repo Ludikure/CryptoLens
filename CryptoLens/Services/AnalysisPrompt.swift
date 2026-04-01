@@ -121,9 +121,10 @@ enum AnalysisPrompt {
         If no valid setup, output empty array: `[]`
         Use actual prices from the data. This JSON is machine-parsed to create alerts.
 
-        IMPORTANT FORMATTING RULES:
+        IMPORTANT RULES:
+        - ONLY reference indicator values, levels, and data points explicitly present in this payload. If a data field is not provided, state "data unavailable" — never estimate or infer missing values.
         - Keep it concise. No filler, no restating indicator values the user can already see.
-        - Use ## headers exactly as shown above. The app parses these for collapsible sections.
+        - Use ## headers exactly as shown above. The app parses these for section rendering.
         - Tables must use markdown pipe syntax with header row.
         - Do NOT list every indicator value — synthesize them into a narrative.
         - Maximum 400 words before the JSON block.
@@ -362,9 +363,13 @@ enum AnalysisPrompt {
             lines.append("Open Interest: \(Formatters.formatVolume(d.openInterestUSD))\(d.oiChange4h.map { String(format: " (4h: %+.1f%%)", $0) } ?? "")\(d.oiChange24h.map { String(format: " (24h: %+.1f%%)", $0) } ?? "") — \(p.oiTrend.rawValue)")
             if d.globalLongPercent != 50 || d.globalShortPercent != 50 {
                 lines.append("Global L/S: Long \(Int(d.globalLongPercent))% / Short \(Int(d.globalShortPercent))% — \(p.crowding.rawValue)")
+            } else {
+                lines.append("Global L/S: Data unavailable (fallback source)")
             }
             if d.topTraderLongPercent != 50 || d.topTraderShortPercent != 50 {
                 lines.append("Top Traders: Long \(Int(d.topTraderLongPercent))% / Short \(Int(d.topTraderShortPercent))% — \(p.smartMoneyBias)")
+            } else {
+                lines.append("Top Traders: Data unavailable (fallback source)")
             }
             if d.takerBuySellRatio != 1.0 || d.takerBuyVolume > 0 {
                 lines.append("Taker Buy/Sell: \(String(format: "%.2f", d.takerBuySellRatio)) — \(p.takerPressure)")
@@ -459,17 +464,26 @@ enum AnalysisPrompt {
 
             if let rsi = ind.rsi {
                 var rsiStr = "RSI: \(rsi)"
-                if let sr = ind.stochRSI { rsiStr += " | Stoch RSI: \(sr.k)/\(sr.d)" }
+                if let sr = ind.stochRSI {
+                    rsiStr += " | Stoch RSI: \(sr.k)/\(sr.d)"
+                    if let cross = sr.crossover { rsiStr += " (\(cross) crossover)" }
+                    else { rsiStr += " (no crossover)" }
+                }
                 lines.append(rsiStr)
             }
             if let macd = ind.macd {
-                lines.append("MACD: \(macd.macd) Signal: \(macd.signal) Hist: \(macd.histogram)\(macd.crossover.map { " Crossover: \($0)" } ?? "")")
+                let crossLabel = macd.crossover.map { " Crossover: \($0)" } ?? " (no crossover)"
+                lines.append("MACD: \(macd.macd) Signal: \(macd.signal) Hist: \(macd.histogram)\(crossLabel)")
             }
             if let adx = ind.adx {
-                lines.append("ADX: \(adx.adx) (\(adx.strength), \(adx.direction)) +DI: \(adx.plusDI) -DI: \(adx.minusDI)")
+                if adx.adx < 20 {
+                    lines.append("ADX: \(adx.adx) (No Trend — direction unreliable) +DI: \(adx.plusDI) -DI: \(adx.minusDI)")
+                } else {
+                    lines.append("ADX: \(adx.adx) (\(adx.strength), \(adx.direction)) +DI: \(adx.plusDI) -DI: \(adx.minusDI)")
+                }
             }
             if let bb = ind.bollingerBands {
-                lines.append("BB: Upper=\(Formatters.formatPrice(bb.upper)) Mid=\(Formatters.formatPrice(bb.middle)) Lower=\(Formatters.formatPrice(bb.lower)) | %B \(bb.percentB), BW \(bb.bandwidth)%\(bb.squeeze ? " SQUEEZE" : "")")
+                lines.append("BB: Upper=\(Formatters.formatPrice(bb.upper)) Mid=\(Formatters.formatPrice(bb.middle)) Lower=\(Formatters.formatPrice(bb.lower)) | %B \(bb.percentB), BW \(bb.bandwidth)%\(bb.squeeze ? " SQUEEZE" : " (no squeeze)")")
             }
             if let atr = ind.atr {
                 lines.append("ATR: \(Formatters.formatPrice(atr.atr)) (\(atr.atrPercent)%)")

@@ -43,7 +43,7 @@ const CORS = {
 // Limits
 const RATE_LIMIT_ANALYZE = 10;   // AI calls per device per hour
 const MAX_ALERTS = 50;           // Max alerts per device
-const MAX_PROMPT_CHARS = 20_000; // Max prompt size
+const MAX_PROMPT_CHARS = 40_000; // Max prompt size (weekly + SPY + spot pressure increase payload)
 const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
 
 export default {

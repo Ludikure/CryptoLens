@@ -99,7 +99,7 @@ struct IndicatorTableView: View {
                             .foregroundStyle(vol > 2 ? .orange : .primary)
                     } else { dash }
                 }
-                row("MA Struct") { r in
+                row("MA Struct", tooltip: "EMA 20/50/200 alignment. Bullish = 20 > 50 > 200 (trend up). Bearish = 20 < 50 < 200 (trend down). Mixed = no clear stacking — trend in transition.") { r in
                     if let e20 = r.ema20, let e50 = r.ema50, let e200 = r.ema200 {
                         if e20 > e50 && e50 > e200 {
                             Text("Bull").foregroundStyle(.green)
