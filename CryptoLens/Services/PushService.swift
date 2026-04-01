@@ -28,6 +28,7 @@ enum PushService {
 
     /// Add auth headers to any worker request.
     static func addAuthHeaders(_ request: inout URLRequest) {
+        request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
         request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
         if let token = authToken {
             request.setValue(token, forHTTPHeaderField: "X-Auth-Token")
@@ -41,6 +42,7 @@ enum PushService {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
             request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
             // Include existing auth token if we have one (for push token update)
             if let existing = authToken {
@@ -74,7 +76,8 @@ enum PushService {
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+                request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
+            request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
                 request.httpBody = try? JSONSerialization.data(withJSONObject: [:] as [String: String])
 
                 if let (data, response) = try? await URLSession.shared.data(for: request),
@@ -100,6 +103,7 @@ enum PushService {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
             request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
             request.httpBody = try? JSONSerialization.data(withJSONObject: [:] as [String: String])
 

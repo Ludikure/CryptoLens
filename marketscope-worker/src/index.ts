@@ -37,7 +37,7 @@ const FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations';
 const CORS = {
   'Access-Control-Allow-Origin': 'capacitor://com.ludikure.CryptoLens',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, X-Device-ID, X-Auth-Token',
+  'Access-Control-Allow-Headers': 'Content-Type, X-Device-ID, X-Auth-Token, X-App-ID',
 };
 
 // Limits
@@ -55,8 +55,15 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // Health check — no KV, no auth
     if (path === '/' || path === '/health') {
-      return json({ status: 'ok', service: 'marketscope-proxy' });
+      return json({ status: 'ok' });
+    }
+
+    // Block non-app traffic — require app identifier header on all endpoints
+    const appId = request.headers.get('X-App-ID');
+    if (appId !== 'marketscope-ios') {
+      return json({ error: 'Forbidden' }, 403);
     }
 
     // Device auth: server-issued token stored in X-Auth-Token header
@@ -104,8 +111,8 @@ export default {
       }
     }
 
-    // All other endpoints require valid auth token (except /macro which is public)
-    if (path !== '/macro') {
+    // All endpoints (except /register) require valid auth token
+    if (path !== '/register') {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       const storedToken = await env.ALERTS.get(`auth:${deviceId}`);
       if (!storedToken || storedToken !== authToken) return json({ error: 'Unauthorized' }, 401);
@@ -231,7 +238,7 @@ export default {
       const cached = await env.ALERTS.get(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.timestamp < 60_000) return json(parsed.data);
+        if (Date.now() - parsed.timestamp < 300_000) return json(parsed.data);
       }
 
       try {
@@ -239,7 +246,7 @@ export default {
         const resp = await fetch(`${TWELVE_DATA_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=${outputsize}&apikey=${env.TWELVE_DATA_API_KEY}`);
         if (!resp.ok) return json({ error: `Twelve Data ${resp.status}` }, 502);
         const data = await resp.json();
-        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 120 });
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
         return json(data);
       } catch {
         return json({ error: 'Twelve Data fetch failed' }, 502);
@@ -256,14 +263,14 @@ export default {
       const cached = await env.ALERTS.get(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.timestamp < 60_000) return json(parsed.data);
+        if (Date.now() - parsed.timestamp < 300_000) return json(parsed.data);
       }
 
       try {
         const resp = await fetch(`${TWELVE_DATA_BASE}/quote?symbol=${symbol}&apikey=${env.TWELVE_DATA_API_KEY}`);
         if (!resp.ok) return json({ error: `Twelve Data ${resp.status}` }, 502);
         const data = await resp.json();
-        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 120 });
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
         return json(data);
       } catch {
         return json({ error: 'Twelve Data fetch failed' }, 502);
@@ -281,7 +288,7 @@ export default {
       const endpointMap: Record<string, { path: string; ttl: number; params?: string }> = {
         'recommendation': { path: '/stock/recommendation', ttl: 86400_000 },
         'metric': { path: '/stock/metric', ttl: 86400_000, params: '&metric=all' },
-        'quote': { path: '/quote', ttl: 60_000 },
+        'quote': { path: '/quote', ttl: 300_000 },
         'earnings': { path: '/calendar/earnings', ttl: 43200_000, params: `&from=${new Date(Date.now() - 30*86400_000).toISOString().split('T')[0]}&to=${new Date(Date.now() + 60*86400_000).toISOString().split('T')[0]}` },
         'news': { path: '/company-news', ttl: 3600_000, params: `&from=${new Date(Date.now() - 7*86400_000).toISOString().split('T')[0]}&to=${new Date().toISOString().split('T')[0]}` },
         'peers': { path: '/stock/peers', ttl: 86400_000 },
