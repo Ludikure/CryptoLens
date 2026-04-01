@@ -97,7 +97,7 @@ struct AnalysisView: View {
             .background(Color(.systemGroupedBackground))
             .scrollContentBackground(.hidden)
             .refreshable {
-                await service.runFullAnalysis(symbol: selectedSymbol)
+                await service.refreshIndicators(symbol: selectedSymbol)
                 HapticManager.notification(.success)
             }
             .navigationBarTitleDisplayMode(.inline)
