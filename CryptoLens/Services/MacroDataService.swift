@@ -31,13 +31,16 @@ class MacroDataService {
 
     func fetchMacroSnapshot() async -> MacroSnapshot? {
         if let cached = cachedSnapshot, let last = lastFetch, Date().timeIntervalSince(last) < cacheInterval {
+            ConnectionStatus.shared.macro = .ok
             return cached
         }
 
         guard let url = URL(string: "\(workerURL)/macro") else { return nil }
 
         do {
-            let (data, response) = try await session.data(from: url)
+            var request = URLRequest(url: url)
+            PushService.addAuthHeaders(&request)
+            let (data, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) { return nil }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
 

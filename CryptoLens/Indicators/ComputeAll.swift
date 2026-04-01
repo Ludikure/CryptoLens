@@ -100,7 +100,15 @@ enum IndicatorEngine {
         let ema50SeriesData = Array(ema50List.suffix(50))
         let ema200SeriesData = Array(ema200List.suffix(50))
 
-        return IndicatorResult(
+        // Volume profile (POC, VAH, VAL) — only for Daily and 4H (1H sample too thin)
+        let volProfile: VolumeProfileResult?
+        if let atrVal = atr, (timeframe == "1d" || timeframe == "4h" || timeframe == "D") {
+            volProfile = VolumeProfile.compute(candles: Array(candles.suffix(30)), atr: atrVal.atr)
+        } else {
+            volProfile = nil
+        }
+
+        var result = IndicatorResult(
             timeframe: timeframe,
             label: label,
             price: current,
@@ -137,5 +145,7 @@ enum IndicatorEngine {
             ema50Series: ema50SeriesData,
             ema200Series: ema200SeriesData
         )
+        result.volumeProfile = volProfile
+        return result
     }
 }

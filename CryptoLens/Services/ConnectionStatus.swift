@@ -7,30 +7,27 @@ class ConnectionStatus: ObservableObject {
 
     enum SourceState: String {
         case ok = "OK"
+        case idle = "Idle"       // Not yet called
         case pending = "Pending"
         case error = "Error"
         case offline = "Offline"
     }
 
-    @Published var workerAuth: SourceState = .pending
-    @Published var binance: SourceState = .pending
-    @Published var twelveData: SourceState = .pending
-    @Published var finnhub: SourceState = .pending
-    @Published var macro: SourceState = .pending
-    @Published var ai: SourceState = .pending
+    @Published var workerAuth: SourceState = PushService.authToken != nil ? .ok : .pending
+    @Published var binance: SourceState = .idle
+    @Published var twelveData: SourceState = .idle
+    @Published var finnhub: SourceState = .idle
+    @Published var macro: SourceState = .idle
+    @Published var ai: SourceState = .idle
     @Published var alertSync: SourceState = .ok
     @Published var pendingOfflineChanges = false
 
-    // Legacy compat — views referencing .yahoo
-    var yahoo: SourceState {
-        get { twelveData }
-        set { twelveData = newValue }
-    }
+    @Published var yahooFinance: SourceState = .idle
 
     var overallState: String {
         if NetworkMonitor.shared.isOffline { return "Offline" }
-        if workerAuth == .pending { return "Connecting..." }
         if workerAuth == .error { return "Auth failed" }
+        if workerAuth == .pending && PushService.authToken == nil { return "Connecting..." }
         return "Connected"
     }
 

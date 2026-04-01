@@ -11,8 +11,8 @@ class EconomicCalendarService {
     }
 
     func fetchUpcomingEvents() async -> [EconomicEvent] {
-        // Cache for 1 hour
-        if let cache = cache, Date().timeIntervalSince(cache.fetched) < 3600 {
+        // Cache for 15 minutes (events can be added/rescheduled)
+        if let cache = cache, Date().timeIntervalSince(cache.fetched) < 900 {
             return cache.events
         }
 

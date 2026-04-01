@@ -38,7 +38,10 @@ enum AnalysisPrompt {
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2, TP3 rows showing Price, Why, and R:R.
-        Rate it: HIGH / MODERATE conviction only. LOW conviction = no setup.
+        Rate conviction:
+        - HIGH: 3+ confluences across timeframes, volume confirming, no high-impact macro event within 12 hours, regime and bias aligned on all timeframes.
+        - MODERATE: 2 confluences, volume neutral or unconfirmed, macro event >24h out or no event. One minor disagreement between timeframes is acceptable.
+        - LOW: Anything less than MODERATE = no setup. Do not present it.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
@@ -83,6 +86,9 @@ enum AnalysisPrompt {
         - Stop losses at structural levels, not arbitrary distances.
         - Never present a trade that contradicts your own regime or positioning read. If you said "bearish regime," do not then offer a long setup.
         - "Works if / Kills it" is not a license to counter your own analysis. If the kill condition is already true, there is no setup.
+        - Market Structure: HH/HL = bullish until broken. LL/LH = bearish until broken. Structure change on the higher TF overrides lower TF structure. Fresh levels (1× test) are highest probability reactions. Worn levels (4×+) are likely to break on next test — each test absorbs resting orders.
+        - Volume Profile: POC is fair value — price reverts to it in ranges. VAH/VAL act as S/R. Break above VAH with volume = acceptance higher. Break below VAL with volume = acceptance lower. In ranging regimes, fade moves to VAH/VAL back toward POC.
+        - Overbought/oversold is a condition, not a signal. RSI 80 in an uptrend is strength, not a short trigger. RSI 20 in a downtrend is weakness, not a buy. Only treat OB/OS as actionable when it coincides with a level + divergence or a regime change.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -127,7 +133,7 @@ enum AnalysisPrompt {
         - Use ## headers exactly as shown above. The app parses these for section rendering.
         - Tables must use markdown pipe syntax with header row.
         - Do NOT list every indicator value — synthesize them into a narrative.
-        - Maximum 400 words before the JSON block.
+        - Maximum 400 words before the JSON block (headers, level lists, and table rows count toward this limit).
 
         ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
         """
@@ -359,7 +365,9 @@ enum AnalysisPrompt {
         if let d = derivatives, let p = positioning {
             lines.append("")
             lines.append("=== DERIVATIVES POSITIONING ===")
-            lines.append("Funding Rate: \(String(format: "%.4f%%", d.fundingRatePercent)) (avg last 10: \(String(format: "%.4f%%", d.avgFundingRate * 100))) — \(p.fundingSentiment)")
+            let frDelta = d.fundingRatePercent - (d.avgFundingRate * 100)
+            let frTrend = frDelta > 0.002 ? "rising" : (frDelta < -0.002 ? "falling" : "stable")
+            lines.append("Funding Rate: \(String(format: "%.4f%%", d.fundingRatePercent)) (avg last 10: \(String(format: "%.4f%%", d.avgFundingRate * 100)), \(frTrend)) — \(p.fundingSentiment)")
             lines.append("Open Interest: \(Formatters.formatVolume(d.openInterestUSD))\(d.oiChange4h.map { String(format: " (4h: %+.1f%%)", $0) } ?? "")\(d.oiChange24h.map { String(format: " (24h: %+.1f%%)", $0) } ?? "") — \(p.oiTrend.rawValue)")
             if d.globalLongPercent != 50 || d.globalShortPercent != 50 {
                 lines.append("Global L/S: Long \(Int(d.globalLongPercent))% / Short \(Int(d.globalShortPercent))% — \(p.crowding.rawValue)")
@@ -416,6 +424,33 @@ enum AnalysisPrompt {
                 lines.append(line)
             }
         }
+
+        // Market structure + volatility regime + momentum alignment
+        if let daily = indicators.first, daily.candles.count >= 15 {
+            if let structure = MarketStructure.analyze(candles: daily.candles, atr: daily.atr?.atr ?? 0) {
+                lines.append("")
+                lines.append("=== MARKET STRUCTURE ===")
+                lines.append("Structure: \(structure.label)")
+                if !structure.swingHighs.isEmpty {
+                    lines.append("Swing Highs: \(structure.swingHighs.map { Formatters.formatPrice($0) }.joined(separator: " > "))")
+                }
+                if !structure.swingLows.isEmpty {
+                    lines.append("Swing Lows: \(structure.swingLows.map { Formatters.formatPrice($0) }.joined(separator: " > "))")
+                }
+                for level in structure.levelTests.prefix(3) {
+                    let freshness = level.candlesAgo <= 3 ? "fresh" : (level.candlesAgo <= 10 ? "recent" : "old")
+                    lines.append("\(Formatters.formatPrice(level.price)) (tested \(level.tests)×, \(freshness) — \(level.candlesAgo) candles ago)")
+                }
+            }
+
+            if let volRegime = VolatilityRegime.atrPercentile(candles: daily.candles) {
+                lines.append("ATR Percentile: \(Int(volRegime.percentile))% (\(volRegime.label))")
+            }
+        }
+
+        // Momentum alignment across timeframes
+        let alignment = MomentumAlignment.compute(indicators: indicators)
+        lines.append("Momentum Alignment: \(alignment.score > 0 ? "+" : "")\(alignment.score)/9 (\(alignment.label))")
 
         // Price Action Summary (computed from candle data)
         let summaries = indicators.map { PriceActionAnalyzer.analyze(indicator: $0) }
@@ -518,6 +553,10 @@ enum AnalysisPrompt {
             if let fib = ind.fibonacci {
                 lines.append("Fib (\(fib.trend)): swing \(Formatters.formatPrice(fib.swingLow))-\(Formatters.formatPrice(fib.swingHigh)) | Nearest: \(fib.nearestLevel) at \(Formatters.formatPrice(fib.nearestPrice))")
             }
+            if let vp = ind.volumeProfile {
+                let vaWidth = vp.poc > 0 ? ((vp.valueAreaHigh - vp.valueAreaLow) / vp.poc) * 100 : 0
+                lines.append("Volume Profile: POC \(Formatters.formatPrice(vp.poc)) | VAH \(Formatters.formatPrice(vp.valueAreaHigh)) | VAL \(Formatters.formatPrice(vp.valueAreaLow)) (\(String(format: "%.1f%%", vaWidth)) VA width)")
+            }
 
             if let div = ind.divergence { lines.append("Divergence: \(div)") }
             if !ind.candlePatterns.isEmpty {
@@ -540,6 +579,26 @@ enum AnalysisPrompt {
             }
 
             lines.append("")
+        }
+
+        // POC alignment (Daily vs 4H) + Naked POC
+        if indicators.count >= 2 {
+            let dailyVP = indicators[0].volumeProfile
+            let fourHVP = indicators[1].volumeProfile
+            let atrVal = indicators[0].atr?.atr ?? 0
+            if let alignment = VolumeProfile.pocAlignment(daily: dailyVP, fourH: fourHVP, atr: atrVal) {
+                lines.append("POC Alignment: \(alignment)")
+            }
+            // Store today's daily POC for naked POC tracking
+            if let dpoc = dailyVP?.poc {
+                VolumeProfile.storePOC(dpoc, symbol: symbol)
+            }
+            // Check for naked POC from previous session
+            if let last = indicators[0].candles.last {
+                if let naked = VolumeProfile.nakedPOC(symbol: symbol, currentLow: last.low, currentHigh: last.high) {
+                    lines.append("Naked POC: \(Formatters.formatPrice(naked.price)) (untested from \(naked.date))")
+                }
+            }
         }
 
         // Recent candles (5 closed + 1 forming per timeframe)

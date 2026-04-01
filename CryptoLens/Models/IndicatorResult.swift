@@ -120,6 +120,7 @@ struct IndicatorResult: Identifiable, Codable {
     let fibonacci: FibResult?
     let supportResistance: SRResult
     let candlePatterns: [PatternResult]
+    var volumeProfile: VolumeProfileResult?
     let volumeRatio: Double?
     let divergence: String?
     let bias: String
@@ -160,6 +161,7 @@ struct IndicatorResult: Identifiable, Codable {
         self.fibonacci = fibonacci
         self.supportResistance = supportResistance
         self.candlePatterns = candlePatterns
+        self.volumeProfile = nil  // Computed post-init by IndicatorEngine
         self.volumeRatio = volumeRatio
         self.divergence = divergence
         self.bias = bias
@@ -200,6 +202,7 @@ struct IndicatorResult: Identifiable, Codable {
         fibonacci = try container.decodeIfPresent(FibResult.self, forKey: .fibonacci)
         supportResistance = try container.decode(SRResult.self, forKey: .supportResistance)
         candlePatterns = try container.decode([PatternResult].self, forKey: .candlePatterns)
+        volumeProfile = try? container.decodeIfPresent(VolumeProfileResult.self, forKey: .volumeProfile)
         volumeRatio = try container.decodeIfPresent(Double.self, forKey: .volumeRatio)
         divergence = try container.decodeIfPresent(String.self, forKey: .divergence)
         bias = try container.decode(String.self, forKey: .bias)

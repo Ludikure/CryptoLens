@@ -14,7 +14,9 @@ enum SharedDataManager {
     }
 
     static func writeLatest(results: [String: AnalysisResult], favorites: [String]) {
-        guard let defaults = UserDefaults(suiteName: suiteName) else { return }
+        // Skip if App Group not provisioned (avoids CFPrefsPlistSource warning)
+        guard FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName) != nil,
+              let defaults = UserDefaults(suiteName: suiteName) else { return }
 
         let assets: [WidgetAsset] = favorites.compactMap { symbol in
             guard let result = results[symbol] else { return nil }
@@ -35,7 +37,8 @@ enum SharedDataManager {
     }
 
     static func readLatest() -> [WidgetAsset] {
-        guard let defaults = UserDefaults(suiteName: suiteName),
+        guard FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName) != nil,
+              let defaults = UserDefaults(suiteName: suiteName),
               let data = defaults.data(forKey: key),
               let assets = try? JSONDecoder().decode([WidgetAsset].self, from: data)
         else { return [] }

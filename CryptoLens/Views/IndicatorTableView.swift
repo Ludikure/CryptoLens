@@ -2,6 +2,8 @@ import SwiftUI
 
 struct IndicatorTableView: View {
     let results: [IndicatorResult]
+    var putCallRatio: Double? = nil
+    var spotPressure: SpotPressure? = nil
     @State private var expanded = false
 
     private var hasStockIndicators: Bool {
@@ -153,11 +155,61 @@ struct IndicatorTableView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.systemGray4), lineWidth: 0.5))
             .padding(.top, 8)
+
+            // Single-value indicators (not per-timeframe)
+            if putCallRatio != nil || spotPressure != nil {
+                VStack(spacing: 0) {
+                    if let pcr = putCallRatio {
+                        singleRow("Put/Call", value: String(format: "%.2f", pcr),
+                                  color: pcr > 1.0 ? .red : (pcr < 0.7 ? .orange : .primary),
+                                  note: pcr > 1.0 ? "Bearish" : (pcr < 0.7 ? "Complacent" : "Neutral"),
+                                  tooltip: "Put/call options ratio. >1.0 = bearish sentiment (contrarian buy). <0.7 = complacent (potential top).")
+                    }
+                    if let sp = spotPressure {
+                        singleRow("Taker Buy", value: String(format: "%.0f%%", sp.takerBuyRatio * 100),
+                                  color: sp.takerBuyRatio > 0.55 ? .green : (sp.takerBuyRatio < 0.45 ? .red : .primary),
+                                  note: sp.takerBuyLabel,
+                                  tooltip: "Who crosses the spread. >55% = aggressive buying. <45% = aggressive selling.")
+                        singleRow("CVD 24h", value: String(format: "%.0f", sp.cvd24h),
+                                  color: sp.cvdTrend == "Rising" ? .green : (sp.cvdTrend == "Falling" ? .red : .primary),
+                                  note: sp.cvdTrend,
+                                  tooltip: "Cumulative Volume Delta. Rising + price falling = accumulation. Falling + price rising = distribution (hollow rally).")
+                        if let br = sp.bookRatio, let bl = sp.bookLabel {
+                            singleRow("Order Book", value: String(format: "%.0f%% bids", br * 100),
+                                      color: br > 0.6 ? .green : (br < 0.4 ? .red : .primary),
+                                      note: bl,
+                                      tooltip: "Bid vs ask depth. >60% bids = strong support. <40% = heavy selling pressure. Can be spoofed.")
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(.systemGray4), lineWidth: 0.5))
+                .padding(.top, 6)
+            }
             } // if expanded
         }
         .font(.caption)
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func singleRow(_ label: String, value: String, color: Color, note: String, tooltip: String) -> some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 3) {
+                Text(label).foregroundStyle(.secondary)
+                InfoTooltip(title: label, explanation: tooltip)
+            }
+            .frame(width: 76, alignment: .leading)
+            Text(value)
+                .fontWeight(.medium)
+                .foregroundStyle(color)
+            Spacer()
+            Text(note)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
     }
 
     private func biasColor(_ bias: String) -> Color {

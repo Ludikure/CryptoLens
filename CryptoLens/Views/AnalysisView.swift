@@ -9,6 +9,8 @@ struct AnalysisView: View {
     @State private var showWatchlist = false
     @State private var viewId = UUID()
     @State private var activeSection = "overview"
+    @State private var spotPressure: SpotPressure?
+    @State private var macroSnapshot: MacroSnapshot?
 
     private var selectedAssetName: String {
         Constants.asset(for: selectedSymbol)?.name ?? selectedSymbol
@@ -202,7 +204,14 @@ struct AnalysisView: View {
             }
             .onChange(of: selectedSymbol) {
                 HapticManager.selection()
-                Task { await service.selectSymbol(selectedSymbol) }
+                spotPressure = nil
+                Task {
+                    await service.selectSymbol(selectedSymbol)
+                    macroSnapshot = await service.macroData.fetchMacroSnapshot()
+                    if service.marketFor(selectedSymbol) == .crypto {
+                        spotPressure = await SpotPressureAnalyzer.analyze(symbol: selectedSymbol)
+                    }
+                }
             }
             .onChange(of: coordinator.pendingSymbol) {
                 if let symbol = coordinator.pendingSymbol {
@@ -326,7 +335,11 @@ struct AnalysisView: View {
         }
 
         // Indicators (collapsed by default)
-        IndicatorTableView(results: [result.tf1, result.tf2, result.tf3])
+        IndicatorTableView(
+            results: [result.tf1, result.tf2, result.tf3],
+            putCallRatio: result.stockSentiment?.putCallRatio,
+            spotPressure: spotPressure
+        )
             .id("indicators")
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
@@ -351,6 +364,12 @@ struct AnalysisView: View {
         // Derivatives positioning (crypto only)
         if let d = result.derivatives, let p = result.positioning {
             DerivativesCardView(data: d, snapshot: p)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
+        // Macro context (FRED data)
+        if let macro = macroSnapshot {
+            MacroContextView(macro: macro)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 

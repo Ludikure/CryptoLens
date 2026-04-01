@@ -20,6 +20,41 @@ class YahooFinanceService {
     private let session: URLSession
     private var lastRequestTime: Date?
 
+    /// Fetch market status from Finnhub (definitive, includes holidays).
+    /// Cached in-memory for 5 minutes.
+    private static var cachedMarketState: (state: String, fetched: Date)?
+
+    static func computeMarketState() -> String {
+        // Return cache if fresh
+        if let cached = cachedMarketState, Date().timeIntervalSince(cached.fetched) < 300 {
+            return cached.state
+        }
+        // Trigger async fetch, return best guess synchronously
+        Task { await fetchMarketStatus() }
+        return cachedMarketState?.state ?? "REGULAR"
+    }
+
+    static func fetchMarketStatus() async {
+        guard let url = URL(string: "\(PushService.workerURL)/finnhub/market-status?symbol=US") else { return }
+        var request = URLRequest(url: url)
+        PushService.addAuthHeaders(&request)
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return }
+
+        let session = json["session"] as? String ?? "closed"
+        let state: String
+        switch session.lowercased() {
+        case "regular": state = "REGULAR"
+        case "pre", "pre-market": state = "PRE"
+        case "post", "post-market", "after-hours": state = "POST"
+        default: state = "CLOSED"
+        }
+        cachedMarketState = (state, Date())
+    }
+
     private func throttle(minInterval: TimeInterval = 1.0) async {
         if let last = lastRequestTime {
             let elapsed = Date().timeIntervalSince(last)
@@ -105,7 +140,7 @@ class YahooFinanceService {
             earningsDate: nil,
             sector: nil,
             industry: nil,
-            marketState: (meta["marketState"] as? String) ?? "CLOSED",
+            marketState: Self.computeMarketState(),
             priceChangePercent1d: changePercent
         )
     }

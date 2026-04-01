@@ -316,6 +316,29 @@ export default {
     }
 
     // === Finnhub Enrichment (cached 24h for fundamentals, 1h for dynamic) ===
+    // === Finnhub Market Status (special case — no symbol needed) ===
+    if (path === '/finnhub/market-status') {
+      if (!env.FINNHUB_API_KEY) return json({ error: 'Finnhub not configured' }, 503);
+      const exchange = url.searchParams.get('symbol') || 'US';
+      const cacheKey = `cache:fh:market-status:${exchange}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 300_000) return json(parsed.data);
+      }
+      try {
+        const resp = await fetch(`${FINNHUB_BASE}/stock/market-status?exchange=${exchange}`, {
+          headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY },
+        });
+        if (!resp.ok) return json({ error: `Finnhub ${resp.status}` }, 502);
+        const data = await resp.json();
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
+        return json(data);
+      } catch {
+        return json({ error: 'Finnhub fetch failed' }, 502);
+      }
+    }
+
     if (path.startsWith('/finnhub/')) {
       const endpoint = path.replace('/finnhub/', '');
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));

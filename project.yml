@@ -5,6 +5,8 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: YES
     SWIFT_EMIT_LOC_STRINGS: YES
+    CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED: YES
+    SWIFT_EMIT_LOC_STRINGS_RESOURCES: YES
     DEVELOPMENT_TEAM: 6AS729C9FR
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "13"
@@ -59,8 +61,6 @@ targets:
       path: MarketScope.entitlements
       properties:
         aps-environment: development
-        com.apple.security.application-groups:
-          - group.com.ludikure.CryptoLens
     dependencies:
       - target: MarketScopeWidget
     scheme:

@@ -178,7 +178,7 @@ class AnalysisService: ObservableObject {
         do {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
             if market == .crypto { ConnectionStatus.shared.binance = .ok }
-            else { ConnectionStatus.shared.twelveData = .ok }
+            else { ConnectionStatus.shared.yahooFinance = .ok }
             let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
             let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
@@ -282,6 +282,8 @@ class AnalysisService: ObservableObject {
             }
 
             let events = await economicCalendar.highImpactUpcoming()
+            // Fetch macro once (5min cache) to populate FRED status badge
+            _ = await macroData.fetchMacroSnapshot()
 
             let previous = resultsBySymbol[symbol]
             let result = AnalysisResult(
@@ -330,7 +332,7 @@ class AnalysisService: ObservableObject {
             #endif
             let market = marketFor(symbol)
             if market == .crypto { ConnectionStatus.shared.binance = .error }
-            else { ConnectionStatus.shared.twelveData = .error }
+            else { ConnectionStatus.shared.yahooFinance = .error }
 
             if symbol == currentSymbol {
                 if resultsBySymbol[symbol] != nil {
@@ -477,6 +479,8 @@ class AnalysisService: ObservableObject {
             if market == .crypto {
                 spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
             }
+
+            // Volume profile computed in IndicatorEngine from OHLCV data (D + 4H)
 
             // Weekly context + SPY for stocks (Twelve Data, cached 24h on worker)
             var weeklyContext: String? = nil
