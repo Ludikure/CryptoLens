@@ -47,6 +47,10 @@ class ClaudeService: AIProvider {
             throw ClaudeError.decodingError
         }
 
+        if httpResp.statusCode == 401 {
+            await PushService.handleAuthFailure()
+            throw ClaudeError.apiError(401, "Auth expired. Please retry.")
+        }
         if httpResp.statusCode == 429 {
             await MainActor.run { ConnectionStatus.shared.ai = .error }
             throw ClaudeError.apiError(429, "Rate limited. Try again in a few minutes.")

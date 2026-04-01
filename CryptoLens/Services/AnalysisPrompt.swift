@@ -149,7 +149,7 @@ enum AnalysisPrompt {
 
             MACRO CONTEXT (if provided — from Federal Reserve FRED data):
             - MACRO REGIME: Risk-On / Normal / Cautious / Elevated Fear / Crisis. This is the single most important macro signal.
-            - VIX: >35 = crisis (no new longs). 25-35 = elevated fear (reduce size). <15 = complacent (watch for pullback).
+            - VIX (EOD): End-of-day closing value from FRED. >35 = crisis (no new longs). 25-35 = elevated fear (reduce size). <15 = complacent (watch for pullback).
             - 10Y YIELD: Rising = growth stocks pressured, value/financials benefit. Falling = growth stocks benefit.
             - 2Y/10Y SPREAD: Negative (inverted) = recession signal. Positive steepening = risk-on.
             - FED FUNDS: Higher = restrictive (bearish growth). Lower = accommodative (bullish).
@@ -164,7 +164,7 @@ enum AnalysisPrompt {
             - Timeframes: \(tf.trend) (trend), \(tf.bias) (bias), \(tf.entry) (entry).
 
             STOCK SENTIMENT DATA (if provided):
-            - VIX: Market fear gauge. >30 = extreme fear (historically bullish). <15 = complacency (watch for pullback).
+            - VIX (Intraday): Real-time from Yahoo Finance. >30 = extreme fear (historically bullish). <15 = complacency (watch for pullback). Prefer this over VIX EOD during market hours.
             - SHORT INTEREST: High short % of float (>10%) = crowded shorts, squeeze potential. Days to cover > 5 = shorts trapped.
             - PUT/CALL RATIO: High (>1.0) = bearish sentiment, contrarian buy. Low (<0.7) = complacent.
             - 52-WEEK POSITION: Context for S/R and trend health.
@@ -314,7 +314,7 @@ enum AnalysisPrompt {
             lines.append("")
             lines.append("=== STOCK SENTIMENT ===")
             if let vix = ss.vix {
-                lines.append("VIX: \(String(format: "%.1f", vix)) (\(ss.vixLevel))\(ss.vixChange.map { String(format: " %+.1f%%", $0) } ?? "")")
+                lines.append("VIX (intraday): \(String(format: "%.1f", vix)) (\(ss.vixLevel))\(ss.vixChange.map { String(format: " %+.1f%%", $0) } ?? "")")
             }
             if let shortPct = ss.shortPercentOfFloat {
                 var shortLine = "Short Interest: \(String(format: "%.1f%%", shortPct)) of float"
@@ -338,7 +338,7 @@ enum AnalysisPrompt {
             }
             if let vix = m.vix {
                 let level = vix > 35 ? "EXTREME FEAR" : (vix > 25 ? "ELEVATED" : (vix < 15 ? "LOW/COMPLACENT" : "NORMAL"))
-                lines.append("VIX: \(String(format: "%.1f", vix)) — \(level)")
+                lines.append("VIX (EOD): \(String(format: "%.1f", vix)) — \(level)")
             }
             if let t10 = m.treasury10Y {
                 lines.append("10Y Treasury Yield: \(String(format: "%.2f%%", t10))")

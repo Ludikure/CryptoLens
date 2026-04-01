@@ -13,8 +13,8 @@ struct StockSentimentView: View {
             if let vix = sentiment.vix {
                 HStack {
                     HStack(spacing: 3) {
-                        Text("VIX").font(.caption).foregroundStyle(.secondary)
-                        InfoTooltip(title: "VIX", explanation: Tooltips.vix)
+                        Text("VIX Intraday").font(.caption).foregroundStyle(.secondary)
+                        InfoTooltip(title: "VIX Intraday", explanation: Tooltips.vix)
                     }
                     Spacer()
                     Text(String(format: "%.1f", vix))

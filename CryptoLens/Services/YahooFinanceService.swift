@@ -35,6 +35,7 @@ class YahooFinanceService {
     }
 
     static func fetchMarketStatus() async {
+        await PushService.ensureAuth()
         guard let url = URL(string: "\(PushService.workerURL)/finnhub/market-status?symbol=US") else { return }
         var request = URLRequest(url: url)
         PushService.addAuthHeaders(&request)

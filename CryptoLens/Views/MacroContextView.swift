@@ -25,11 +25,11 @@ struct MacroContextView: View {
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 if let vix = macro.vix {
                     metricCell(
-                        label: "VIX",
+                        label: "VIX EOD",
                         value: String(format: "%.1f", vix),
                         color: vix > 30 ? .red : (vix > 20 ? .orange : .green),
                         note: vix > 35 ? "Crisis" : (vix > 25 ? "Elevated" : (vix < 15 ? "Low" : "Normal")),
-                        tooltip: "S&P 500 fear gauge. <15 = complacent (watch for pullback). 15-25 = normal. 25-35 = elevated fear (reduce size). >35 = crisis (no new longs, defensive only)."
+                        tooltip: "VIX end-of-day close from FRED. S&P 500 fear gauge. <15 = complacent (watch for pullback). 15-25 = normal. 25-35 = elevated fear (reduce size). >35 = crisis (no new longs, defensive only)."
                     )
                 }
                 if let t10 = macro.treasury10Y {

@@ -108,6 +108,7 @@ class FinnhubProvider {
     // MARK: - Generic Worker Fetch
 
     private func fetchEndpoint(_ endpoint: String, symbol: String) async -> Data? {
+        await PushService.ensureAuth()
         guard let url = URL(string: "\(workerURL)/finnhub/\(endpoint)?symbol=\(symbol)") else { return nil }
         var request = URLRequest(url: url)
         PushService.addAuthHeaders(&request)

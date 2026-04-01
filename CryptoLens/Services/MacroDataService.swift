@@ -38,6 +38,7 @@ class MacroDataService {
         guard let url = URL(string: "\(workerURL)/macro") else { return nil }
 
         do {
+            await PushService.ensureAuth()
             var request = URLRequest(url: url)
             PushService.addAuthHeaders(&request)
             let (data, response) = try await session.data(for: request)

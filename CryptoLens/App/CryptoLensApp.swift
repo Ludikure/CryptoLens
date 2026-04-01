@@ -1,9 +1,27 @@
 import SwiftUI
 import UIKit
+import UserNotifications
 
-class AppDelegate: NSObject, UIApplicationDelegate {
+class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        #if DEBUG
+        print("[MarketScope] AppDelegate didFinishLaunching — registering for remote notifications")
+        #endif
+        UNUserNotificationCenter.current().delegate = self
+        application.registerForRemoteNotifications()
+        return true
+    }
+
+    // Show push banners even when app is in foreground
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .badge])
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        #if DEBUG
+        print("[MarketScope] APNs push token: \(token.prefix(20))...")
+        #endif
         PushService.registerDevice(token: token)
     }
 
@@ -26,8 +44,11 @@ struct MarketScopeApp: App {
     init() {
         BackgroundRefreshManager.register()
         AlertsStore.requestPermission()
-        UIApplication.shared.registerForRemoteNotifications()
         PushService.ensureRegistered()
+        #if DEBUG
+        print("[MarketScope] Device ID: \(PushService.deviceId)")
+        print("[MarketScope] Auth Token: \(PushService.authToken ?? "nil")")
+        #endif
     }
 
     var body: some Scene {

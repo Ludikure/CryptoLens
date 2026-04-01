@@ -10,8 +10,15 @@ class CoinbaseService {
 
     // Coinbase instrument IDs for major perps
     private let instrumentIds: [String: String] = [
-        "BTCUSDT": "149264167780483072",  // BTC-PERP
-        "ETHUSDT": "149264164756389888",  // ETH-PERP (the first instrument)
+        "BTCUSDT": "149264167780483072",   // BTC-PERP
+        "ETHUSDT": "149264164756389888",   // ETH-PERP
+        "XRPUSDT": "207597758503190528",   // XRP-PERP
+        "SOLUSDT": "240589739374149632",   // SOL-PERP
+        "AVAXUSDT": "240640203117559808",  // AVAX-PERP
+        "DOGEUSDT": "252858534771818496",  // DOGE-PERP
+        "LINKUSDT": "252858968550932480",  // LINK-PERP
+        "ADAUSDT": "252859427479093248",   // ADA-PERP
+        "DOTUSDT": "283235244151144450",   // DOT-PERP
     ]
 
     init() {

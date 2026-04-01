@@ -528,12 +528,16 @@ async function checkRateLimit(env: Env, key: string, limit: number, windowSec: n
 
 // === Alert Checking (Cron — iterates all devices) ===
 async function checkAllDeviceAlerts(env: Env) {
-  // List all alert keys
-  const alertKeys = await env.ALERTS.list({ prefix: 'alerts:' });
-  for (const key of alertKeys.keys) {
-    const deviceId = key.name.replace('alerts:', '');
-    await checkDeviceAlerts(env, deviceId);
-  }
+  // Paginate through all alert keys (KV list returns max 1000 per call)
+  let cursor: string | undefined = undefined;
+  do {
+    const listResult = await env.ALERTS.list({ prefix: 'alerts:', cursor });
+    for (const key of listResult.keys) {
+      const deviceId = key.name.replace('alerts:', '');
+      await checkDeviceAlerts(env, deviceId);
+    }
+    cursor = listResult.list_complete ? undefined : (listResult as any).cursor;
+  } while (cursor);
 }
 
 async function checkDeviceAlerts(env: Env, deviceId: string) {
@@ -541,6 +545,7 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
   if (!alertsData) return;
   let alerts: Alert[] = JSON.parse(alertsData);
   const activeAlerts = alerts.filter(a => !a.triggered);
+  console.log(`[cron] device=${deviceId.substring(0,8)} total=${alerts.length} active=${activeAlerts.length}`);
   if (activeAlerts.length === 0) return;
 
   const symbols = [...new Set(activeAlerts.map(a => a.symbol))];
@@ -548,14 +553,27 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
 
   for (const symbol of symbols) {
     try {
-      // Try Binance for crypto (USDT pairs)
+      // Try Binance for crypto (USDT pairs), fallback to Coinbase
       if (symbol.endsWith('USDT')) {
-        const resp = await fetch(`${BINANCE_SPOT}/ticker/price?symbol=${symbol}`);
-        if (resp.ok) {
-          const data = await resp.json() as { price: string };
-          prices[symbol] = parseFloat(data.price);
-          continue;
-        }
+        // Binance
+        try {
+          const resp = await fetch(`${BINANCE_SPOT}/ticker/price?symbol=${symbol}`);
+          if (resp.ok) {
+            const data = await resp.json() as { price: string };
+            prices[symbol] = parseFloat(data.price);
+            continue;
+          }
+        } catch { /* Binance failed */ }
+        // Coinbase fallback (e.g., BTCUSDT → BTC-USD)
+        try {
+          const cbSymbol = symbol.replace('USDT', '-USD');
+          const resp = await fetch(`https://api.exchange.coinbase.com/products/${cbSymbol}/ticker`);
+          if (resp.ok) {
+            const data = await resp.json() as { price: string };
+            prices[symbol] = parseFloat(data.price);
+            continue;
+          }
+        } catch { /* Coinbase failed */ }
       }
       // Fall back to Yahoo for stocks
       const resp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=1d`);
@@ -567,11 +585,13 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
     } catch { /* skip */ }
   }
 
+  console.log(`[cron] prices: ${JSON.stringify(prices)}`);
   const triggered: Alert[] = [];
   for (const alert of activeAlerts) {
     const price = prices[alert.symbol];
-    if (!price) continue;
+    if (!price) { console.log(`[cron] no price for ${alert.symbol}`); continue; }
     const hit = alert.condition === 'above' ? price >= alert.targetPrice : price <= alert.targetPrice;
+    console.log(`[cron] ${alert.symbol} ${alert.condition} ${alert.targetPrice} vs ${price} → ${hit ? 'TRIGGERED' : 'no'}`);
     if (hit) {
       alert.triggered = true;
       triggered.push(alert);
@@ -597,30 +617,44 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
 
 // === APNs ===
 async function sendAPNs(env: Env, deviceToken: string, title: string, body: string) {
+  // Try sandbox first (development builds), fall back to production
+  const endpoints = [
+    'https://api.sandbox.push.apple.com',
+    'https://api.push.apple.com',
+  ];
+
   try {
     const jwt = await buildAPNsJWT(env);
-    if (!jwt) return;
+    if (!jwt) { console.error('APNs: JWT build returned null'); return; }
 
-    const resp = await fetch(`https://api.push.apple.com/3/device/${deviceToken}`, {
-      method: 'POST',
-      headers: {
-        'authorization': `bearer ${jwt}`,
-        'apns-topic': env.APNS_BUNDLE_ID || 'com.ludikure.CryptoLens',
-        'apns-push-type': 'alert',
-        'apns-priority': '10',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        aps: { alert: { title, body }, sound: 'default', badge: 1 },
-      }),
-    });
+    for (const endpoint of endpoints) {
+      const resp = await fetch(`${endpoint}/3/device/${deviceToken}`, {
+        method: 'POST',
+        headers: {
+          'authorization': `bearer ${jwt}`,
+          'apns-topic': env.APNS_BUNDLE_ID || 'com.ludikure.CryptoLens',
+          'apns-push-type': 'alert',
+          'apns-priority': '10',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          aps: { alert: { title, body }, sound: 'default', badge: 1 },
+        }),
+      });
 
-    if (!resp.ok) {
-      // Log status code only, not response body
-      console.error(`APNs ${resp.status}`);
+      if (resp.ok) {
+        console.log(`APNs sent via ${endpoint.includes('sandbox') ? 'sandbox' : 'production'}`);
+        return;
+      }
+      const errBody = await resp.text();
+      console.error(`APNs ${endpoint.includes('sandbox') ? 'sandbox' : 'prod'} ${resp.status}: ${errBody}`);
+      // If sandbox says BadDeviceToken, try production (token is from a release build)
+      if (resp.status === 400 && errBody.includes('BadDeviceToken')) continue;
+      // Any other error, stop trying
+      return;
     }
-  } catch {
-    console.error('APNs send failed');
+  } catch (e) {
+    console.error(`APNs send failed: ${e}`);
   }
 }
 

@@ -35,6 +35,17 @@ enum PushService {
         }
     }
 
+    /// Handle 401 by clearing expired token, generating new device ID, and re-registering.
+    static func handleAuthFailure() async {
+        authToken = nil
+        // Generate new device ID to get a fresh token (old one expired/invalidated)
+        let newId = UUID().uuidString
+        UserDefaults.standard.set(newId, forKey: "device_id")
+        await MainActor.run { ConnectionStatus.shared.workerAuth = .pending }
+        // Re-register with new identity
+        await ensureAuth()
+    }
+
     /// Register device and obtain auth token from worker.
     static func registerDevice(token: String) {
         Task {
@@ -150,13 +161,28 @@ enum PushService {
             }
 
             request.httpBody = try? JSONSerialization.data(withJSONObject: ["alerts": payload])
-            if let (_, response) = try? await URLSession.shared.data(for: request),
-               let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                await MainActor.run {
-                    ConnectionStatus.shared.alertSync = .ok
-                    ConnectionStatus.shared.pendingOfflineChanges = false
+            #if DEBUG
+            print("[MarketScope] Syncing \(payload.count) alerts to worker...")
+            #endif
+            if let (data, response) = try? await URLSession.shared.data(for: request),
+               let http = response as? HTTPURLResponse {
+                #if DEBUG
+                let body = String(data: data, encoding: .utf8) ?? ""
+                print("[MarketScope] Alert sync: HTTP \(http.statusCode) — \(body)")
+                #endif
+                if (200...299).contains(http.statusCode) {
+                    await MainActor.run {
+                        ConnectionStatus.shared.alertSync = .ok
+                        ConnectionStatus.shared.pendingOfflineChanges = false
+                    }
+                } else {
+                    if http.statusCode == 401 { await handleAuthFailure() }
+                    await MainActor.run { ConnectionStatus.shared.alertSync = .error }
                 }
             } else {
+                #if DEBUG
+                print("[MarketScope] Alert sync: network error")
+                #endif
                 await MainActor.run { ConnectionStatus.shared.alertSync = .error }
             }
         }

@@ -52,6 +52,7 @@ targets:
           - com.ludikure.CryptoLens.priceCheck
         UIBackgroundModes:
           - fetch
+          - remote-notification
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens
