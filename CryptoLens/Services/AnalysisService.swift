@@ -5,6 +5,7 @@ class AnalysisService: ObservableObject {
     let binance = BinanceService()
     let yahoo = YahooFinanceService()
     let twelveData = TwelveDataProvider()
+    let tiingo = TiingoProvider()
     let finnhub = FinnhubProvider()
     let derivativesService = DerivativesService()
     let coinGecko = CoinGeckoService()
@@ -77,8 +78,8 @@ class AnalysisService: ObservableObject {
     }
 
     /// Prefetch data for all favorites that aren't cached yet.
-    /// First pass: quick fetch (daily only) for fast watchlist population.
-    /// Second pass: full refresh in background.
+    /// Pass 1: disk cache or quick fetch (daily only) for fast watchlist cards.
+    /// Pass 2: full refresh for crypto only (stocks skip to avoid Twelve Data rate limit).
     func prefetchFavorites(_ symbols: [String]) {
         Task {
             // Pass 1: disk cache or quick fetch
@@ -89,9 +90,13 @@ class AnalysisService: ObservableObject {
                     await quickFetch(symbol: symbol)
                 }
             }
-            // Pass 2: full refresh for stale/quick-fetched data (lower priority)
+            // Pass 2: full refresh for crypto only (Binance has no rate issue).
+            // Stocks stay on quick-fetched daily data until user taps them.
+            // This avoids burning Twelve Data's 8/min limit on prefetch.
             for symbol in symbols where symbol != currentSymbol {
-                await refreshIndicators(symbol: symbol)
+                if marketFor(symbol) == .crypto {
+                    await refreshIndicators(symbol: symbol)
+                }
             }
         }
     }
@@ -108,7 +113,9 @@ class AnalysisService: ObservableObject {
             switch market {
             case .crypto: candles = try await binance.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300)
             case .stock:
-                if let td = try? await twelveData.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300), !td.isEmpty {
+                if let ti = try? await tiingo.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300), !ti.isEmpty {
+                    candles = ti
+                } else if let td = try? await twelveData.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300), !td.isEmpty {
                     candles = td
                 } else {
                     candles = try await yahoo.fetchCandles(symbol: symbol, interval: tf.interval)
@@ -559,7 +566,12 @@ class AnalysisService: ObservableObject {
     // MARK: - Weekly + SPY Context
 
     private func buildWeeklyContext(symbol: String) async -> String? {
-        guard let candles = try? await twelveData.fetchCandles(symbol: symbol, interval: "1week", limit: 20),
+        // Use Tiingo daily (100 days), fallback to Twelve Data weekly
+        var weeklyCandles = try? await tiingo.fetchCandles(symbol: symbol, interval: "1d", limit: 100)
+        if weeklyCandles == nil || weeklyCandles!.isEmpty {
+            weeklyCandles = try? await twelveData.fetchCandles(symbol: symbol, interval: "1week", limit: 20)
+        }
+        guard let candles = weeklyCandles,
               candles.count >= 5 else { return nil }
 
         let result = IndicatorEngine.computeAll(candles: candles, timeframe: "1week", label: "Weekly")
@@ -608,7 +620,11 @@ class AnalysisService: ObservableObject {
     }
 
     private func buildSPYContext() async -> String? {
-        guard let candles = try? await twelveData.fetchCandles(symbol: "SPY", interval: "1day", limit: 30),
+        var spyCandles = try? await tiingo.fetchCandles(symbol: "SPY", interval: "1d", limit: 30)
+        if spyCandles == nil || spyCandles!.isEmpty {
+            spyCandles = try? await twelveData.fetchCandles(symbol: "SPY", interval: "1d", limit: 30)
+        }
+        guard let candles = spyCandles,
               let last = candles.last else { return nil }
 
         let result = IndicatorEngine.computeAll(candles: candles, timeframe: "1d", label: "SPY Daily")
@@ -655,39 +671,53 @@ class AnalysisService: ObservableObject {
             return (r1, r2, r3)
 
         case .stock:
-            // Twelve Data for candles (native 4H, cached via worker)
-            // Falls back to Yahoo if Twelve Data fails (4H degrades to 1H)
+            // Tiingo primary (500/hr), Twelve Data fallback (8/min), Yahoo last resort
             var c1: [Candle]
             var c2: [Candle]
             var c3: [Candle]
             var tf2Interval = tfs[1].interval
             var tf2Label = tfs[1].label
             do {
-                async let td1 = twelveData.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
-                async let td2 = twelveData.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
-                async let td3 = twelveData.fetchCandles(symbol: symbol, interval: tfs[2].interval, limit: 300)
-                c1 = try await td1
-                c2 = try await td2
-                c3 = try await td3
+                // Tiingo: 1H native + 4H aggregated from 1H + Daily
+                async let t1 = tiingo.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
+                async let t2 = tiingo.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
+                async let t3 = tiingo.fetchCandles(symbol: symbol, interval: tfs[2].interval, limit: 300)
+                c1 = try await t1
+                c2 = try await t2
+                c3 = try await t3
                 #if DEBUG
-                print("[MarketScope] [\(symbol)] Using Twelve Data candles")
+                print("[MarketScope] [\(symbol)] Using Tiingo candles (4H aggregated)")
                 #endif
             } catch {
                 #if DEBUG
-                print("[MarketScope] [\(symbol)] Twelve Data failed (\(error)), falling back to Yahoo (4H→1H)")
+                print("[MarketScope] [\(symbol)] Tiingo failed (\(error)), trying Twelve Data")
                 #endif
-                // Yahoo doesn't support 4H — degrade to 1H with correct labeling
-                let yahooTf2 = tfs[1].interval == "4h" ? "1h" : tfs[1].interval
-                if tfs[1].interval == "4h" {
-                    tf2Interval = "1h"
-                    tf2Label = "1H (Bias — 4H unavailable)"
+                do {
+                    async let td1 = twelveData.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
+                    async let td2 = twelveData.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
+                    async let td3 = twelveData.fetchCandles(symbol: symbol, interval: tfs[2].interval, limit: 300)
+                    c1 = try await td1
+                    c2 = try await td2
+                    c3 = try await td3
+                    #if DEBUG
+                    print("[MarketScope] [\(symbol)] Using Twelve Data candles")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[MarketScope] [\(symbol)] Twelve Data failed (\(error)), falling back to Yahoo (4H→1H)")
+                    #endif
+                    let yahooTf2 = tfs[1].interval == "4h" ? "1h" : tfs[1].interval
+                    if tfs[1].interval == "4h" {
+                        tf2Interval = "1h"
+                        tf2Label = "1H (Bias — 4H unavailable)"
+                    }
+                    async let y1 = yahoo.fetchCandles(symbol: symbol, interval: tfs[0].interval)
+                    async let y2 = yahoo.fetchCandles(symbol: symbol, interval: yahooTf2)
+                    async let y3 = yahoo.fetchCandles(symbol: symbol, interval: tfs[2].interval)
+                    c1 = try await y1
+                    c2 = try await y2
+                    c3 = try await y3
                 }
-                async let y1 = yahoo.fetchCandles(symbol: symbol, interval: tfs[0].interval)
-                async let y2 = yahoo.fetchCandles(symbol: symbol, interval: yahooTf2)
-                async let y3 = yahoo.fetchCandles(symbol: symbol, interval: tfs[2].interval)
-                c1 = try await y1
-                c2 = try await y2
-                c3 = try await y3
             }
             let r1 = IndicatorEngine.computeAll(candles: c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market)
             let r2 = IndicatorEngine.computeAll(candles: c2, timeframe: tf2Interval, label: tf2Label, market: market)

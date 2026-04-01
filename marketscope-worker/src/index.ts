@@ -12,6 +12,7 @@ export interface Env {
   TWELVE_DATA_API_KEY: string;
   FINNHUB_API_KEY: string;
   FRED_API_KEY: string;
+  TIINGO_API_KEY: string;
 }
 
 interface Alert {
@@ -33,6 +34,8 @@ const YAHOO_BASE = 'https://query1.finance.yahoo.com';
 const TWELVE_DATA_BASE = 'https://api.twelvedata.com';
 const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 const FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations';
+const TIINGO_IEX = 'https://api.tiingo.com/iex';
+const TIINGO_DAILY = 'https://api.tiingo.com/tiingo/daily';
 
 const CORS = {
   'Access-Control-Allow-Origin': 'capacitor://com.ludikure.CryptoLens',
@@ -226,7 +229,42 @@ export default {
       }
     }
 
-    // === Twelve Data Candles (cached 60s, shared) ===
+    // === Tiingo Candles (cached 5min, shared) ===
+    if (path === '/tiingo/candles') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      const interval = url.searchParams.get('interval') || '1hour';  // 1hour or 1day
+      const days = url.searchParams.get('days') || '60';
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      if (!env.TIINGO_API_KEY) return json({ error: 'Tiingo not configured' }, 503);
+
+      const cacheKey = `cache:tiingo:${symbol}:${interval}:${days}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 300_000) return json(parsed.data);
+      }
+
+      try {
+        const startDate = new Date(Date.now() - parseInt(days) * 86400_000).toISOString().split('T')[0];
+        let apiUrl: string;
+        if (interval === '1day') {
+          apiUrl = `${TIINGO_DAILY}/${symbol}/prices?startDate=${startDate}&token=${env.TIINGO_API_KEY}`;
+        } else {
+          apiUrl = `${TIINGO_IEX}/${symbol}/prices?startDate=${startDate}&resampleFreq=${interval}&columns=open,high,low,close,volume&token=${env.TIINGO_API_KEY}`;
+        }
+        const resp = await fetch(apiUrl, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!resp.ok) return json({ error: `Tiingo ${resp.status}` }, 502);
+        const data = await resp.json();
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
+        return json(data);
+      } catch {
+        return json({ error: 'Tiingo fetch failed' }, 502);
+      }
+    }
+
+    // === Twelve Data Candles (cached 5min, shared) ===
     if (path === '/twelvedata/candles') {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       const interval = url.searchParams.get('interval')?.replace(/[^0-9a-zA-Z]/g, '') || '1day';

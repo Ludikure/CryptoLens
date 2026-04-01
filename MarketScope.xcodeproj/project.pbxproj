@@ -33,6 +33,7 @@
 		4022873D15F6D82DC37F348F /* ViewToImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE9477E64E7199714B3CC77 /* ViewToImage.swift */; };
 		4289A8040BC41C7DFDC45778 /* AIProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714F80BAAC4263133724FD5B /* AIProvider.swift */; };
 		453071FE065A474BB06375C3 /* AlertsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CD9FF6F190A00C9532669B /* AlertsView.swift */; };
+		45629282FD0F71DC0EA426F2 /* TiingoProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1130BA47A4CBC38DABF202C7 /* TiingoProvider.swift */; };
 		462B2A26DFED08C5A7314474 /* CoinbaseService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5961A704972E8E2F585273 /* CoinbaseService.swift */; };
 		470497CCF14795AE790BB436 /* AnalysisSnapshotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1946FA77C8C32F6D51B1003 /* AnalysisSnapshotView.swift */; };
 		471CE5CDEF743E4519BED335 /* StockSentiment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AE84F39420DD84DD31D5AD2 /* StockSentiment.swift */; };
@@ -130,6 +131,7 @@
 		09AAF6BFAA40D31F154B42C7 /* MacroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroDataService.swift; sourceTree = "<group>"; };
 		0B08599D1603C5AB66273B24 /* PositioningAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningAnalyzer.swift; sourceTree = "<group>"; };
 		0BB3A257C06C78BA23D12112 /* AnalysisResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisResult.swift; sourceTree = "<group>"; };
+		1130BA47A4CBC38DABF202C7 /* TiingoProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiingoProvider.swift; sourceTree = "<group>"; };
 		12D0F991054D30151E4C8216 /* TradeSetupChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeSetupChartView.swift; sourceTree = "<group>"; };
 		1D96C0465266CF918A8844FA /* AnalysisHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisHistoryStore.swift; sourceTree = "<group>"; };
 		1FBD8705FBB2C73758106E5E /* RSIDivergence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSIDivergence.swift; sourceTree = "<group>"; };
@@ -261,6 +263,7 @@
 				9C98ABE8F402ADB12ADC93C4 /* PushService.swift */,
 				87D801CCA8235626DE669D05 /* SharedDataManager.swift */,
 				58B2E5EFCF02DC42400FCA88 /* SpotPressureAnalyzer.swift */,
+				1130BA47A4CBC38DABF202C7 /* TiingoProvider.swift */,
 				C2C2A83A7C177C3ACB6D3C5D /* TwelveDataProvider.swift */,
 				DC9A005B372BCAA04AAAE663 /* YahooFinanceService.swift */,
 			);
@@ -585,6 +588,7 @@
 				471CE5CDEF743E4519BED335 /* StockSentiment.swift in Sources */,
 				344E6DE5C93D918308661C0A /* StockSentimentView.swift in Sources */,
 				98F95BD1C597F29D6F1C6D0E /* SupportResistance.swift in Sources */,
+				45629282FD0F71DC0EA426F2 /* TiingoProvider.swift in Sources */,
 				E120E3822144D196C3381E48 /* TimestampBar.swift in Sources */,
 				FE15E19EF0270FE8B25AFF33 /* Tooltips.swift in Sources */,
 				9167E1BA530041645544057F /* TradeSetup.swift in Sources */,
