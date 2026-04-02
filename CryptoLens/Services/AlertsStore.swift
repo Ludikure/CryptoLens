@@ -87,6 +87,7 @@ class AlertsStore: ObservableObject {
                 alerts[i].triggered = true
                 changed = true
                 fireNotification(alert: alerts[i], currentPrice: price)
+                HapticManager.notification(.warning)
             }
         }
         if changed { save() }

@@ -69,11 +69,15 @@ class EconomicCalendarService {
 
             cache = (upcoming, Date())
             return upcoming
+        } catch is CancellationError {
+            return cache?.events ?? []
+        } catch let error as NSError where error.code == NSURLErrorCancelled {
+            return cache?.events ?? []
         } catch {
             #if DEBUG
             print("[MarketScope] Economic calendar fetch failed: \(error)")
             #endif
-            return []
+            return cache?.events ?? []
         }
     }
 

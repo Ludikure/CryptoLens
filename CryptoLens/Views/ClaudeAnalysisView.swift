@@ -4,6 +4,7 @@ struct ClaudeAnalysisView: View {
     let markdown: String
     var aiLoadingPhase: AnalysisService.AILoadingPhase = .idle
     var isStale: Bool = false
+    var analysisTimestamp: Date?
     var onRunAnalysis: (() -> Void)?
 
     private var isAILoading: Bool { aiLoadingPhase != .idle }
@@ -25,21 +26,21 @@ struct ClaudeAnalysisView: View {
                     .fontWeight(.semibold)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if isStale && !isAILoading && !markdown.isEmpty && !markdown.contains("not configured") {
+                if let ts = analysisTimestamp, !isAILoading, !markdown.isEmpty, !markdown.contains("not configured") {
                     Button {
                         onRunAnalysis?()
                     } label: {
                         HStack(spacing: 4) {
-                            Text("Outdated")
+                            Text(ts, style: .relative)
                                 .font(.caption2)
                                 .fontWeight(.semibold)
                             Image(systemName: "arrow.clockwise")
                                 .font(.system(size: 9, weight: .bold))
                         }
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(isStale ? .orange : .secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.12), in: Capsule())
+                        .background((isStale ? Color.orange : Color.secondary).opacity(0.12), in: Capsule())
                     }
                     .buttonStyle(.borderless)
                 }
@@ -57,7 +58,7 @@ struct ClaudeAnalysisView: View {
                         Button {
                             onRunAnalysis()
                         } label: {
-                            Label("Run Analysis", systemImage: "sparkles")
+                            Text("Run Analysis")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
                         }
@@ -65,7 +66,7 @@ struct ClaudeAnalysisView: View {
                         .controlSize(.small)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 8)
             } else if markdown.contains("not configured") {
                 Text(markdown)

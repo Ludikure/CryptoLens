@@ -23,6 +23,16 @@ class AnalysisService: ObservableObject {
     @Published var currentSymbol: String?
     @Published var aiLoadingPhase: AILoadingPhase = .idle
     @Published var isAIStale = false
+    @Published var spotPressure: SpotPressure?
+    @Published var macroSnapshot: MacroSnapshot?
+
+    /// Returns the best available result for the selected symbol.
+    /// Checks lastResult first, then falls back to resultsBySymbol cache.
+    var currentResult: AnalysisResult? {
+        if let result = lastResult, result.symbol == currentSymbol { return result }
+        if let symbol = currentSymbol, let cached = resultsBySymbol[symbol] { return cached }
+        return nil
+    }
 
     enum AILoadingPhase: Equatable {
         case idle, preparingPrompt, waitingForResponse, parsingResponse
@@ -58,7 +68,7 @@ class AnalysisService: ObservableObject {
         return .stock
     }
 
-    /// Switch to a symbol — show cached instantly, then refresh.
+    /// Switch to a symbol — show cached or quick data instantly, then full refresh in background.
     func selectSymbol(_ symbol: String) async {
         let market = marketFor(symbol)
         currentMarket = market
@@ -70,9 +80,15 @@ class AnalysisService: ObservableObject {
             resultsBySymbol[symbol] = diskCached
             lastResult = diskCached; error = nil
         } else {
-            lastResult = nil; error = nil
+            // No cache at all — do a quick single-timeframe fetch for instant chart data
+            await quickFetch(symbol: symbol)
+            if let quick = resultsBySymbol[symbol], symbol == currentSymbol {
+                lastResult = quick
+            }
         }
 
+        // Full 3-timeframe refresh in background
+        guard symbol == currentSymbol else { return }
         await refreshIndicators(symbol: symbol)
         startAutoRefresh(symbol: symbol)
     }
@@ -102,8 +118,8 @@ class AnalysisService: ObservableObject {
     }
 
     /// Lightweight fetch — only daily candles + indicators for watchlist card.
-    func quickFetch(symbol: String) async {
-        guard resultsBySymbol[symbol] == nil else { return }
+    func quickFetch(symbol: String, force: Bool = false) async {
+        guard force || resultsBySymbol[symbol] == nil else { return }
         guard !NetworkMonitor.shared.isOffline else { return }
 
         let market = marketFor(symbol)
@@ -134,7 +150,6 @@ class AnalysisService: ObservableObject {
 
     func startAutoRefresh(symbol: String) {
         refreshTimer?.cancel()
-        currentSymbol = symbol
         refreshTimer = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 60_000_000_000) // 60s
@@ -304,7 +319,7 @@ class AnalysisService: ObservableObject {
             )
 
             resultsBySymbol[symbol] = result
-            // Only update displayed result if this is the active symbol
+            // Only update displayed result if this is still the active symbol
             if symbol == currentSymbol {
                 lastResult = result
                 isLoading = false
@@ -326,25 +341,29 @@ class AnalysisService: ObservableObject {
                 BiasNotificationManager.send(ticker: ticker, oldBias: prev.daily.bias, newBias: result.daily.bias)
             }
 
+        } catch is CancellationError {
+            // Expected when switching symbols — silently ignore
+        } catch let error as NSError where error.code == NSURLErrorCancelled {
+            // Expected when switching symbols — silently ignore
         } catch {
             #if DEBUG
             print("[MarketScope] [\(symbol)] refreshIndicators error: \(error)")
             #endif
+            // Only update UI state if this is still the active symbol
+            guard symbol == currentSymbol else { return }
             let market = marketFor(symbol)
             if market == .crypto { ConnectionStatus.shared.binance = .error }
             else { ConnectionStatus.shared.yahooFinance = .error }
 
-            if symbol == currentSymbol {
-                if resultsBySymbol[symbol] != nil {
-                    isLoading = false
-                    loadingStatus = ""
-                } else {
-                    self.error = error.localizedDescription
-                    self.isLoading = false
-                    self.loadingStatus = ""
-                }
-                self.aiLoadingPhase = .idle
+            if resultsBySymbol[symbol] != nil {
+                isLoading = false
+                loadingStatus = ""
+            } else {
+                self.error = error.localizedDescription
+                self.isLoading = false
+                self.loadingStatus = ""
             }
+            self.aiLoadingPhase = .idle
         }
     }
 
@@ -542,6 +561,8 @@ class AnalysisService: ObservableObject {
             loadingStatus = ""
             aiLoadingPhase = .idle
             isAIStale = false
+            HapticManager.notification(.success)
+            AnalysisHistoryStore.save(result)
             if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
                 store.removeAlerts(forSymbol: symbol)
                 if !tradeSetups.isEmpty {
@@ -558,6 +579,7 @@ class AnalysisService: ObservableObject {
             self.isLoading = false
             self.loadingStatus = ""
             self.aiLoadingPhase = .idle
+            HapticManager.notification(.error)
         }
     }
 

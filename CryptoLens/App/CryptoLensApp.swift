@@ -40,6 +40,7 @@ struct MarketScopeApp: App {
     @StateObject private var alertsStore = AlertsStore()
     @StateObject private var navigationCoordinator = NavigationCoordinator()
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showWhatsNew = false
 
     init() {
         BackgroundRefreshManager.register()
@@ -66,6 +67,17 @@ struct MarketScopeApp: App {
                     analysisService.alertsStore = alertsStore
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)
                     alertsStore.syncFromServer()
+                    // Show What's New after splash dismisses
+                    if WhatsNewManager.shouldShow {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                            showWhatsNew = true
+                        }
+                    }
+                }
+                .sheet(isPresented: $showWhatsNew, onDismiss: {
+                    WhatsNewManager.markSeen()
+                }) {
+                    WhatsNewView()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
                     BackgroundRefreshManager.schedule()

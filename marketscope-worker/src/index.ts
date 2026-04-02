@@ -575,12 +575,17 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
           }
         } catch { /* Coinbase failed */ }
       }
-      // Fall back to Yahoo for stocks
-      const resp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=1d`);
-      if (resp.ok) {
-        const chart = await resp.json() as any;
-        const price = chart?.chart?.result?.[0]?.meta?.regularMarketPrice;
-        if (price) prices[symbol] = price;
+      // Stocks/ETFs — use Finnhub quote
+      if (env.FINNHUB_API_KEY) {
+        try {
+          const resp = await fetch(`${FINNHUB_BASE}/quote?symbol=${symbol}`, {
+            headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY },
+          });
+          if (resp.ok) {
+            const data = await resp.json() as { c: number };
+            if (data.c && data.c > 0) { prices[symbol] = data.c; continue; }
+          }
+        } catch { /* Finnhub failed */ }
       }
     } catch { /* skip */ }
   }

@@ -7,22 +7,30 @@ struct ContentView: View {
 
     var body: some View {
         TabView(selection: $coordinator.selectedTab) {
-            AnalysisView()
+            ChartTabView()
                 .tabItem {
-                    Label("Analysis", systemImage: "chart.line.uptrend.xyaxis")
+                    Label("Chart", systemImage: "chart.xyaxis.line")
                 }
                 .tag(0)
+            MarketTabView()
+                .tabItem {
+                    Label("Market", systemImage: "building.columns")
+                }
+                .tag(1)
+            AITabView()
+                .tabItem {
+                    Label("Analysis", systemImage: "brain")
+                }
+                .tag(2)
             AlertsView()
                 .tabItem {
                     Label("Alerts", systemImage: alertsStore.activeAlerts.isEmpty ? "bell" : "bell.badge")
                 }
-                .tag(1)
-            SettingsView()
-                .tabItem {
-                    Label("Settings", systemImage: "gear")
-                }
-                .tag(2)
+                .tag(3)
         }
         .preferredColorScheme(colorSchemeOverride == "light" ? .light : colorSchemeOverride == "dark" ? .dark : nil)
+        .sheet(isPresented: $coordinator.showSettings) {
+            SettingsView()
+        }
     }
 }
