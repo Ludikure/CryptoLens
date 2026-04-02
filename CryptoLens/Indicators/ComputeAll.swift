@@ -9,17 +9,18 @@ enum IndicatorEngine {
         let volumes = candles.map(\.volume)
         let current = closes.last ?? 0
 
-        // Common indicators
-        let rsi = RSI.compute(closes: closes)
+        // Common indicators (compute series once, derive scalar from last value)
         let rsiSeries = RSI.computeSeries(closes: closes)
         let validRSI = rsiSeries.compactMap { $0 }
+        let rsi = validRSI.last
         let divergence: String? = validRSI.count >= 50
             ? RSIDivergence.detect(closes: Array(closes.suffix(50)), rsiValues: Array(validRSI.suffix(50)))
             : nil
         let macd = MACD.compute(closes: closes)
         let bb = BollingerBands.compute(closes: closes)
         let atr = ATR.compute(highs: highs, lows: lows, closes: closes)
-        let stochRSI = StochasticRSI.compute(closes: closes)
+        // StochRSI: computed once via computeFull, scalar derived from last values
+        let stochRSIFull = StochasticRSI.computeFull(closes: closes)
         let adx = ADX.compute(highs: highs, lows: lows, closes: closes)
         let vwap = VWAP.compute(highs: highs, lows: lows, closes: closes, volumes: volumes)
         let fib = Fibonacci.compute(highs: highs, lows: lows, closes: closes)
@@ -92,7 +93,7 @@ enum IndicatorEngine {
 
         // Series data for price action analysis (last 10 values each)
         let rsiSeriesData = Array(validRSI.suffix(10))
-        let stochSeries = StochasticRSI.computeSeries(closes: closes, count: 10)
+        let stochSeries = (k: Array(stochRSIFull.kValues.suffix(10)), d: Array(stochRSIFull.dValues.suffix(10)))
         let macdHistSeriesData = MACD.computeHistSeries(closes: closes, count: 10)
 
         // EMA series aligned with chart candles (last 50)
@@ -113,7 +114,7 @@ enum IndicatorEngine {
             label: label,
             price: current,
             rsi: rsi,
-            stochRSI: stochRSI,
+            stochRSI: stochRSIFull.result,
             macd: macd,
             adx: adx,
             bollingerBands: bb,

@@ -32,7 +32,8 @@ enum SpotPressureAnalyzer {
         var deltas = [Double]() // per-candle CVD
 
         do {
-            let (data, _) = try await session.data(from: url)
+            let (data, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return nil }
             guard let klines = try JSONSerialization.jsonObject(with: data) as? [[Any]] else { return nil }
 
             for k in klines {
@@ -71,7 +72,8 @@ enum SpotPressureAnalyzer {
         var bookRatio: Double? = nil
         var bookLabel: String? = nil
         if let depthURL = URL(string: "\(base)/depth?symbol=\(symbol)&limit=20") {
-            if let (depthData, _) = try? await session.data(from: depthURL),
+            if let (depthData, depthResp) = try? await session.data(from: depthURL),
+               let depthHttp = depthResp as? HTTPURLResponse, (200...299).contains(depthHttp.statusCode),
                let json = try? JSONSerialization.jsonObject(with: depthData) as? [String: Any],
                let bids = json["bids"] as? [[Any]],
                let asks = json["asks"] as? [[Any]] {

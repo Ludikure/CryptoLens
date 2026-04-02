@@ -69,7 +69,8 @@ struct MarketScopeApp: App {
                     alertsStore.syncFromServer()
                     // Show What's New after splash dismisses
                     if WhatsNewManager.shouldShow {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_800_000_000)
                             showWhatsNew = true
                         }
                     }

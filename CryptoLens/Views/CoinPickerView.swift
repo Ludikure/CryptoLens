@@ -11,7 +11,7 @@ struct CoinPickerView: View {
     @State private var isValidatingTicker = false
     @State private var tickerValidationError: String?
 
-    private let yahoo = YahooFinanceService()
+    private static let yahoo = YahooFinanceService()
 
     // MARK: - Filtered data
 
@@ -167,7 +167,7 @@ struct CoinPickerView: View {
             tickerValidationError = nil
         }
 
-        let (name, valid) = await yahoo.validateTicker(ticker)
+        let (name, valid) = await Self.yahoo.validateTicker(ticker)
 
         await MainActor.run {
             isValidatingTicker = false

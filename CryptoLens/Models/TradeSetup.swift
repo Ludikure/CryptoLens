@@ -21,8 +21,8 @@ struct TradeSetup: Codable, Identifiable {
         self.entry = try c.decode(Double.self, forKey: .entry)
         self.stopLoss = try c.decode(Double.self, forKey: .stopLoss)
         self.tp1 = try c.decode(Double.self, forKey: .tp1)
-        self.tp2 = try? c.decode(Double.self, forKey: .tp2)
-        self.tp3 = try? c.decode(Double.self, forKey: .tp3)
+        self.tp2 = try c.decodeIfPresent(Double.self, forKey: .tp2)
+        self.tp3 = try c.decodeIfPresent(Double.self, forKey: .tp3)
         self.reasoning = (try? c.decode(String.self, forKey: .reasoning)) ?? ""
     }
 

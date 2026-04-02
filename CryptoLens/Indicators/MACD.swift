@@ -1,7 +1,8 @@
 import Foundation
 
 enum MACD {
-    static func compute(closes: [Double], fast: Int = 12, slow: Int = 26, signal: Int = 9) -> MACDResult? {
+    /// Shared computation of MACD line and signal line from closes.
+    private static func computeLines(closes: [Double], fast: Int = 12, slow: Int = 26, signal: Int = 9) -> (macdLine: [Double], signalLine: [Double])? {
         let emaFast = MovingAverages.computeEMA(values: closes, period: fast)
         let emaSlow = MovingAverages.computeEMA(values: closes, period: slow)
         guard !emaFast.isEmpty, !emaSlow.isEmpty else { return nil }
@@ -16,17 +17,26 @@ enum MACD {
         let signalLine = MovingAverages.computeEMA(values: macdLine, period: signal)
         guard !signalLine.isEmpty else { return nil }
 
-        let macdVal = macdLine.last!.rounded(toPlaces: 2)
-        let signalVal = signalLine.last!.rounded(toPlaces: 2)
+        return (macdLine, signalLine)
+    }
+
+    static func compute(closes: [Double], fast: Int = 12, slow: Int = 26, signal: Int = 9) -> MACDResult? {
+        guard let (macdLine, signalLine) = computeLines(closes: closes, fast: fast, slow: slow, signal: signal) else { return nil }
+
+        let rawMacd = macdLine.last!
+        let rawSignal = signalLine.last!
+        let macdVal = rawMacd.rounded(toPlaces: 2)
+        let signalVal = rawSignal.rounded(toPlaces: 2)
         let histogram = (macdVal - signalVal).rounded(toPlaces: 2)
 
         var crossover: String? = nil
         if macdLine.count >= 2, signalLine.count >= 2 {
             let prevMacd = macdLine[macdLine.count - 2]
             let prevSignal = signalLine[signalLine.count - 2]
-            if prevMacd <= prevSignal && macdVal > signalVal {
+            // Use unrounded values for consistent crossover detection
+            if prevMacd <= prevSignal && rawMacd > rawSignal {
                 crossover = "bullish"
-            } else if prevMacd >= prevSignal && macdVal < signalVal {
+            } else if prevMacd >= prevSignal && rawMacd < rawSignal {
                 crossover = "bearish"
             }
         }
@@ -36,19 +46,7 @@ enum MACD {
 
     /// Returns last N MACD histogram values.
     static func computeHistSeries(closes: [Double], count: Int = 10, fast: Int = 12, slow: Int = 26, signal: Int = 9) -> [Double] {
-        let emaFast = MovingAverages.computeEMA(values: closes, period: fast)
-        let emaSlow = MovingAverages.computeEMA(values: closes, period: slow)
-        guard !emaFast.isEmpty, !emaSlow.isEmpty else { return [] }
-
-        let minLen = min(emaFast.count, emaSlow.count)
-        var macdLine = [Double]()
-        for i in 0..<minLen {
-            macdLine.append(emaFast[emaFast.count - minLen + i] - emaSlow[emaSlow.count - minLen + i])
-        }
-        guard macdLine.count >= signal else { return [] }
-
-        let signalLine = MovingAverages.computeEMA(values: macdLine, period: signal)
-        guard !signalLine.isEmpty else { return [] }
+        guard let (macdLine, signalLine) = computeLines(closes: closes, fast: fast, slow: slow, signal: signal) else { return [] }
 
         let histLen = min(macdLine.count, signalLine.count)
         var hist = [Double]()

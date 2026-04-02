@@ -51,7 +51,7 @@ class AnalysisService: ObservableObject {
     @Published private(set) var resultsBySymbol: [String: AnalysisResult] = [:]
     var cachedResults: [String: AnalysisResult] { resultsBySymbol }
 
-    private static var cacheDir: URL {
+    private nonisolated static var cacheDir: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appendingPathComponent("analyses", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -269,38 +269,7 @@ class AnalysisService: ObservableObject {
             // Enhanced fundamentals + Finnhub — only on enrichment cycles
             if var si = stockInfo, market == .stock, needsEnrichment {
                 if let enhanced = await yahoo.fetchEnhancedFundamentals(symbol: symbol) {
-                    si.analystTargetMean = enhanced["targetMeanPrice"] as? Double
-                    si.analystTargetHigh = enhanced["targetHighPrice"] as? Double
-                    si.analystTargetLow = enhanced["targetLowPrice"] as? Double
-                    si.analystCount = enhanced["numberOfAnalystOpinions"] as? Int
-                    si.analystRating = enhanced["recommendationKey"] as? String
-                    si.analystRatingScore = enhanced["recommendationMean"] as? Double
-                    si.revenueGrowthYoY = (enhanced["revenueGrowth"] as? Double).map { $0 * 100 }
-                    si.earningsGrowthYoY = (enhanced["earningsGrowth"] as? Double).map { $0 * 100 }
-                    si.consecutiveBeats = enhanced["consecutiveBeats"] as? Int
-                    si.avgEarningsSurprise = enhanced["avgSurprise"] as? Double
-                    si.lastEarningsSurprise = enhanced["lastSurprise"] as? Double
-                    si.insiderBuyCount6m = enhanced["insiderBuys"] as? Int
-                    si.insiderSellCount6m = enhanced["insiderSells"] as? Int
-                    si.insiderNetBuying = enhanced["insiderNetBuying"] as? Bool
-                    si.epsEstimateCurrent = enhanced["epsEstimateCurrent"] as? Double
-                    si.epsEstimate90dAgo = enhanced["epsEstimate90dAgo"] as? Double
-                    si.revisionDirection = enhanced["revisionDirection"] as? String
-                    si.upRevisions30d = enhanced["upRevisions30d"] as? Int
-                    si.downRevisions30d = enhanced["downRevisions30d"] as? Int
-                    if let exDivRaw = enhanced["exDividendDate"] as? Int {
-                        let exDate = Date(timeIntervalSince1970: Double(exDivRaw))
-                        si.exDividendDate = exDate
-                        let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 999
-                        si.exDividendWarning = days >= 0 && days <= 5
-                    }
-                    si.dividendRate = enhanced["dividendRate"] as? Double
-                    if let mc = enhanced["marketCap"] as? Double { si.marketCap = mc }
-                    if let pe = enhanced["peRatio"] as? Double { si.peRatio = pe }
-                    if let eps = enhanced["eps"] as? Double { si.eps = eps }
-                    if let dy = enhanced["dividendYield"] as? Double { si.dividendYield = dy }
-                    if let s = enhanced["sector"] as? String { si.sector = s }
-                    if let ind = enhanced["industry"] as? String { si.industry = ind }
+                    applyEnhancedFundamentals(enhanced, to: &si)
                 }
                 if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
                     si.sectorETF = comp.etf
@@ -485,39 +454,7 @@ class AnalysisService: ObservableObject {
             // Enhanced stock fundamentals
             if var si = stockInfo, market == .stock {
                 if let enhanced = await yahoo.fetchEnhancedFundamentals(symbol: symbol) {
-                    si.analystTargetMean = enhanced["targetMeanPrice"] as? Double
-                    si.analystTargetHigh = enhanced["targetHighPrice"] as? Double
-                    si.analystTargetLow = enhanced["targetLowPrice"] as? Double
-                    si.analystCount = enhanced["numberOfAnalystOpinions"] as? Int
-                    si.analystRating = enhanced["recommendationKey"] as? String
-                    si.analystRatingScore = enhanced["recommendationMean"] as? Double
-                    si.revenueGrowthYoY = (enhanced["revenueGrowth"] as? Double).map { $0 * 100 }
-                    si.earningsGrowthYoY = (enhanced["earningsGrowth"] as? Double).map { $0 * 100 }
-                    si.consecutiveBeats = enhanced["consecutiveBeats"] as? Int
-                    si.avgEarningsSurprise = enhanced["avgSurprise"] as? Double
-                    si.lastEarningsSurprise = enhanced["lastSurprise"] as? Double
-                    si.insiderBuyCount6m = enhanced["insiderBuys"] as? Int
-                    si.insiderSellCount6m = enhanced["insiderSells"] as? Int
-                    si.insiderNetBuying = enhanced["insiderNetBuying"] as? Bool
-                    si.epsEstimateCurrent = enhanced["epsEstimateCurrent"] as? Double
-                    si.epsEstimate90dAgo = enhanced["epsEstimate90dAgo"] as? Double
-                    si.revisionDirection = enhanced["revisionDirection"] as? String
-                    si.upRevisions30d = enhanced["upRevisions30d"] as? Int
-                    si.downRevisions30d = enhanced["downRevisions30d"] as? Int
-                    if let exDivRaw = enhanced["exDividendDate"] as? Int {
-                        let exDate = Date(timeIntervalSince1970: Double(exDivRaw))
-                        si.exDividendDate = exDate
-                        let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 999
-                        si.exDividendWarning = days >= 0 && days <= 5
-                    }
-                    si.dividendRate = enhanced["dividendRate"] as? Double
-                    // Core fundamentals
-                    if let mc = enhanced["marketCap"] as? Double { si.marketCap = mc }
-                    if let pe = enhanced["peRatio"] as? Double { si.peRatio = pe }
-                    if let eps = enhanced["eps"] as? Double { si.eps = eps }
-                    if let dy = enhanced["dividendYield"] as? Double { si.dividendYield = dy }
-                    if let s = enhanced["sector"] as? String { si.sector = s }
-                    if let ind = enhanced["industry"] as? String { si.industry = ind }
+                    applyEnhancedFundamentals(enhanced, to: &si)
                 }
                 if let comp = await yahoo.fetchSectorComparison(symbol: symbol, sector: si.sector) {
                     si.sectorETF = comp.etf
@@ -789,6 +726,44 @@ class AnalysisService: ObservableObject {
         }
     }
 
+    // MARK: - Shared Helpers
+
+    /// Apply enhanced fundamentals data from Yahoo quoteSummary to a StockInfo.
+    private func applyEnhancedFundamentals(_ enhanced: [String: Any], to si: inout StockInfo) {
+        si.analystTargetMean = enhanced["targetMeanPrice"] as? Double
+        si.analystTargetHigh = enhanced["targetHighPrice"] as? Double
+        si.analystTargetLow = enhanced["targetLowPrice"] as? Double
+        si.analystCount = enhanced["numberOfAnalystOpinions"] as? Int
+        si.analystRating = enhanced["recommendationKey"] as? String
+        si.analystRatingScore = enhanced["recommendationMean"] as? Double
+        si.revenueGrowthYoY = (enhanced["revenueGrowth"] as? Double).map { $0 * 100 }
+        si.earningsGrowthYoY = (enhanced["earningsGrowth"] as? Double).map { $0 * 100 }
+        si.consecutiveBeats = enhanced["consecutiveBeats"] as? Int
+        si.avgEarningsSurprise = enhanced["avgSurprise"] as? Double
+        si.lastEarningsSurprise = enhanced["lastSurprise"] as? Double
+        si.insiderBuyCount6m = enhanced["insiderBuys"] as? Int
+        si.insiderSellCount6m = enhanced["insiderSells"] as? Int
+        si.insiderNetBuying = enhanced["insiderNetBuying"] as? Bool
+        si.epsEstimateCurrent = enhanced["epsEstimateCurrent"] as? Double
+        si.epsEstimate90dAgo = enhanced["epsEstimate90dAgo"] as? Double
+        si.revisionDirection = enhanced["revisionDirection"] as? String
+        si.upRevisions30d = enhanced["upRevisions30d"] as? Int
+        si.downRevisions30d = enhanced["downRevisions30d"] as? Int
+        if let exDivRaw = enhanced["exDividendDate"] as? Int {
+            let exDate = Date(timeIntervalSince1970: Double(exDivRaw))
+            si.exDividendDate = exDate
+            let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 999
+            si.exDividendWarning = days >= 0 && days <= 5
+        }
+        si.dividendRate = enhanced["dividendRate"] as? Double
+        if let mc = enhanced["marketCap"] as? Double { si.marketCap = mc }
+        if let pe = enhanced["peRatio"] as? Double { si.peRatio = pe }
+        if let eps = enhanced["eps"] as? Double { si.eps = eps }
+        if let dy = enhanced["dividendYield"] as? Double { si.dividendYield = dy }
+        if let s = enhanced["sector"] as? String { si.sector = s }
+        if let ind = enhanced["industry"] as? String { si.industry = ind }
+    }
+
     // MARK: - Cache
 
     private func cacheURL(for symbol: String) -> URL {
@@ -809,8 +784,8 @@ class AnalysisService: ObservableObject {
         }
     }
 
-    private func loadCache(symbol: String) -> AnalysisResult? {
-        let url = cacheURL(for: symbol)
+    private nonisolated func loadCache(symbol: String) -> AnalysisResult? {
+        let url = Self.cacheDir.appendingPathComponent("\(symbol).json")
         do {
             let data = try Data(contentsOf: url)
             let result = try JSONDecoder().decode(AnalysisResult.self, from: data)

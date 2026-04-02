@@ -174,9 +174,9 @@ struct ChartTabContent: View {
             }
             HapticManager.notification(.success)
         }
-        .onAppear {
+        .task {
             if service.currentSymbol == nil {
-                Task { await service.selectSymbol(Constants.allCoins[0].id) }
+                await service.selectSymbol(Constants.allCoins[0].id)
             }
             recomputeBiasChanges()
         }

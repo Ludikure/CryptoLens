@@ -4,8 +4,12 @@ import SwiftUI
 struct FearGreedView: View {
     let index: FearGreedIndex
 
+    private var clampedValue: Int {
+        max(0, min(100, index.value))
+    }
+
     private var gaugeColor: Color {
-        switch index.value {
+        switch clampedValue {
         case 0..<25: return .red
         case 25..<45: return .orange
         case 45..<55: return .gray
@@ -15,7 +19,7 @@ struct FearGreedView: View {
     }
 
     private var emoji: String {
-        switch index.value {
+        switch clampedValue {
         case 0..<25: return "😱"
         case 25..<45: return "😟"
         case 45..<55: return "😐"
@@ -32,7 +36,7 @@ struct FearGreedView: View {
                     .stroke(Color(.systemGray5), lineWidth: 6)
                     .frame(width: 48, height: 48)
                 Circle()
-                    .trim(from: 0, to: CGFloat(index.value) / 100.0)
+                    .trim(from: 0, to: CGFloat(clampedValue) / 100.0)
                     .stroke(gaugeColor, style: StrokeStyle(lineWidth: 6, lineCap: .round))
                     .frame(width: 48, height: 48)
                     .rotationEffect(.degrees(-90))
@@ -67,7 +71,7 @@ struct FearGreedView: View {
                             .frame(height: 6)
                         Capsule()
                             .fill(gaugeColor)
-                            .frame(width: geo.size.width * CGFloat(index.value) / 100.0, height: 6)
+                            .frame(width: geo.size.width * CGFloat(clampedValue) / 100.0, height: 6)
                     }
                 }
                 .frame(width: 80, height: 6)

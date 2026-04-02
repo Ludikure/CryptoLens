@@ -41,7 +41,7 @@ enum MarketHours {
 
         let cal = Calendar.current
         let now = Date()
-        var comps = cal.dateComponents(in: et, from: now)
+        let comps = cal.dateComponents(in: et, from: now)
         guard let weekday = comps.weekday else { return nil }
 
         // Find next weekday 9:30 AM ET
@@ -58,12 +58,14 @@ enum MarketHours {
             daysToAdd = 1 // Next day
         }
 
-        comps.day = (comps.day ?? 0) + daysToAdd
-        comps.hour = 9
-        comps.minute = 30
-        comps.second = 0
+        guard let baseDate = cal.date(from: comps) else { return nil }
+        guard let targetDay = cal.date(byAdding: .day, value: daysToAdd, to: baseDate) else { return nil }
+        var targetComps = cal.dateComponents(in: et, from: targetDay)
+        targetComps.hour = 9
+        targetComps.minute = 30
+        targetComps.second = 0
 
-        guard let nextOpen = cal.date(from: comps) else { return nil }
+        guard let nextOpen = cal.date(from: targetComps) else { return nil }
         let diff = nextOpen.timeIntervalSince(now)
         if diff <= 0 { return nil }
 

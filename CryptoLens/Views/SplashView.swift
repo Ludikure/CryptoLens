@@ -31,15 +31,13 @@ struct SplashView: View {
                 }
             }
             .opacity(opacity)
-            .onAppear {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        opacity = 0
-                    }
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        isActive = true
-                    }
+            .task {
+                try? await Task.sleep(nanoseconds: 1_200_000_000)
+                withAnimation(.easeOut(duration: 0.3)) {
+                    opacity = 0
                 }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                isActive = true
             }
         }
     }
