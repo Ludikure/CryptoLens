@@ -116,14 +116,16 @@ struct ChartTabContent: View {
 
     private func recomputeBiasChanges() {
         guard let result = service.currentResult else { biasChanges = []; return }
-        let history = AnalysisHistoryStore.load(symbol: result.symbol)
-        guard history.count >= 2 else { biasChanges = []; return }
-        let prev = history[1]
-        var changes = [String]()
-        if result.tf1.bias != prev.tf1.bias { changes.append("\(result.tf1.label) flipped to \(result.tf1.bias)") }
-        if result.tf2.bias != prev.tf2.bias { changes.append("\(result.tf2.label) flipped to \(result.tf2.bias)") }
-        if result.tf3.bias != prev.tf3.bias { changes.append("\(result.tf3.label) flipped to \(result.tf3.bias)") }
-        biasChanges = changes
+        Task {
+            let history = await AnalysisHistoryStore.loadAsync(symbol: result.symbol)
+            guard history.count >= 2 else { biasChanges = []; return }
+            let prev = history[1]
+            var changes = [String]()
+            if result.tf1.bias != prev.tf1.bias { changes.append("\(result.tf1.label) flipped to \(result.tf1.bias)") }
+            if result.tf2.bias != prev.tf2.bias { changes.append("\(result.tf2.label) flipped to \(result.tf2.bias)") }
+            if result.tf3.bias != prev.tf3.bias { changes.append("\(result.tf3.label) flipped to \(result.tf3.bias)") }
+            biasChanges = changes
+        }
     }
 
     var body: some View {
@@ -374,18 +376,18 @@ struct AITabContent: View {
         .listStyle(.plain)
         .background(Color(.systemGroupedBackground))
         .scrollContentBackground(.hidden)
-        .onAppear {
-            historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+        .task {
+            historyCount = await AnalysisHistoryStore.loadAsync(symbol: selectedSymbol).count
         }
         .onChange(of: service.currentSymbol) {
-            historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+            Task { historyCount = await AnalysisHistoryStore.loadAsync(symbol: selectedSymbol).count }
         }
         .onChange(of: service.currentResult?.analysisTimestamp) {
-            historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+            Task { historyCount = await AnalysisHistoryStore.loadAsync(symbol: selectedSymbol).count }
         }
         .onChange(of: showHistory) {
             if !showHistory {
-                historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+                Task { historyCount = await AnalysisHistoryStore.loadAsync(symbol: selectedSymbol).count }
             }
         }
     }

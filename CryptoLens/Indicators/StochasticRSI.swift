@@ -40,21 +40,22 @@ enum StochasticRSI {
             dValues.append(window.reduce(0, +) / Double(dSmooth))
         }
 
-        let k = kValues.last!.rounded(toPlaces: 2)
-        let d = dValues.last!.rounded(toPlaces: 2)
+        let rawK = kValues.last!
+        let rawD = dValues.last!
 
         var crossover: String? = nil
         if kValues.count >= 2, dValues.count >= 2 {
             let prevK = kValues[kValues.count - 2]
             let prevD = dValues[dValues.count - 2]
-            if prevK <= prevD && k > d {
+            // Use unrounded values for consistent crossover detection
+            if prevK <= prevD && rawK > rawD {
                 crossover = "bullish"
-            } else if prevK >= prevD && k < d {
+            } else if prevK >= prevD && rawK < rawD {
                 crossover = "bearish"
             }
         }
 
-        let result = StochRSIResult(k: k, d: d, crossover: crossover)
+        let result = StochRSIResult(k: rawK.rounded(toPlaces: 2), d: rawD.rounded(toPlaces: 2), crossover: crossover)
         return StochasticRSIFull(result: result, kValues: kValues, dValues: dValues)
     }
 

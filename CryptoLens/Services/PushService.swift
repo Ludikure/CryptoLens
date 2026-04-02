@@ -2,11 +2,13 @@ import Foundation
 
 /// Syncs alerts and device token to the Cloudflare Worker.
 /// Auth: server-issued token obtained on first registration.
+/// All state is @MainActor-isolated to prevent data races on deviceId, authToken, and isAuthenticating.
+@MainActor
 enum PushService {
     static let workerURL = "https://marketscope-proxy.ludikure.workers.dev"
 
-    /// Stable device identifier.
-    static let deviceId: String = {
+    /// Stable device identifier — mutable to support auth recovery.
+    private(set) static var deviceId: String = {
         if let existing = UserDefaults.standard.string(forKey: "device_id") {
             return existing
         }
@@ -27,10 +29,13 @@ enum PushService {
     }
 
     /// Add auth headers to any worker request.
-    static func addAuthHeaders(_ request: inout URLRequest) {
+    nonisolated static func addAuthHeaders(_ request: inout URLRequest) {
         request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
-        request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
-        if let token = authToken {
+        // deviceId and authToken are read from MainActor, but addAuthHeaders is called
+        // from non-isolated contexts. We use a synchronous approach with cached values.
+        let id = UserDefaults.standard.string(forKey: "device_id") ?? ""
+        request.setValue(id, forHTTPHeaderField: "X-Device-ID")
+        if let token = KeychainHelper.load(key: authTokenKey) {
             request.setValue(token, forHTTPHeaderField: "X-Auth-Token")
         }
     }
@@ -41,14 +46,15 @@ enum PushService {
         // Generate new device ID to get a fresh token (old one expired/invalidated)
         let newId = UUID().uuidString
         UserDefaults.standard.set(newId, forKey: "device_id")
-        await MainActor.run { ConnectionStatus.shared.workerAuth = .pending }
+        deviceId = newId
+        ConnectionStatus.shared.workerAuth = .pending
         // Re-register with new identity
         await ensureAuth()
     }
 
     /// Register device and obtain auth token from worker.
-    static func registerDevice(token: String) {
-        Task {
+    nonisolated static func registerDevice(token: String) {
+        Task { @MainActor in
             guard let url = URL(string: "\(workerURL)/register") else { return }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -74,11 +80,9 @@ enum PushService {
     }
 
     /// Register device without push token (just to get auth token on first launch).
-    /// Register with retry (up to 3 attempts with backoff).
-    /// Called on launch and before any authenticated request if token is missing.
-    static func ensureRegistered() {
-        guard authToken == nil else { return }
-        Task {
+    nonisolated static func ensureRegistered() {
+        Task { @MainActor in
+            guard authToken == nil else { return }
             for attempt in 0..<3 {
                 if attempt > 0 {
                     try? await Task.sleep(for: .seconds(Double(attempt) * 5))
@@ -88,7 +92,7 @@ enum PushService {
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
-            request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+                request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
                 request.httpBody = try? JSONSerialization.data(withJSONObject: [:] as [String: String])
 
                 if let (data, response) = try? await URLSession.shared.data(for: request),
@@ -96,32 +100,28 @@ enum PushService {
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let serverToken = json["authToken"] as? String {
                     authToken = serverToken
-                    await MainActor.run { ConnectionStatus.shared.workerAuth = .ok }
+                    ConnectionStatus.shared.workerAuth = .ok
                     return
                 }
             }
-            await MainActor.run { ConnectionStatus.shared.workerAuth = .error }
+            ConnectionStatus.shared.workerAuth = .error
         }
     }
 
     /// Guard to prevent concurrent ensureAuth calls from double-registering.
-    @MainActor private static var isAuthenticating = false
+    private static var isAuthenticating = false
 
     /// Call before any authenticated worker request — retries registration if needed.
     static func ensureAuth() async {
         if authToken != nil { return }
-        let alreadyInFlight = await MainActor.run {
-            if isAuthenticating { return true }
-            isAuthenticating = true
-            ConnectionStatus.shared.workerAuth = .pending
-            return false
-        }
-        guard !alreadyInFlight else {
+        guard !isAuthenticating else {
             // Another call is already in-flight; wait briefly and check again
             try? await Task.sleep(nanoseconds: 500_000_000)
             return
         }
-        defer { Task { @MainActor in isAuthenticating = false } }
+        isAuthenticating = true
+        defer { isAuthenticating = false }
+        ConnectionStatus.shared.workerAuth = .pending
         for attempt in 0..<2 {
             if attempt > 0 { try? await Task.sleep(for: .seconds(3)) }
             guard let url = URL(string: "\(workerURL)/register") else { return }
@@ -137,22 +137,20 @@ enum PushService {
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let serverToken = json["authToken"] as? String {
                 authToken = serverToken
-                await MainActor.run { ConnectionStatus.shared.workerAuth = .ok }
+                ConnectionStatus.shared.workerAuth = .ok
                 return
             }
         }
-        await MainActor.run { ConnectionStatus.shared.workerAuth = .error }
+        ConnectionStatus.shared.workerAuth = .error
     }
 
     /// Sync current alerts to the worker. Marks pending if offline.
-    static func syncAlerts(_ alerts: [PriceAlert]) {
-        Task {
-            let offline = await MainActor.run { NetworkMonitor.shared.isOffline }
+    nonisolated static func syncAlerts(_ alerts: [PriceAlert]) {
+        Task { @MainActor in
+            let offline = NetworkMonitor.shared.isOffline
             if offline {
-                await MainActor.run {
-                    ConnectionStatus.shared.alertSync = .pending
-                    ConnectionStatus.shared.pendingOfflineChanges = true
-                }
+                ConnectionStatus.shared.alertSync = .pending
+                ConnectionStatus.shared.pendingOfflineChanges = true
                 return
             }
 
@@ -185,19 +183,17 @@ enum PushService {
                 print("[MarketScope] Alert sync: HTTP \(http.statusCode) — \(body)")
                 #endif
                 if (200...299).contains(http.statusCode) {
-                    await MainActor.run {
-                        ConnectionStatus.shared.alertSync = .ok
-                        ConnectionStatus.shared.pendingOfflineChanges = false
-                    }
+                    ConnectionStatus.shared.alertSync = .ok
+                    ConnectionStatus.shared.pendingOfflineChanges = false
                 } else {
                     if http.statusCode == 401 { await handleAuthFailure() }
-                    await MainActor.run { ConnectionStatus.shared.alertSync = .error }
+                    ConnectionStatus.shared.alertSync = .error
                 }
             } else {
                 #if DEBUG
                 print("[MarketScope] Alert sync: network error")
                 #endif
-                await MainActor.run { ConnectionStatus.shared.alertSync = .error }
+                ConnectionStatus.shared.alertSync = .error
             }
         }
     }

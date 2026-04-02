@@ -3,8 +3,7 @@ import Security
 
 struct SettingsView: View {
     @EnvironmentObject var service: AnalysisService
-    @ObservedObject var status = ConnectionStatus.shared
-    @ObservedObject var network = NetworkMonitor.shared
+    @StateObject private var status = ConnectionStatus.shared
     @State private var selectedProvider: AIProviderType = .claude
     @State private var selectedModel: String = ""
     @State private var autoAlerts = UserDefaults.standard.object(forKey: "auto_alerts_enabled") as? Bool ?? false

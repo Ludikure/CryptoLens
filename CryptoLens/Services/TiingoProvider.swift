@@ -124,8 +124,8 @@ class TiingoProvider {
             var i = 0
             while i < session.count {
                 let chunk = Array(session[i..<min(i + 4, session.count)])
-                if !chunk.isEmpty {
-                    result.append(mergeCandles(chunk))
+                if !chunk.isEmpty, let merged = mergeCandles(chunk) {
+                    result.append(merged)
                 }
                 i += 4
             }
@@ -133,10 +133,10 @@ class TiingoProvider {
         return result
     }
 
-    private func mergeCandles(_ candles: [Candle]) -> Candle {
-        // Caller guarantees non-empty, but guard defensively
+    private func mergeCandles(_ candles: [Candle]) -> Candle? {
         guard let first = candles.first, let last = candles.last else {
-            fatalError("mergeCandles called with empty array")
+            assertionFailure("mergeCandles called with empty array")
+            return nil
         }
         return Candle(
             time: first.time,

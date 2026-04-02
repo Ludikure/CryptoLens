@@ -48,6 +48,17 @@ enum AnalysisHistoryStore {
         return ioQueue.sync { loadSync(url: url) }
     }
 
+    /// Non-blocking async variant — use from UI contexts to avoid blocking main thread.
+    static func loadAsync(symbol: String) async -> [AnalysisResult] {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                let url = historyDir.appendingPathComponent("\(symbol).json")
+                let result = loadSync(url: url)
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
     static func delete(symbol: String, id: UUID) {
         let url = historyDir.appendingPathComponent("\(symbol).json")
         ioQueue.sync {

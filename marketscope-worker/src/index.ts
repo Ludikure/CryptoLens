@@ -47,6 +47,9 @@ const CORS = {
 const RATE_LIMIT_ANALYZE = 10;   // AI calls per device per hour
 const MAX_ALERTS = 50;           // Max alerts per device
 const MAX_PROMPT_CHARS = 40_000; // Max prompt size (weekly + SPY + spot pressure increase payload)
+const MAX_BODY_BYTES = 256_000;  // Max request body size (256KB)
+const MAX_NOTE_LENGTH = 500;     // Max alert note length
+const DEVICE_ID_REGEX = /^[a-zA-Z0-9-]{1,128}$/;
 const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
 
 export default {
@@ -69,9 +72,22 @@ export default {
       return json({ error: 'Forbidden' }, 403);
     }
 
+    // Enforce body size limit on POST requests
+    if (request.method === 'POST') {
+      const contentLength = parseInt(request.headers.get('Content-Length') || '0');
+      if (contentLength > MAX_BODY_BYTES) {
+        return json({ error: 'Request body too large' }, 413);
+      }
+    }
+
     // Device auth: server-issued token stored in X-Auth-Token header
     const deviceId = request.headers.get('X-Device-ID') || '';
     const authToken = request.headers.get('X-Auth-Token') || '';
+
+    // Validate deviceId format to prevent KV key abuse
+    if (deviceId && !DEVICE_ID_REGEX.test(deviceId)) {
+      return json({ error: 'Invalid device ID format' }, 400);
+    }
 
     // === Device registration — issues an auth token ===
     if (path === '/register' && request.method === 'POST') {
@@ -84,7 +100,7 @@ export default {
         if (existing) {
           // Existing device — must prove ownership by sending current token
           const providedToken = request.headers.get('X-Auth-Token') || '';
-          if (providedToken !== existing) return json({ error: 'Unauthorized' }, 401);
+          if (!timingSafeEqual(providedToken, existing)) return json({ error: 'Unauthorized' }, 401);
 
           // Authenticated — update push token if provided
           if (body.deviceToken) {
@@ -118,18 +134,18 @@ export default {
     if (path !== '/register') {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       const storedToken = await env.ALERTS.get(`auth:${deviceId}`);
-      if (!storedToken || storedToken !== authToken) return json({ error: 'Unauthorized' }, 401);
+      if (!storedToken || !timingSafeEqual(storedToken, authToken)) return json({ error: 'Unauthorized' }, 401);
     }
 
     // === Alert sync (per-device isolation) ===
     if (path === '/alerts' && request.method === 'POST') {
       if (!deviceId) return json({ error: 'Missing device ID' }, 400);
       try {
-        const body = await request.json() as { alerts: Alert[] };
+        const body = await request.json() as { alerts: any[] };
         if (!body.alerts || !Array.isArray(body.alerts)) return json({ error: 'Missing alerts' }, 400);
-        const capped = body.alerts.slice(0, MAX_ALERTS);
-        await env.ALERTS.put(`alerts:${deviceId}`, JSON.stringify(capped), { expirationTtl: 86400 * 7 });
-        return json({ ok: true, count: capped.length });
+        const validated = body.alerts.slice(0, MAX_ALERTS).map(validateAlert).filter((a): a is Alert => a !== null);
+        await env.ALERTS.put(`alerts:${deviceId}`, JSON.stringify(validated), { expirationTtl: 86400 * 7 });
+        return json({ ok: true, count: validated.length });
       } catch {
         return json({ error: 'Invalid request' }, 400);
       }
@@ -514,6 +530,30 @@ function sanitizeSymbol(input: string | null): string | null {
   if (!input) return null;
   const cleaned = input.replace(/[^a-zA-Z0-9.%^-]/g, '').substring(0, 20);
   return cleaned || null;
+}
+
+/** Constant-time string comparison to prevent timing side-channel attacks. */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const aBytes = new TextEncoder().encode(a);
+  const bBytes = new TextEncoder().encode(b);
+  let result = 0;
+  for (let i = 0; i < aBytes.length; i++) {
+    result |= aBytes[i] ^ bBytes[i];
+  }
+  return result === 0;
+}
+
+/** Validate and sanitize an alert object. Returns null if invalid. */
+function validateAlert(raw: any): Alert | null {
+  if (!raw || typeof raw !== 'object') return null;
+  if (typeof raw.id !== 'string' || raw.id.length > 128) return null;
+  if (typeof raw.symbol !== 'string' || raw.symbol.length > 20) return null;
+  if (typeof raw.targetPrice !== 'number' || !isFinite(raw.targetPrice) || raw.targetPrice <= 0) return null;
+  if (raw.condition !== 'above' && raw.condition !== 'below') return null;
+  const note = typeof raw.note === 'string' ? raw.note.substring(0, MAX_NOTE_LENGTH) : '';
+  const triggered = raw.triggered === true;
+  return { id: raw.id, symbol: raw.symbol, targetPrice: raw.targetPrice, condition: raw.condition, note, triggered };
 }
 
 // === Rate Limiting ===
