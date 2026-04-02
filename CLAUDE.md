@@ -89,7 +89,8 @@ TypeScript worker that proxies API calls, handles auth, push notifications (APNs
 - `AnalysisService`, `AlertsStore`, `FavoritesStore`, `MacroDataService`, `ConnectionStatus`, `NetworkMonitor` are all `@MainActor`.
 - `YahooFinanceService` is an `actor`.
 - Other services (`BinanceService`, `CoinGeckoService`, etc.) are plain classes with no mutable shared state — safe because they're only accessed from `@MainActor` `AnalysisService`.
-- `PushService` is a non-isolated `enum` with static methods. `isAuthenticating` is `@MainActor`-protected.
+- `PushService` is an `@MainActor` `enum`. All state (`deviceId`, `authToken`, `isAuthenticating`) is serialized through MainActor. `addAuthHeaders` and `syncAlerts` are `nonisolated` but dispatch work to `@MainActor`.
+- `NavigationCoordinator` is `@MainActor`.
 - Use `.task { }` instead of `.onAppear { Task { } }` for async work in views (auto-cancels on disappear).
 - Use iOS 17 `onChange` form: `.onChange(of: value) { }` (zero-parameter) or `.onChange(of: value) { old, new in }`.
 
