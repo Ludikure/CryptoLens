@@ -2,9 +2,7 @@ import Foundation
 
 enum RetryHelper {
     static func withRetry<T>(maxAttempts: Int = 3, backoff: [TimeInterval] = [1, 2, 4], operation: () async throws -> T) async throws -> T {
-        guard maxAttempts > 0 else {
-            throw CancellationError()
-        }
+        precondition(maxAttempts > 0, "maxAttempts must be greater than 0")
         var lastError: Error?
         for attempt in 0..<maxAttempts {
             do {

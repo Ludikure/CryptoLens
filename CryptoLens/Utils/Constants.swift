@@ -180,7 +180,7 @@ enum Constants {
 
     // MARK: - Custom stocks (set by FavoritesStore on init)
 
-    static var customStocks: [AssetDefinition] = []
+    @MainActor static var customStocks: [AssetDefinition] = []
 
     // MARK: - Unified lookups
 
@@ -191,12 +191,12 @@ enum Constants {
         allCoins.first { $0.id == symbol }
     }
 
-    static func stock(for symbol: String) -> AssetDefinition? {
+    @MainActor static func stock(for symbol: String) -> AssetDefinition? {
         if let s = defaultStocks.first(where: { $0.id == symbol }) { return s }
         return customStocks.first { $0.id == symbol }
     }
 
-    static func asset(for symbol: String) -> (name: String, ticker: String, market: Market)? {
+    @MainActor static func asset(for symbol: String) -> (name: String, ticker: String, market: Market)? {
         if let c = coin(for: symbol) { return (c.name, c.ticker, .crypto) }
         if let s = stock(for: symbol) { return (s.name, s.ticker, .stock) }
         return nil

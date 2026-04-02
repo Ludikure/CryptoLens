@@ -3,7 +3,6 @@ import SwiftUI
 struct FavoritePillsView: View {
     @EnvironmentObject var service: AnalysisService
     @EnvironmentObject var favorites: FavoritesStore
-    @State private var symbolTask: Task<Void, Never>?
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
@@ -54,26 +53,6 @@ struct FavoritePillsView: View {
     }
 
     private func selectSymbol(_ symbol: String) {
-        HapticManager.selection()
-        // Cancel any in-flight symbol switch
-        symbolTask?.cancel()
-        // Set immediately so pill highlight updates without waiting for async work
-        service.currentSymbol = symbol
-        service.currentMarket = service.marketFor(symbol)
-        // Show cached data instantly if available
-        if let cached = service.resultsBySymbol[symbol] {
-            service.lastResult = cached
-        }
-        symbolTask = Task {
-            await service.selectSymbol(symbol)
-            guard !Task.isCancelled else { return }
-            if service.marketFor(symbol) == .crypto {
-                service.spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
-            } else {
-                service.spotPressure = nil
-            }
-            guard !Task.isCancelled else { return }
-            service.macroSnapshot = await service.macroData.fetchMacroSnapshot()
-        }
+        service.switchToSymbol(symbol)
     }
 }

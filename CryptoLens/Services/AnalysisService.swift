@@ -101,6 +101,31 @@ class AnalysisService: ObservableObject {
         startAutoRefresh(symbol: symbol)
     }
 
+    /// Unified symbol switch with cancellation — use from any view.
+    /// Handles selectSymbol + spot pressure + macro fetch with a single cancellable task.
+    private var switchTask: Task<Void, Never>?
+
+    func switchToSymbol(_ symbol: String) {
+        HapticManager.selection()
+        currentSymbol = symbol
+        currentMarket = marketFor(symbol)
+        if let cached = resultsBySymbol[symbol] {
+            lastResult = cached
+        }
+        switchTask?.cancel()
+        switchTask = Task {
+            await selectSymbol(symbol)
+            guard !Task.isCancelled else { return }
+            if marketFor(symbol) == .crypto {
+                spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
+            } else {
+                spotPressure = nil
+            }
+            guard !Task.isCancelled else { return }
+            macroSnapshot = await macroData.fetchMacroSnapshot()
+        }
+    }
+
     /// Prefetch data for all favorites that aren't cached yet.
     /// Pass 1: disk cache or quick fetch (daily only) for fast watchlist cards.
     /// Pass 2: full refresh for crypto only (stocks skip to avoid Twelve Data rate limit).

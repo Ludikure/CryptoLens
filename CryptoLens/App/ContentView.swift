@@ -99,27 +99,8 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
-    @State private var selectSymbolTask: Task<Void, Never>?
-
     private func selectSymbol(_ symbol: String) {
-        HapticManager.selection()
-        service.currentSymbol = symbol
-        service.currentMarket = service.marketFor(symbol)
-        if let cached = service.resultsBySymbol[symbol] {
-            service.lastResult = cached
-        }
-        selectSymbolTask?.cancel()
-        selectSymbolTask = Task {
-            await service.selectSymbol(symbol)
-            guard !Task.isCancelled else { return }
-            if service.marketFor(symbol) == .crypto {
-                service.spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
-            } else {
-                service.spotPressure = nil
-            }
-            guard !Task.isCancelled else { return }
-            service.macroSnapshot = await service.macroData.fetchMacroSnapshot()
-        }
+        service.switchToSymbol(symbol)
     }
 }
 
@@ -199,7 +180,7 @@ struct ChartTabContent: View {
             }
             recomputeBiasChanges()
         }
-        .onChange(of: service.currentResult?.symbol) { _ in
+        .onChange(of: service.currentResult?.timestamp) {
             recomputeBiasChanges()
         }
     }
@@ -396,11 +377,16 @@ struct AITabContent: View {
         .onAppear {
             historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
         }
-        .onChange(of: service.currentSymbol) { _ in
+        .onChange(of: service.currentSymbol) {
             historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
         }
-        .onChange(of: service.currentResult?.analysisTimestamp) { _ in
+        .onChange(of: service.currentResult?.analysisTimestamp) {
             historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+        }
+        .onChange(of: showHistory) {
+            if !showHistory {
+                historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+            }
         }
     }
 
