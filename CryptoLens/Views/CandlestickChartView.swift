@@ -126,7 +126,7 @@ private struct CandlestickCanvas: View {
     // Layout
     private let chartHeight: CGFloat = 240
     private let volumeHeight: CGFloat = 40
-    private let subChartHeight: CGFloat = 90
+    private let subChartHeight: CGFloat = 120
     private let spacing: CGFloat = 6
     private let minVisibleCandles = 15
     private let maxVisibleCandles = 200

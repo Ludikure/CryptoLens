@@ -26,6 +26,10 @@ class AnalysisService: ObservableObject {
     @Published var spotPressure: SpotPressure?
     @Published var macroSnapshot: MacroSnapshot?
 
+    /// Tracks when slow-changing data was last fetched per symbol (fundamentals, Finnhub, etc.)
+    private var lastEnrichmentFetch: [String: Date] = [:]
+    private let enrichmentInterval: TimeInterval = 300  // 5 min between enrichment refreshes
+
     /// Returns the best available result for the selected symbol.
     /// Checks lastResult first, then falls back to resultsBySymbol cache.
     var currentResult: AnalysisResult? {
@@ -194,17 +198,38 @@ class AnalysisService: ObservableObject {
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
             if market == .crypto { ConnectionStatus.shared.binance = .ok }
             else { ConnectionStatus.shared.yahooFinance = .ok }
-            let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
-            let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
+            // Determine if enrichment (slow-changing data) needs refresh
+            let needsEnrichment: Bool
+            if let lastFetch = lastEnrichmentFetch[symbol] {
+                needsEnrichment = Date().timeIntervalSince(lastFetch) > enrichmentInterval
+            } else {
+                needsEnrichment = true
+            }
+
+            // Reuse previous enrichment data if still fresh
+            let previous = resultsBySymbol[symbol]
+
+            // Sentiment — only on enrichment cycles
+            let sentiment: CoinInfo?
+            let fearGreed: FearGreedIndex?
+            if needsEnrichment && market == .crypto {
+                sentiment = try? await coinGecko.fetchSentiment(symbol: symbol)
+                fearGreed = await coinGecko.fetchFearGreed()
+            } else {
+                sentiment = previous?.sentiment
+                fearGreed = previous?.fearGreed
+            }
+
+            // Stock quote (price updates every cycle), but fundamentals only on enrichment
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
-            var stockSentiment: StockSentimentData? = nil
-            if stockInfo != nil && market == .stock {
+            var stockSentiment: StockSentimentData? = previous?.stockSentiment
+            if stockInfo != nil && market == .stock && needsEnrichment {
                 stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
                 stockSentiment = await yahoo.fetchStockSentiment(symbol: symbol)
             }
 
-            // Enhanced stock fundamentals
-            if var si = stockInfo, market == .stock {
+            // Enhanced fundamentals + Finnhub — only on enrichment cycles
+            if var si = stockInfo, market == .stock, needsEnrichment {
                 if let enhanced = await yahoo.fetchEnhancedFundamentals(symbol: symbol) {
                     si.analystTargetMean = enhanced["targetMeanPrice"] as? Double
                     si.analystTargetHigh = enhanced["targetHighPrice"] as? Double
@@ -232,7 +257,6 @@ class AnalysisService: ObservableObject {
                         si.exDividendWarning = days >= 0 && days <= 5
                     }
                     si.dividendRate = enhanced["dividendRate"] as? Double
-                    // Core fundamentals
                     if let mc = enhanced["marketCap"] as? Double { si.marketCap = mc }
                     if let pe = enhanced["peRatio"] as? Double { si.peRatio = pe }
                     if let eps = enhanced["eps"] as? Double { si.eps = eps }
@@ -246,10 +270,33 @@ class AnalysisService: ObservableObject {
                     si.outperformingSector = comp.outperforming
                 }
                 stockInfo = si
+            } else if var si = stockInfo, market == .stock, let prev = previous?.stockInfo {
+                // Carry forward enrichment from previous result
+                si.earningsDate = si.earningsDate ?? prev.earningsDate
+                si.analystTargetMean = si.analystTargetMean ?? prev.analystTargetMean
+                si.analystTargetHigh = si.analystTargetHigh ?? prev.analystTargetHigh
+                si.analystTargetLow = si.analystTargetLow ?? prev.analystTargetLow
+                si.analystCount = si.analystCount ?? prev.analystCount
+                si.analystRating = si.analystRating ?? prev.analystRating
+                si.analystRatingScore = si.analystRatingScore ?? prev.analystRatingScore
+                si.finnhubBuy = si.finnhubBuy ?? prev.finnhubBuy
+                si.finnhubHold = si.finnhubHold ?? prev.finnhubHold
+                si.finnhubSell = si.finnhubSell ?? prev.finnhubSell
+                si.finnhubStrongBuy = si.finnhubStrongBuy ?? prev.finnhubStrongBuy
+                si.beta = si.beta ?? prev.beta
+                si.newsHeadlines = si.newsHeadlines ?? prev.newsHeadlines
+                si.sector = si.sector ?? prev.sector
+                si.industry = si.industry ?? prev.industry
+                si.revenueGrowthYoY = si.revenueGrowthYoY ?? prev.revenueGrowthYoY
+                si.earningsGrowthYoY = si.earningsGrowthYoY ?? prev.earningsGrowthYoY
+                si.sectorETF = si.sectorETF ?? prev.sectorETF
+                si.relativeStrength1d = si.relativeStrength1d ?? prev.relativeStrength1d
+                si.outperformingSector = si.outperformingSector ?? prev.outperformingSector
+                stockInfo = si
             }
 
-            // Finnhub enrichment (analyst recs, metrics, earnings, news)
-            if var si = stockInfo, market == .stock {
+            // Finnhub enrichment — only on enrichment cycles
+            if var si = stockInfo, market == .stock, needsEnrichment {
                 async let fhRec = finnhub.fetchRecommendations(symbol: symbol)
                 async let fhMetrics = finnhub.fetchMetrics(symbol: symbol)
                 async let fhEarnings = finnhub.fetchEarnings(symbol: symbol)
@@ -260,15 +307,13 @@ class AnalysisService: ObservableObject {
                     si.finnhubHold = rec.hold
                     si.finnhubSell = rec.sell + rec.strongSell
                     si.finnhubStrongBuy = rec.strongBuy
-                    // Override Yahoo analyst count if Finnhub has data
                     let total = rec.buy + rec.hold + rec.sell + rec.strongBuy + rec.strongSell
                     if total > 0 { si.analystCount = total }
                 }
                 if let met = await fhMetrics {
-                    // Fill gaps from Yahoo with Finnhub data
                     if si.peRatio == nil { si.peRatio = met.peRatio }
                     if si.eps == nil { si.eps = met.eps }
-                    if si.marketCap == nil, let mc = met.marketCap { si.marketCap = mc * 1_000_000 } // Finnhub returns in millions
+                    if si.marketCap == nil, let mc = met.marketCap { si.marketCap = mc * 1_000_000 }
                     if si.dividendYield == nil { si.dividendYield = met.dividendYield.map { $0 * 100 } }
                     si.beta = met.beta
                 }
@@ -280,32 +325,38 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
-            // Crypto derivatives (fails gracefully if geo-blocked)
+            // Crypto derivatives — only on enrichment cycles
             var derivData: DerivativesData? = nil
             var positioning: PositioningSnapshot? = nil
             if market == .crypto {
-                derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
-                #if DEBUG
-                print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
-                #endif
-                if let d = derivData {
-                    positioning = PositioningAnalyzer.analyze(data: d)
+                if needsEnrichment {
+                    derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
                     #if DEBUG
-                    print("[MarketScope] Positioning: \(positioning?.crowding.rawValue ?? "nil"), squeeze: \(positioning?.squeezeRisk.level ?? "nil")")
+                    print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
                     #endif
+                    if let d = derivData {
+                        positioning = PositioningAnalyzer.analyze(data: d)
+                        #if DEBUG
+                        print("[MarketScope] Positioning: \(positioning?.crowding.rawValue ?? "nil"), squeeze: \(positioning?.squeezeRisk.level ?? "nil")")
+                        #endif
+                    }
+                } else {
+                    derivData = previous?.derivatives
+                    positioning = previous?.positioning
                 }
             }
 
             let events = await economicCalendar.highImpactUpcoming()
-            // Fetch macro once (5min cache) to populate FRED status badge
             _ = await macroData.fetchMacroSnapshot()
 
-            let previous = resultsBySymbol[symbol]
+            if needsEnrichment { lastEnrichmentFetch[symbol] = Date() }
+
+            let prevResult = resultsBySymbol[symbol]
             let result = AnalysisResult(
                 symbol: symbol,
                 market: market,
                 timestamp: Date(),
-                analysisTimestamp: previous?.analysisTimestamp,
+                analysisTimestamp: prevResult?.analysisTimestamp,
                 tf1: tf1, tf2: tf2, tf3: tf3,
                 sentiment: sentiment,
                 fearGreed: fearGreed,
@@ -314,8 +365,8 @@ class AnalysisService: ObservableObject {
                 positioning: positioning,
                 stockSentiment: stockSentiment,
                 economicEvents: events,
-                claudeAnalysis: previous?.claudeAnalysis ?? "",
-                tradeSetups: previous?.tradeSetups ?? []
+                claudeAnalysis: prevResult?.claudeAnalysis ?? "",
+                tradeSetups: prevResult?.tradeSetups ?? []
             )
 
             resultsBySymbol[symbol] = result
@@ -334,7 +385,7 @@ class AnalysisService: ObservableObject {
             SharedDataManager.writeLatest(results: resultsBySymbol, favorites: favs)
 
             // Bias flip notification
-            if let prev = previous,
+            if let prev = prevResult,
                prev.daily.bias != result.daily.bias,
                UserDefaults.standard.bool(forKey: "notify_bias_flips") {
                 let ticker = Constants.asset(for: symbol)?.ticker ?? symbol
