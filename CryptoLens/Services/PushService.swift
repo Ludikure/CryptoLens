@@ -5,7 +5,7 @@ import Foundation
 /// All state is @MainActor-isolated to prevent data races on deviceId, authToken, and isAuthenticating.
 @MainActor
 enum PushService {
-    static let workerURL = "https://marketscope-proxy.ludikure.workers.dev"
+    nonisolated static let workerURL = "https://marketscope-proxy.ludikure.workers.dev"
 
     /// Stable device identifier — mutable to support auth recovery.
     private(set) static var deviceId: String = {

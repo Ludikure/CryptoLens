@@ -91,10 +91,10 @@ enum IndicatorEngine {
         // Retain last 50 candles for chart display
         let chartCandles = Array(candles.suffix(50))
 
-        // Series data for price action analysis (last 10 values each)
-        let rsiSeriesData = Array(validRSI.suffix(10))
-        let stochSeries = (k: Array(stochRSIFull.kValues.suffix(10)), d: Array(stochRSIFull.dValues.suffix(10)))
-        let macdHistSeriesData = MACD.computeHistSeries(closes: closes, count: 10)
+        // Series data aligned with chart candles (last 50)
+        let rsiSeriesData = Array(validRSI.suffix(50))
+        let stochSeries = (k: Array(stochRSIFull.kValues.suffix(50)), d: Array(stochRSIFull.dValues.suffix(50)))
+        let macdHistSeriesData = MACD.computeHistSeries(closes: closes, count: 50)
 
         // EMA series aligned with chart candles (last 50)
         let ema20SeriesData = Array(ema20List.suffix(50))

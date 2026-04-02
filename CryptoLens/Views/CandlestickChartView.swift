@@ -498,7 +498,7 @@ private struct CandlestickCanvas: View {
     @ViewBuilder
     private var subCharts: some View {
         if !rsiSeries.isEmpty {
-            oscillatorPanel(title: "RSI", series: [(rsiSeries, Color.purple)], range: 0...100, levels: [30, 70])
+            oscillatorPanel(title: "RSI", series: [(rsiSeries, Color.purple)], range: 0...100, levels: [30, 70], highlightBand: true)
         }
         if !macdHistSeries.isEmpty {
             macdPanel
@@ -508,7 +508,7 @@ private struct CandlestickCanvas: View {
         }
     }
 
-    private func oscillatorPanel(title: String, series: [([Double], Color)], range: ClosedRange<Double>, levels: [Double]) -> some View {
+    private func oscillatorPanel(title: String, series: [([Double], Color)], range: ClosedRange<Double>, levels: [Double], highlightBand: Bool = false) -> some View {
         VStack(spacing: 0) {
             HStack {
                 Text(title).font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
@@ -533,6 +533,29 @@ private struct CandlestickCanvas: View {
                 let hi = range.upperBound
 
                 ZStack(alignment: .topLeading) {
+                    // Band fill between levels (TradingView style)
+                    if levels.count == 2 {
+                        let yTop = height * CGFloat(1.0 - (levels[1] - lo) / (hi - lo))
+                        let yBot = height * CGFloat(1.0 - (levels[0] - lo) / (hi - lo))
+                        if highlightBand {
+                            // RSI style: highlight the neutral band between levels
+                            Rectangle()
+                                .fill(Color.purple.opacity(0.06))
+                                .frame(width: width, height: yBot - yTop)
+                                .position(x: width / 2, y: yTop + (yBot - yTop) / 2)
+                        } else {
+                            // StochRSI style: highlight overbought/oversold zones
+                            Rectangle()
+                                .fill(Color.red.opacity(0.04))
+                                .frame(width: width, height: yTop)
+                                .position(x: width / 2, y: yTop / 2)
+                            Rectangle()
+                                .fill(Color.green.opacity(0.04))
+                                .frame(width: width, height: height - yBot)
+                                .position(x: width / 2, y: yBot + (height - yBot) / 2)
+                        }
+                    }
+
                     ForEach(levels, id: \.self) { level in
                         let y = height * CGFloat(1.0 - (level - lo) / (hi - lo))
                         Path { p in
@@ -551,25 +574,16 @@ private struct CandlestickCanvas: View {
                         let (data, color) = seriesData
                         seriesLine(data: data, step: step, height: height, lo: lo, hi: hi, color: color)
                     }
-
-                    if levels.count == 2 {
-                        let yTop = height * CGFloat(1.0 - (levels[1] - lo) / (hi - lo))
-                        let yBot = height * CGFloat(1.0 - (levels[0] - lo) / (hi - lo))
-                        Rectangle()
-                            .fill(Color.red.opacity(0.04))
-                            .frame(width: width, height: yTop)
-                            .position(x: width / 2, y: yTop / 2)
-                        Rectangle()
-                            .fill(Color.green.opacity(0.04))
-                            .frame(width: width, height: height - yBot)
-                            .position(x: width / 2, y: yBot + (height - yBot) / 2)
-                    }
                 }
             }
             .frame(height: subChartHeight - 14)
         }
         .frame(height: subChartHeight)
         .padding(.top, spacing)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(.systemGray4), lineWidth: 0.5)
+        )
     }
 
     /// Draw a series line aligned to candle positions in the visible range
@@ -652,6 +666,10 @@ private struct CandlestickCanvas: View {
         }
         .frame(height: subChartHeight)
         .padding(.top, spacing)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(.systemGray4), lineWidth: 0.5)
+        )
     }
 
     // MARK: - Helpers
