@@ -1,6 +1,7 @@
 import Foundation
 import UserNotifications
 
+@MainActor
 class AlertsStore: ObservableObject {
     @Published var alerts: [PriceAlert] {
         didSet { save() }

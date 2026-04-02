@@ -99,6 +99,8 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    @State private var selectSymbolTask: Task<Void, Never>?
+
     private func selectSymbol(_ symbol: String) {
         HapticManager.selection()
         service.currentSymbol = symbol
@@ -106,13 +108,16 @@ struct ContentView: View {
         if let cached = service.resultsBySymbol[symbol] {
             service.lastResult = cached
         }
-        Task {
+        selectSymbolTask?.cancel()
+        selectSymbolTask = Task {
             await service.selectSymbol(symbol)
+            guard !Task.isCancelled else { return }
             if service.marketFor(symbol) == .crypto {
                 service.spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
             } else {
                 service.spotPressure = nil
             }
+            guard !Task.isCancelled else { return }
             service.macroSnapshot = await service.macroData.fetchMacroSnapshot()
         }
     }
@@ -122,21 +127,22 @@ struct ContentView: View {
 
 struct ChartTabContent: View {
     @EnvironmentObject var service: AnalysisService
+    @State private var biasChanges: [String] = []
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
     }
 
-    private var biasChanges: [String] {
-        guard let result = service.currentResult else { return [] }
+    private func recomputeBiasChanges() {
+        guard let result = service.currentResult else { biasChanges = []; return }
         let history = AnalysisHistoryStore.load(symbol: result.symbol)
-        guard history.count >= 2 else { return [] }
+        guard history.count >= 2 else { biasChanges = []; return }
         let prev = history[1]
         var changes = [String]()
         if result.tf1.bias != prev.tf1.bias { changes.append("\(result.tf1.label) flipped to \(result.tf1.bias)") }
         if result.tf2.bias != prev.tf2.bias { changes.append("\(result.tf2.label) flipped to \(result.tf2.bias)") }
         if result.tf3.bias != prev.tf3.bias { changes.append("\(result.tf3.label) flipped to \(result.tf3.bias)") }
-        return changes
+        biasChanges = changes
     }
 
     var body: some View {
@@ -191,6 +197,10 @@ struct ChartTabContent: View {
             if service.currentSymbol == nil {
                 Task { await service.selectSymbol(Constants.allCoins[0].id) }
             }
+            recomputeBiasChanges()
+        }
+        .onChange(of: service.currentResult?.symbol) { _ in
+            recomputeBiasChanges()
         }
     }
 
@@ -352,6 +362,7 @@ struct MarketTabContent: View {
 struct AITabContent: View {
     @EnvironmentObject var service: AnalysisService
     @Binding var showHistory: Bool
+    @State private var historyCount: Int = 0
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
@@ -382,6 +393,15 @@ struct AITabContent: View {
         .listStyle(.plain)
         .background(Color(.systemGroupedBackground))
         .scrollContentBackground(.hidden)
+        .onAppear {
+            historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+        }
+        .onChange(of: service.currentSymbol) { _ in
+            historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+        }
+        .onChange(of: service.currentResult?.analysisTimestamp) { _ in
+            historyCount = AnalysisHistoryStore.load(symbol: selectedSymbol).count
+        }
     }
 
     @ViewBuilder
@@ -398,9 +418,8 @@ struct AITabContent: View {
                 Image(systemName: "clock.arrow.circlepath")
                 Text("Analysis History")
                 Spacer()
-                let count = AnalysisHistoryStore.load(symbol: selectedSymbol).count
-                if count > 0 {
-                    Text("\(count)")
+                if historyCount > 0 {
+                    Text("\(historyCount)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

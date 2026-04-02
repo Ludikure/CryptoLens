@@ -7,7 +7,7 @@ struct TimestampBar: View {
 
     @State private var now = Date()
     @State private var pulse = false
-    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    private let timer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HStack(spacing: 16) {

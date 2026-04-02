@@ -11,9 +11,13 @@ class AnalysisService: ObservableObject {
     let coinGecko = CoinGeckoService()
     let economicCalendar = EconomicCalendarService()
     let macroData = MacroDataService()
-    var aiProvider: AIProvider?
+    private(set) var aiProvider: AIProvider?
     @Published var providerType: AIProviderType = .claude
-    var alertsStore: AlertsStore?
+    private(set) var alertsStore: AlertsStore?
+
+    func configure(alertsStore: AlertsStore) {
+        self.alertsStore = alertsStore
+    }
 
     @Published var isLoading = false
     @Published var loadingStatus = ""
@@ -156,7 +160,11 @@ class AnalysisService: ObservableObject {
         refreshTimer?.cancel()
         refreshTimer = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000) // 60s
+                do {
+                    try await Task.sleep(nanoseconds: 60_000_000_000) // 60s
+                } catch {
+                    return // Task was cancelled
+                }
                 guard !Task.isCancelled, let self else { return }
                 await self.refreshIndicators(symbol: symbol)
             }
@@ -222,10 +230,15 @@ class AnalysisService: ObservableObject {
 
             // Stock quote (price updates every cycle), but fundamentals only on enrichment
             var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
-            var stockSentiment: StockSentimentData? = previous?.stockSentiment
-            if stockInfo != nil && market == .stock && needsEnrichment {
-                stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
+            var stockSentiment: StockSentimentData? = nil
+            if stockInfo != nil && market == .stock {
+                // VIX is intraday — always fetch stock sentiment (includes VIX, put/call, short interest)
                 stockSentiment = await yahoo.fetchStockSentiment(symbol: symbol)
+                if needsEnrichment {
+                    stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
+                } else {
+                    stockInfo?.earningsDate = previous?.stockInfo?.earningsDate
+                }
             }
 
             // Enhanced fundamentals + Finnhub — only on enrichment cycles

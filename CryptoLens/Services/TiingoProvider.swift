@@ -134,12 +134,16 @@ class TiingoProvider {
     }
 
     private func mergeCandles(_ candles: [Candle]) -> Candle {
-        Candle(
-            time: candles.first!.time,
-            open: candles.first!.open,
-            high: candles.map(\.high).max()!,
-            low: candles.map(\.low).min()!,
-            close: candles.last!.close,
+        // Caller guarantees non-empty, but guard defensively
+        guard let first = candles.first, let last = candles.last else {
+            fatalError("mergeCandles called with empty array")
+        }
+        return Candle(
+            time: first.time,
+            open: first.open,
+            high: candles.map(\.high).max() ?? first.high,
+            low: candles.map(\.low).min() ?? first.low,
+            close: last.close,
             volume: candles.map(\.volume).reduce(0, +)
         )
     }

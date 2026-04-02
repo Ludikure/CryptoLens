@@ -16,7 +16,6 @@ struct AlertsView: View {
     private var triggeredAlerts: [PriceAlert] { alertsStore.alerts.filter(\.triggered) }
 
     var body: some View {
-        NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     ForEach(allSetups) { group in
@@ -79,7 +78,6 @@ struct AlertsView: View {
                 }
             }
             .sheet(isPresented: $showCreateAlert) { CreateAlertView() }
-        }
     }
 
     private func removeGroup(_ group: SetupGroup) {

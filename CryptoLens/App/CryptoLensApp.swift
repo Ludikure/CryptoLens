@@ -64,7 +64,7 @@ struct MarketScopeApp: App {
                 SplashView()
             }
                 .onAppear {
-                    analysisService.alertsStore = alertsStore
+                    analysisService.configure(alertsStore: alertsStore)
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)
                     alertsStore.syncFromServer()
                     // Show What's New after splash dismisses

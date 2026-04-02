@@ -16,15 +16,15 @@ enum YahooError: LocalizedError {
     }
 }
 
-class YahooFinanceService {
+actor YahooFinanceService {
     private let session: URLSession
     private var lastRequestTime: Date?
 
     /// Fetch market status from Finnhub (definitive, includes holidays).
-    /// Cached in-memory for 5 minutes.
-    private static var cachedMarketState: (state: String, fetched: Date)?
+    /// Cached in-memory for 5 minutes. Protected by @MainActor to avoid races.
+    @MainActor private static var cachedMarketState: (state: String, fetched: Date)?
 
-    static func computeMarketState() -> String {
+    @MainActor static func computeMarketState() -> String {
         // Return cache if fresh
         if let cached = cachedMarketState, Date().timeIntervalSince(cached.fetched) < 300 {
             return cached.state
@@ -53,7 +53,7 @@ class YahooFinanceService {
         case "post", "post-market", "after-hours": state = "POST"
         default: state = "CLOSED"
         }
-        cachedMarketState = (state, Date())
+        await MainActor.run { cachedMarketState = (state, Date()) }
     }
 
     private func throttle(minInterval: TimeInterval = 1.0) async {
@@ -141,7 +141,7 @@ class YahooFinanceService {
             earningsDate: nil,
             sector: nil,
             industry: nil,
-            marketState: Self.computeMarketState(),
+            marketState: await Self.computeMarketState(),
             priceChangePercent1d: changePercent
         )
     }

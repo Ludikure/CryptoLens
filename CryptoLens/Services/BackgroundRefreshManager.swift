@@ -42,8 +42,8 @@ enum BackgroundRefreshManager {
     }
 
     private static func checkPrices() async {
-        let store = AlertsStore()
-        let activeAlerts = store.activeAlerts
+        let store = await MainActor.run { AlertsStore() }
+        let activeAlerts = await store.activeAlerts
         guard !activeAlerts.isEmpty else { return }
 
         // Get unique symbols that have active alerts
@@ -68,6 +68,6 @@ enum BackgroundRefreshManager {
             }
         }
 
-        store.checkAlerts(prices: prices)
+        await MainActor.run { store.checkAlerts(prices: prices) }
     }
 }

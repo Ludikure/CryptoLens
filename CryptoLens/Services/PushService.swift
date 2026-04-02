@@ -104,9 +104,19 @@ enum PushService {
         }
     }
 
+    /// Guard to prevent concurrent ensureAuth calls from double-registering.
+    private static var isAuthenticating = false
+
     /// Call before any authenticated worker request — retries registration if needed.
     static func ensureAuth() async {
         if authToken != nil { return }
+        guard !isAuthenticating else {
+            // Another call is already in-flight; wait briefly and check again
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return
+        }
+        isAuthenticating = true
+        defer { isAuthenticating = false }
         await MainActor.run { ConnectionStatus.shared.workerAuth = .pending }
         for attempt in 0..<2 {
             if attempt > 0 { try? await Task.sleep(for: .seconds(3)) }
