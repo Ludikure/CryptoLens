@@ -55,4 +55,14 @@ enum MACD {
         }
         return Array(hist.suffix(count))
     }
+
+    /// Returns full MACD line + signal line series (last N values each).
+    static func computeFullSeries(closes: [Double], count: Int = 50, fast: Int = 12, slow: Int = 26, signal: Int = 9) -> (macdLine: [Double], signalLine: [Double]) {
+        guard let (macd, sig) = computeLines(closes: closes, fast: fast, slow: slow, signal: signal) else { return ([], []) }
+        // Align: both series end at the same bar, take last N
+        let alignLen = min(macd.count, sig.count)
+        let macdAligned = Array(macd.suffix(alignLen).suffix(count))
+        let sigAligned = Array(sig.suffix(alignLen).suffix(count))
+        return (macdAligned, sigAligned)
+    }
 }

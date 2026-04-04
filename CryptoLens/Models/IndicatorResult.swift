@@ -132,16 +132,22 @@ struct IndicatorResult: Identifiable, Codable {
     let gap: GapResult?
     let addv: ADDVResult?
     let candles: [Candle]
-    // Series data for momentum analysis (not persisted to cache)
+    // Series data for chart sub-panels
     let rsiSeries: [Double]
     let stochKSeries: [Double]
     let stochDSeries: [Double]
     let macdHistSeries: [Double]
+    let macdLineSeries: [Double]
+    let macdSignalSeries: [Double]
+    let adxSeries: [Double]
+    let plusDISeries: [Double]
+    let minusDISeries: [Double]
+    let volumeRatioSeries: [Double]
     let ema20Series: [Double]
     let ema50Series: [Double]
     let ema200Series: [Double]
 
-    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = []) {
+    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = []) {
         self.id = UUID()
         self.timeframe = timeframe
         self.label = label
@@ -176,6 +182,12 @@ struct IndicatorResult: Identifiable, Codable {
         self.stochKSeries = stochKSeries
         self.stochDSeries = stochDSeries
         self.macdHistSeries = macdHistSeries
+        self.macdLineSeries = macdLineSeries
+        self.macdSignalSeries = macdSignalSeries
+        self.adxSeries = adxSeries
+        self.plusDISeries = plusDISeries
+        self.minusDISeries = minusDISeries
+        self.volumeRatioSeries = volumeRatioSeries
         self.ema20Series = ema20Series
         self.ema50Series = ema50Series
         self.ema200Series = ema200Series
@@ -217,6 +229,12 @@ struct IndicatorResult: Identifiable, Codable {
         stochKSeries = (try? container.decodeIfPresent([Double].self, forKey: .stochKSeries)) ?? []
         stochDSeries = (try? container.decodeIfPresent([Double].self, forKey: .stochDSeries)) ?? []
         macdHistSeries = (try? container.decodeIfPresent([Double].self, forKey: .macdHistSeries)) ?? []
+        macdLineSeries = (try? container.decodeIfPresent([Double].self, forKey: .macdLineSeries)) ?? []
+        macdSignalSeries = (try? container.decodeIfPresent([Double].self, forKey: .macdSignalSeries)) ?? []
+        adxSeries = (try? container.decodeIfPresent([Double].self, forKey: .adxSeries)) ?? []
+        plusDISeries = (try? container.decodeIfPresent([Double].self, forKey: .plusDISeries)) ?? []
+        minusDISeries = (try? container.decodeIfPresent([Double].self, forKey: .minusDISeries)) ?? []
+        volumeRatioSeries = (try? container.decodeIfPresent([Double].self, forKey: .volumeRatioSeries)) ?? []
         ema20Series = (try? container.decodeIfPresent([Double].self, forKey: .ema20Series)) ?? []
         ema50Series = (try? container.decodeIfPresent([Double].self, forKey: .ema50Series)) ?? []
         ema200Series = (try? container.decodeIfPresent([Double].self, forKey: .ema200Series)) ?? []

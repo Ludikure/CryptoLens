@@ -2,3 +2,4 @@ Secrets.xcconfig
 *.xcuserdata
 DerivedData/
 .DS_Store
+marketscope-worker/.wrangler/

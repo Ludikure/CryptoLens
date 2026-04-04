@@ -2,6 +2,12 @@ import Foundation
 
 enum ADX {
     static func compute(highs: [Double], lows: [Double], closes: [Double], period: Int = 14) -> ADXResult? {
+        guard let full = computeFull(highs: highs, lows: lows, closes: closes, period: period) else { return nil }
+        return full.result
+    }
+
+    /// Full ADX computation returning scalar result + series for charting.
+    static func computeFull(highs: [Double], lows: [Double], closes: [Double], period: Int = 14) -> ADXFull? {
         guard closes.count >= period + 1 else { return nil }
 
         var plusDMList = [Double]()
@@ -37,9 +43,13 @@ enum ADX {
 
         guard dxValues.count >= period else { return nil }
 
+        // Build ADX series using Wilder smoothing
+        var adxSeries = [Double]()
         var adx = dxValues[..<period].reduce(0.0) { $0 + $1.dx } / Double(period)
+        adxSeries.append(adx)
         for i in period..<dxValues.count {
             adx = (adx * Double(period - 1) + dxValues[i].dx) / Double(period)
+            adxSeries.append(adx)
         }
 
         let adxFinal = adx.rounded(toPlaces: 2)
@@ -52,12 +62,26 @@ enum ADX {
         else if adxFinal < 60 { strength = "Strong Trend" }
         else { strength = "Very Strong Trend" }
 
-        return ADXResult(
+        let result = ADXResult(
             adx: adxFinal,
             plusDI: plusDIFinal,
             minusDI: minusDIFinal,
             strength: strength,
             direction: plusDIFinal > minusDIFinal ? "Bullish" : "Bearish"
         )
+
+        // Extract +DI and -DI series aligned with ADX series
+        let diStartIdx = dxValues.count - adxSeries.count
+        let plusDISeries = (diStartIdx..<dxValues.count).map { dxValues[$0].plusDI }
+        let minusDISeries = (diStartIdx..<dxValues.count).map { dxValues[$0].minusDI }
+
+        return ADXFull(result: result, adxSeries: adxSeries, plusDISeries: plusDISeries, minusDISeries: minusDISeries)
     }
+}
+
+struct ADXFull {
+    let result: ADXResult
+    let adxSeries: [Double]
+    let plusDISeries: [Double]
+    let minusDISeries: [Double]
 }

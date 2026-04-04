@@ -9,6 +9,8 @@ struct CandlestickChartView: View {
     @AppStorage("chart_show_rsi") private var showRSI = false
     @AppStorage("chart_show_macd") private var showMACD = false
     @AppStorage("chart_show_stochrsi") private var showStochRSI = false
+    @AppStorage("chart_show_adx") private var showADX = false
+    @AppStorage("chart_show_vol") private var showVolOsc = false
     @State private var showOverlayMenu = false
 
     private var currentResult: IndicatorResult { results[selectedTab] }
@@ -36,8 +38,10 @@ struct CandlestickChartView: View {
                         Divider()
                         Text("Sub-Charts").font(.caption2).foregroundStyle(.tertiary)
                         Toggle("RSI", isOn: $showRSI)
-                        Toggle("MACD Histogram", isOn: $showMACD)
+                        Toggle("MACD", isOn: $showMACD)
                         Toggle("Stoch RSI", isOn: $showStochRSI)
+                        Toggle("ADX / DI", isOn: $showADX)
+                        Toggle("Volume", isOn: $showVolOsc)
                     }
                     .font(.caption)
                     .padding(12)
@@ -82,8 +86,14 @@ struct CandlestickChartView: View {
                     candlePatterns: currentResult.candlePatterns,
                     rsiSeries: showRSI ? currentResult.rsiSeries : [],
                     macdHistSeries: showMACD ? currentResult.macdHistSeries : [],
+                    macdLineSeries: showMACD ? currentResult.macdLineSeries : [],
+                    macdSignalSeries: showMACD ? currentResult.macdSignalSeries : [],
                     stochKSeries: showStochRSI ? currentResult.stochKSeries : [],
-                    stochDSeries: showStochRSI ? currentResult.stochDSeries : []
+                    stochDSeries: showStochRSI ? currentResult.stochDSeries : [],
+                    adxSeries: showADX ? currentResult.adxSeries : [],
+                    plusDISeries: showADX ? currentResult.plusDISeries : [],
+                    minusDISeries: showADX ? currentResult.minusDISeries : [],
+                    volumeRatioSeries: showVolOsc ? currentResult.volumeRatioSeries : []
                 )
             } else {
                 Text("No candle data")
@@ -111,8 +121,14 @@ private struct CandlestickCanvas: View {
     let candlePatterns: [PatternResult]
     let rsiSeries: [Double]
     let macdHistSeries: [Double]
+    let macdLineSeries: [Double]
+    let macdSignalSeries: [Double]
     let stochKSeries: [Double]
     let stochDSeries: [Double]
+    let adxSeries: [Double]
+    let plusDISeries: [Double]
+    let minusDISeries: [Double]
+    let volumeRatioSeries: [Double]
 
     @State private var selectedIndex: Int?
     @State private var scrubMode = false
@@ -122,6 +138,7 @@ private struct CandlestickCanvas: View {
     @State private var scrollOffset: Int = 0  // 0 = latest candles visible
     @GestureState private var livePinchScale: CGFloat = 1.0
     @GestureState private var liveDragOffset: CGFloat = 0
+    @State private var chartWidth: CGFloat = 350
 
     // Layout
     private let chartHeight: CGFloat = 240
@@ -132,7 +149,7 @@ private struct CandlestickCanvas: View {
     private let maxVisibleCandles = 200
 
     private var subChartCount: Int {
-        (rsiSeries.isEmpty ? 0 : 1) + (macdHistSeries.isEmpty ? 0 : 1) + (stochKSeries.isEmpty ? 0 : 1)
+        (rsiSeries.isEmpty ? 0 : 1) + (macdHistSeries.isEmpty ? 0 : 1) + (stochKSeries.isEmpty ? 0 : 1) + (adxSeries.isEmpty ? 0 : 1) + (volumeRatioSeries.isEmpty ? 0 : 1)
     }
     private var totalHeight: CGFloat {
         chartHeight + spacing + volumeHeight + CGFloat(subChartCount) * (spacing + subChartHeight)
@@ -147,8 +164,7 @@ private struct CandlestickCanvas: View {
     /// Effective scroll offset accounting for live drag gesture
     private var effectiveScrollOffset: Int {
         if liveDragOffset == 0 { return scrollOffset }
-        // Approximate candles per point based on current viewport
-        let candlesPerPoint = Double(effectiveVisibleCount) / 350.0  // rough screen width
+        let candlesPerPoint = Double(effectiveVisibleCount) / max(1, Double(chartWidth))
         let draggedCandles = Int(Double(liveDragOffset) * candlesPerPoint)
         return max(0, min(candles.count - effectiveVisibleCount, scrollOffset + draggedCandles))
     }
@@ -196,6 +212,7 @@ private struct CandlestickCanvas: View {
             // Price chart + volume
             GeometryReader { geo in
                 let totalWidth = geo.size.width
+                let _ = updateChartWidth(totalWidth)
                 let vCount = visibleRange.count
                 let candleWidth = max(2, (totalWidth / CGFloat(vCount)) - 1.5)
                 let step = totalWidth / CGFloat(vCount)
@@ -218,9 +235,9 @@ private struct CandlestickCanvas: View {
                     }
 
                     // EMA polylines (sliced to visible range)
-                    emaPolyline(series: ema200Series, step: step, height: chartHeight, color: .purple.opacity(0.5))
-                    emaPolyline(series: ema50Series, step: step, height: chartHeight, color: .blue.opacity(0.6))
-                    emaPolyline(series: ema20Series, step: step, height: chartHeight, color: .orange.opacity(0.7))
+                    emaPolyline(series: ema200Series, step: step, height: chartHeight, color: .purple.opacity(0.7))
+                    emaPolyline(series: ema50Series, step: step, height: chartHeight, color: .blue.opacity(0.75))
+                    emaPolyline(series: ema20Series, step: step, height: chartHeight, color: .orange.opacity(0.85))
 
                     // Candlesticks
                     ForEach(Array(visibleCandles.enumerated()), id: \.offset) { localIdx, candle in
@@ -312,36 +329,9 @@ private struct CandlestickCanvas: View {
                     }
                 }
                 .contentShape(Rectangle())
-                .onTapGesture { location in
-                    let localIdx = Int(location.x / step)
-                    let globalIdx = localIdx + visibleRange.lowerBound
-                    if globalIdx >= visibleRange.lowerBound && globalIdx < visibleRange.upperBound {
-                        if selectedIndex == globalIdx {
-                            selectedIndex = nil
-                            scrubMode = false
-                        } else {
-                            selectedIndex = globalIdx
-                            scrubMode = true
-                        }
-                    }
-                }
-                .gesture(scrubMode ?
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            let localIdx = Int(value.location.x / step)
-                            let globalIdx = localIdx + visibleRange.lowerBound
-                            if globalIdx >= visibleRange.lowerBound && globalIdx < visibleRange.upperBound {
-                                selectedIndex = globalIdx
-                            }
-                        }
-                        .onEnded { _ in
-                            scrubMode = false
-                            selectedIndex = nil
-                        }
-                    : nil
-                )
+                // Pinch to zoom — runs simultaneously, no delay
                 .simultaneousGesture(
-                    MagnificationGesture()
+                    MagnificationGesture(minimumScaleDelta: 0.01)
                         .updating($livePinchScale) { value, state, _ in
                             state = value
                         }
@@ -350,21 +340,45 @@ private struct CandlestickCanvas: View {
                             visibleCount = min(maxVisibleCandles, max(minVisibleCandles, newCount))
                         }
                 )
+                // Pan to scroll — runs simultaneously, low minimum distance
                 .simultaneousGesture(
-                    !scrubMode ?
-                    DragGesture(minimumDistance: 20)
+                    DragGesture(minimumDistance: 8)
                         .updating($liveDragOffset) { value, state, _ in
                             state = value.translation.width
                         }
                         .onEnded { value in
-                            let candlesPerPoint = Double(effectiveVisibleCount) / Double(totalWidth)
+                            let candlesPerPoint = Double(effectiveVisibleCount) / max(1, Double(chartWidth))
                             let candlesDragged = Int(Double(value.translation.width) * candlesPerPoint)
                             scrollOffset = max(0, min(candles.count - visibleCount, scrollOffset + candlesDragged))
                         }
-                    : nil
+                )
+                // Long press + drag to scrub candles
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.25)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .onChanged { value in
+                            switch value {
+                            case .first(true):
+                                scrubMode = true
+                            case .second(true, let drag):
+                                if let drag {
+                                    let localIdx = Int(drag.location.x / step)
+                                    let globalIdx = localIdx + visibleRange.lowerBound
+                                    if globalIdx >= visibleRange.lowerBound && globalIdx < visibleRange.upperBound {
+                                        selectedIndex = globalIdx
+                                    }
+                                }
+                            default: break
+                            }
+                        }
+                        .onEnded { _ in
+                            scrubMode = false
+                            selectedIndex = nil
+                        }
                 )
             }
             .frame(height: chartHeight + spacing + volumeHeight)
+            .drawingGroup()
             .clipped()
 
             // Sub-charts
@@ -408,7 +422,7 @@ private struct CandlestickCanvas: View {
 
     private func label(_ key: String, value: Double, color: Color = .secondary) -> some View {
         HStack(spacing: 2) {
-            Text(key).foregroundStyle(.tertiary)
+            Text(key).foregroundStyle(.secondary)
             Text(Formatters.formatPrice(value)).foregroundStyle(color)
         }
     }
@@ -427,11 +441,11 @@ private struct CandlestickCanvas: View {
                     path.move(to: CGPoint(x: 0, y: y))
                     path.addLine(to: CGPoint(x: width, y: y))
                 }
-                .stroke(Color(.systemGray4), style: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
+                .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
 
                 Text(Formatters.formatPrice(price))
                     .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .offset(y: y - 10)
             }
         }
@@ -446,11 +460,11 @@ private struct CandlestickCanvas: View {
                 path.move(to: CGPoint(x: 0, y: y))
                 path.addLine(to: CGPoint(x: width, y: y))
             }
-            .stroke(color.opacity(0.4), style: StrokeStyle(lineWidth: 0.7, dash: [3, 3]))
+            .stroke(color.opacity(0.6), style: StrokeStyle(lineWidth: 0.7, dash: [3, 3]))
 
             Text(Formatters.formatPrice(value))
                 .font(.system(size: 7))
-                .foregroundStyle(color.opacity(0.7))
+                .foregroundStyle(color.opacity(0.85))
                 .offset(x: width - 4, y: y - 8)
         }
     }
@@ -506,6 +520,12 @@ private struct CandlestickCanvas: View {
         if !stochKSeries.isEmpty {
             oscillatorPanel(title: "Stoch RSI", series: [(stochKSeries, Color.blue), (stochDSeries, Color.orange)], range: 0...100, levels: [20, 80])
         }
+        if !adxSeries.isEmpty {
+            adxPanel
+        }
+        if !volumeRatioSeries.isEmpty {
+            volumeOscPanel
+        }
     }
 
     private func oscillatorPanel(title: String, series: [([Double], Color)], range: ClosedRange<Double>, levels: [Double], highlightBand: Bool = false) -> some View {
@@ -515,11 +535,12 @@ private struct CandlestickCanvas: View {
                 Spacer()
                 if let mainSeries = series.first?.0 {
                     let offset = candles.count - mainSeries.count
-                    let lastIdx = visibleRange.upperBound - 1 - offset
-                    if lastIdx >= 0 && lastIdx < mainSeries.count {
-                        Text(String(format: "%.1f", mainSeries[lastIdx]))
+                    // Show value at selected candle, or fall back to last visible
+                    let displayIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - offset
+                    if displayIdx >= 0 && displayIdx < mainSeries.count {
+                        Text(String(format: "%.1f", mainSeries[displayIdx]))
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(selectedIndex != nil ? .primary : .secondary)
                     }
                 }
             }
@@ -562,17 +583,39 @@ private struct CandlestickCanvas: View {
                             p.move(to: CGPoint(x: 0, y: y))
                             p.addLine(to: CGPoint(x: width, y: y))
                         }
-                        .stroke(Color(.systemGray4), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                        .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
 
                         Text(String(format: "%.0f", level))
                             .font(.system(size: 7))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                             .position(x: 12, y: y)
                     }
 
                     ForEach(Array(series.enumerated()), id: \.offset) { _, seriesData in
                         let (data, color) = seriesData
                         seriesLine(data: data, step: step, height: height, lo: lo, hi: hi, color: color)
+                    }
+
+                    // Selection crosshair — extends from main chart
+                    if let idx = selectedIndex, visibleRange.contains(idx) {
+                        let localIdx = idx - visibleRange.lowerBound
+                        let x = step * CGFloat(localIdx) + step / 2
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(width: step, height: height)
+                            .position(x: x, y: height / 2)
+
+                        // Value dot on the main series line
+                        if let mainSeries = series.first?.0 {
+                            let seriesIdx = idx - (candles.count - mainSeries.count)
+                            if seriesIdx >= 0 && seriesIdx < mainSeries.count {
+                                let y = height * CGFloat(1.0 - (mainSeries[seriesIdx] - lo) / (hi - lo))
+                                Circle()
+                                    .fill(series.first!.1)
+                                    .frame(width: 5, height: 5)
+                                    .position(x: x, y: y)
+                            }
+                        }
                     }
                 }
             }
@@ -582,7 +625,7 @@ private struct CandlestickCanvas: View {
         .padding(.top, spacing)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(Color(.systemGray4), lineWidth: 0.5)
+                .stroke(Color(.systemGray3), lineWidth: 0.5)
         )
     }
 
@@ -612,13 +655,24 @@ private struct CandlestickCanvas: View {
             HStack {
                 Text("MACD").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
                 Spacer()
+                // Show MACD line, signal, and histogram values
                 let fullOffset = candles.count - macdHistSeries.count
-                let lastIdx = visibleRange.upperBound - 1 - fullOffset
-                if lastIdx >= 0 && lastIdx < macdHistSeries.count {
-                    let val = macdHistSeries[lastIdx]
-                    Text(String(format: "%.2f", val))
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(val >= 0 ? .green : .red)
+                let displayIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - fullOffset
+                if displayIdx >= 0 && displayIdx < macdHistSeries.count {
+                    HStack(spacing: 6) {
+                        let lineOffset = candles.count - macdLineSeries.count
+                        let lineIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - lineOffset
+                        if lineIdx >= 0 && lineIdx < macdLineSeries.count {
+                            Text(String(format: "%.2f", macdLineSeries[lineIdx]))
+                                .foregroundStyle(.blue)
+                            Text(String(format: "%.2f", macdSignalSeries[lineIdx]))
+                                .foregroundStyle(.orange)
+                        }
+                        let hist = macdHistSeries[displayIdx]
+                        Text(String(format: "%.2f", hist))
+                            .foregroundStyle(hist >= 0 ? .green : .red)
+                    }
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
                 }
             }
             .padding(.horizontal, 2)
@@ -629,13 +683,17 @@ private struct CandlestickCanvas: View {
                 let step = width / CGFloat(visibleRange.count)
                 let fullOffset = candles.count - macdHistSeries.count
 
-                // Find max abs in visible range for scaling
-                let visibleVals: [Double] = visibleRange.compactMap { idx in
-                    let si = idx - fullOffset
-                    guard si >= 0 && si < macdHistSeries.count else { return nil }
-                    return macdHistSeries[si]
+                // Scale all MACD components together
+                let allSeries = [macdHistSeries, macdLineSeries, macdSignalSeries]
+                let allVisibleVals: [Double] = allSeries.flatMap { series in
+                    let off = candles.count - series.count
+                    return visibleRange.compactMap { idx in
+                        let si = idx - off; return (si >= 0 && si < series.count) ? series[si] : nil
+                    }
                 }
-                let maxAbs = visibleVals.map { abs($0) }.max() ?? 1
+                let maxAbs = allVisibleVals.map { abs($0) }.max() ?? 1
+                let lo = -maxAbs
+                let hi = maxAbs
 
                 ZStack(alignment: .topLeading) {
                     let midY = height / 2
@@ -643,8 +701,9 @@ private struct CandlestickCanvas: View {
                         p.move(to: CGPoint(x: 0, y: midY))
                         p.addLine(to: CGPoint(x: width, y: midY))
                     }
-                    .stroke(Color(.systemGray4), style: StrokeStyle(lineWidth: 0.5))
+                    .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5))
 
+                    // Histogram bars
                     let candleWidth = max(1.5, step - 1.5)
                     ForEach(Array(visibleRange.enumerated()), id: \.offset) { localIdx, globalIdx in
                         let si = globalIdx - fullOffset
@@ -655,10 +714,25 @@ private struct CandlestickCanvas: View {
                             let y = val >= 0 ? midY - barH : midY
 
                             Rectangle()
-                                .fill(val >= 0 ? Color.green.opacity(0.7) : Color.red.opacity(0.7))
+                                .fill(val >= 0 ? Color.green.opacity(0.4) : Color.red.opacity(0.4))
                                 .frame(width: candleWidth, height: max(0.5, barH))
                                 .position(x: x, y: y + max(0.5, barH) / 2)
                         }
+                    }
+
+                    // MACD line (blue)
+                    seriesLine(data: macdLineSeries, step: step, height: height, lo: lo, hi: hi, color: .blue.opacity(0.9))
+                    // Signal line (orange)
+                    seriesLine(data: macdSignalSeries, step: step, height: height, lo: lo, hi: hi, color: .orange.opacity(0.9))
+
+                    // Selection crosshair
+                    if let idx = selectedIndex, visibleRange.contains(idx) {
+                        let localIdx = idx - visibleRange.lowerBound
+                        let x = step * CGFloat(localIdx) + step / 2
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(width: step, height: height)
+                            .position(x: x, y: height / 2)
                     }
                 }
             }
@@ -668,11 +742,192 @@ private struct CandlestickCanvas: View {
         .padding(.top, spacing)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(Color(.systemGray4), lineWidth: 0.5)
+                .stroke(Color(.systemGray3), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - ADX Panel
+
+    private var adxPanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("ADX").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                Spacer()
+                let offset = candles.count - adxSeries.count
+                let displayIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - offset
+                if displayIdx >= 0 && displayIdx < adxSeries.count {
+                    HStack(spacing: 6) {
+                        Text("ADX \(String(format: "%.0f", adxSeries[displayIdx]))")
+                            .foregroundStyle(.secondary)
+                        let diOffset = candles.count - plusDISeries.count
+                        let diIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - diOffset
+                        if diIdx >= 0 && diIdx < plusDISeries.count {
+                            Text("+DI \(String(format: "%.0f", plusDISeries[diIdx]))")
+                                .foregroundStyle(.green)
+                            Text("-DI \(String(format: "%.0f", minusDISeries[diIdx]))")
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                }
+            }
+            .padding(.horizontal, 2)
+
+            GeometryReader { geo in
+                let width = geo.size.width
+                let height = subChartHeight - 14
+                let step = width / CGFloat(visibleRange.count)
+
+                // Auto-scale to visible data range
+                let allVisible = [adxSeries, plusDISeries, minusDISeries].flatMap { series -> [Double] in
+                    let off = candles.count - series.count
+                    return visibleRange.compactMap { idx in
+                        let si = idx - off; return (si >= 0 && si < series.count) ? series[si] : nil
+                    }
+                }
+                let hi = max(50, (allVisible.max() ?? 50) * 1.1)
+                let lo = 0.0
+
+                ZStack(alignment: .topLeading) {
+                    // 20 and 40 reference lines
+                    ForEach([20.0, 40.0], id: \.self) { level in
+                        let y = height * CGFloat(1.0 - (level - lo) / (hi - lo))
+                        Path { p in p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: width, y: y)) }
+                            .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                        Text(String(format: "%.0f", level))
+                            .font(.system(size: 7)).foregroundStyle(.secondary)
+                            .position(x: 12, y: y)
+                    }
+
+                    // Trend strength zone (below 20 = weak)
+                    let y20 = height * CGFloat(1.0 - (20.0 - lo) / (hi - lo))
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.06))
+                        .frame(width: width, height: height - y20)
+                        .position(x: width / 2, y: y20 + (height - y20) / 2)
+
+                    // ADX line (white/yellow — trend strength)
+                    seriesLine(data: adxSeries, step: step, height: height, lo: lo, hi: hi, color: .yellow.opacity(0.9))
+                    // +DI line (green)
+                    seriesLine(data: plusDISeries, step: step, height: height, lo: lo, hi: hi, color: .green.opacity(0.8))
+                    // -DI line (red)
+                    seriesLine(data: minusDISeries, step: step, height: height, lo: lo, hi: hi, color: .red.opacity(0.8))
+
+                    // Selection crosshair
+                    if let idx = selectedIndex, visibleRange.contains(idx) {
+                        let localIdx = idx - visibleRange.lowerBound
+                        let x = step * CGFloat(localIdx) + step / 2
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(width: step, height: height)
+                            .position(x: x, y: height / 2)
+                    }
+                }
+            }
+            .frame(height: subChartHeight - 14)
+        }
+        .frame(height: subChartHeight)
+        .padding(.top, spacing)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(.systemGray3), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - Volume Oscillator Panel
+
+    private var volumeOscPanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Vol Ratio").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                Spacer()
+                let offset = candles.count - volumeRatioSeries.count
+                let displayIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - offset
+                if displayIdx >= 0 && displayIdx < volumeRatioSeries.count {
+                    let val = volumeRatioSeries[displayIdx]
+                    Text(String(format: "%.1fx", val))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(val >= 2.0 ? .orange : val >= 1.0 ? .primary : .secondary)
+                }
+            }
+            .padding(.horizontal, 2)
+
+            GeometryReader { geo in
+                let width = geo.size.width
+                let height = subChartHeight - 14
+                let step = width / CGFloat(visibleRange.count)
+                let fullOffset = candles.count - volumeRatioSeries.count
+
+                // Scale: 0 to max visible ratio (at least 2.0)
+                let visibleVals: [Double] = visibleRange.compactMap { idx in
+                    let si = idx - fullOffset
+                    guard si >= 0 && si < volumeRatioSeries.count else { return nil }
+                    return volumeRatioSeries[si]
+                }
+                let maxVal = max(2.0, visibleVals.max() ?? 2.0)
+
+                ZStack(alignment: .topLeading) {
+                    // 1.0x reference line (average)
+                    let avgY = height * CGFloat(1.0 - 1.0 / maxVal)
+                    Path { p in p.move(to: CGPoint(x: 0, y: avgY)); p.addLine(to: CGPoint(x: width, y: avgY)) }
+                        .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                    Text("1x").font(.system(size: 7)).foregroundStyle(.secondary)
+                        .position(x: 10, y: avgY)
+
+                    // 2x line
+                    if maxVal >= 2.0 {
+                        let y2x = height * CGFloat(1.0 - 2.0 / maxVal)
+                        Path { p in p.move(to: CGPoint(x: 0, y: y2x)); p.addLine(to: CGPoint(x: width, y: y2x)) }
+                            .stroke(Color.orange.opacity(0.3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                        Text("2x").font(.system(size: 7)).foregroundStyle(.orange.opacity(0.6))
+                            .position(x: 10, y: y2x)
+                    }
+
+                    // Volume ratio bars
+                    let candleWidth = max(1.5, step - 1.5)
+                    ForEach(Array(visibleRange.enumerated()), id: \.offset) { localIdx, globalIdx in
+                        let si = globalIdx - fullOffset
+                        if si >= 0 && si < volumeRatioSeries.count {
+                            let val = volumeRatioSeries[si]
+                            let x = step * CGFloat(localIdx) + step / 2
+                            let barH = CGFloat(val / maxVal) * height
+                            let color: Color = val >= 2.0 ? .orange.opacity(0.7) : val >= 1.0 ? .blue.opacity(0.5) : .blue.opacity(0.3)
+
+                            Rectangle()
+                                .fill(color)
+                                .frame(width: candleWidth, height: max(0.5, barH))
+                                .position(x: x, y: height - barH / 2)
+                        }
+                    }
+
+                    // Selection crosshair
+                    if let idx = selectedIndex, visibleRange.contains(idx) {
+                        let localIdx = idx - visibleRange.lowerBound
+                        let x = step * CGFloat(localIdx) + step / 2
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(width: step, height: height)
+                            .position(x: x, y: height / 2)
+                    }
+                }
+            }
+            .frame(height: subChartHeight - 14)
+        }
+        .frame(height: subChartHeight)
+        .padding(.top, spacing)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(.systemGray3), lineWidth: 0.5)
         )
     }
 
     // MARK: - Helpers
+
+    private func updateChartWidth(_ width: CGFloat) {
+        if abs(chartWidth - width) > 1 {
+            DispatchQueue.main.async { chartWidth = width }
+        }
+    }
 
     private func priceY(_ price: Double, height: CGFloat) -> CGFloat {
         let fraction = (priceMax - price) / (priceMax - priceMin)

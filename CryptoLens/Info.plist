@@ -37,6 +37,7 @@
 	<array>
 		<string>fetch</string>
 		<string>remote-notification</string>
+		<string>bluetooth-peripheral</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>

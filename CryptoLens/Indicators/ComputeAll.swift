@@ -21,7 +21,8 @@ enum IndicatorEngine {
         let atr = ATR.compute(highs: highs, lows: lows, closes: closes)
         // StochRSI: computed once via computeFull, scalar derived from last values
         let stochRSIFull = StochasticRSI.computeFull(closes: closes)
-        let adx = ADX.compute(highs: highs, lows: lows, closes: closes)
+        let adxFull = ADX.computeFull(highs: highs, lows: lows, closes: closes)
+        let adx = adxFull?.result
         let vwap = VWAP.compute(highs: highs, lows: lows, closes: closes, volumes: volumes)
         let fib = Fibonacci.compute(highs: highs, lows: lows, closes: closes)
         let sr = SupportResistance.find(highs: highs, lows: lows, closes: closes)
@@ -96,6 +97,24 @@ enum IndicatorEngine {
         let stochSeries = (k: Array(stochRSIFull.kValues.suffix(50)), d: Array(stochRSIFull.dValues.suffix(50)))
         let macdHistSeriesData = MACD.computeHistSeries(closes: closes, count: 50)
 
+        // Full MACD line + signal series
+        let macdFull = MACD.computeFullSeries(closes: closes, count: 50)
+
+        // ADX + DI series
+        let adxSeriesData = adxFull.map { Array($0.adxSeries.suffix(50)) } ?? []
+        let plusDISeriesData = adxFull.map { Array($0.plusDISeries.suffix(50)) } ?? []
+        let minusDISeriesData = adxFull.map { Array($0.minusDISeries.suffix(50)) } ?? []
+
+        // Volume ratio series (each bar's volume / 20-period avg)
+        var volRatioSeries = [Double]()
+        if volumes.count >= 20 {
+            for i in 19..<volumes.count {
+                let avg = volumes[(i - 19)...i].reduce(0, +) / 20.0
+                volRatioSeries.append(avg > 0 ? volumes[i] / avg : 1.0)
+            }
+            volRatioSeries = Array(volRatioSeries.suffix(50))
+        }
+
         // EMA series aligned with chart candles (last 50)
         let ema20SeriesData = Array(ema20List.suffix(50))
         let ema50SeriesData = Array(ema50List.suffix(50))
@@ -142,6 +161,12 @@ enum IndicatorEngine {
             stochKSeries: stochSeries.k,
             stochDSeries: stochSeries.d,
             macdHistSeries: macdHistSeriesData,
+            macdLineSeries: macdFull.macdLine,
+            macdSignalSeries: macdFull.signalLine,
+            adxSeries: adxSeriesData,
+            plusDISeries: plusDISeriesData,
+            minusDISeries: minusDISeriesData,
+            volumeRatioSeries: volRatioSeries,
             ema20Series: ema20SeriesData,
             ema50Series: ema50SeriesData,
             ema200Series: ema200SeriesData
