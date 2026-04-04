@@ -14,9 +14,12 @@ enum OutcomeTracker {
 
     // MARK: - Trade Setup Outcomes (#1b)
 
-    /// Called during each refresh cycle with current price.
-    /// Checks all active (unresolved) setups for the symbol against the current price.
-    static func trackSetupOutcomes(symbol: String, currentPrice: Double) {
+    /// Called during each refresh cycle with current price and recent candle range.
+    /// Uses high/low for level checks (catches wicks between refreshes).
+    static func trackSetupOutcomes(symbol: String, currentPrice: Double,
+                                    recentHigh: Double? = nil, recentLow: Double? = nil) {
+        let checkHigh = recentHigh ?? currentPrice
+        let checkLow = recentLow ?? currentPrice
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
             var tracked = loadTrackedSetups(url: url)
@@ -28,11 +31,11 @@ enum OutcomeTracker {
                 let setup = tracked[i].setup
                 let isLong = setup.direction == "LONG"
 
-                // Check entry hit
+                // Check entry hit (use checkLow for longs, checkHigh for shorts — catches wicks)
                 if !tracked[i].outcome.entryHit {
                     let entryHit = isLong
-                        ? currentPrice <= setup.entry  // price dipped to entry for longs
-                        : currentPrice >= setup.entry   // price rose to entry for shorts
+                        ? checkLow <= setup.entry
+                        : checkHigh >= setup.entry
                     if entryHit {
                         tracked[i].outcome.entryHit = true
                         tracked[i].outcome.entryHitTime = Date()
@@ -41,7 +44,7 @@ enum OutcomeTracker {
                     continue  // Don't check targets until entry is hit
                 }
 
-                // Entry was hit — track excursions and targets
+                // Entry was hit — track excursions
                 let moveFromEntry = isLong
                     ? currentPrice - setup.entry
                     : setup.entry - currentPrice
@@ -55,27 +58,30 @@ enum OutcomeTracker {
                     changed = true
                 }
 
-                // Check stop loss
+                // Once resolved (SL or TP1 hit), stop checking — first resolution wins
+                if tracked[i].outcome.resolved { continue }
+
+                // Check stop loss (worst case: checkLow for longs, checkHigh for shorts)
                 let stopHit = isLong
-                    ? currentPrice <= setup.stopLoss
-                    : currentPrice >= setup.stopLoss
+                    ? checkLow <= setup.stopLoss
+                    : checkHigh >= setup.stopLoss
                 if stopHit && !tracked[i].outcome.stopHit {
                     tracked[i].outcome.stopHit = true
                     tracked[i].outcome.outcomeTime = Date()
                     changed = true
                 }
 
-                // Check TPs
+                // Check TPs (best case: checkHigh for longs, checkLow for shorts)
                 if !tracked[i].outcome.tp1Hit {
-                    let tp1Hit = isLong ? currentPrice >= setup.tp1 : currentPrice <= setup.tp1
+                    let tp1Hit = isLong ? checkHigh >= setup.tp1 : checkLow <= setup.tp1
                     if tp1Hit { tracked[i].outcome.tp1Hit = true; changed = true }
                 }
                 if let tp2 = setup.tp2, !tracked[i].outcome.tp2Hit {
-                    let tp2Hit = isLong ? currentPrice >= tp2 : currentPrice <= tp2
+                    let tp2Hit = isLong ? checkHigh >= tp2 : checkLow <= tp2
                     if tp2Hit { tracked[i].outcome.tp2Hit = true; changed = true }
                 }
                 if let tp3 = setup.tp3, !tracked[i].outcome.tp3Hit {
-                    let tp3Hit = isLong ? currentPrice >= tp3 : currentPrice <= tp3
+                    let tp3Hit = isLong ? checkHigh >= tp3 : checkLow <= tp3
                     if tp3Hit {
                         tracked[i].outcome.tp3Hit = true
                         tracked[i].outcome.outcomeTime = tracked[i].outcome.outcomeTime ?? Date()

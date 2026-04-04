@@ -386,7 +386,8 @@ class AnalysisService: ObservableObject {
             }
             alertsStore?.checkAlerts(prices: [symbol: result.daily.price])
             // Track setup/flat outcomes on each refresh
-            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price)
+            let recentCandle = result.h1.candles.last
+            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentHigh: recentCandle?.high, recentLow: recentCandle?.low)
             OutcomeTracker.trackFlatOutcomes(symbol: symbol, currentPrice: result.daily.price)
             saveCache(result)
 

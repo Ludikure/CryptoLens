@@ -382,6 +382,9 @@ enum AnalysisPrompt {
             let biasAligned = (dailyBearish && fourHBearish) || (dailyBullish && fourHBullish)
             let oneHOpposes = biasAligned && ((dailyBearish && oneHBias.contains("Bullish")) || (dailyBullish && oneHBias.contains("Bearish")))
             let alignedDirection = dailyBearish ? "SHORT" : (dailyBullish ? "LONG" : "FLAT")
+            // Read kill duration state BEFORE it gets updated — needed by kills-clearing later
+            let killDurKeyOuter = "killDur_\(symbol)"
+            let prevDurState = (UserDefaults.standard.dictionary(forKey: killDurKeyOuter) as? [String: Int]) ?? [:]
 
             lines.append("Bias Alignment: Daily=\(dailyBias), 4H=\(fourHBias), 1H=\(oneHBias)")
             lines.append("Counter-Trend Pullback: \(oneHOpposes) | Aligned Direction: \(alignedDirection)")
@@ -399,36 +402,37 @@ enum AnalysisPrompt {
                     if dailyBearish && macd.histogram > 0 { killDivergence = true }
                     if dailyBullish && macd.histogram < 0 { killDivergence = true }
                 }
-                // Also check 4H RSI divergence if we have enough data
-                if fourH.rsiSeries.count >= 10 && fourH.candles.count >= 10 {
-                    let recentCandles = Array(fourH.candles.suffix(10))
-                    let recentRSI = fourH.rsiSeries.count >= 10 ? Array(fourH.rsiSeries.suffix(10)) : []
-                    if recentRSI.count >= 10 {
-                        let priceLow1 = recentCandles[0..<5].map(\.low).min() ?? 0
-                        let priceLow2 = recentCandles[5..<10].map(\.low).min() ?? 0
-                        let rsiLow1 = recentRSI[0..<5].min() ?? 0
-                        let rsiLow2 = recentRSI[5..<10].min() ?? 0
-                        // Bullish divergence: price making lower lows, RSI making higher lows
-                        if dailyBearish && priceLow2 < priceLow1 && rsiLow2 > rsiLow1 + 2 {
-                            killDivergence = true
-                        }
-                        let priceHigh1 = recentCandles[0..<5].map(\.high).max() ?? 0
-                        let priceHigh2 = recentCandles[5..<10].map(\.high).max() ?? 0
-                        let rsiHigh1 = recentRSI[0..<5].max() ?? 0
-                        let rsiHigh2 = recentRSI[5..<10].max() ?? 0
-                        // Bearish divergence: price making higher highs, RSI making lower highs
-                        if dailyBullish && priceHigh2 > priceHigh1 && rsiHigh2 < rsiHigh1 - 2 {
+                // Also check 4H RSI divergence using swing point detection
+                if fourH.rsiSeries.count >= 15 && fourH.candles.count >= 15 {
+                    let lookbackCandles = Array(fourH.candles.suffix(20))
+                    let rsiOffset = fourH.candles.count - fourH.rsiSeries.count
+                    let rsiStart = max(0, fourH.candles.count - 20 - rsiOffset)
+                    let lookbackRSI = Array(fourH.rsiSeries.suffix(min(20, fourH.rsiSeries.count)))
+                    if lookbackCandles.count == lookbackRSI.count {
+                        let biasDir = dailyBearish ? "Bearish" : "Bullish"
+                        if DivergenceDetector.hasDivergence(candles: lookbackCandles, rsiSeries: lookbackRSI, biasDirection: biasDir) {
                             killDivergence = true
                         }
                     }
                 }
 
-                // 2b.2 — 1H counter-move volume vs trend volume
+                // 2b.2 — 1H counter-move volume vs trend volume (direction-aware)
                 if oneHData.candles.count >= 6 {
                     let recent = Array(oneHData.candles.suffix(6))
-                    let counterVol = recent.suffix(3).map(\.volume).reduce(0, +) / 3.0
-                    let trendVol = recent.prefix(3).map(\.volume).reduce(0, +) / 3.0
-                    if trendVol > 0 && counterVol > trendVol * 1.2 {
+                    let counterCandles: [Candle]
+                    let trendCandles: [Candle]
+                    if dailyBearish {
+                        counterCandles = recent.filter { $0.close > $0.open }
+                        trendCandles = recent.filter { $0.close <= $0.open }
+                    } else {
+                        counterCandles = recent.filter { $0.close < $0.open }
+                        trendCandles = recent.filter { $0.close >= $0.open }
+                    }
+                    let counterAvg = counterCandles.isEmpty ? 0 : counterCandles.map(\.volume).reduce(0, +) / Double(counterCandles.count)
+                    let trendAvg = trendCandles.isEmpty ? 0 : trendCandles.map(\.volume).reduce(0, +) / Double(trendCandles.count)
+                    let avgVol = recent.map(\.volume).reduce(0, +) / Double(recent.count)
+                    let minThreshold = avgVol * 0.3
+                    if trendAvg > 0 && counterAvg > trendAvg * 1.2 && counterAvg > minThreshold {
                         killVolume = true
                     }
                 }
@@ -450,7 +454,7 @@ enum AnalysisPrompt {
 
                 // Phase 3 — Kill duration tracking (persist across refreshes)
                 let killDurKey = "killDur_\(symbol)"
-                var durState = (UserDefaults.standard.dictionary(forKey: killDurKey) as? [String: Int]) ?? [:]
+                var durState = prevDurState  // prevDurState read in outer scope before write
                 durState["divergence"] = killDivergence ? (durState["divergence"] ?? 0) + 1 : 0
                 durState["volume"] = killVolume ? (durState["volume"] ?? 0) + 1 : 0
                 durState["funding"] = killFunding ? (durState["funding"] ?? 0) + 1 : 0
@@ -479,14 +483,12 @@ enum AnalysisPrompt {
                 lines.append("Macro Risk: NONE")
             }
 
-            // Phase 2d — Kills-clearing detection
+            // Phase 2d — Kills-clearing detection (uses prevDurState from before write)
             if oneHOpposes, let oneHData = oneH {
                 var killsClearing = [String]()
-                let killDurKey2 = "killDur_\(symbol)"
-                let prevDur = (UserDefaults.standard.dictionary(forKey: killDurKey2) as? [String: Int]) ?? [:]
 
-                // Divergence: was active previously but now cleared
-                if let prev = prevDur["divergence"], prev > 0 {
+                // Divergence: was active in PREVIOUS refresh but now cleared or weakening
+                if let prev = prevDurState["divergence"], prev > 0 {
                     // Check if MACD histogram is contracting (weakening)
                     let histSeries = MACD.computeHistSeries(closes: fourH.candles.map(\.close), count: 3)
                     if histSeries.count >= 2 {
@@ -514,11 +516,44 @@ enum AnalysisPrompt {
                 }
             }
 
-            // Phase 2c — Candle close timestamps
+            // Phase 2c — Candle close timestamps (timezone-aware)
             let now = Date()
             let fourHInterval: TimeInterval = 4 * 3600
             let nextFourHClose = Date(timeIntervalSince1970: (floor(now.timeIntervalSince1970 / fourHInterval) + 1) * fourHInterval)
-            let dailyClose = Calendar.current.nextDate(after: now, matching: DateComponents(hour: 0, minute: 0), matchingPolicy: .nextTime) ?? now
+
+            let dailyClose: Date
+            let isStock = stockInfo != nil
+            if isStock {
+                // Stock daily close = next 4:00 PM ET on a trading day
+                let et = TimeZone(identifier: "America/New_York")!
+                var cal = Calendar.current
+                cal.timeZone = et
+                var comps = cal.dateComponents([.year, .month, .day], from: now)
+                comps.hour = 16; comps.minute = 0; comps.second = 0
+                let todayClose = cal.date(from: comps) ?? now
+                if now < todayClose && !MarketHours.isMarketHoliday(date: now)
+                    && Calendar.current.component(.weekday, from: now) >= 2
+                    && Calendar.current.component(.weekday, from: now) <= 6 {
+                    dailyClose = todayClose
+                } else {
+                    // Next trading day — skip weekends and holidays
+                    var nextDay = cal.date(byAdding: .day, value: 1, to: now) ?? now
+                    while cal.component(.weekday, from: nextDay) == 1
+                       || cal.component(.weekday, from: nextDay) == 7
+                       || MarketHours.isMarketHoliday(date: nextDay) {
+                        nextDay = cal.date(byAdding: .day, value: 1, to: nextDay) ?? nextDay
+                    }
+                    var nextComps = cal.dateComponents([.year, .month, .day], from: nextDay)
+                    nextComps.hour = 16; nextComps.minute = 0
+                    dailyClose = cal.date(from: nextComps) ?? now.addingTimeInterval(86400)
+                }
+            } else {
+                // Crypto daily close = next midnight UTC
+                var cal = Calendar.current
+                cal.timeZone = TimeZone(identifier: "UTC")!
+                dailyClose = cal.nextDate(after: now, matching: DateComponents(hour: 0, minute: 0), matchingPolicy: .nextTime) ?? now
+            }
+
             let isoFormatter = ISO8601DateFormatter()
             lines.append("Next 4H Close: \(isoFormatter.string(from: nextFourHClose))")
             lines.append("Next Daily Close: \(isoFormatter.string(from: dailyClose))")
