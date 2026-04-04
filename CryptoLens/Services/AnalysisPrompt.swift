@@ -15,6 +15,8 @@ enum AnalysisPrompt {
 
         STEP 1: IDENTIFY THE REGIME
         The regime label is pre-computed in the PRE-COMPUTED FLAGS section and is AUTHORITATIVE. Use it as-is. The regime_details (ADX, MA alignment, BB squeeze) are provided for your narrative only — do not reclassify the regime.
+        If regime_changed is false, output only: "## Market Regime\n[REGIME] (unchanged)" — do not re-explain. Save token budget for setup and watching sections.
+        Only state "regime changed" if the Regime Changed field is explicitly true in the PRE-COMPUTED FLAGS. If the field is not present, do not infer regime change status — treat as unchanged.
         - TRENDING: ADX > 25, price respecting EMAs, MAs stacked in order
         - RANGING: ADX < 20, price oscillating between S/R, MAs flat/tangled
         - TRANSITIONING: breaking out of range or trend exhausting
@@ -57,8 +59,30 @@ enum AnalysisPrompt {
 
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
-        STEP 4: FIND THE TRADE (only if bias is LONG or SHORT)
-        If you declared FLAT in Step 3, skip this step entirely.
+        KILL CONDITION GATE (evaluate before Step 4):
+        If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
+
+        If ANY_KILLED is true:
+          → Skip Step 4 entirely. Do not construct a setup table.
+          → Output format:
+            ## Bias
+            "Bias: [DIRECTION] (Rule 1 — D+4H aligned [direction]). Counter-trend entry BLOCKED: [kill flag names only, no explanation]. See Risk Factors for monitoring items."
+            Do not explain what divergence means or why volume matters. The kill names are sufficient.
+            ## Trade Setup
+            "NO SETUP — Kill conditions active."
+            Then output a structured watching section:
+            **Prerequisites** (must clear before entry is possible):
+            - [conditions that need to change — e.g., divergence clearing, volume normalizing]
+            **Entry trigger** (the specific confirmation that activates the trade):
+            - [the one thing that gets you in — e.g., rejection candle at $X with declining volume]
+            **Re-evaluate on:** [specific time or price level, whichever comes first]
+          → Go directly to Risk Factors, then empty JSON [].
+
+        If ANY_KILLED is false:
+          → Proceed to Step 4. Build the counter-trend pullback setup with the mandatory kill checklist (all will show PASS).
+
+        STEP 4: FIND THE TRADE (only if bias is LONG or SHORT and kill gate is CLEAR)
+        If you declared FLAT in Step 3, or if the kill gate blocked entry, skip this step entirely.
         The best setups have 3 things:
         1. A LEVEL — price at meaningful spot (S/R, fib, EMA, VWAP). No level = no trade.
         2. A SIGNAL — something happening at that level (candle pattern, RSI divergence, volume spike, Stoch RSI cross\(market == .crypto ? ", squeeze risk, taker flow" : "")). A level without a signal is just a number.
@@ -109,7 +133,7 @@ enum AnalysisPrompt {
         - Funding rate has flipped to support the counter-move direction (market structure shifting, not just a pullback).
         - High-impact macro event within 4 hours.
 
-        MANDATORY: Kill conditions are pre-computed in the PRE-COMPUTED FLAGS section. If ANY_KILLED is true, do not present a counter-trend setup. State which condition(s) fired and what you are watching instead. Do not re-evaluate kill conditions from raw data — the pre-computed values are authoritative.
+        MANDATORY: Output the kill condition checklist ONLY when presenting a counter-trend pullback setup (all checks will be PASS). If ANY_KILLED is true, the kill gate already blocked entry — do not repeat the checklist. Kill conditions are pre-computed in the PRE-COMPUTED FLAGS section and are authoritative. Do not re-evaluate from raw data.
         The kill condition flags are:
         - divergence_against_bias: 4H RSI/MACD showing divergence against the bias direction
         - counter_move_volume_exceeds: 1H counter-move volume > 1.2x trend volume
@@ -184,7 +208,15 @@ enum AnalysisPrompt {
         "NO SETUP — [specific reason]." Skip the table entirely. No conditional or hypothetical entries.
 
         ## Risk Factors
-        Bullet list: upcoming events, macro headwinds/tailwinds, key invalidation levels. Raw data observations that diverge from pre-computed labels belong here (e.g., "4H raw data showing ascending lows — monitor for potential label flip on next refresh").
+        Maximum 3 bullets. Ranked by what is most likely to change the picture in the next 1-4 hours. Do not restate information already covered in the Bias or Trade Setup sections. Focus on:
+        1. What could flip a label or clear a kill condition
+        2. What external catalyst could override the technical picture
+        3. Key invalidation level with specific price
+        Raw data observations that diverge from pre-computed labels belong here (e.g., "4H raw data showing ascending lows — monitor for potential label flip on next refresh").
+
+        **Next decision point:** [specific time-based event OR price level], whichever comes first.
+        This must be ONE line with at most two conditions. Always include a time component (next candle close, next 4H close, specific event time) so the user knows when to look again.
+        Examples: "Next decision point: 4H candle close at 6:00 PM ET or price reaching $67,663." / "Next decision point: 1H close below $66,938 or NFP release tomorrow 8:30 AM ET."
 
         ---
         At the very end, include a JSON block with trade setups:
@@ -317,9 +349,16 @@ enum AnalysisPrompt {
                 regime = "TRENDING"
             }
 
+            // Phase 2 — Regime staleness
+            let regimeKey = "regime_\(symbol)"
+            let previousRegime = UserDefaults.standard.string(forKey: regimeKey)
+            let regimeChanged = previousRegime != regime
+            UserDefaults.standard.set(regime, forKey: regimeKey)
+
             lines.append("")
             lines.append("=== PRE-COMPUTED FLAGS (authoritative — do not reclassify) ===")
             lines.append("Regime: \(regime) (ADX_daily: \(String(format: "%.1f", adxDaily)), MA_alignment: \(maAlignment), BB_squeeze: \(bbSqueezeAny))")
+            lines.append("Regime Changed: \(regimeChanged)")
 
             // Phase 2a — Counter-trend flag + bias alignment
             let dailyBias = daily.bias
@@ -354,7 +393,6 @@ enum AnalysisPrompt {
                 // Also check 4H RSI divergence if we have enough data
                 if fourH.rsiSeries.count >= 10 && fourH.candles.count >= 10 {
                     let recentCandles = Array(fourH.candles.suffix(10))
-                    let rsiOffset = fourH.candles.count - fourH.rsiSeries.count
                     let recentRSI = fourH.rsiSeries.count >= 10 ? Array(fourH.rsiSeries.suffix(10)) : []
                     if recentRSI.count >= 10 {
                         let priceLow1 = recentCandles[0..<5].map(\.low).min() ?? 0
@@ -400,7 +438,21 @@ enum AnalysisPrompt {
                 killMacro = macroIn4h
 
                 let anyKilled = killDivergence || killVolume || killFunding || killMacro
-                lines.append("Kill Conditions: divergence_against_bias=\(killDivergence), counter_move_volume_exceeds=\(killVolume), funding_supports_counter=\(killFunding), macro_event_within_4h=\(killMacro), ANY_KILLED=\(anyKilled)")
+
+                // Phase 3 — Kill duration tracking (persist across refreshes)
+                let killDurKey = "killDur_\(symbol)"
+                var durState = (UserDefaults.standard.dictionary(forKey: killDurKey) as? [String: Int]) ?? [:]
+                durState["divergence"] = killDivergence ? (durState["divergence"] ?? 0) + 1 : 0
+                durState["volume"] = killVolume ? (durState["volume"] ?? 0) + 1 : 0
+                durState["funding"] = killFunding ? (durState["funding"] ?? 0) + 1 : 0
+                UserDefaults.standard.set(durState, forKey: killDurKey)
+
+                var killParts = [String]()
+                if killDivergence { killParts.append("divergence_against_bias(\(durState["divergence"] ?? 1) candles)") }
+                if killVolume { killParts.append("counter_move_volume_exceeds(\(durState["volume"] ?? 1) candles)") }
+                if killFunding { killParts.append("funding_supports_counter(\(durState["funding"] ?? 1) candles)") }
+                if killMacro { killParts.append("macro_event_within_4h") }
+                lines.append("Kill Conditions: \(killParts.isEmpty ? "none" : killParts.joined(separator: ", ")), ANY_KILLED=\(anyKilled)")
             }
 
             // Phase 5 — Macro event window
