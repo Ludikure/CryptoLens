@@ -250,15 +250,17 @@ struct TrackedSetup: Codable, Identifiable {
     let analysisId: UUID
     let timestamp: Date
     var outcome: TradeOutcome
+    let killsAtGeneration: KillSnapshot?
 
     var id: UUID { setup.id }
 
-    init(setup: TradeSetup, symbol: String, analysisId: UUID) {
+    init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil) {
         self.setup = setup
         self.symbol = symbol
         self.analysisId = analysisId
         self.timestamp = Date()
         self.outcome = TradeOutcome()
+        self.killsAtGeneration = killSnapshot
     }
 }
 

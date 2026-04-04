@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 import UIKit
 import UserNotifications
 
@@ -46,6 +47,8 @@ struct MarketScopeApp: App {
         BackgroundRefreshManager.register()
         AlertsStore.requestPermission()
         PushService.ensureRegistered()
+        // Migrate kill duration / regime state from UserDefaults → SwiftData
+        AnalysisStateMigration.migrateIfNeeded()
         #if DEBUG
         print("[MarketScope] Device ID: \(PushService.deviceId)")
         print("[MarketScope] Auth Token: \(PushService.authToken ?? "nil")")
@@ -63,6 +66,7 @@ struct MarketScopeApp: App {
 
                 SplashView()
             }
+                .modelContainer(for: [AnalysisState.self])
                 .onAppear {
                     analysisService.configure(alertsStore: alertsStore)
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)

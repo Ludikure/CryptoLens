@@ -238,6 +238,7 @@ enum AnalysisPrompt {
         MACRO RISK: The macro event proximity is pre-computed as `Macro Risk` in the PRE-COMPUTED FLAGS section. If IMMINENT, conviction cannot exceed LOW (no trade). If NEARBY, conviction cannot exceed MODERATE. If UPCOMING or ON_HORIZON, flag in Risk Factors but do not suppress conviction.
 
         TAGGED LEVELS: Levels in the TAGGED LEVELS section are pre-computed with proximity (IN_PLAY / NEARBY / DISTANT) and ATR distance. IN_PLAY levels are the only candidates for primary entries. NEARBY levels may be used for conditional/wait entries. DISTANT levels are targets only — never propose them as entries.
+        CANDIDATE SETUPS: If pre-computed candidate setups are provided, use the exact R:R values shown — do not recalculate. Select the best candidate based on signal quality, exhaustion signals, and confluence. If no candidate is marked Viable (R:R >= 1.5), there is no setup. You may adjust entry price slightly based on the current candle pattern (e.g., entry at the wick rejection rather than the level itself), but do not recalculate R:R — state that the entry is adjusted and the pre-computed R:R is approximate.
         CANDLE CLOSE TIMESTAMPS: Use the pre-computed Next 4H Close and Next Daily Close timestamps for the "Next decision point" line. Do not calculate candle close times yourself.
         KILLS CLEARING: If Kills Clearing flags are present, mention them in the Prerequisites section of the watching output. Do not analyze raw data to determine if kills are clearing — use the pre-computed flags.
         """
@@ -405,8 +406,6 @@ enum AnalysisPrompt {
                 // Also check 4H RSI divergence using swing point detection
                 if fourH.rsiSeries.count >= 15 && fourH.candles.count >= 15 {
                     let lookbackCandles = Array(fourH.candles.suffix(20))
-                    let rsiOffset = fourH.candles.count - fourH.rsiSeries.count
-                    let rsiStart = max(0, fourH.candles.count - 20 - rsiOffset)
                     let lookbackRSI = Array(fourH.rsiSeries.suffix(min(20, fourH.rsiSeries.count)))
                     if lookbackCandles.count == lookbackRSI.count {
                         let biasDir = dailyBearish ? "Bearish" : "Bullish"
@@ -852,61 +851,118 @@ enum AnalysisPrompt {
             lines.append(spy)
         }
 
-        // Phase 3 — Level proximity + freshness tagging
+        // Phase 3+4 — Level proximity tagging + R:R pre-computation
         if let currentPrice = indicators.last?.price ?? indicators.first.map({ $0.price }),
            let atr = indicators.count > 2 ? indicators[2].atr?.atr : indicators[1].atr?.atr {
-            var taggedLevels = [String]()
+
+            // Build structured level array (used for both text output and R:R)
+            struct TaggedLevel {
+                let price: Double
+                let type: String
+                let proximity: String
+                let atrDistance: Double
+            }
+
+            var allLevels = [TaggedLevel]()
 
             for ind in indicators {
                 let prefix = ind.label
-                // S/R levels
                 for s in ind.supportResistance.supports {
                     let dist = abs(currentPrice - s) / max(atr, 0.0001)
-                    let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
-                    taggedLevels.append("\(Formatters.formatPrice(s)) (\(prefix) support) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                    allLevels.append(TaggedLevel(price: s, type: "\(prefix) support",
+                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
                 }
                 for r in ind.supportResistance.resistances {
                     let dist = abs(currentPrice - r) / max(atr, 0.0001)
-                    let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
-                    taggedLevels.append("\(Formatters.formatPrice(r)) (\(prefix) resistance) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                    allLevels.append(TaggedLevel(price: r, type: "\(prefix) resistance",
+                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
                 }
-                // VWAP
                 if let vwap = ind.vwap?.vwap {
                     let dist = abs(currentPrice - vwap) / max(atr, 0.0001)
-                    let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
-                    taggedLevels.append("\(Formatters.formatPrice(vwap)) (\(prefix) VWAP) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                    allLevels.append(TaggedLevel(price: vwap, type: "\(prefix) VWAP",
+                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
                 }
-                // Volume Profile levels
                 if let vp = ind.volumeProfile {
                     for (label, price) in [("POC", vp.poc), ("VAH", vp.valueAreaHigh), ("VAL", vp.valueAreaLow)] {
                         let dist = abs(currentPrice - price) / max(atr, 0.0001)
-                        let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
-                        taggedLevels.append("\(Formatters.formatPrice(price)) (\(prefix) \(label)) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                        allLevels.append(TaggedLevel(price: price, type: "\(prefix) \(label)",
+                            proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
                     }
                 }
             }
 
-            // Deduplicate levels within 0.1% of each other, keep the one with shortest label
-            var uniqueLevels = [String]()
-            var seenPrices = [Double]()
-            for level in taggedLevels {
-                if let priceStr = level.components(separatedBy: " ").first,
-                   let price = Double(priceStr.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")) {
-                    let isDuplicate = seenPrices.contains { abs($0 - price) / max(price, 1) < 0.001 }
-                    if !isDuplicate {
-                        seenPrices.append(price)
-                        uniqueLevels.append(level)
-                    }
-                } else {
-                    uniqueLevels.append(level)
-                }
+            // Deduplicate levels within 0.1%
+            var uniqueLevels = [TaggedLevel]()
+            for level in allLevels {
+                let isDuplicate = uniqueLevels.contains { abs($0.price - level.price) / max(level.price, 1) < 0.001 }
+                if !isDuplicate { uniqueLevels.append(level) }
             }
 
+            // Output tagged levels
             if !uniqueLevels.isEmpty {
                 lines.append("")
                 lines.append("=== TAGGED LEVELS ===")
                 for level in uniqueLevels.prefix(15) {
-                    lines.append(level)
+                    lines.append("\(Formatters.formatPrice(level.price)) (\(level.type)) [\(level.proximity), \(String(format: "%.1f", level.atrDistance))x ATR]")
+                }
+            }
+
+            // Phase 4 — R:R pre-computation from IN_PLAY levels
+            if indicators.count >= 2 {
+                let daily = indicators[0]
+                let dailyBearish4 = daily.bias.contains("Bearish")
+                let dailyBullish4 = daily.bias.contains("Bullish")
+                let fourHBearish4 = indicators[1].bias.contains("Bearish")
+                let fourHBullish4 = indicators[1].bias.contains("Bullish")
+                let aligned4 = (dailyBearish4 && fourHBearish4) || (dailyBullish4 && fourHBullish4)
+                let direction4 = dailyBearish4 ? "SHORT" : (dailyBullish4 ? "LONG" : "")
+
+                if aligned4 && !direction4.isEmpty {
+                    let entryLevels = uniqueLevels.filter { $0.proximity == "IN_PLAY" }
+                    var candidates = [String]()
+
+                    for entry in entryLevels {
+                        let stop: Double
+                        if direction4 == "SHORT" {
+                            let above = uniqueLevels.filter { $0.price > entry.price }.sorted { $0.price < $1.price }
+                            stop = (above.first?.price ?? entry.price) + atr * 0.5
+                        } else {
+                            let below = uniqueLevels.filter { $0.price < entry.price }.sorted { $0.price > $1.price }
+                            stop = (below.first?.price ?? entry.price) - atr * 0.5
+                        }
+
+                        let risk = abs(entry.price - stop)
+                        guard risk > 0 else { continue }
+
+                        let validTargets: [TaggedLevel]
+                        if direction4 == "SHORT" {
+                            validTargets = uniqueLevels.filter { $0.price < entry.price }.sorted { $0.price > $1.price }
+                        } else {
+                            validTargets = uniqueLevels.filter { $0.price > entry.price }.sorted { $0.price < $1.price }
+                        }
+
+                        let targetLines = validTargets.prefix(3).map { t -> String in
+                            let reward = abs(t.price - entry.price)
+                            let rr = reward / risk
+                            return "\(Formatters.formatPrice(t.price)) (\(t.type)) R:R=\(String(format: "%.2f", rr))"
+                        }
+
+                        let viable = validTargets.prefix(3).contains { abs($0.price - entry.price) / risk >= 1.5 }
+
+                        candidates.append(
+                            "Entry \(Formatters.formatPrice(entry.price)) (\(entry.type)) | " +
+                            "Stop \(Formatters.formatPrice(stop)) | " +
+                            "Risk \(Formatters.formatPrice(risk)) | " +
+                            "Targets: \(targetLines.joined(separator: ", ")) | " +
+                            "Viable: \(viable)"
+                        )
+                    }
+
+                    if !candidates.isEmpty {
+                        lines.append("")
+                        lines.append("=== CANDIDATE SETUPS (pre-computed R:R — do not recalculate) ===")
+                        for c in candidates { lines.append(c) }
+                    }
                 }
             }
         }
