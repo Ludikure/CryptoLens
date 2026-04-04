@@ -105,6 +105,52 @@ struct TradeSetup: Codable, Identifiable {
     }
 }
 
+/// Tracks what happened after a setup was generated.
+struct TradeOutcome: Codable {
+    var entryHit: Bool
+    var entryHitTime: Date?
+    var stopHit: Bool
+    var tp1Hit: Bool
+    var tp2Hit: Bool
+    var tp3Hit: Bool
+    var maxFavorable: Double   // max move in trade direction from entry
+    var maxAdverse: Double     // max move against trade direction from entry
+    var outcomeTime: Date?     // when the trade resolved (hit TP or SL)
+    var resolved: Bool { stopHit || tp1Hit }
+
+    init() {
+        entryHit = false; entryHitTime = nil; stopHit = false
+        tp1Hit = false; tp2Hit = false; tp3Hit = false
+        maxFavorable = 0; maxAdverse = 0; outcomeTime = nil
+    }
+
+    var result: String {
+        if !entryHit { return "not_triggered" }
+        if stopHit { return "loss" }
+        if tp3Hit { return "tp3_win" }
+        if tp2Hit { return "tp2_win" }
+        if tp1Hit { return "tp1_win" }
+        return "open"
+    }
+}
+
+/// Tracks FLAT/kill outcomes to detect false conservatism.
+struct FlatOutcome: Codable {
+    let symbol: String
+    let priceAtFlat: Double
+    let timestamp: Date
+    let reason: String           // "FLAT_Rule2", "KILL_divergence", etc.
+    var priceAfter3Refreshes: Double?
+    var refreshCount: Int
+    var falseFlat: Bool?         // true if price moved >1.5% directionally
+
+    init(symbol: String, price: Double, reason: String) {
+        self.symbol = symbol; self.priceAtFlat = price
+        self.timestamp = Date(); self.reason = reason
+        self.refreshCount = 0; self.falseFlat = nil
+    }
+}
+
 /// Response from Claude with both markdown and structured setups.
 struct ClaudeAnalysisResponse {
     let markdown: String

@@ -53,14 +53,8 @@ struct BiasPill: View {
         }
     }
 
-    private var shortBias: String {
-        switch bias {
-        case "Strong Bullish": return "Strong Bull"
-        case "Bullish": return "Bullish"
-        case "Strong Bearish": return "Strong Bear"
-        case "Bearish": return "Bearish"
-        default: return "Neutral"
-        }
+    private var pillShortBias: String {
+        shortBias(bias)
     }
 
     var body: some View {
@@ -68,7 +62,7 @@ struct BiasPill: View {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-            Text(shortBias)
+            Text(pillShortBias)
                 .font(.caption2)
                 .fontWeight(.semibold)
                 .foregroundStyle(textColor)
@@ -76,6 +70,6 @@ struct BiasPill: View {
                 .padding(.vertical, 3)
                 .background(color, in: Capsule())
         }
-        .accessibilityLabel("\(label) bias: \(shortBias)")
+        .accessibilityLabel("\(label) bias: \(pillShortBias)")
     }
 }

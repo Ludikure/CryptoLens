@@ -135,7 +135,7 @@ struct AnalysisSnapshotView: View {
                 .foregroundStyle(.white.opacity(0.4))
         }
         .padding(20)
-        .frame(width: 390)
+        .frame(maxWidth: .infinity)
         .background(bgColor)
     }
 
@@ -159,7 +159,7 @@ struct AnalysisSnapshotView: View {
                 .foregroundStyle(biasTextColor(bias))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4)
-                .background(biasColor(bias).opacity(0.2), in: Capsule())
+                .background(biasColorSimple(bias).opacity(0.2), in: Capsule())
         }
     }
 
@@ -226,21 +226,7 @@ struct AnalysisSnapshotView: View {
         return before
     }
 
-    private func shortBias(_ bias: String) -> String {
-        switch bias {
-        case "Strong Bullish": return "Strong Bull"
-        case "Bullish": return "Bullish"
-        case "Strong Bearish": return "Strong Bear"
-        case "Bearish": return "Bearish"
-        default: return "Neutral"
-        }
-    }
-
     private func biasTextColor(_ bias: String) -> Color {
         bias.contains("Bullish") ? .green : (bias.contains("Bearish") ? .red : .white.opacity(0.6))
-    }
-
-    private func biasColor(_ bias: String) -> Color {
-        bias.contains("Bullish") ? .green : (bias.contains("Bearish") ? .red : .gray)
     }
 }

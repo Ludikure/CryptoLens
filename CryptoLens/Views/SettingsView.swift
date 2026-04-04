@@ -100,12 +100,18 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
+                Section("Data") {
+                    NavigationLink("Outcome Tracking") {
+                        OutcomeDashboardView()
+                    }
+                }
+
                 // About
                 Section("About") {
                     HStack {
                         Text("Version")
                         Spacer()
-                        Text("1.0").foregroundStyle(.secondary)
+                        Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?").foregroundStyle(.secondary)
                     }
                     HStack {
                         Text("Build")

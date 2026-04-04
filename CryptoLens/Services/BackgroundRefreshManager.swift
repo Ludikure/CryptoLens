@@ -68,6 +68,26 @@ enum BackgroundRefreshManager {
             }
         }
 
-        await MainActor.run { store.checkAlerts(prices: prices) }
+        let fetchedPrices = prices
+        await MainActor.run {
+            // Capture alert IDs that are not yet triggered before checking
+            let previouslyUntriggered = Set(store.activeAlerts.map { $0.id.uuidString })
+
+            store.checkAlerts(prices: fetchedPrices)
+
+            // Determine which alerts were just triggered
+            let nowUntriggered = Set(store.activeAlerts.map { $0.id.uuidString })
+            let newlyTriggered = previouslyUntriggered.subtracting(nowUntriggered)
+
+            if !newlyTriggered.isEmpty {
+                // Append to any existing pending IDs (in case multiple BG runs fire)
+                var pending = UserDefaults.standard.stringArray(forKey: Self.backgroundTriggeredKey) ?? []
+                pending.append(contentsOf: newlyTriggered)
+                UserDefaults.standard.set(pending, forKey: Self.backgroundTriggeredKey)
+            }
+        }
     }
+
+    /// UserDefaults key for alert IDs triggered during background refresh.
+    static let backgroundTriggeredKey = "backgroundTriggeredAlertIDs"
 }

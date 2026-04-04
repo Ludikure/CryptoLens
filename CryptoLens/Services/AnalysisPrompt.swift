@@ -236,6 +236,10 @@ enum AnalysisPrompt {
 
         ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
         MACRO RISK: The macro event proximity is pre-computed as `Macro Risk` in the PRE-COMPUTED FLAGS section. If IMMINENT, conviction cannot exceed LOW (no trade). If NEARBY, conviction cannot exceed MODERATE. If UPCOMING or ON_HORIZON, flag in Risk Factors but do not suppress conviction.
+
+        TAGGED LEVELS: Levels in the TAGGED LEVELS section are pre-computed with proximity (IN_PLAY / NEARBY / DISTANT) and ATR distance. IN_PLAY levels are the only candidates for primary entries. NEARBY levels may be used for conditional/wait entries. DISTANT levels are targets only — never propose them as entries.
+        CANDLE CLOSE TIMESTAMPS: Use the pre-computed Next 4H Close and Next Daily Close timestamps for the "Next decision point" line. Do not calculate candle close times yourself.
+        KILLS CLEARING: If Kills Clearing flags are present, mention them in the Prerequisites section of the watching output. Do not analyze raw data to determine if kills are clearing — use the pre-computed flags.
         """
 
         if market == .crypto {
@@ -357,8 +361,13 @@ enum AnalysisPrompt {
 
             lines.append("")
             lines.append("=== PRE-COMPUTED FLAGS (authoritative — do not reclassify) ===")
-            lines.append("Regime: \(regime) (ADX_daily: \(String(format: "%.1f", adxDaily)), MA_alignment: \(maAlignment), BB_squeeze: \(bbSqueezeAny))")
-            lines.append("Regime Changed: \(regimeChanged)")
+            if regimeChanged {
+                lines.append("Regime: \(regime) (ADX_daily: \(String(format: "%.1f", adxDaily)), MA_alignment: \(maAlignment), BB_squeeze: \(bbSqueezeAny))")
+                lines.append("Regime Changed: true")
+            } else {
+                lines.append("Regime: \(regime)")
+                lines.append("Regime Changed: false")
+            }
 
             // Phase 2a — Counter-trend flag + bias alignment
             let dailyBias = daily.bias
@@ -469,6 +478,50 @@ enum AnalysisPrompt {
             } else {
                 lines.append("Macro Risk: NONE")
             }
+
+            // Phase 2d — Kills-clearing detection
+            if oneHOpposes, let oneHData = oneH {
+                var killsClearing = [String]()
+                let killDurKey2 = "killDur_\(symbol)"
+                let prevDur = (UserDefaults.standard.dictionary(forKey: killDurKey2) as? [String: Int]) ?? [:]
+
+                // Divergence: was active previously but now cleared
+                if let prev = prevDur["divergence"], prev > 0 {
+                    // Check if MACD histogram is contracting (weakening)
+                    let histSeries = MACD.computeHistSeries(closes: fourH.candles.map(\.close), count: 3)
+                    if histSeries.count >= 2 {
+                        let latest = histSeries.last ?? 0
+                        let prior = histSeries[histSeries.count - 2]
+                        let dailyBearish2 = daily.bias.contains("Bearish")
+                        let dailyBullish2 = daily.bias.contains("Bullish")
+                        if dailyBearish2 && latest < prior { killsClearing.append("divergence_weakening") }
+                        if dailyBullish2 && latest > prior { killsClearing.append("divergence_weakening") }
+                    }
+                }
+
+                // Volume: was elevated, now normalizing
+                if oneHData.candles.count >= 6 {
+                    let recent = Array(oneHData.candles.suffix(6))
+                    let latestVol = recent.last?.volume ?? 0
+                    let avgVol = recent.prefix(3).map(\.volume).reduce(0, +) / 3.0
+                    if avgVol > 0 && latestVol < avgVol * 0.8 {
+                        killsClearing.append("volume_normalizing")
+                    }
+                }
+
+                if !killsClearing.isEmpty {
+                    lines.append("Kills Clearing: \(killsClearing.joined(separator: ", "))")
+                }
+            }
+
+            // Phase 2c — Candle close timestamps
+            let now = Date()
+            let fourHInterval: TimeInterval = 4 * 3600
+            let nextFourHClose = Date(timeIntervalSince1970: (floor(now.timeIntervalSince1970 / fourHInterval) + 1) * fourHInterval)
+            let dailyClose = Calendar.current.nextDate(after: now, matching: DateComponents(hour: 0, minute: 0), matchingPolicy: .nextTime) ?? now
+            let isoFormatter = ISO8601DateFormatter()
+            lines.append("Next 4H Close: \(isoFormatter.string(from: nextFourHClose))")
+            lines.append("Next Daily Close: \(isoFormatter.string(from: dailyClose))")
         }
 
         if let s = sentiment {
@@ -762,6 +815,65 @@ enum AnalysisPrompt {
             lines.append("")
             lines.append("=== BROAD MARKET (SPY) ===")
             lines.append(spy)
+        }
+
+        // Phase 3 — Level proximity + freshness tagging
+        if let currentPrice = indicators.last?.price ?? indicators.first.map({ $0.price }),
+           let atr = indicators.count > 2 ? indicators[2].atr?.atr : indicators[1].atr?.atr {
+            var taggedLevels = [String]()
+
+            for ind in indicators {
+                let prefix = ind.label
+                // S/R levels
+                for s in ind.supportResistance.supports {
+                    let dist = abs(currentPrice - s) / max(atr, 0.0001)
+                    let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
+                    taggedLevels.append("\(Formatters.formatPrice(s)) (\(prefix) support) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                }
+                for r in ind.supportResistance.resistances {
+                    let dist = abs(currentPrice - r) / max(atr, 0.0001)
+                    let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
+                    taggedLevels.append("\(Formatters.formatPrice(r)) (\(prefix) resistance) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                }
+                // VWAP
+                if let vwap = ind.vwap?.vwap {
+                    let dist = abs(currentPrice - vwap) / max(atr, 0.0001)
+                    let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
+                    taggedLevels.append("\(Formatters.formatPrice(vwap)) (\(prefix) VWAP) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                }
+                // Volume Profile levels
+                if let vp = ind.volumeProfile {
+                    for (label, price) in [("POC", vp.poc), ("VAH", vp.valueAreaHigh), ("VAL", vp.valueAreaLow)] {
+                        let dist = abs(currentPrice - price) / max(atr, 0.0001)
+                        let prox = dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT"
+                        taggedLevels.append("\(Formatters.formatPrice(price)) (\(prefix) \(label)) [\(prox), \(String(format: "%.1f", dist))x ATR]")
+                    }
+                }
+            }
+
+            // Deduplicate levels within 0.1% of each other, keep the one with shortest label
+            var uniqueLevels = [String]()
+            var seenPrices = [Double]()
+            for level in taggedLevels {
+                if let priceStr = level.components(separatedBy: " ").first,
+                   let price = Double(priceStr.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "$", with: "")) {
+                    let isDuplicate = seenPrices.contains { abs($0 - price) / max(price, 1) < 0.001 }
+                    if !isDuplicate {
+                        seenPrices.append(price)
+                        uniqueLevels.append(level)
+                    }
+                } else {
+                    uniqueLevels.append(level)
+                }
+            }
+
+            if !uniqueLevels.isEmpty {
+                lines.append("")
+                lines.append("=== TAGGED LEVELS ===")
+                for level in uniqueLevels.prefix(15) {
+                    lines.append(level)
+                }
+            }
         }
 
         lines.append("")

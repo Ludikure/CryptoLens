@@ -89,6 +89,7 @@ struct MarketScopeApp: App {
                         if let symbol = analysisService.currentSymbol {
                             analysisService.startAutoRefresh(symbol: symbol)
                         }
+                        alertsStore.processPendingBackgroundAlerts()
                         alertsStore.syncFromServer()
                         // Replay any offline alert changes
                         if ConnectionStatus.shared.pendingOfflineChanges {

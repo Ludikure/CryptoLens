@@ -385,11 +385,12 @@ class AnalysisService: ObservableObject {
                 isAIStale = !result.claudeAnalysis.isEmpty && !result.claudeAnalysis.contains("not configured") && (result.analysisTimestamp == nil || result.timestamp.timeIntervalSince(result.analysisTimestamp!) > 600)
             }
             alertsStore?.checkAlerts(prices: [symbol: result.daily.price])
+            // Track setup/flat outcomes on each refresh
+            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price)
+            OutcomeTracker.trackFlatOutcomes(symbol: symbol, currentPrice: result.daily.price)
             saveCache(result)
 
-            // Update widget shared data
-            let favs = (try? JSONDecoder().decode([String].self, from: UserDefaults.standard.data(forKey: "favorite_coins") ?? Data())) ?? []
-            SharedDataManager.writeLatest(results: resultsBySymbol, favorites: favs)
+            // Widget shared data disabled until App Group is provisioned
 
             // Bias flip notification
             if let prev = prevResult,
@@ -589,6 +590,19 @@ class AnalysisService: ObservableObject {
             isAIStale = false
             HapticManager.notification(.success)
             AnalysisHistoryStore.save(result)
+
+            // Outcome tracking: register new setups
+            for setup in tradeSetups {
+                OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id)
+            }
+            // Track FLAT/kill outcomes
+            if tradeSetups.isEmpty && !result.claudeAnalysis.isEmpty {
+                let reason = result.claudeAnalysis.contains("BLOCKED") ? "KILL" :
+                             result.claudeAnalysis.contains("Rule 2") ? "FLAT_Rule2" :
+                             result.claudeAnalysis.contains("NO SETUP") ? "FLAT" : "NO_SETUP"
+                OutcomeTracker.registerFlatOutcome(symbol: symbol, price: result.daily.price, reason: reason)
+            }
+
             if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
                 store.removeAlerts(forSymbol: symbol)
                 if !tradeSetups.isEmpty {

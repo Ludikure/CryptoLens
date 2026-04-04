@@ -33,7 +33,7 @@ enum Constants {
         CoinDefinition(id: "AVAXUSDT", geckoId: "avalanche-2", name: "Avalanche", ticker: "AVAX", color: .red),
         CoinDefinition(id: "LINKUSDT", geckoId: "chainlink", name: "Chainlink", ticker: "LINK", color: .blue),
         CoinDefinition(id: "DOGEUSDT", geckoId: "dogecoin", name: "Dogecoin", ticker: "DOGE", color: .yellow),
-        CoinDefinition(id: "MATICUSDT", geckoId: "matic-network", name: "Polygon", ticker: "MATIC", color: .purple),
+        CoinDefinition(id: "POLUSDT", geckoId: "matic-network", name: "Polygon", ticker: "POL", color: .purple),
         CoinDefinition(id: "NEARUSDT", geckoId: "near", name: "NEAR Protocol", ticker: "NEAR", color: .green),
         CoinDefinition(id: "UNIUSDT", geckoId: "uniswap", name: "Uniswap", ticker: "UNI", color: .pink),
         CoinDefinition(id: "AAVEUSDT", geckoId: "aave", name: "Aave", ticker: "AAVE", color: .cyan),

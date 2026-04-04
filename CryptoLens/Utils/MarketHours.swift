@@ -10,13 +10,66 @@ enum MarketSession: String {
 enum MarketHours {
     private static let et = TimeZone(identifier: "America/New_York")!
 
+    // MARK: - NYSE/NASDAQ Holiday Calendar (2025-2026)
+
+    /// Fixed and observed holidays for NYSE/NASDAQ.
+    /// Dates follow the exchange calendar: when a holiday falls on Saturday it is
+    /// observed the preceding Friday; when it falls on Sunday it is observed the
+    /// following Monday.
+    private static let holidays: Set<String> = {
+        // Format: "yyyy-MM-dd" in Eastern Time
+        return [
+            // 2025
+            "2025-01-01", // New Year's Day
+            "2025-01-20", // MLK Day (3rd Monday Jan)
+            "2025-02-17", // Presidents' Day (3rd Monday Feb)
+            "2025-04-18", // Good Friday
+            "2025-05-26", // Memorial Day (last Monday May)
+            "2025-06-19", // Juneteenth
+            "2025-07-04", // Independence Day
+            "2025-09-01", // Labor Day (1st Monday Sep)
+            "2025-11-27", // Thanksgiving (4th Thursday Nov)
+            "2025-12-25", // Christmas
+
+            // 2026
+            "2026-01-01", // New Year's Day
+            "2026-01-19", // MLK Day
+            "2026-02-16", // Presidents' Day
+            "2026-04-03", // Good Friday
+            "2026-05-25", // Memorial Day
+            "2026-06-19", // Juneteenth
+            "2026-07-03", // Independence Day (observed, Jul 4 is Saturday)
+            "2026-09-07", // Labor Day
+            "2026-11-26", // Thanksgiving
+            "2026-12-25", // Christmas
+        ]
+    }()
+
+    private static let holidayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = et
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
+
+    /// Returns true if the given date falls on an NYSE/NASDAQ holiday.
+    static func isMarketHoliday(date: Date = Date()) -> Bool {
+        let key = holidayFormatter.string(from: date)
+        return holidays.contains(key)
+    }
+
     static func currentSession() -> MarketSession {
+        let now = Date()
         let cal = Calendar.current
-        let comps = cal.dateComponents(in: et, from: Date())
+        let comps = cal.dateComponents(in: et, from: now)
         guard let weekday = comps.weekday, let hour = comps.hour, let minute = comps.minute else { return .closed }
 
         // Weekend
         if weekday == 1 || weekday == 7 { return .closed }
+
+        // Holiday
+        if isMarketHoliday(date: now) { return .closed }
 
         let time = hour * 60 + minute
         let preOpen = 4 * 60        // 4:00 AM
@@ -44,7 +97,7 @@ enum MarketHours {
         let comps = cal.dateComponents(in: et, from: now)
         guard let weekday = comps.weekday else { return nil }
 
-        // Find next weekday 9:30 AM ET
+        // Find next weekday 9:30 AM ET, skipping holidays
         var daysToAdd = 0
         if session == .preMarket {
             daysToAdd = 0 // Today
@@ -59,7 +112,22 @@ enum MarketHours {
         }
 
         guard let baseDate = cal.date(from: comps) else { return nil }
-        guard let targetDay = cal.date(byAdding: .day, value: daysToAdd, to: baseDate) else { return nil }
+        guard var targetDay = cal.date(byAdding: .day, value: daysToAdd, to: baseDate) else { return nil }
+
+        // Skip over any holidays (and weekends just in case)
+        var safety = 0
+        while isMarketHoliday(date: targetDay) && safety < 10 {
+            guard let next = cal.date(byAdding: .day, value: 1, to: targetDay) else { break }
+            targetDay = next
+            // Also skip weekends
+            let wd = cal.dateComponents(in: et, from: targetDay).weekday ?? 2
+            if wd == 7 {
+                targetDay = cal.date(byAdding: .day, value: 2, to: targetDay) ?? targetDay
+            } else if wd == 1 {
+                targetDay = cal.date(byAdding: .day, value: 1, to: targetDay) ?? targetDay
+            }
+            safety += 1
+        }
         var targetComps = cal.dateComponents(in: et, from: targetDay)
         targetComps.hour = 9
         targetComps.minute = 30

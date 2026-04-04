@@ -129,14 +129,6 @@ struct AnalysisHistoryView: View {
             .clipShape(Capsule())
     }
 
-    private func biasColor(_ bias: String) -> Color {
-        if bias.contains("Strong Bull") { return .green }
-        if bias.contains("Bull") { return .green.opacity(0.7) }
-        if bias.contains("Strong Bear") { return .red }
-        if bias.contains("Bear") { return .red.opacity(0.7) }
-        return .secondary
-    }
-
     private func regimeColor(_ regime: String) -> Color {
         let r = regime.lowercased()
         if r.contains("trending up") || r.contains("bullish") { return .green }
@@ -167,12 +159,6 @@ struct AnalysisHistoryView: View {
         return nil
     }
 
-    private func timeAgo(_ date: Date) -> String {
-        let interval = Date().timeIntervalSince(date)
-        if interval < 3600 { return "\(Int(interval / 60))m ago" }
-        if interval < 86400 { return "\(Int(interval / 3600))h ago" }
-        return "\(Int(interval / 86400))d ago"
-    }
 }
 
 // MARK: - Detail View
@@ -361,18 +347,4 @@ struct HistoryDetailView: View {
         }
     }
 
-    private func biasColor(_ bias: String) -> Color {
-        if bias.contains("Strong Bull") { return .green }
-        if bias.contains("Bull") { return .green.opacity(0.7) }
-        if bias.contains("Strong Bear") { return .red }
-        if bias.contains("Bear") { return .red.opacity(0.7) }
-        return .secondary
-    }
-
-    private func timeAgo(_ date: Date) -> String {
-        let interval = Date().timeIntervalSince(date)
-        if interval < 3600 { return "\(Int(interval / 60))m ago" }
-        if interval < 86400 { return "\(Int(interval / 3600))h ago" }
-        return "\(Int(interval / 86400))d ago"
-    }
 }

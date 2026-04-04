@@ -46,6 +46,36 @@ class AlertsStore: ObservableObject {
         alerts.removeAll()
     }
 
+    /// Process alerts that were triggered during background refresh.
+    /// The background manager writes triggered IDs to UserDefaults since it uses
+    /// its own AlertsStore instance. This method reconciles those changes into
+    /// the live store so the UI reflects the correct state.
+    func processPendingBackgroundAlerts() {
+        let key = BackgroundRefreshManager.backgroundTriggeredKey
+        guard let pendingIDs = UserDefaults.standard.stringArray(forKey: key), !pendingIDs.isEmpty else { return }
+
+        // Clear immediately to avoid double-processing
+        UserDefaults.standard.removeObject(forKey: key)
+
+        let idSet = Set(pendingIDs)
+        var changed = false
+        for i in alerts.indices where !alerts[i].triggered {
+            if idSet.contains(alerts[i].id.uuidString) {
+                alerts[i].triggered = true
+                changed = true
+            }
+        }
+
+        // If the background store already persisted these changes to UserDefaults
+        // under "price_alerts", we may also need to re-read. But since we just
+        // set triggered = true on matching IDs, `save()` from didSet will persist.
+        if changed {
+            #if DEBUG
+            print("[MarketScope] Processed \(idSet.count) background-triggered alerts")
+            #endif
+        }
+    }
+
     /// Pull server-side triggered state to prevent local re-triggers.
     func syncFromServer() {
         Task {

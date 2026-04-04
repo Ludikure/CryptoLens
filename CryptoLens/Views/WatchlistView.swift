@@ -66,22 +66,14 @@ private struct WatchlistCard: View {
         Constants.asset(for: symbol)?.name ?? symbol
     }
 
-    private var biasColor: Color {
+    private var cardBiasColor: Color {
         guard let bias = result?.daily.bias else { return .gray }
-        if bias.contains("Bullish") { return .green }
-        if bias.contains("Bearish") { return .red }
-        return .gray
+        return biasColorSimple(bias)
     }
 
-    private var shortBias: String {
+    private var cardShortBias: String {
         guard let bias = result?.daily.bias else { return "..." }
-        switch bias {
-        case "Strong Bullish": return "Strong Bull"
-        case "Bullish": return "Bullish"
-        case "Strong Bearish": return "Strong Bear"
-        case "Bearish": return "Bearish"
-        default: return "Neutral"
-        }
+        return shortBias(bias)
     }
 
     var body: some View {
@@ -92,12 +84,12 @@ private struct WatchlistCard: View {
                     .font(.subheadline)
                     .fontWeight(.bold)
                 Spacer()
-                Text(shortBias)
+                Text(cardShortBias)
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(biasColor)
+                    .foregroundStyle(cardBiasColor)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(biasColor.opacity(0.12), in: Capsule())
+                    .background(cardBiasColor.opacity(0.12), in: Capsule())
             }
 
             if let result {
@@ -138,7 +130,7 @@ private struct WatchlistCard: View {
                 .fill(Color(.secondarySystemGroupedBackground))
                 .overlay(
                     RoundedRectangle(cornerRadius: 10)
-                        .stroke(isSelected ? Color.accentColor : biasColor.opacity(0.2), lineWidth: isSelected ? 2 : 1)
+                        .stroke(isSelected ? Color.accentColor : cardBiasColor.opacity(0.2), lineWidth: isSelected ? 2 : 1)
                 )
         )
     }

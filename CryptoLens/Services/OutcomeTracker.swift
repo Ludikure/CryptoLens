@@ -1,0 +1,271 @@
+import Foundation
+
+/// Tracks trade setup outcomes and FLAT/kill outcomes across refresh cycles.
+/// Persists to disk alongside analysis history.
+enum OutcomeTracker {
+    private static let ioQueue = DispatchQueue(label: "com.ludikure.CryptoLens.outcomeIO")
+
+    private static var outcomeDir: URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("trade_outcomes", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    // MARK: - Trade Setup Outcomes (#1b)
+
+    /// Called during each refresh cycle with current price.
+    /// Checks all active (unresolved) setups for the symbol against the current price.
+    static func trackSetupOutcomes(symbol: String, currentPrice: Double) {
+        ioQueue.async {
+            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
+            var tracked = loadTrackedSetups(url: url)
+            var changed = false
+
+            for i in tracked.indices {
+                guard !tracked[i].outcome.resolved else { continue }
+
+                let setup = tracked[i].setup
+                let isLong = setup.direction == "LONG"
+
+                // Check entry hit
+                if !tracked[i].outcome.entryHit {
+                    let entryHit = isLong
+                        ? currentPrice <= setup.entry  // price dipped to entry for longs
+                        : currentPrice >= setup.entry   // price rose to entry for shorts
+                    if entryHit {
+                        tracked[i].outcome.entryHit = true
+                        tracked[i].outcome.entryHitTime = Date()
+                        changed = true
+                    }
+                    continue  // Don't check targets until entry is hit
+                }
+
+                // Entry was hit — track excursions and targets
+                let moveFromEntry = isLong
+                    ? currentPrice - setup.entry
+                    : setup.entry - currentPrice
+
+                if moveFromEntry > tracked[i].outcome.maxFavorable {
+                    tracked[i].outcome.maxFavorable = moveFromEntry
+                    changed = true
+                }
+                if -moveFromEntry > tracked[i].outcome.maxAdverse {
+                    tracked[i].outcome.maxAdverse = -moveFromEntry
+                    changed = true
+                }
+
+                // Check stop loss
+                let stopHit = isLong
+                    ? currentPrice <= setup.stopLoss
+                    : currentPrice >= setup.stopLoss
+                if stopHit && !tracked[i].outcome.stopHit {
+                    tracked[i].outcome.stopHit = true
+                    tracked[i].outcome.outcomeTime = Date()
+                    changed = true
+                }
+
+                // Check TPs
+                if !tracked[i].outcome.tp1Hit {
+                    let tp1Hit = isLong ? currentPrice >= setup.tp1 : currentPrice <= setup.tp1
+                    if tp1Hit { tracked[i].outcome.tp1Hit = true; changed = true }
+                }
+                if let tp2 = setup.tp2, !tracked[i].outcome.tp2Hit {
+                    let tp2Hit = isLong ? currentPrice >= tp2 : currentPrice <= tp2
+                    if tp2Hit { tracked[i].outcome.tp2Hit = true; changed = true }
+                }
+                if let tp3 = setup.tp3, !tracked[i].outcome.tp3Hit {
+                    let tp3Hit = isLong ? currentPrice >= tp3 : currentPrice <= tp3
+                    if tp3Hit {
+                        tracked[i].outcome.tp3Hit = true
+                        tracked[i].outcome.outcomeTime = tracked[i].outcome.outcomeTime ?? Date()
+                        changed = true
+                    }
+                }
+            }
+
+            // Expire setups older than 7 days that never triggered
+            let cutoff = Date().addingTimeInterval(-7 * 86400)
+            let before = tracked.count
+            tracked.removeAll { !$0.outcome.entryHit && $0.timestamp < cutoff }
+            if tracked.count != before { changed = true }
+
+            if changed { save(tracked, to: url) }
+        }
+    }
+
+    /// Register a new setup for tracking.
+    static func registerSetup(_ setup: TradeSetup, symbol: String, analysisId: UUID) {
+        ioQueue.async {
+            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
+            var tracked = loadTrackedSetups(url: url)
+
+            // Don't duplicate
+            guard !tracked.contains(where: { $0.setup.id == setup.id }) else { return }
+
+            tracked.insert(TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId), at: 0)
+
+            // Cap at 50 per symbol
+            if tracked.count > 50 { tracked = Array(tracked.prefix(50)) }
+
+            save(tracked, to: url)
+        }
+    }
+
+    // MARK: - FLAT/Kill Outcomes (#1c)
+
+    /// Register a FLAT or kill-blocked outcome for tracking.
+    static func registerFlatOutcome(symbol: String, price: Double, reason: String) {
+        ioQueue.async {
+            let url = outcomeDir.appendingPathComponent("flats_\(symbol).json")
+            var flats = loadFlatOutcomes(url: url)
+
+            flats.insert(FlatOutcome(symbol: symbol, price: price, reason: reason), at: 0)
+
+            // Cap at 50
+            if flats.count > 50 { flats = Array(flats.prefix(50)) }
+
+            save(flats, to: url)
+        }
+    }
+
+    /// Called during refresh to track price movement after FLAT decisions.
+    static func trackFlatOutcomes(symbol: String, currentPrice: Double) {
+        ioQueue.async {
+            let url = outcomeDir.appendingPathComponent("flats_\(symbol).json")
+            var flats = loadFlatOutcomes(url: url)
+            var changed = false
+
+            for i in flats.indices {
+                guard flats[i].falseFlat == nil, flats[i].refreshCount < 3 else { continue }
+
+                flats[i].refreshCount += 1
+                changed = true
+
+                if flats[i].refreshCount >= 3 {
+                    flats[i].priceAfter3Refreshes = currentPrice
+                    let move = abs(currentPrice - flats[i].priceAtFlat) / flats[i].priceAtFlat * 100
+                    flats[i].falseFlat = move > 1.5
+                    changed = true
+                }
+            }
+
+            // Expire old entries (30 days)
+            let cutoff = Date().addingTimeInterval(-30 * 86400)
+            let before = flats.count
+            flats.removeAll { $0.timestamp < cutoff }
+            if flats.count != before { changed = true }
+
+            if changed { save(flats, to: url) }
+        }
+    }
+
+    // MARK: - Stats (#1d)
+
+    /// Compute outcome statistics for dashboard.
+    static func stats(symbol: String? = nil) -> OutcomeStats {
+        return ioQueue.sync {
+            var allSetups = [TrackedSetup]()
+            var allFlats = [FlatOutcome]()
+
+            let dir = outcomeDir
+            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+
+            for file in files {
+                if file.lastPathComponent.hasPrefix("setups_") {
+                    if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
+                    allSetups.append(contentsOf: loadTrackedSetups(url: file))
+                }
+                if file.lastPathComponent.hasPrefix("flats_") {
+                    if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
+                    allFlats.append(contentsOf: loadFlatOutcomes(url: file))
+                }
+            }
+
+            let resolved = allSetups.filter { $0.outcome.resolved }
+            let wins = resolved.filter { $0.outcome.tp1Hit && !$0.outcome.stopHit }
+            let losses = resolved.filter { $0.outcome.stopHit && !$0.outcome.tp1Hit }
+
+            let evaluatedFlats = allFlats.filter { $0.falseFlat != nil }
+            let falseFlats = evaluatedFlats.filter { $0.falseFlat == true }
+
+            // Average R:R achieved
+            var avgRRAchieved: Double = 0
+            if !resolved.isEmpty {
+                let rrValues = resolved.compactMap { tracked -> Double? in
+                    let s = tracked.setup
+                    guard s.risk > 0, tracked.outcome.entryHit else { return nil }
+                    let favorable = tracked.outcome.maxFavorable
+                    return favorable / s.risk
+                }
+                if !rrValues.isEmpty { avgRRAchieved = rrValues.reduce(0, +) / Double(rrValues.count) }
+            }
+
+            return OutcomeStats(
+                totalSetups: allSetups.count,
+                resolvedSetups: resolved.count,
+                wins: wins.count,
+                losses: losses.count,
+                winRate: resolved.isEmpty ? 0 : Double(wins.count) / Double(resolved.count) * 100,
+                avgRRAchieved: avgRRAchieved,
+                totalFlats: allFlats.count,
+                evaluatedFlats: evaluatedFlats.count,
+                falseFlats: falseFlats.count,
+                falseFlatRate: evaluatedFlats.isEmpty ? 0 : Double(falseFlats.count) / Double(evaluatedFlats.count) * 100,
+                recentSetups: Array(allSetups.prefix(10))
+            )
+        }
+    }
+
+    // MARK: - Persistence
+
+    private static func loadTrackedSetups(url: URL) -> [TrackedSetup] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([TrackedSetup].self, from: data)) ?? []
+    }
+
+    private static func loadFlatOutcomes(url: URL) -> [FlatOutcome] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        return (try? JSONDecoder().decode([FlatOutcome].self, from: data)) ?? []
+    }
+
+    private static func save<T: Encodable>(_ value: T, to url: URL) {
+        if let data = try? JSONEncoder().encode(value) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+}
+
+// MARK: - Models
+
+struct TrackedSetup: Codable, Identifiable {
+    let setup: TradeSetup
+    let symbol: String
+    let analysisId: UUID
+    let timestamp: Date
+    var outcome: TradeOutcome
+
+    var id: UUID { setup.id }
+
+    init(setup: TradeSetup, symbol: String, analysisId: UUID) {
+        self.setup = setup
+        self.symbol = symbol
+        self.analysisId = analysisId
+        self.timestamp = Date()
+        self.outcome = TradeOutcome()
+    }
+}
+
+struct OutcomeStats {
+    let totalSetups: Int
+    let resolvedSetups: Int
+    let wins: Int
+    let losses: Int
+    let winRate: Double
+    let avgRRAchieved: Double
+    let totalFlats: Int
+    let evaluatedFlats: Int
+    let falseFlats: Int
+    let falseFlatRate: Double
+    let recentSetups: [TrackedSetup]
+}

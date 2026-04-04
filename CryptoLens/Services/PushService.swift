@@ -35,7 +35,7 @@ enum PushService {
         // from non-isolated contexts. We use a synchronous approach with cached values.
         let id = UserDefaults.standard.string(forKey: "device_id") ?? ""
         request.setValue(id, forHTTPHeaderField: "X-Device-ID")
-        if let token = KeychainHelper.load(key: authTokenKey) {
+        if let token = KeychainHelper.load(key: "worker_auth_token") {
             request.setValue(token, forHTTPHeaderField: "X-Auth-Token")
         }
     }

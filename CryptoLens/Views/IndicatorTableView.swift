@@ -30,10 +30,10 @@ struct IndicatorTableView: View {
                             ForEach(results) { r in
                                 Text(r.label.replacingOccurrences(of: " (Trend)", with: "").replacingOccurrences(of: " (Bias)", with: "").replacingOccurrences(of: " (Entry)", with: ""))
                                     .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(biasColor(r.bias))
+                                    .foregroundStyle(biasColorSimple(r.bias))
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
-                                    .background(biasColor(r.bias).opacity(0.12), in: Capsule())
+                                    .background(biasColorSimple(r.bias).opacity(0.12), in: Capsule())
                             }
                         }
                     }
@@ -210,12 +210,6 @@ struct IndicatorTableView: View {
         .font(.caption)
         .padding(.vertical, 5)
         .padding(.horizontal, 8)
-    }
-
-    private func biasColor(_ bias: String) -> Color {
-        if bias.contains("Bullish") { return .green }
-        if bias.contains("Bearish") { return .red }
-        return .gray
     }
 
     private var dash: some View {
