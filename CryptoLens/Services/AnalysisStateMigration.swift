@@ -29,9 +29,9 @@ enum AnalysisStateMigration {
                 state.lastUpdated = Date()
                 context.insert(state)
 
-                // Clean up old keys
-                defaults.removeObject(forKey: "regime_\(symbol)")
-                defaults.removeObject(forKey: "killDur_\(symbol)")
+                // Keep UserDefaults keys — prompt builder still reads them.
+                // SwiftData is a parallel store for future outcome correlation queries.
+                // Option B (full migration) will remove UserDefaults reads from buildUserPrompt.
             }
 
             try context.save()
