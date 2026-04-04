@@ -55,20 +55,21 @@ class EconomicCalendarService {
 
                 let forecast = item["forecast"] as? String
                 let previous = item["previous"] as? String
+                let actual = item["actual"] as? String
 
                 events.append(EconomicEvent(
                     title: title, date: eventDate, impact: impact,
-                    country: country, forecast: forecast, previous: previous
+                    country: country, forecast: forecast, previous: previous, actual: actual
                 ))
             }
 
-            // Sort by date, filter to upcoming only (within next 7 days, not past by more than 1 hour)
-            let upcoming = events
-                .filter { $0.date.timeIntervalSinceNow > -3600 }
+            // Keep events upcoming or recently released (past 12h) so the LLM sees actual numbers
+            let relevant = events
+                .filter { $0.date.timeIntervalSinceNow > -12 * 3600 }
                 .sorted { $0.date < $1.date }
 
-            cache = (upcoming, Date())
-            return upcoming
+            cache = (relevant, Date())
+            return relevant
         } catch is CancellationError {
             return cache?.events ?? []
         } catch let error as NSError where error.code == NSURLErrorCancelled {
@@ -81,9 +82,9 @@ class EconomicCalendarService {
         }
     }
 
-    /// Get only high-impact events within the next 48 hours (for AI prompt)
-    func highImpactUpcoming() async -> [EconomicEvent] {
+    /// Get high-impact events: upcoming (next 48h) or recently released (past 12h) for AI prompt
+    func highImpactRelevant() async -> [EconomicEvent] {
         let events = await fetchUpcomingEvents()
-        return events.filter { $0.isHighImpact && $0.isWithin48Hours }
+        return events.filter { $0.isHighImpact && ($0.isUpcoming || $0.isRecentlyReleased) }
     }
 }

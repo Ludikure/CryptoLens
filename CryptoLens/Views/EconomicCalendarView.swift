@@ -49,8 +49,11 @@ struct EconomicCalendarView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        // Warning if within 48h
-                        if event.isWithin48Hours {
+                        if event.hasActual {
+                            Text(event.actual!)
+                                .font(.caption2.bold())
+                                .foregroundStyle(event.surprise == "BEAT" ? .green : event.surprise == "MISS" ? .red : .primary)
+                        } else if event.isUpcoming {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)

@@ -14,7 +14,7 @@ enum AnalysisPrompt {
         You receive pre-computed indicator data across three timeframes (\(tf.trend)/\(tf.bias)/\(tf.entry))\(market == .crypto ? " and derivatives positioning data" : "").
 
         STEP 1: IDENTIFY THE REGIME
-        Classify the market before anything else:
+        The regime label is pre-computed in the PRE-COMPUTED FLAGS section and is AUTHORITATIVE. Use it as-is. The regime_details (ADX, MA alignment, BB squeeze) are provided for your narrative only — do not reclassify the regime.
         - TRENDING: ADX > 25, price respecting EMAs, MAs stacked in order
         - RANGING: ADX < 20, price oscillating between S/R, MAs flat/tangled
         - TRANSITIONING: breaking out of range or trend exhausting
@@ -25,10 +25,37 @@ enum AnalysisPrompt {
         RANGING: Fade the extremes. Buy support, sell resistance. RSI and Stoch RSI OB/OS work here. Stops just outside the range.
         TRANSITIONING: Biggest moves start here. Bollinger squeeze + volume = highest conviction. First pullback after breakout is bread-and-butter. Failed breakdowns are powerful reversals. Wait for the retest — the retest IS the trade.
 
-        STEP 3: DECLARE YOUR BIAS
-        Before looking for a trade: LONG, SHORT, or FLAT. Based on regime, higher-timeframe structure, positioning, and macro context.
+        STEP 3: DECLARE YOUR BIAS (Hierarchical Resolution)
+
+        LABEL AUTHORITY: The per-timeframe bias labels (Bearish/Bullish/Neutral) in the data header are pre-computed by the app and are AUTHORITATIVE. Use them as-is for bias resolution below. Do NOT override these labels with your own interpretation of the raw indicator data. The raw indicators are for confluence analysis in Step 4 and Risk Factors — not for re-litigating bias labels. The ONLY exception: if a label is "Neutral" and raw data shows a clear directional breakout within the most recent 2 candles, you may upgrade Neutral to the breakout direction. You may NEVER downgrade or flip a Bearish/Bullish label.
+
+        Daily sets directional authority. 4H confirms or negates. 1H determines entry timing only.
+        Read the pre-computed bias labels for Daily and 4H. Apply these rules IN ORDER — stop at the first match:
+
+        Rule 1 — DAILY + 4H LABELS ALIGNED (both Bearish, or both Bullish):
+           → Bias = that direction, regardless of 1H.
+           → If 1H opposes: classify as COUNTER-TREND PULLBACK (entry opportunity, not conflict).
+           → Proceed to Step 4 for trade setup.
+           → Output: "Bias: [DIRECTION] (Rule 1 — D+4H aligned [direction], 1H [state] classified as counter-trend pullback)"
+
+        Rule 2 — DAILY + 4H LABELS CONFLICT (one Bearish, one Bullish):
+           → Bias = FLAT. Skip Step 4. No trade.
+           → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label])"
+
+        Rule 3 — DAILY OR 4H LABEL IS NEUTRAL:
+           → If one is directional and the other is Neutral: Bias = the directional label. Use 1H for timing.
+           → If both are Neutral: Bias = FLAT.
+           → Output: "Bias: [DIRECTION] (Rule 3 — D [label], 4H [label], deferring to [whichever is directional])"
+
+        ANTI-GAMING RULES:
+        - You may NOT selectively cite raw 4H indicators (ascending lows, improving MACD, rising RSI) to argue a pre-computed label is "wrong" and then use your reinterpretation to trigger a different rule.
+        - If the 4H label says Bearish, treat it as Bearish for Step 3 — even if you see bullish signals in the raw 4H data. Note those observations in Risk Factors as monitoring items, not as grounds to change bias.
+        - 4H printing higher lows while Daily remains in LH/LL = corrective retracement, NOT structural conflict — unless 4H breaks above the most recent Daily lower high.
+        - 4H printing lower highs while Daily remains in HH/HL = corrective pullback, NOT structural conflict — unless 4H breaks below the most recent Daily higher low.
+        - 1H NEVER determines or vetoes bias. A 1H move opposing Daily+4H is expected market behavior, not a reason to go FLAT.
+        - FLAT is a label-level determination only. If D+4H labels agree, there IS a direction — trade it or explain in Step 4 why setup quality is insufficient.
+
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
-        This decision is final. Step 4 cannot contradict it.
 
         STEP 4: FIND THE TRADE (only if bias is LONG or SHORT)
         If you declared FLAT in Step 3, skip this step entirely.
@@ -39,15 +66,55 @@ enum AnalysisPrompt {
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2, TP3 rows showing Price, Why, and R:R.
         Rate conviction:
-        - HIGH: 3+ confluences across timeframes, volume confirming, no high-impact macro event within 12 hours, regime and bias aligned on all timeframes.
-        - MODERATE: 2 confluences, volume neutral or unconfirmed, macro event >24h out or no event. One minor disagreement between timeframes is acceptable.
-        - LOW: Anything less than MODERATE = no setup. Do not present it.
+        - HIGH: 3+ confluences, all timeframes aligned (D + 4H + 1H same direction), no macro event within 12 hours, derivatives positioning supports direction.
+        - MODERATE: 2+ confluences, D + 4H aligned with 1H counter-trend providing entry (counter-trend pullback setup), no macro event within 4 hours. OR: All timeframes aligned but only 2 confluences.
+        - LOW: Fewer than 2 confluences, OR macro event within 2 hours, OR derivatives positioning strongly opposes the setup. → NO TRADE.
+        - FLAT: Daily and 4H pre-computed bias labels conflict (one Bearish, one Bullish), OR both labels are Neutral. → NO TRADE.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
         If no structure, say "no trade — here's what I'm watching."
 
         Show both directions when both have merit. Show one when only one makes sense. Show none when the market isn't giving anything. Never force it.
+
+        COUNTER-TREND PULLBACK SETUP:
+        Trigger: Bias set by Daily+4H alignment, but 1H is moving AGAINST that bias.
+        This is a HIGH-PROBABILITY pattern — you are entering with the higher-timeframe trend after the lower timeframe exhausts its counter-move.
+
+        ENTRY CONDITIONS (ALL required):
+        1. Daily and 4H bias aligned in the same direction (from Step 3).
+        2. 1H is in a counter-trend move (squeeze, impulse, or drift against D/4H bias).
+        3. 1H counter-move reaches a significant higher-timeframe level:
+           - For shorts: 1H rallies into 4H resistance, EMA cluster, prior breakdown level, or upper volume profile zone (VAH/POC).
+           - For longs: 1H sells off into 4H support, EMA cluster, prior breakout level, or lower volume profile zone (VAL/POC).
+        4. 1H shows exhaustion signal at that level:
+           - Bearish: inverted hammer, bearish engulfing, squeeze failure, divergence on 1H RSI, volume decline on push higher, taker ratio dropping.
+           - Bullish: hammer, bullish engulfing, squeeze failure to downside, 1H RSI divergence, volume decline on push lower, taker ratio rising.
+
+        ENTRY TRIGGER:
+        - Enter in the direction of Daily+4H bias AFTER the 1H exhaustion signal confirms.
+        - "Confirms" = 1H candle close showing rejection (wick > body at the level), OR 1H close back below/above the level after a false breakout.
+
+        STOP PLACEMENT:
+        - Beyond the 1H counter-move extreme (the high of the rally for shorts, the low of the selloff for longs).
+        - Must satisfy minimum R:R requirement.
+
+        TARGET:
+        - T1: Next 4H support/resistance level in the direction of bias.
+        - T2: Prior Daily swing low (for shorts) or swing high (for longs).
+
+        KILL CONDITIONS (do NOT enter even if pattern forms):
+        - 4H shows bullish/bearish divergence AGAINST the Daily bias direction (suggests Daily trend is weakening, not just a pullback).
+        - Volume on the 1H counter-move is significantly HIGHER than the prior trend-direction move (institutional participation in the counter-move).
+        - Funding rate has flipped to support the counter-move direction (market structure shifting, not just a pullback).
+        - High-impact macro event within 4 hours.
+
+        MANDATORY: Kill conditions are pre-computed in the PRE-COMPUTED FLAGS section. If ANY_KILLED is true, do not present a counter-trend setup. State which condition(s) fired and what you are watching instead. Do not re-evaluate kill conditions from raw data — the pre-computed values are authoritative.
+        The kill condition flags are:
+        - divergence_against_bias: 4H RSI/MACD showing divergence against the bias direction
+        - counter_move_volume_exceeds: 1H counter-move volume > 1.2x trend volume
+        - funding_supports_counter: Funding rate flipped to support the counter-move
+        - macro_event_within_4h: High-impact macro event within 4 hours
 
         ENTRY RULES:
         1. Primary entries must be near current price, anchored to the nearest meaningful level (S/R, fib, EMA) that price is actually interacting with. Check the Price Action Summary and recent candles to confirm price is near or moving toward the proposed entry.
@@ -99,7 +166,7 @@ enum AnalysisPrompt {
         Bullet list of the 3-5 most important levels (S/R, fib, EMA) with prices. Mark which ones price is near.
 
         ## Bias
-        One line. LONG, SHORT, or FLAT. Why. This must match your Step 3 declaration.
+        State which rule fired: "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback." This must match your Step 3 declaration.
 
         ## Trade Setup
         Only if bias is LONG or SHORT with MODERATE+ conviction. Present as a markdown table:
@@ -117,7 +184,7 @@ enum AnalysisPrompt {
         "NO SETUP — [specific reason]." Skip the table entirely. No conditional or hypothetical entries.
 
         ## Risk Factors
-        Bullet list: upcoming events, macro headwinds/tailwinds, key invalidation levels.
+        Bullet list: upcoming events, macro headwinds/tailwinds, key invalidation levels. Raw data observations that diverge from pre-computed labels belong here (e.g., "4H raw data showing ascending lows — monitor for potential label flip on next refresh").
 
         ---
         At the very end, include a JSON block with trade setups:
@@ -136,6 +203,7 @@ enum AnalysisPrompt {
         - Maximum 400 words before the JSON block (headers, level lists, and table rows count toward this limit).
 
         ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
+        MACRO RISK: The macro event proximity is pre-computed as `Macro Risk` in the PRE-COMPUTED FLAGS section. If IMMINENT, conviction cannot exceed LOW (no trade). If NEARBY, conviction cannot exceed MODERATE. If UPCOMING or ON_HORIZON, flag in Risk Factors but do not suppress conviction.
         """
 
         if market == .crypto {
@@ -222,6 +290,134 @@ enum AnalysisPrompt {
                                 weeklyContext: String? = nil, spyContext: String? = nil,
                                 spotPressure: SpotPressure? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
+
+        // === PRE-COMPUTED FLAGS (Phases 1-5) ===
+        if indicators.count >= 2 {
+            let daily = indicators[0]
+            let fourH = indicators[1]
+            let oneH = indicators.count > 2 ? indicators[2] : nil
+
+            // Phase 1 — Regime label
+            let adxDaily = daily.adx?.adx ?? 0
+            var maAlignment = "tangled"
+            if let e20 = daily.ema20, let e50 = daily.ema50, let e200 = daily.ema200 {
+                if e20 > e50 && e50 > e200 { maAlignment = "bullish_stacked" }
+                else if e20 < e50 && e50 < e200 { maAlignment = "bearish_stacked" }
+            }
+            let bbSqueezeAny = indicators.contains { $0.bollingerBands?.squeeze == true }
+
+            let regime: String
+            if adxDaily > 25 && maAlignment != "tangled" {
+                regime = "TRENDING"
+            } else if bbSqueezeAny || (adxDaily >= 20 && adxDaily <= 25) {
+                regime = "TRANSITIONING"
+            } else if adxDaily < 20 {
+                regime = "RANGING"
+            } else {
+                regime = "TRENDING"
+            }
+
+            lines.append("")
+            lines.append("=== PRE-COMPUTED FLAGS (authoritative — do not reclassify) ===")
+            lines.append("Regime: \(regime) (ADX_daily: \(String(format: "%.1f", adxDaily)), MA_alignment: \(maAlignment), BB_squeeze: \(bbSqueezeAny))")
+
+            // Phase 2a — Counter-trend flag + bias alignment
+            let dailyBias = daily.bias
+            let fourHBias = fourH.bias
+            let oneHBias = oneH?.bias ?? "Neutral"
+
+            let dailyBearish = dailyBias.contains("Bearish")
+            let dailyBullish = dailyBias.contains("Bullish")
+            let fourHBearish = fourHBias.contains("Bearish")
+            let fourHBullish = fourHBias.contains("Bullish")
+
+            let biasAligned = (dailyBearish && fourHBearish) || (dailyBullish && fourHBullish)
+            let oneHOpposes = biasAligned && ((dailyBearish && oneHBias.contains("Bullish")) || (dailyBullish && oneHBias.contains("Bearish")))
+            let alignedDirection = dailyBearish ? "SHORT" : (dailyBullish ? "LONG" : "FLAT")
+
+            lines.append("Bias Alignment: Daily=\(dailyBias), 4H=\(fourHBias), 1H=\(oneHBias)")
+            lines.append("Counter-Trend Pullback: \(oneHOpposes) | Aligned Direction: \(alignedDirection)")
+
+            // Phase 2b — Kill conditions (only relevant if counter-trend)
+            if oneHOpposes, let oneHData = oneH {
+                var killDivergence = false
+                var killVolume = false
+                var killFunding = false
+                var killMacro = false
+
+                // 2b.1 — 4H divergence against bias (simplified: check MACD histogram direction)
+                if let macd = fourH.macd {
+                    // If bias is bearish but 4H MACD histogram is positive/contracting bearish → potential bullish divergence
+                    if dailyBearish && macd.histogram > 0 { killDivergence = true }
+                    if dailyBullish && macd.histogram < 0 { killDivergence = true }
+                }
+                // Also check 4H RSI divergence if we have enough data
+                if fourH.rsiSeries.count >= 10 && fourH.candles.count >= 10 {
+                    let recentCandles = Array(fourH.candles.suffix(10))
+                    let rsiOffset = fourH.candles.count - fourH.rsiSeries.count
+                    let recentRSI = fourH.rsiSeries.count >= 10 ? Array(fourH.rsiSeries.suffix(10)) : []
+                    if recentRSI.count >= 10 {
+                        let priceLow1 = recentCandles[0..<5].map(\.low).min() ?? 0
+                        let priceLow2 = recentCandles[5..<10].map(\.low).min() ?? 0
+                        let rsiLow1 = recentRSI[0..<5].min() ?? 0
+                        let rsiLow2 = recentRSI[5..<10].min() ?? 0
+                        // Bullish divergence: price making lower lows, RSI making higher lows
+                        if dailyBearish && priceLow2 < priceLow1 && rsiLow2 > rsiLow1 + 2 {
+                            killDivergence = true
+                        }
+                        let priceHigh1 = recentCandles[0..<5].map(\.high).max() ?? 0
+                        let priceHigh2 = recentCandles[5..<10].map(\.high).max() ?? 0
+                        let rsiHigh1 = recentRSI[0..<5].max() ?? 0
+                        let rsiHigh2 = recentRSI[5..<10].max() ?? 0
+                        // Bearish divergence: price making higher highs, RSI making lower highs
+                        if dailyBullish && priceHigh2 > priceHigh1 && rsiHigh2 < rsiHigh1 - 2 {
+                            killDivergence = true
+                        }
+                    }
+                }
+
+                // 2b.2 — 1H counter-move volume vs trend volume
+                if oneHData.candles.count >= 6 {
+                    let recent = Array(oneHData.candles.suffix(6))
+                    let counterVol = recent.suffix(3).map(\.volume).reduce(0, +) / 3.0
+                    let trendVol = recent.prefix(3).map(\.volume).reduce(0, +) / 3.0
+                    if trendVol > 0 && counterVol > trendVol * 1.2 {
+                        killVolume = true
+                    }
+                }
+
+                // 2b.3 — Funding rate flip
+                if let d = derivatives {
+                    let fr = d.fundingRatePercent
+                    if dailyBearish && fr < -0.01 { killFunding = true }
+                    if dailyBullish && fr > 0.01 { killFunding = true }
+                }
+
+                // 2b.4 — Macro event within 4h
+                let macroIn4h = economicEvents.filter { $0.isHighImpact && $0.isUpcoming }.contains {
+                    $0.date.timeIntervalSinceNow > 0 && $0.date.timeIntervalSinceNow < 4 * 3600
+                }
+                killMacro = macroIn4h
+
+                let anyKilled = killDivergence || killVolume || killFunding || killMacro
+                lines.append("Kill Conditions: divergence_against_bias=\(killDivergence), counter_move_volume_exceeds=\(killVolume), funding_supports_counter=\(killFunding), macro_event_within_4h=\(killMacro), ANY_KILLED=\(anyKilled)")
+            }
+
+            // Phase 5 — Macro event window
+            let highImpactUpcoming = economicEvents.filter { $0.isHighImpact && $0.isUpcoming }
+            if let nearest = highImpactUpcoming.first {
+                let hoursUntil = nearest.date.timeIntervalSinceNow / 3600
+                let macroRisk: String
+                if hoursUntil <= 2 { macroRisk = "IMMINENT" }
+                else if hoursUntil <= 4 { macroRisk = "NEARBY" }
+                else if hoursUntil <= 12 { macroRisk = "UPCOMING" }
+                else { macroRisk = "ON_HORIZON" }
+                lines.append("Macro Risk: \(macroRisk) — \(nearest.title) in \(String(format: "%.1f", hoursUntil))h")
+                lines.append("Conviction Cap: \(macroRisk == "IMMINENT" ? "LOW (no trade)" : macroRisk == "NEARBY" ? "MODERATE max" : "no cap")")
+            } else {
+                lines.append("Macro Risk: NONE")
+            }
+        }
 
         if let s = sentiment {
             var sentParts = [String]()
@@ -414,13 +610,38 @@ enum AnalysisPrompt {
         #if DEBUG
         print("[MarketScope] [\(symbol)] \(economicEvents.count) economic events")
         #endif
-        if !economicEvents.isEmpty {
+        let releasedEvents = economicEvents.filter { $0.isRecentlyReleased }
+        let upcomingEvents = economicEvents.filter { $0.isUpcoming }
+
+        if !releasedEvents.isEmpty {
+            lines.append("")
+            lines.append("=== RECENTLY RELEASED ECONOMIC DATA ===")
+            for event in releasedEvents {
+                var line = "✅ \(event.title) (\(event.country)) — Released \(event.date.formatted(date: .abbreviated, time: .shortened))"
+                if let actual = event.actual, !actual.isEmpty {
+                    line += " | Actual: \(actual)"
+                    if let forecast = event.forecast, !forecast.isEmpty { line += " vs Exp: \(forecast)" }
+                    if let surprise = event.surprise { line += " [\(surprise)]" }
+                } else {
+                    line += " | Actual: pending"
+                    if let forecast = event.forecast, !forecast.isEmpty { line += " | Exp: \(forecast)" }
+                }
+                if let prev = event.previous, !prev.isEmpty { line += " | Prev: \(prev)" }
+                lines.append(line)
+            }
+            lines.append("NOTE: These events ALREADY HAPPENED. Discuss their IMPACT on current price action, not as upcoming risk.")
+        }
+
+        if !upcomingEvents.isEmpty {
             lines.append("")
             lines.append("=== UPCOMING ECONOMIC EVENTS ===")
-            for event in economicEvents {
+            for event in upcomingEvents {
                 var line = "\(event.title) (\(event.country)) — \(event.date.formatted(date: .abbreviated, time: .shortened))"
                 if let forecast = event.forecast, !forecast.isEmpty { line += " | Exp: \(forecast)" }
-                if event.isWithin48Hours { line += " ⚠️ WITHIN 48H" }
+                if let prev = event.previous, !prev.isEmpty { line += " | Prev: \(prev)" }
+                let hoursAway = event.date.timeIntervalSinceNow / 3600
+                if hoursAway < 12 { line += " ⚠️ IN \(Int(hoursAway))H" }
+                else if hoursAway < 48 { line += " ⚠️ WITHIN 48H" }
                 lines.append(line)
             }
         }

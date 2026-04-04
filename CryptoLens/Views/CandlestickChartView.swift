@@ -37,11 +37,11 @@ struct CandlestickChartView: View {
                         Toggle("Bollinger Bands", isOn: $showBB)
                         Divider()
                         Text("Sub-Charts").font(.caption2).foregroundStyle(.tertiary)
+                        Toggle("Volume", isOn: $showVolOsc)
                         Toggle("RSI", isOn: $showRSI)
                         Toggle("MACD", isOn: $showMACD)
                         Toggle("Stoch RSI", isOn: $showStochRSI)
                         Toggle("ADX / DI", isOn: $showADX)
-                        Toggle("Volume", isOn: $showVolOsc)
                     }
                     .font(.caption)
                     .padding(12)
@@ -137,12 +137,11 @@ private struct CandlestickCanvas: View {
     @State private var visibleCount: Int = 80
     @State private var scrollOffset: Int = 0  // 0 = latest candles visible
     @GestureState private var livePinchScale: CGFloat = 1.0
-    @GestureState private var liveDragOffset: CGFloat = 0
+    @GestureState private var livePanOffset: CGFloat = 0
     @State private var chartWidth: CGFloat = 350
 
     // Layout
     private let chartHeight: CGFloat = 240
-    private let volumeHeight: CGFloat = 40
     private let subChartHeight: CGFloat = 120
     private let spacing: CGFloat = 6
     private let minVisibleCandles = 15
@@ -152,7 +151,7 @@ private struct CandlestickCanvas: View {
         (rsiSeries.isEmpty ? 0 : 1) + (macdHistSeries.isEmpty ? 0 : 1) + (stochKSeries.isEmpty ? 0 : 1) + (adxSeries.isEmpty ? 0 : 1) + (volumeRatioSeries.isEmpty ? 0 : 1)
     }
     private var totalHeight: CGFloat {
-        chartHeight + spacing + volumeHeight + CGFloat(subChartCount) * (spacing + subChartHeight)
+        chartHeight + CGFloat(subChartCount) * (spacing + subChartHeight)
     }
 
     /// Effective visible count accounting for live pinch gesture
@@ -161,18 +160,18 @@ private struct CandlestickCanvas: View {
         return min(maxVisibleCandles, max(minVisibleCandles, scaled))
     }
 
-    /// Effective scroll offset accounting for live drag gesture
-    private var effectiveScrollOffset: Int {
-        if liveDragOffset == 0 { return scrollOffset }
-        let candlesPerPoint = Double(effectiveVisibleCount) / max(1, Double(chartWidth))
-        let draggedCandles = Int(Double(liveDragOffset) * candlesPerPoint)
-        return max(0, min(candles.count - effectiveVisibleCount, scrollOffset + draggedCandles))
+    /// Candle offset from live pan gesture (positive = scrolling back in time)
+    private var panOffsetCandles: Int {
+        guard livePanOffset != 0, chartWidth > 0 else { return 0 }
+        let candlesPerPoint = Double(effectiveVisibleCount) / Double(chartWidth)
+        return Int(livePanOffset * candlesPerPoint)
     }
 
     private var visibleRange: Range<Int> {
         let total = candles.count
         let count = min(effectiveVisibleCount, total)
-        let end = max(count, total - effectiveScrollOffset)
+        let offset = max(0, min(total - count, scrollOffset + panOffsetCandles))
+        let end = max(count, total - offset)
         let start = max(0, end - count)
         return start..<min(end, total)
     }
@@ -196,9 +195,6 @@ private struct CandlestickCanvas: View {
         let low = visibleCandles.map(\.low).min() ?? 0
         return max(high - low, 0.0001)
     }
-    private var volumeMax: Double {
-        visibleCandles.map(\.volume).max() ?? 1
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -209,7 +205,7 @@ private struct CandlestickCanvas: View {
                 selectedCandleInfo(last)
             }
 
-            // Price chart + volume
+            // Price chart — single Canvas draw call for all candles, overlays, grid
             GeometryReader { geo in
                 let totalWidth = geo.size.width
                 let _ = updateChartWidth(totalWidth)
@@ -217,51 +213,66 @@ private struct CandlestickCanvas: View {
                 let candleWidth = max(2, (totalWidth / CGFloat(vCount)) - 1.5)
                 let step = totalWidth / CGFloat(vCount)
 
-                ZStack(alignment: .topLeading) {
-                    // Price grid lines
-                    priceGrid(height: chartHeight, width: totalWidth)
+                Canvas { context, size in
+                    let chartH = chartHeight
 
-                    // Bollinger bands fill
+                    // Price grid
+                    let gridLines = 3
+                    for i in 0...gridLines {
+                        let fraction = CGFloat(i) / CGFloat(gridLines)
+                        let price = priceMax - Double(fraction) * (priceMax - priceMin)
+                        let y = chartH * fraction
+
+                        var gp = Path()
+                        gp.move(to: CGPoint(x: 0, y: y))
+                        gp.addLine(to: CGPoint(x: totalWidth, y: y))
+                        context.stroke(gp, with: .color(Color(.systemGray3)), style: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
+
+                        context.draw(
+                            Text(Formatters.formatPrice(price)).font(.system(size: 8)).foregroundColor(.secondary),
+                            at: CGPoint(x: 4, y: y - 10), anchor: .topLeading
+                        )
+                    }
+
+                    // Bollinger band fill
                     if let bbUpper = bollingerUpper, let bbLower = bollingerLower {
-                        bollingerBandOverlay(upper: bbUpper, lower: bbLower, height: chartHeight, width: totalWidth)
+                        let yU = priceY(bbUpper, height: chartH)
+                        let yL = priceY(bbLower, height: chartH)
+                        context.fill(Path(CGRect(x: 0, y: yU, width: totalWidth, height: max(0, yL - yU))), with: .color(.purple.opacity(0.04)))
                     }
 
                     // S/R levels
-                    ForEach(Array(visibleSupports.enumerated()), id: \.offset) { _, level in
-                        srLine(value: level, height: chartHeight, width: totalWidth, color: .green)
+                    let visSup = supports.filter { $0 >= priceMin && $0 <= priceMax }
+                    let visRes = resistances.filter { $0 >= priceMin && $0 <= priceMax }
+                    for level in visSup {
+                        drawSRLine(context: &context, value: level, height: chartH, width: totalWidth, color: .green)
                     }
-                    ForEach(Array(visibleResistances.enumerated()), id: \.offset) { _, level in
-                        srLine(value: level, height: chartHeight, width: totalWidth, color: .red)
+                    for level in visRes {
+                        drawSRLine(context: &context, value: level, height: chartH, width: totalWidth, color: .red)
                     }
 
-                    // EMA polylines (sliced to visible range)
-                    emaPolyline(series: ema200Series, step: step, height: chartHeight, color: .purple.opacity(0.7))
-                    emaPolyline(series: ema50Series, step: step, height: chartHeight, color: .blue.opacity(0.75))
-                    emaPolyline(series: ema20Series, step: step, height: chartHeight, color: .orange.opacity(0.85))
+                    // EMA polylines
+                    drawPriceLine(context: &context, series: ema200Series, step: step, height: chartH, color: .purple.opacity(0.7))
+                    drawPriceLine(context: &context, series: ema50Series, step: step, height: chartH, color: .blue.opacity(0.75))
+                    drawPriceLine(context: &context, series: ema20Series, step: step, height: chartH, color: .orange.opacity(0.85))
 
                     // Candlesticks
-                    ForEach(Array(visibleCandles.enumerated()), id: \.offset) { localIdx, candle in
+                    for (localIdx, candle) in visibleCandles.enumerated() {
                         let x = step * CGFloat(localIdx) + step / 2
                         let isUp = candle.close >= candle.open
+                        let color: Color = isUp ? .green : .red
 
                         // Wick
-                        Path { path in
-                            let yHigh = priceY(candle.high, height: chartHeight)
-                            let yLow = priceY(candle.low, height: chartHeight)
-                            path.move(to: CGPoint(x: x, y: yHigh))
-                            path.addLine(to: CGPoint(x: x, y: yLow))
-                        }
-                        .stroke(isUp ? Color.green : Color.red, lineWidth: 1)
+                        var wick = Path()
+                        wick.move(to: CGPoint(x: x, y: priceY(candle.high, height: chartH)))
+                        wick.addLine(to: CGPoint(x: x, y: priceY(candle.low, height: chartH)))
+                        context.stroke(wick, with: .color(color), lineWidth: 1)
 
                         // Body
-                        let bodyTop = priceY(max(candle.open, candle.close), height: chartHeight)
-                        let bodyBot = priceY(min(candle.open, candle.close), height: chartHeight)
-                        let bodyHeight = max(1, bodyBot - bodyTop)
-
-                        Rectangle()
-                            .fill(isUp ? Color.green : Color.red)
-                            .frame(width: candleWidth, height: bodyHeight)
-                            .position(x: x, y: bodyTop + bodyHeight / 2)
+                        let bodyTop = priceY(max(candle.open, candle.close), height: chartH)
+                        let bodyBot = priceY(min(candle.open, candle.close), height: chartH)
+                        let bodyH = max(1, bodyBot - bodyTop)
+                        context.fill(Path(CGRect(x: x - candleWidth / 2, y: bodyTop, width: candleWidth, height: bodyH)), with: .color(color))
                     }
 
                     // Pattern annotation on last visible candle
@@ -270,66 +281,42 @@ private struct CandlestickCanvas: View {
                        let lastCandle = candles.last {
                         let localIdx = candles.count - 1 - visibleRange.lowerBound
                         let lastX = step * CGFloat(localIdx) + step / 2
-                        let lastHigh = priceY(lastCandle.high, height: chartHeight)
+                        let lastHigh = priceY(lastCandle.high, height: chartH)
                         let isBullish = candlePatterns.contains { $0.signal.lowercased().contains("bullish") }
+                        let dotColor: Color = isBullish ? .green : .red
 
-                        Circle()
-                            .fill(isBullish ? Color.green : Color.red)
-                            .frame(width: 6, height: 6)
-                            .position(x: lastX, y: lastHigh - 8)
-
-                        Text(firstPattern.pattern)
-                            .font(.system(size: 7, weight: .semibold))
-                            .foregroundStyle(isBullish ? .green : .red)
-                            .position(x: lastX, y: lastHigh - 18)
-                    }
-
-                    // Volume bars (below price)
-                    ForEach(Array(visibleCandles.enumerated()), id: \.offset) { localIdx, candle in
-                        let x = step * CGFloat(localIdx) + step / 2
-                        let isUp = candle.close >= candle.open
-                        let volH = CGFloat(candle.volume / volumeMax) * volumeHeight
-                        let yOrigin = chartHeight + spacing + volumeHeight
-
-                        Rectangle()
-                            .fill((isUp ? Color.green : Color.red).opacity(0.3))
-                            .frame(width: candleWidth, height: max(0.5, volH))
-                            .position(x: x, y: yOrigin - volH / 2)
+                        context.fill(Path(ellipseIn: CGRect(x: lastX - 3, y: lastHigh - 11, width: 6, height: 6)), with: .color(dotColor))
+                        context.draw(
+                            Text(firstPattern.pattern).font(.system(size: 7, weight: .semibold)).foregroundColor(dotColor),
+                            at: CGPoint(x: lastX, y: lastHigh - 18), anchor: .center
+                        )
                     }
 
                     // Selection highlight
                     if let idx = selectedIndex, visibleRange.contains(idx) {
                         let localIdx = idx - visibleRange.lowerBound
                         let x = step * CGFloat(localIdx) + step / 2
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.08))
-                            .frame(width: step, height: chartHeight + spacing + volumeHeight)
-                            .position(x: x, y: (chartHeight + spacing + volumeHeight) / 2)
+                        context.fill(Path(CGRect(x: x - step / 2, y: 0, width: step, height: chartH)), with: .color(Color.primary.opacity(0.08)))
                     }
-
-                    // "Go to latest" button when scrolled back
+                }
+                // Go-to-latest button (interactive overlay outside Canvas)
+                .overlay(alignment: .bottomTrailing) {
                     if scrollOffset > 0 {
-                        VStack {
-                            Spacer()
-                            HStack {
-                                Spacer()
-                                Button {
-                                    withAnimation(.easeOut(duration: 0.2)) { scrollOffset = 0 }
-                                } label: {
-                                    Image(systemName: "chevron.right.2")
-                                        .font(.caption2)
-                                        .foregroundStyle(.white)
-                                        .padding(6)
-                                        .background(Color.accentColor.opacity(0.8), in: Circle())
-                                }
-                                .buttonStyle(.borderless)
-                                .padding(4)
-                            }
+                        Button {
+                            withAnimation(.easeOut(duration: 0.2)) { scrollOffset = 0 }
+                        } label: {
+                            Image(systemName: "chevron.right.2")
+                                .font(.caption2)
+                                .foregroundStyle(.white)
+                                .padding(6)
+                                .background(Color.accentColor.opacity(0.8), in: Circle())
                         }
+                        .buttonStyle(.borderless)
+                        .padding(4)
                     }
                 }
                 .contentShape(Rectangle())
-                // Pinch to zoom — runs simultaneously, no delay
+                // Pinch to zoom
                 .simultaneousGesture(
                     MagnificationGesture(minimumScaleDelta: 0.01)
                         .updating($livePinchScale) { value, state, _ in
@@ -340,21 +327,25 @@ private struct CandlestickCanvas: View {
                             visibleCount = min(maxVisibleCandles, max(minVisibleCandles, newCount))
                         }
                 )
-                // Pan to scroll — runs simultaneously, low minimum distance
+                // Horizontal drag to pan chart history
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 8)
-                        .updating($liveDragOffset) { value, state, _ in
-                            state = value.translation.width
+                    DragGesture(minimumDistance: 15)
+                        .updating($livePanOffset) { value, state, _ in
+                            if !scrubMode && abs(value.translation.width) > abs(value.translation.height) * 1.5 {
+                                state = value.translation.width
+                            }
                         }
                         .onEnded { value in
-                            let candlesPerPoint = Double(effectiveVisibleCount) / max(1, Double(chartWidth))
-                            let candlesDragged = Int(Double(value.translation.width) * candlesPerPoint)
-                            scrollOffset = max(0, min(candles.count - visibleCount, scrollOffset + candlesDragged))
+                            if !scrubMode && abs(value.translation.width) > abs(value.translation.height) {
+                                let cPerPt = Double(effectiveVisibleCount) / max(1, Double(chartWidth))
+                                let dragged = Int(value.translation.width * cPerPt)
+                                scrollOffset = max(0, min(candles.count - visibleCount, scrollOffset + dragged))
+                            }
                         }
                 )
-                // Long press + drag to scrub candles
+                // Long press + drag to scrub (Apple Stocks style)
                 .simultaneousGesture(
-                    LongPressGesture(minimumDuration: 0.25)
+                    LongPressGesture(minimumDuration: 0.15)
                         .sequenced(before: DragGesture(minimumDistance: 0))
                         .onChanged { value in
                             switch value {
@@ -362,11 +353,7 @@ private struct CandlestickCanvas: View {
                                 scrubMode = true
                             case .second(true, let drag):
                                 if let drag {
-                                    let localIdx = Int(drag.location.x / step)
-                                    let globalIdx = localIdx + visibleRange.lowerBound
-                                    if globalIdx >= visibleRange.lowerBound && globalIdx < visibleRange.upperBound {
-                                        selectedIndex = globalIdx
-                                    }
+                                    updateSelectedCandle(at: drag.location, step: step)
                                 }
                             default: break
                             }
@@ -377,29 +364,18 @@ private struct CandlestickCanvas: View {
                         }
                 )
             }
-            .frame(height: chartHeight + spacing + volumeHeight)
-            .drawingGroup()
+            .frame(height: chartHeight)
             .clipped()
 
             // Sub-charts
             subCharts
         }
         .onChange(of: candles.count) { _, newCount in
-            // Reset viewport when switching timeframes
             visibleCount = min(80, newCount)
             scrollOffset = 0
             selectedIndex = nil
             scrubMode = false
         }
-    }
-
-    // MARK: - S/R levels within visible range
-
-    private var visibleSupports: [Double] {
-        supports.filter { $0 >= priceMin && $0 <= priceMax }
-    }
-    private var visibleResistances: [Double] {
-        resistances.filter { $0 >= priceMin && $0 <= priceMax }
     }
 
     // MARK: - Selected Candle Info Bar
@@ -427,83 +403,61 @@ private struct CandlestickCanvas: View {
         }
     }
 
-    // MARK: - Price Grid
+    // MARK: - Canvas Drawing Helpers
 
-    private func priceGrid(height: CGFloat, width: CGFloat) -> some View {
-        let lines = 3
-        return ForEach(0...lines, id: \.self) { i in
-            let fraction = Double(i) / Double(lines)
-            let price = priceMax - fraction * (priceMax - priceMin)
-            let y = height * CGFloat(fraction)
-
-            ZStack(alignment: .topLeading) {
-                Path { path in
-                    path.move(to: CGPoint(x: 0, y: y))
-                    path.addLine(to: CGPoint(x: width, y: y))
-                }
-                .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
-
-                Text(Formatters.formatPrice(price))
-                    .font(.system(size: 8))
-                    .foregroundStyle(.secondary)
-                    .offset(y: y - 10)
-            }
-        }
-    }
-
-    // MARK: - S/R Line
-
-    private func srLine(value: Double, height: CGFloat, width: CGFloat, color: Color) -> some View {
+    private func drawSRLine(context: inout GraphicsContext, value: Double, height: CGFloat, width: CGFloat, color: Color) {
         let y = priceY(value, height: height)
-        return ZStack(alignment: .trailing) {
-            Path { path in
-                path.move(to: CGPoint(x: 0, y: y))
-                path.addLine(to: CGPoint(x: width, y: y))
-            }
-            .stroke(color.opacity(0.6), style: StrokeStyle(lineWidth: 0.7, dash: [3, 3]))
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: y))
+        path.addLine(to: CGPoint(x: width, y: y))
+        context.stroke(path, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: 0.7, dash: [3, 3]))
+        context.draw(
+            Text(Formatters.formatPrice(value)).font(.system(size: 7)).foregroundColor(color.opacity(0.85)),
+            at: CGPoint(x: width - 4, y: y - 8), anchor: .trailing
+        )
+    }
 
-            Text(Formatters.formatPrice(value))
-                .font(.system(size: 7))
-                .foregroundStyle(color.opacity(0.85))
-                .offset(x: width - 4, y: y - 8)
+    private func drawPriceLine(context: inout GraphicsContext, series: [Double], step: CGFloat, height: CGFloat, color: Color) {
+        guard series.count >= 2 else { return }
+        let fullOffset = candles.count - series.count
+        var path = Path()
+        var started = false
+        for globalIdx in visibleRange {
+            let seriesIdx = globalIdx - fullOffset
+            guard seriesIdx >= 0 && seriesIdx < series.count else { continue }
+            let localIdx = globalIdx - visibleRange.lowerBound
+            let x = step * CGFloat(localIdx) + step / 2
+            let y = priceY(series[seriesIdx], height: height)
+            if !started { path.move(to: CGPoint(x: x, y: y)); started = true }
+            else { path.addLine(to: CGPoint(x: x, y: y)) }
         }
+        context.stroke(path, with: .color(color), lineWidth: 1.2)
     }
 
-    // MARK: - Bollinger Bands
-
-    private func bollingerBandOverlay(upper: Double, lower: Double, height: CGFloat, width: CGFloat) -> some View {
-        let yUpper = priceY(upper, height: height)
-        let yLower = priceY(lower, height: height)
-        return Rectangle()
-            .fill(Color.purple.opacity(0.04))
-            .frame(width: width, height: max(0, yLower - yUpper))
-            .position(x: width / 2, y: (yUpper + yLower) / 2)
+    private func drawSubChartLine(context: inout GraphicsContext, data: [Double], step: CGFloat, height: CGFloat, lo: Double, hi: Double, color: Color) {
+        guard data.count >= 2, hi > lo else { return }
+        let fullOffset = candles.count - data.count
+        var path = Path()
+        var started = false
+        for globalIdx in visibleRange {
+            let seriesIdx = globalIdx - fullOffset
+            guard seriesIdx >= 0 && seriesIdx < data.count else { continue }
+            let localIdx = globalIdx - visibleRange.lowerBound
+            let x = step * CGFloat(localIdx) + step / 2
+            let y = height * CGFloat(1.0 - (data[seriesIdx] - lo) / (hi - lo))
+            if !started { path.move(to: CGPoint(x: x, y: y)); started = true }
+            else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        context.stroke(path, with: .color(color), lineWidth: 1.0)
     }
 
-    // MARK: - EMA Polyline
+    // MARK: - Scrub Helpers
 
-    @ViewBuilder
-    private func emaPolyline(series: [Double], step: CGFloat, height: CGFloat, color: Color) -> some View {
-        if series.count >= 2 {
-            // Align series to candles: series may be shorter than candles (warmup period)
-            let fullOffset = candles.count - series.count
-            Path { path in
-                var started = false
-                for globalIdx in visibleRange {
-                    let seriesIdx = globalIdx - fullOffset
-                    guard seriesIdx >= 0 && seriesIdx < series.count else { continue }
-                    let localIdx = globalIdx - visibleRange.lowerBound
-                    let x = step * CGFloat(localIdx) + step / 2
-                    let y = priceY(series[seriesIdx], height: height)
-                    if !started {
-                        path.move(to: CGPoint(x: x, y: y))
-                        started = true
-                    } else {
-                        path.addLine(to: CGPoint(x: x, y: y))
-                    }
-                }
-            }
-            .stroke(color, lineWidth: 1.2)
+    private func updateSelectedCandle(at location: CGPoint, step: CGFloat) {
+        let localIdx = Int(location.x / step)
+        let globalIdx = localIdx + visibleRange.lowerBound
+        if globalIdx >= visibleRange.lowerBound && globalIdx < visibleRange.upperBound {
+            selectedIndex = globalIdx
         }
     }
 
@@ -511,6 +465,9 @@ private struct CandlestickCanvas: View {
 
     @ViewBuilder
     private var subCharts: some View {
+        if !volumeRatioSeries.isEmpty {
+            volumeOscPanel
+        }
         if !rsiSeries.isEmpty {
             oscillatorPanel(title: "RSI", series: [(rsiSeries, Color.purple)], range: 0...100, levels: [30, 70], highlightBand: true)
         }
@@ -523,9 +480,6 @@ private struct CandlestickCanvas: View {
         if !adxSeries.isEmpty {
             adxPanel
         }
-        if !volumeRatioSeries.isEmpty {
-            volumeOscPanel
-        }
     }
 
     private func oscillatorPanel(title: String, series: [([Double], Color)], range: ClosedRange<Double>, levels: [Double], highlightBand: Bool = false) -> some View {
@@ -535,7 +489,6 @@ private struct CandlestickCanvas: View {
                 Spacer()
                 if let mainSeries = series.first?.0 {
                     let offset = candles.count - mainSeries.count
-                    // Show value at selected candle, or fall back to last visible
                     let displayIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - offset
                     if displayIdx >= 0 && displayIdx < mainSeries.count {
                         Text(String(format: "%.1f", mainSeries[displayIdx]))
@@ -553,71 +506,67 @@ private struct CandlestickCanvas: View {
                 let lo = range.lowerBound
                 let hi = range.upperBound
 
-                ZStack(alignment: .topLeading) {
-                    // Band fill between levels (TradingView style)
+                Canvas { context, size in
+                    // Band fills
                     if levels.count == 2 {
                         let yTop = height * CGFloat(1.0 - (levels[1] - lo) / (hi - lo))
                         let yBot = height * CGFloat(1.0 - (levels[0] - lo) / (hi - lo))
                         if highlightBand {
-                            // RSI style: highlight the neutral band between levels
-                            Rectangle()
-                                .fill(Color.purple.opacity(0.06))
-                                .frame(width: width, height: yBot - yTop)
-                                .position(x: width / 2, y: yTop + (yBot - yTop) / 2)
+                            context.fill(Path(CGRect(x: 0, y: yTop, width: width, height: yBot - yTop)), with: .color(.purple.opacity(0.06)))
                         } else {
-                            // StochRSI style: highlight overbought/oversold zones
-                            Rectangle()
-                                .fill(Color.red.opacity(0.04))
-                                .frame(width: width, height: yTop)
-                                .position(x: width / 2, y: yTop / 2)
-                            Rectangle()
-                                .fill(Color.green.opacity(0.04))
-                                .frame(width: width, height: height - yBot)
-                                .position(x: width / 2, y: yBot + (height - yBot) / 2)
+                            context.fill(Path(CGRect(x: 0, y: 0, width: width, height: yTop)), with: .color(.red.opacity(0.04)))
+                            context.fill(Path(CGRect(x: 0, y: yBot, width: width, height: height - yBot)), with: .color(.green.opacity(0.04)))
                         }
                     }
 
-                    ForEach(levels, id: \.self) { level in
+                    // Level lines
+                    for level in levels {
                         let y = height * CGFloat(1.0 - (level - lo) / (hi - lo))
-                        Path { p in
-                            p.move(to: CGPoint(x: 0, y: y))
-                            p.addLine(to: CGPoint(x: width, y: y))
-                        }
-                        .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
-
-                        Text(String(format: "%.0f", level))
-                            .font(.system(size: 7))
-                            .foregroundStyle(.secondary)
-                            .position(x: 12, y: y)
+                        var lp = Path()
+                        lp.move(to: CGPoint(x: 0, y: y))
+                        lp.addLine(to: CGPoint(x: width, y: y))
+                        context.stroke(lp, with: .color(Color(.systemGray3)), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                        context.draw(
+                            Text(String(format: "%.0f", level)).font(.system(size: 7)).foregroundColor(.secondary),
+                            at: CGPoint(x: 12, y: y), anchor: .center
+                        )
                     }
 
-                    ForEach(Array(series.enumerated()), id: \.offset) { _, seriesData in
-                        let (data, color) = seriesData
-                        seriesLine(data: data, step: step, height: height, lo: lo, hi: hi, color: color)
+                    // Series lines
+                    for (data, color) in series {
+                        drawSubChartLine(context: &context, data: data, step: step, height: height, lo: lo, hi: hi, color: color)
                     }
 
-                    // Selection crosshair — extends from main chart
+                    // Selection crosshair
                     if let idx = selectedIndex, visibleRange.contains(idx) {
                         let localIdx = idx - visibleRange.lowerBound
                         let x = step * CGFloat(localIdx) + step / 2
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.08))
-                            .frame(width: step, height: height)
-                            .position(x: x, y: height / 2)
+                        context.fill(Path(CGRect(x: x - step / 2, y: 0, width: step, height: height)), with: .color(Color.primary.opacity(0.08)))
 
-                        // Value dot on the main series line
+                        // Value dot
                         if let mainSeries = series.first?.0 {
                             let seriesIdx = idx - (candles.count - mainSeries.count)
                             if seriesIdx >= 0 && seriesIdx < mainSeries.count {
                                 let y = height * CGFloat(1.0 - (mainSeries[seriesIdx] - lo) / (hi - lo))
-                                Circle()
-                                    .fill(series.first!.1)
-                                    .frame(width: 5, height: 5)
-                                    .position(x: x, y: y)
+                                context.fill(Path(ellipseIn: CGRect(x: x - 2.5, y: y - 2.5, width: 5, height: 5)), with: .color(series.first!.1))
                             }
                         }
                     }
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.15)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .onChanged { value in
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
+                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
+                )
             }
             .frame(height: subChartHeight - 14)
         }
@@ -629,33 +578,11 @@ private struct CandlestickCanvas: View {
         )
     }
 
-    /// Draw a series line aligned to candle positions in the visible range
-    @ViewBuilder
-    private func seriesLine(data: [Double], step: CGFloat, height: CGFloat, lo: Double, hi: Double, color: Color) -> some View {
-        if data.count >= 2 {
-            let fullOffset = candles.count - data.count
-            Path { path in
-                var started = false
-                for globalIdx in visibleRange {
-                    let seriesIdx = globalIdx - fullOffset
-                    guard seriesIdx >= 0 && seriesIdx < data.count else { continue }
-                    let localIdx = globalIdx - visibleRange.lowerBound
-                    let x = step * CGFloat(localIdx) + step / 2
-                    let y = height * CGFloat(1.0 - (data[seriesIdx] - lo) / (hi - lo))
-                    if !started { path.move(to: CGPoint(x: x, y: y)); started = true }
-                    else { path.addLine(to: CGPoint(x: x, y: y)) }
-                }
-            }
-            .stroke(color, lineWidth: 1.0)
-        }
-    }
-
     private var macdPanel: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("MACD").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
                 Spacer()
-                // Show MACD line, signal, and histogram values
                 let fullOffset = candles.count - macdHistSeries.count
                 let displayIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - fullOffset
                 if displayIdx >= 0 && displayIdx < macdHistSeries.count {
@@ -695,46 +622,55 @@ private struct CandlestickCanvas: View {
                 let lo = -maxAbs
                 let hi = maxAbs
 
-                ZStack(alignment: .topLeading) {
+                Canvas { context, size in
                     let midY = height / 2
-                    Path { p in
-                        p.move(to: CGPoint(x: 0, y: midY))
-                        p.addLine(to: CGPoint(x: width, y: midY))
-                    }
-                    .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5))
+
+                    // Zero line
+                    var zp = Path()
+                    zp.move(to: CGPoint(x: 0, y: midY))
+                    zp.addLine(to: CGPoint(x: width, y: midY))
+                    context.stroke(zp, with: .color(Color(.systemGray3)), style: StrokeStyle(lineWidth: 0.5))
 
                     // Histogram bars
-                    let candleWidth = max(1.5, step - 1.5)
-                    ForEach(Array(visibleRange.enumerated()), id: \.offset) { localIdx, globalIdx in
+                    let cw = max(1.5, step - 1.5)
+                    for (localIdx, globalIdx) in visibleRange.enumerated() {
                         let si = globalIdx - fullOffset
-                        if si >= 0 && si < macdHistSeries.count {
-                            let val = macdHistSeries[si]
-                            let x = step * CGFloat(localIdx) + step / 2
-                            let barH = CGFloat(abs(val) / maxAbs) * (height / 2 - 2)
-                            let y = val >= 0 ? midY - barH : midY
-
-                            Rectangle()
-                                .fill(val >= 0 ? Color.green.opacity(0.4) : Color.red.opacity(0.4))
-                                .frame(width: candleWidth, height: max(0.5, barH))
-                                .position(x: x, y: y + max(0.5, barH) / 2)
-                        }
+                        guard si >= 0 && si < macdHistSeries.count else { continue }
+                        let val = macdHistSeries[si]
+                        let x = step * CGFloat(localIdx) + step / 2
+                        let barH = CGFloat(abs(val) / maxAbs) * (height / 2 - 2)
+                        let y = val >= 0 ? midY - barH : midY
+                        context.fill(
+                            Path(CGRect(x: x - cw / 2, y: y, width: cw, height: max(0.5, barH))),
+                            with: .color(val >= 0 ? Color.green.opacity(0.4) : Color.red.opacity(0.4))
+                        )
                     }
 
-                    // MACD line (blue)
-                    seriesLine(data: macdLineSeries, step: step, height: height, lo: lo, hi: hi, color: .blue.opacity(0.9))
-                    // Signal line (orange)
-                    seriesLine(data: macdSignalSeries, step: step, height: height, lo: lo, hi: hi, color: .orange.opacity(0.9))
+                    // MACD line + signal line
+                    drawSubChartLine(context: &context, data: macdLineSeries, step: step, height: height, lo: lo, hi: hi, color: .blue.opacity(0.9))
+                    drawSubChartLine(context: &context, data: macdSignalSeries, step: step, height: height, lo: lo, hi: hi, color: .orange.opacity(0.9))
 
                     // Selection crosshair
                     if let idx = selectedIndex, visibleRange.contains(idx) {
                         let localIdx = idx - visibleRange.lowerBound
                         let x = step * CGFloat(localIdx) + step / 2
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.08))
-                            .frame(width: step, height: height)
-                            .position(x: x, y: height / 2)
+                        context.fill(Path(CGRect(x: x - step / 2, y: 0, width: step, height: height)), with: .color(Color.primary.opacity(0.08)))
                     }
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.15)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .onChanged { value in
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
+                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
+                )
             }
             .frame(height: subChartHeight - 14)
         }
@@ -788,41 +724,50 @@ private struct CandlestickCanvas: View {
                 let hi = max(50, (allVisible.max() ?? 50) * 1.1)
                 let lo = 0.0
 
-                ZStack(alignment: .topLeading) {
+                Canvas { context, size in
                     // 20 and 40 reference lines
-                    ForEach([20.0, 40.0], id: \.self) { level in
+                    for level in [20.0, 40.0] {
                         let y = height * CGFloat(1.0 - (level - lo) / (hi - lo))
-                        Path { p in p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: width, y: y)) }
-                            .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
-                        Text(String(format: "%.0f", level))
-                            .font(.system(size: 7)).foregroundStyle(.secondary)
-                            .position(x: 12, y: y)
+                        var lp = Path()
+                        lp.move(to: CGPoint(x: 0, y: y))
+                        lp.addLine(to: CGPoint(x: width, y: y))
+                        context.stroke(lp, with: .color(Color(.systemGray3)), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                        context.draw(
+                            Text(String(format: "%.0f", level)).font(.system(size: 7)).foregroundColor(.secondary),
+                            at: CGPoint(x: 12, y: y), anchor: .center
+                        )
                     }
 
-                    // Trend strength zone (below 20 = weak)
+                    // Weak trend zone (below 20)
                     let y20 = height * CGFloat(1.0 - (20.0 - lo) / (hi - lo))
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.06))
-                        .frame(width: width, height: height - y20)
-                        .position(x: width / 2, y: y20 + (height - y20) / 2)
+                    context.fill(Path(CGRect(x: 0, y: y20, width: width, height: height - y20)), with: .color(.gray.opacity(0.06)))
 
-                    // ADX line (white/yellow — trend strength)
-                    seriesLine(data: adxSeries, step: step, height: height, lo: lo, hi: hi, color: .yellow.opacity(0.9))
-                    // +DI line (green)
-                    seriesLine(data: plusDISeries, step: step, height: height, lo: lo, hi: hi, color: .green.opacity(0.8))
-                    // -DI line (red)
-                    seriesLine(data: minusDISeries, step: step, height: height, lo: lo, hi: hi, color: .red.opacity(0.8))
+                    // ADX line (yellow), +DI (green), -DI (red)
+                    drawSubChartLine(context: &context, data: adxSeries, step: step, height: height, lo: lo, hi: hi, color: .yellow.opacity(0.9))
+                    drawSubChartLine(context: &context, data: plusDISeries, step: step, height: height, lo: lo, hi: hi, color: .green.opacity(0.8))
+                    drawSubChartLine(context: &context, data: minusDISeries, step: step, height: height, lo: lo, hi: hi, color: .red.opacity(0.8))
 
                     // Selection crosshair
                     if let idx = selectedIndex, visibleRange.contains(idx) {
                         let localIdx = idx - visibleRange.lowerBound
                         let x = step * CGFloat(localIdx) + step / 2
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.08))
-                            .frame(width: step, height: height)
-                            .position(x: x, y: height / 2)
+                        context.fill(Path(CGRect(x: x - step / 2, y: 0, width: step, height: height)), with: .color(Color.primary.opacity(0.08)))
                     }
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.15)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .onChanged { value in
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
+                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
+                )
             }
             .frame(height: subChartHeight - 14)
         }
@@ -839,7 +784,7 @@ private struct CandlestickCanvas: View {
     private var volumeOscPanel: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Vol Ratio").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                Text("Volume").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
                 Spacer()
                 let offset = candles.count - volumeRatioSeries.count
                 let displayIdx = (selectedIndex ?? (visibleRange.upperBound - 1)) - offset
@@ -866,50 +811,61 @@ private struct CandlestickCanvas: View {
                 }
                 let maxVal = max(2.0, visibleVals.max() ?? 2.0)
 
-                ZStack(alignment: .topLeading) {
-                    // 1.0x reference line (average)
+                Canvas { context, size in
+                    // 1x reference line
                     let avgY = height * CGFloat(1.0 - 1.0 / maxVal)
-                    Path { p in p.move(to: CGPoint(x: 0, y: avgY)); p.addLine(to: CGPoint(x: width, y: avgY)) }
-                        .stroke(Color(.systemGray3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
-                    Text("1x").font(.system(size: 7)).foregroundStyle(.secondary)
-                        .position(x: 10, y: avgY)
+                    var ap = Path()
+                    ap.move(to: CGPoint(x: 0, y: avgY))
+                    ap.addLine(to: CGPoint(x: width, y: avgY))
+                    context.stroke(ap, with: .color(Color(.systemGray3)), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                    context.draw(Text("1x").font(.system(size: 7)).foregroundColor(.secondary), at: CGPoint(x: 10, y: avgY), anchor: .center)
 
                     // 2x line
                     if maxVal >= 2.0 {
                         let y2x = height * CGFloat(1.0 - 2.0 / maxVal)
-                        Path { p in p.move(to: CGPoint(x: 0, y: y2x)); p.addLine(to: CGPoint(x: width, y: y2x)) }
-                            .stroke(Color.orange.opacity(0.3), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
-                        Text("2x").font(.system(size: 7)).foregroundStyle(.orange.opacity(0.6))
-                            .position(x: 10, y: y2x)
+                        var tp = Path()
+                        tp.move(to: CGPoint(x: 0, y: y2x))
+                        tp.addLine(to: CGPoint(x: width, y: y2x))
+                        context.stroke(tp, with: .color(.orange.opacity(0.3)), style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                        context.draw(Text("2x").font(.system(size: 7)).foregroundColor(.orange.opacity(0.6)), at: CGPoint(x: 10, y: y2x), anchor: .center)
                     }
 
                     // Volume ratio bars
-                    let candleWidth = max(1.5, step - 1.5)
-                    ForEach(Array(visibleRange.enumerated()), id: \.offset) { localIdx, globalIdx in
+                    let cw = max(1.5, step - 1.5)
+                    for (localIdx, globalIdx) in visibleRange.enumerated() {
                         let si = globalIdx - fullOffset
-                        if si >= 0 && si < volumeRatioSeries.count {
-                            let val = volumeRatioSeries[si]
-                            let x = step * CGFloat(localIdx) + step / 2
-                            let barH = CGFloat(val / maxVal) * height
-                            let color: Color = val >= 2.0 ? .orange.opacity(0.7) : val >= 1.0 ? .blue.opacity(0.5) : .blue.opacity(0.3)
-
-                            Rectangle()
-                                .fill(color)
-                                .frame(width: candleWidth, height: max(0.5, barH))
-                                .position(x: x, y: height - barH / 2)
-                        }
+                        guard si >= 0 && si < volumeRatioSeries.count else { continue }
+                        let val = volumeRatioSeries[si]
+                        let x = step * CGFloat(localIdx) + step / 2
+                        let barH = CGFloat(val / maxVal) * height
+                        let color: Color = val >= 2.0 ? .orange.opacity(0.7) : val >= 1.0 ? .blue.opacity(0.5) : .blue.opacity(0.3)
+                        context.fill(
+                            Path(CGRect(x: x - cw / 2, y: height - barH, width: cw, height: max(0.5, barH))),
+                            with: .color(color)
+                        )
                     }
 
                     // Selection crosshair
                     if let idx = selectedIndex, visibleRange.contains(idx) {
                         let localIdx = idx - visibleRange.lowerBound
                         let x = step * CGFloat(localIdx) + step / 2
-                        Rectangle()
-                            .fill(Color.primary.opacity(0.08))
-                            .frame(width: step, height: height)
-                            .position(x: x, y: height / 2)
+                        context.fill(Path(CGRect(x: x - step / 2, y: 0, width: step, height: height)), with: .color(Color.primary.opacity(0.08)))
                     }
                 }
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.15)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .onChanged { value in
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
+                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
+                )
             }
             .frame(height: subChartHeight - 14)
         }
@@ -934,3 +890,4 @@ private struct CandlestickCanvas: View {
         return height * CGFloat(fraction)
     }
 }
+

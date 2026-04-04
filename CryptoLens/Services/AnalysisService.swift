@@ -353,7 +353,7 @@ class AnalysisService: ObservableObject {
                 }
             }
 
-            let events = await economicCalendar.highImpactUpcoming()
+            let events = await economicCalendar.highImpactRelevant()
             _ = await macroData.fetchMacroSnapshot()
 
             if needsEnrichment { lastEnrichmentFetch[symbol] = Date() }
@@ -516,7 +516,7 @@ class AnalysisService: ObservableObject {
                 }
             }
 
-            let events = await economicCalendar.highImpactUpcoming()
+            let events = await economicCalendar.highImpactRelevant()
             let macroSnapshot = await macroData.fetchMacroSnapshot()
 
             // Spot pressure for crypto (free Binance data)

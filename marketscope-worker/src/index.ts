@@ -417,7 +417,6 @@ export default {
           ['treasury10Y', 'DGS10'],
           ['treasury2Y', 'DGS2'],
           ['fedFundsRate', 'FEDFUNDS'],
-          ['usdIndex', 'DTWEXBGS'],
         ];
         for (const [key, seriesId] of series) {
           try {
@@ -439,6 +438,21 @@ export default {
           } catch { /* skip */ }
         }
       }
+
+      // USD Index (DXY) from Yahoo Finance — ICE US Dollar Index, same as TradingView
+      try {
+        const dxyResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/DX-Y.NYB?interval=1d&range=5d`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+        });
+        if (dxyResp.ok) {
+          const dxyData = await dxyResp.json() as any;
+          const meta = dxyData?.chart?.result?.[0]?.meta;
+          const price = meta?.regularMarketPrice ?? meta?.previousClose;
+          if (price != null && !isNaN(price)) {
+            data['usdIndex'] = Math.round(price * 100) / 100;
+          }
+        }
+      } catch { /* skip */ }
 
       // Compute yield spread
       if (data.treasury10Y != null && data.treasury2Y != null) {

@@ -54,8 +54,8 @@ struct MacroContextView: View {
                         tooltip: "Federal Reserve target rate. Higher = restrictive policy (bearish for growth stocks, bullish for banks). Lower = accommodative (bullish for equities). Changes ~8 times per year at FOMC meetings.")
                 }
                 if let usd = macro.usdIndex {
-                    metricCell(label: "USD Index", value: String(format: "%.1f", usd), color: .primary, note: nil,
-                        tooltip: "Trade-weighted US Dollar index. Dollar up = headwind for equities and commodities (earnings worth less abroad). Dollar down = tailwind. Strong inverse correlation with stocks and crypto.")
+                    metricCell(label: "DXY", value: String(format: "%.2f", usd), color: .primary, note: nil,
+                        tooltip: "US Dollar Index (DXY) — ICE futures index tracking USD against 6 major currencies. Dollar up = headwind for equities and commodities. Dollar down = tailwind. Strong inverse correlation with stocks and crypto.")
                 }
             }
         }

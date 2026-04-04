@@ -6,7 +6,7 @@ struct TradeSetupChartView: View {
     let setup: TradeSetup
     let currentPrice: Double
 
-    private let chartHeight: CGFloat = 160
+    private let chartHeight: CGFloat = 240
 
     // Collect all setup levels for price range calculation
     private var allLevels: [Double] {
