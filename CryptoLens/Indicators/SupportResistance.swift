@@ -15,7 +15,7 @@ enum SupportResistance {
         return clustered
     }
 
-    static func find(highs: [Double], lows: [Double], closes: [Double], lookback: Int = 50) -> SRResult {
+    static func find(highs: [Double], lows: [Double], closes: [Double], atr: Double = 0, lookback: Int = 50) -> SRResult {
         var supports = [Double]()
         var resistances = [Double]()
 
@@ -38,12 +38,8 @@ enum SupportResistance {
 
         let current = closes.last ?? 0
 
-        // Scope tolerance to the lookback window, not the full candle array
-        let lookbackHighs = Array(highs.suffix(lookback + 4))
-        let lookbackLows = Array(lows.suffix(lookback + 4))
-        let highMax = lookbackHighs.max() ?? 0
-        let lowMin = lookbackLows.min() ?? 0
-        let tolerance = (highMax - lowMin) * 0.003
+        // ATR-based tolerance scales correctly across assets and timeframes
+        let tolerance = atr > 0 ? atr * 0.15 : (closes.last ?? 1) * 0.003
 
         // Cluster nearby levels, then filter and sort
         let clusteredSupports = clusterLevels(supports, tolerance: tolerance)

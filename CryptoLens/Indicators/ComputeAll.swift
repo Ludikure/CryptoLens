@@ -36,7 +36,7 @@ enum IndicatorEngine {
         }
         let vwap = VWAP.compute(highs: highs, lows: lows, closes: closes, volumes: volumes, sessionCandles: vwapSessionCandles)
         let fib = Fibonacci.compute(highs: highs, lows: lows, closes: closes)
-        let sr = SupportResistance.find(highs: highs, lows: lows, closes: closes)
+        let sr = SupportResistance.find(highs: highs, lows: lows, closes: closes, atr: atr?.atr ?? 0)
         let patterns = CandlePatterns.detect(opens: opens, highs: highs, lows: lows, closes: closes)
 
         // Moving averages
