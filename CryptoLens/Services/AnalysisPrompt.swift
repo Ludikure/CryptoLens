@@ -62,7 +62,14 @@ enum AnalysisPrompt {
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
 
-        If ANY_KILLED is true:
+        If divergence_escalated is true (6+ candles of 4H divergence against bias):
+          → The counter-trend pullback premise has expired. This is no longer a temporary 1H counter-move — it is a potential trend transition.
+          → Override bias to FLAT regardless of label alignment.
+          → Output: "Bias: FLAT (divergence escalated — 4H divergence against D bias for 6+ candles indicates trend transition, not pullback. Watch for 4H label flip to confirm new direction.)"
+          → Do not present any setup. State what resolves the situation: either 4H label flips (confirming transition) or divergence collapses and kills clear (restoring the original thesis).
+          → Go directly to Risk Factors, then empty JSON [].
+
+        If ANY_KILLED is true (but divergence not escalated):
           → Skip Step 4 entirely. Do not construct a setup table.
           → Output format:
             ## Bias
@@ -460,12 +467,16 @@ enum AnalysisPrompt {
                 durState["funding"] = killFunding ? (durState["funding"] ?? 0) + 1 : 0
                 UserDefaults.standard.set(durState, forKey: killDurKey)
 
+                // Divergence escalation: 6+ candles = trend transition, not pullback
+                let divergenceEscalated = (durState["divergence"] ?? 0) >= 6
+
                 var killParts = [String]()
                 if killDivergence { killParts.append("divergence_against_bias(\(durState["divergence"] ?? 1) candles)") }
                 if killVolume { killParts.append("counter_move_volume_exceeds(\(durState["volume"] ?? 1) candles)") }
                 if killFunding { killParts.append("funding_supports_counter(\(durState["funding"] ?? 1) candles)") }
                 if killMacro { killParts.append("macro_event_within_4h") }
                 lines.append("Kill Conditions: \(killParts.isEmpty ? "none" : killParts.joined(separator: ", ")), ANY_KILLED=\(anyKilled)")
+                lines.append("Divergence Escalated: \(divergenceEscalated)")
             }
 
             // Phase 5 — Macro event window
