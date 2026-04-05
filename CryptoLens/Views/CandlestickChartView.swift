@@ -137,12 +137,8 @@ private struct CandlestickCanvas: View {
     @State private var visibleCount: Int = 80
     @State private var scrollOffset: Int = 0  // 0 = latest candles visible
     @GestureState private var livePinchScale: CGFloat = 1.0
-    @State private var livePanOffset: CGFloat = 0
+    @GestureState private var livePanOffset: CGFloat = 0
     @State private var chartWidth: CGFloat = 350
-    @State private var dragStartTime: Date?
-    @State private var dragMode: DragMode = .undecided
-
-    private enum DragMode { case undecided, pan, scrub, vertical }
 
     // Layout
     private let chartHeight: CGFloat = 240
@@ -331,61 +327,40 @@ private struct CandlestickCanvas: View {
                             visibleCount = min(maxVisibleCandles, max(minVisibleCandles, newCount))
                         }
                 )
-                // Single unified drag: quick horizontal = pan, hold 0.3s = scrub, vertical = ignore (scroll)
+                // Horizontal pan: requires 10pt intentional movement — vertical swipes pass to ScrollView
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { value in
-                            // First touch — record start time
-                            if dragStartTime == nil {
-                                dragStartTime = Date()
-                                dragMode = .undecided
-                            }
-
-                            let dx = abs(value.translation.width)
-                            let dy = abs(value.translation.height)
-                            let elapsed = Date().timeIntervalSince(dragStartTime!)
-
-                            // Decide mode once we have enough movement or enough time
-                            if dragMode == .undecided {
-                                if dx > 8 || dy > 8 {
-                                    // Movement detected before 0.3s — check direction
-                                    if dx > dy {
-                                        dragMode = .pan
-                                    } else {
-                                        dragMode = .vertical  // let ScrollView handle
-                                    }
-                                } else if elapsed >= 0.3 {
-                                    // Held still for 0.3s — enter scrub mode
-                                    dragMode = .scrub
-                                    scrubMode = true
-                                }
-                            }
-
-                            switch dragMode {
-                            case .pan:
-                                livePanOffset = value.translation.width
-                            case .scrub:
-                                if !scrubMode { scrubMode = true }
-                                updateSelectedCandle(at: value.location, step: step)
-                            case .undecided, .vertical:
-                                break
+                    DragGesture(minimumDistance: 10)
+                        .updating($livePanOffset) { value, state, _ in
+                            if !scrubMode && abs(value.translation.width) > abs(value.translation.height) {
+                                state = value.translation.width
                             }
                         }
                         .onEnded { value in
-                            switch dragMode {
-                            case .pan:
+                            if !scrubMode && abs(value.translation.width) > abs(value.translation.height) {
                                 let cPerPt = Double(effectiveVisibleCount) / max(1, Double(chartWidth))
                                 let dragged = Int(value.translation.width * cPerPt)
                                 scrollOffset = max(0, min(candles.count - visibleCount, scrollOffset + dragged))
-                            case .scrub:
-                                scrubMode = false
-                                selectedIndex = nil
-                            case .undecided, .vertical:
-                                break
                             }
-                            livePanOffset = 0
-                            dragStartTime = nil
-                            dragMode = .undecided
+                        }
+                )
+                // Long press + drag to scrub: only activates after deliberate 0.3s hold
+                .simultaneousGesture(
+                    LongPressGesture(minimumDuration: 0.3)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
+                        .onChanged { value in
+                            switch value {
+                            case .first(true):
+                                scrubMode = true
+                            case .second(true, let drag):
+                                if let drag {
+                                    updateSelectedCandle(at: drag.location, step: step)
+                                }
+                            default: break
+                            }
+                        }
+                        .onEnded { _ in
+                            scrubMode = false
+                            selectedIndex = nil
                         }
                 )
             }
@@ -595,17 +570,17 @@ private struct CandlestickCanvas: View {
                 }
                 .contentShape(Rectangle())
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
+                    LongPressGesture(minimumDuration: 0.3)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
                         .onChanged { value in
-                            if dragStartTime == nil { dragStartTime = Date(); dragMode = .undecided }
-                            let elapsed = Date().timeIntervalSince(dragStartTime!)
-                            if dragMode == .undecided && elapsed >= 0.3 { dragMode = .scrub; scrubMode = true }
-                            if dragMode == .scrub { updateSelectedCandle(at: value.location, step: step) }
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
                         }
-                        .onEnded { _ in
-                            if dragMode == .scrub { scrubMode = false; selectedIndex = nil }
-                            dragStartTime = nil; dragMode = .undecided
-                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
                 )
             }
             .frame(height: subChartHeight - 14)
@@ -699,17 +674,17 @@ private struct CandlestickCanvas: View {
                 }
                 .contentShape(Rectangle())
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
+                    LongPressGesture(minimumDuration: 0.3)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
                         .onChanged { value in
-                            if dragStartTime == nil { dragStartTime = Date(); dragMode = .undecided }
-                            let elapsed = Date().timeIntervalSince(dragStartTime!)
-                            if dragMode == .undecided && elapsed >= 0.3 { dragMode = .scrub; scrubMode = true }
-                            if dragMode == .scrub { updateSelectedCandle(at: value.location, step: step) }
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
                         }
-                        .onEnded { _ in
-                            if dragMode == .scrub { scrubMode = false; selectedIndex = nil }
-                            dragStartTime = nil; dragMode = .undecided
-                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
                 )
             }
             .frame(height: subChartHeight - 14)
@@ -796,17 +771,17 @@ private struct CandlestickCanvas: View {
                 }
                 .contentShape(Rectangle())
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
+                    LongPressGesture(minimumDuration: 0.3)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
                         .onChanged { value in
-                            if dragStartTime == nil { dragStartTime = Date(); dragMode = .undecided }
-                            let elapsed = Date().timeIntervalSince(dragStartTime!)
-                            if dragMode == .undecided && elapsed >= 0.3 { dragMode = .scrub; scrubMode = true }
-                            if dragMode == .scrub { updateSelectedCandle(at: value.location, step: step) }
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
                         }
-                        .onEnded { _ in
-                            if dragMode == .scrub { scrubMode = false; selectedIndex = nil }
-                            dragStartTime = nil; dragMode = .undecided
-                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
                 )
             }
             .frame(height: subChartHeight - 14)
@@ -895,17 +870,17 @@ private struct CandlestickCanvas: View {
                 }
                 .contentShape(Rectangle())
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
+                    LongPressGesture(minimumDuration: 0.3)
+                        .sequenced(before: DragGesture(minimumDistance: 0))
                         .onChanged { value in
-                            if dragStartTime == nil { dragStartTime = Date(); dragMode = .undecided }
-                            let elapsed = Date().timeIntervalSince(dragStartTime!)
-                            if dragMode == .undecided && elapsed >= 0.3 { dragMode = .scrub; scrubMode = true }
-                            if dragMode == .scrub { updateSelectedCandle(at: value.location, step: step) }
+                            switch value {
+                            case .first(true): scrubMode = true
+                            case .second(true, let drag):
+                                if let drag { updateSelectedCandle(at: drag.location, step: step) }
+                            default: break
+                            }
                         }
-                        .onEnded { _ in
-                            if dragMode == .scrub { scrubMode = false; selectedIndex = nil }
-                            dragStartTime = nil; dragMode = .undecided
-                        }
+                        .onEnded { _ in scrubMode = false; selectedIndex = nil }
                 )
             }
             .frame(height: subChartHeight - 14)
