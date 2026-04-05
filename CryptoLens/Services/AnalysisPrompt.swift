@@ -233,6 +233,7 @@ enum AnalysisPrompt {
         - Tables must use markdown pipe syntax with header row.
         - Do NOT list every indicator value — synthesize them into a narrative.
         - Maximum 400 words before the JSON block (headers, level lists, and table rows count toward this limit).
+        - ALL times in your output must be in Eastern Time (ET). Convert any UTC timestamps to ET before displaying. Use "ET" suffix (e.g., "4:00 PM ET", "8:30 AM ET"). This applies to: Next decision point, economic event times, candle close times, and any other time references.
 
         ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
         MACRO RISK: The macro event proximity is pre-computed as `Macro Risk` in the PRE-COMPUTED FLAGS section. If IMMINENT, conviction cannot exceed LOW (no trade). If NEARBY, conviction cannot exceed MODERATE. If UPCOMING or ON_HORIZON, flag in Risk Factors but do not suppress conviction.
