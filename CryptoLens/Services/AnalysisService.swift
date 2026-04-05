@@ -385,9 +385,14 @@ class AnalysisService: ObservableObject {
                 isAIStale = !result.claudeAnalysis.isEmpty && !result.claudeAnalysis.contains("not configured") && (result.analysisTimestamp == nil || result.timestamp.timeIntervalSince(result.analysisTimestamp!) > 600)
             }
             alertsStore?.checkAlerts(prices: [symbol: result.daily.price])
-            // Track setup/flat outcomes on each refresh
-            let recentCandle = result.h1.candles.last
-            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentHigh: recentCandle?.high, recentLow: recentCandle?.low)
+            // Track setup/flat outcomes using 15m candles for precise wick detection
+            let outcomeCandles: [Candle]
+            if marketFor(symbol) == .crypto {
+                outcomeCandles = (try? await binance.fetchCandles(symbol: symbol, interval: "15m", limit: 96)) ?? result.h1.candles
+            } else {
+                outcomeCandles = (try? await yahoo.fetchCandles(symbol: symbol, interval: "15m")) ?? result.h1.candles
+            }
+            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles)
             OutcomeTracker.trackFlatOutcomes(symbol: symbol, currentPrice: result.daily.price)
             saveCache(result)
 
@@ -443,10 +448,28 @@ class AnalysisService: ObservableObject {
         error = nil
 
         do {
+            var dataQuality = DataQuality()
+
             let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
-            let sentiment: CoinInfo? = market == .crypto ? (try? await coinGecko.fetchSentiment(symbol: symbol)) : nil
+
+            // Candle staleness check: how old is the latest candle?
+            if let latestCandle = tf3.candles.last {
+                dataQuality.candleStaleness = Date().timeIntervalSince(latestCandle.time)
+            }
+
+            let sentiment: CoinInfo?
+            if market == .crypto {
+                sentiment = try? await coinGecko.fetchSentiment(symbol: symbol)
+                if sentiment == nil { dataQuality.sentimentOK = false }
+            } else { sentiment = nil }
+
             let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
-            var stockInfo: StockInfo? = market == .stock ? (try? await yahoo.fetchQuote(symbol: symbol)) : nil
+
+            var stockInfo: StockInfo?
+            if market == .stock {
+                stockInfo = try? await yahoo.fetchQuote(symbol: symbol)
+                if stockInfo == nil { dataQuality.stockInfoOK = false }
+            } else { stockInfo = nil }
             var stockSentiment: StockSentimentData? = nil
             if stockInfo != nil && market == .stock {
                 stockInfo?.earningsDate = await yahoo.fetchEarningsDate(symbol: symbol)
@@ -507,6 +530,7 @@ class AnalysisService: ObservableObject {
                     print("[MarketScope] Derivatives fresh fetch nil, using cached")
                     #endif
                 }
+                if derivData == nil { dataQuality.derivativesOK = false }
                 #if DEBUG
                 print("[MarketScope] Derivatives for \(symbol): \(derivData != nil ? "OK" : "nil")")
                 #endif
@@ -519,23 +543,32 @@ class AnalysisService: ObservableObject {
             }
 
             let events = await economicCalendar.highImpactRelevant()
+            if events.isEmpty { dataQuality.economicCalendarOK = false }
             let macroSnapshot = await macroData.fetchMacroSnapshot()
+            if macroSnapshot == nil { dataQuality.macroOK = false }
 
             // Spot pressure for crypto (free Binance data)
             var spotPressure: SpotPressure? = nil
             if market == .crypto {
                 spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
+                if spotPressure == nil { dataQuality.spotPressureOK = false }
             }
 
-            // Volume profile computed in IndicatorEngine from OHLCV data (D + 4H)
-
-            // Weekly context + SPY for stocks (Twelve Data, cached 24h on worker)
+            // Weekly context + SPY for stocks
             var weeklyContext: String? = nil
             var spyContext: String? = nil
             if market == .stock {
                 weeklyContext = await buildWeeklyContext(symbol: symbol)
                 spyContext = await buildSPYContext()
+                if weeklyContext == nil { dataQuality.weeklyContextOK = false }
             }
+
+            // Log data quality
+            #if DEBUG
+            if let summary = dataQuality.uiSummary {
+                print("[MarketScope] [\(symbol)] Data quality: \(summary)")
+            }
+            #endif
 
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
@@ -555,7 +588,8 @@ class AnalysisService: ObservableObject {
                     macro: macroSnapshot,
                     weeklyContext: weeklyContext,
                     spyContext: spyContext,
-                    spotPressure: spotPressure
+                    spotPressure: spotPressure,
+                    dataQuality: dataQuality
                 )
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown

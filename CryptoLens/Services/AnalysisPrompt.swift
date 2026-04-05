@@ -249,6 +249,7 @@ enum AnalysisPrompt {
         CANDIDATE SETUPS: If pre-computed candidate setups are provided, use the exact R:R values shown — do not recalculate. Select the best candidate based on signal quality, exhaustion signals, and confluence. If no candidate is marked Viable (R:R >= 1.5), there is no setup. You may adjust entry price slightly based on the current candle pattern (e.g., entry at the wick rejection rather than the level itself), but do not recalculate R:R — state that the entry is adjusted and the pre-computed R:R is approximate.
         CANDLE CLOSE TIMESTAMPS: Use the pre-computed Next 4H Close and Next Daily Close timestamps for the "Next decision point" line. Do not calculate candle close times yourself.
         KILLS CLEARING: If Kills Clearing flags are present, mention them in the Prerequisites section of the watching output. Do not analyze raw data to determine if kills are clearing — use the pre-computed flags.
+        DATA QUALITY: If a DATA QUALITY section is present in the payload, some data sources failed. Mention missing data in Risk Factors. If candle data is flagged as stale, note it prominently — price levels may have shifted. Do not fabricate values for missing data sources. Reduce conviction by one level if 2+ enrichment sources are missing.
         """
 
         if market == .crypto {
@@ -333,8 +334,16 @@ enum AnalysisPrompt {
                                 positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil,
                                 economicEvents: [EconomicEvent] = [], macro: MacroSnapshot? = nil,
                                 weeklyContext: String? = nil, spyContext: String? = nil,
-                                spotPressure: SpotPressure? = nil) -> String {
+                                spotPressure: SpotPressure? = nil,
+                                dataQuality: DataQuality? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
+
+        // Data quality gate — warn about missing/stale data
+        if let dq = dataQuality, let section = dq.promptSection {
+            lines.append("")
+            lines.append("=== DATA QUALITY ===")
+            lines.append(section)
+        }
 
         // === PRE-COMPUTED FLAGS (Phases 1-5) ===
         if indicators.count >= 2 {
@@ -984,7 +993,11 @@ enum AnalysisPrompt {
 
         for ind in indicators {
             lines.append("=== \(ind.label) ===")
-            lines.append("Price: \(Formatters.formatPrice(ind.price)) | Bias: \(ind.bias) (\(Int(ind.bullPercent))% bullish)")
+            var biasLine = "Price: \(Formatters.formatPrice(ind.price)) | Bias: \(ind.bias) (\(Int(ind.bullPercent))% bullish)"
+            if let override = ind.momentumOverride {
+                biasLine += " [MOMENTUM: \(override) — bias adjusted from lagging indicators due to sharp reversal in last 3-5 candles]"
+            }
+            lines.append(biasLine)
 
             if let rsi = ind.rsi {
                 var rsiStr = "RSI: \(rsi)"

@@ -14,16 +14,20 @@ enum OutcomeTracker {
 
     // MARK: - Trade Setup Outcomes (#1b)
 
-    /// Called during each refresh cycle with current price and recent candle range.
-    /// Uses high/low for level checks (catches wicks between refreshes).
+    /// Called during each refresh cycle with current price and recent candles.
+    /// Scans ALL candles to catch every wick between refreshes.
     static func trackSetupOutcomes(symbol: String, currentPrice: Double,
-                                    recentHigh: Double? = nil, recentLow: Double? = nil) {
-        let checkHigh = recentHigh ?? currentPrice
-        let checkLow = recentLow ?? currentPrice
+                                    recentCandles: [Candle] = []) {
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
             var tracked = loadTrackedSetups(url: url)
             var changed = false
+
+            // Build price check points: every candle high/low + current price
+            // This catches every wick, not just the latest snapshot
+            struct PricePoint { let high: Double; let low: Double; let time: Date }
+            var checkPoints = recentCandles.map { PricePoint(high: $0.high, low: $0.low, time: $0.time) }
+            checkPoints.append(PricePoint(high: currentPrice, low: currentPrice, time: Date()))
 
             for i in tracked.indices {
                 guard !tracked[i].outcome.resolved else { continue }
@@ -31,61 +35,57 @@ enum OutcomeTracker {
                 let setup = tracked[i].setup
                 let isLong = setup.direction == "LONG"
 
-                // Check entry hit (use checkLow for longs, checkHigh for shorts — catches wicks)
-                if !tracked[i].outcome.entryHit {
-                    let entryHit = isLong
-                        ? checkLow <= setup.entry
-                        : checkHigh >= setup.entry
-                    if entryHit {
-                        tracked[i].outcome.entryHit = true
-                        tracked[i].outcome.entryHitTime = Date()
-                        changed = true
+                // Scan all candles for entry, SL, and TP hits
+                for point in checkPoints {
+                    // Check entry hit
+                    if !tracked[i].outcome.entryHit {
+                        let entryHit = isLong ? point.low <= setup.entry : point.high >= setup.entry
+                        if entryHit {
+                            tracked[i].outcome.entryHit = true
+                            tracked[i].outcome.entryHitTime = point.time
+                            changed = true
+                        }
+                        continue  // Don't check targets until entry is hit
                     }
-                    continue  // Don't check targets until entry is hit
-                }
 
-                // Entry was hit — track excursions
-                let moveFromEntry = isLong
-                    ? currentPrice - setup.entry
-                    : setup.entry - currentPrice
+                    // Track excursions
+                    let favorable = isLong ? point.high - setup.entry : setup.entry - point.low
+                    let adverse = isLong ? setup.entry - point.low : point.high - setup.entry
+                    if favorable > tracked[i].outcome.maxFavorable {
+                        tracked[i].outcome.maxFavorable = favorable; changed = true
+                    }
+                    if adverse > tracked[i].outcome.maxAdverse {
+                        tracked[i].outcome.maxAdverse = adverse; changed = true
+                    }
 
-                if moveFromEntry > tracked[i].outcome.maxFavorable {
-                    tracked[i].outcome.maxFavorable = moveFromEntry
-                    changed = true
-                }
-                if -moveFromEntry > tracked[i].outcome.maxAdverse {
-                    tracked[i].outcome.maxAdverse = -moveFromEntry
-                    changed = true
-                }
+                    // Once resolved, only track excursions
+                    if tracked[i].outcome.resolved { continue }
 
-                // Once resolved (SL or TP1 hit), stop checking — first resolution wins
-                if tracked[i].outcome.resolved { continue }
-
-                // Check stop loss (worst case: checkLow for longs, checkHigh for shorts)
-                let stopHit = isLong
-                    ? checkLow <= setup.stopLoss
-                    : checkHigh >= setup.stopLoss
-                if stopHit && !tracked[i].outcome.stopHit {
-                    tracked[i].outcome.stopHit = true
-                    tracked[i].outcome.outcomeTime = Date()
-                    changed = true
-                }
-
-                // Check TPs (best case: checkHigh for longs, checkLow for shorts)
-                if !tracked[i].outcome.tp1Hit {
-                    let tp1Hit = isLong ? checkHigh >= setup.tp1 : checkLow <= setup.tp1
-                    if tp1Hit { tracked[i].outcome.tp1Hit = true; changed = true }
-                }
-                if let tp2 = setup.tp2, !tracked[i].outcome.tp2Hit {
-                    let tp2Hit = isLong ? checkHigh >= tp2 : checkLow <= tp2
-                    if tp2Hit { tracked[i].outcome.tp2Hit = true; changed = true }
-                }
-                if let tp3 = setup.tp3, !tracked[i].outcome.tp3Hit {
-                    let tp3Hit = isLong ? checkHigh >= tp3 : checkLow <= tp3
-                    if tp3Hit {
-                        tracked[i].outcome.tp3Hit = true
-                        tracked[i].outcome.outcomeTime = tracked[i].outcome.outcomeTime ?? Date()
+                    // Check stop loss
+                    let stopHit = isLong ? point.low <= setup.stopLoss : point.high >= setup.stopLoss
+                    if stopHit {
+                        tracked[i].outcome.stopHit = true
+                        tracked[i].outcome.outcomeTime = point.time
                         changed = true
+                        break  // Resolved — stop scanning
+                    }
+
+                    // Check TPs
+                    if !tracked[i].outcome.tp1Hit {
+                        let hit = isLong ? point.high >= setup.tp1 : point.low <= setup.tp1
+                        if hit { tracked[i].outcome.tp1Hit = true; changed = true }
+                    }
+                    if let tp2 = setup.tp2, !tracked[i].outcome.tp2Hit {
+                        let hit = isLong ? point.high >= tp2 : point.low <= tp2
+                        if hit { tracked[i].outcome.tp2Hit = true; changed = true }
+                    }
+                    if let tp3 = setup.tp3, !tracked[i].outcome.tp3Hit {
+                        let hit = isLong ? point.high >= tp3 : point.low <= tp3
+                        if hit {
+                            tracked[i].outcome.tp3Hit = true
+                            tracked[i].outcome.outcomeTime = tracked[i].outcome.outcomeTime ?? point.time
+                            changed = true
+                        }
                     }
                 }
             }

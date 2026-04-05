@@ -104,14 +104,61 @@ enum IndicatorEngine {
             if let ad = adLine, ad.trend == "Accumulation" { bullish += 1 } else if adLine?.trend == "Distribution" { bearish += 1 }
         }
 
+        // Momentum override: detect sharp reversals that lagging indicators haven't caught.
+        // Daily: NO override — trend authority must change via structure, not 3-candle patterns.
+        // 4H: Tight thresholds — RSI must move from <30 to >60 (convincing reversal).
+        // 1H: Standard thresholds — RSI from <35 to >60 (fast entry-timing reversals).
+        let isDaily = label.contains("Daily") || label.contains("1D")
+        let is4H = label.contains("4H")
+        var momentumOverride: String? = nil
+        if !isDaily && validRSI.count >= 5 && candles.count >= 3 {
+            let recentRSI = Array(validRSI.suffix(5))
+            let rsiMin = recentRSI.min() ?? 50
+            let rsiMax = recentRSI.max() ?? 50
+            let currentRSI = validRSI.last ?? 50
+            let last3 = Array(candles.suffix(3))
+            let last3AllGreen = last3.allSatisfy { $0.close >= $0.open }
+            let last3AllRed = last3.allSatisfy { $0.close < $0.open }
+            let last3VolIncreasing = last3.count == 3 && last3[2].volume >= last3[1].volume && last3[1].volume >= last3[0].volume
+
+            let oversoldThreshold: Double = is4H ? 30 : 35  // 4H needs deeper oversold
+            let overboughtThreshold: Double = is4H ? 70 : 65
+
+            // Bullish reversal: RSI was oversold recently, now above 60, green candles
+            if rsiMin < oversoldThreshold && currentRSI > 60 && last3AllGreen {
+                momentumOverride = "bullish_reversal"
+                bullish += 3
+            }
+            // Bearish reversal: RSI was overbought recently, now below 40, red candles
+            if rsiMax > overboughtThreshold && currentRSI < 40 && last3AllRed {
+                momentumOverride = "bearish_reversal"
+                bearish += 3
+            }
+            // Weaker version: 3 consecutive candles with increasing volume
+            if momentumOverride == nil && last3AllGreen && last3VolIncreasing && currentRSI > 55 {
+                bullish += 2
+            }
+            if momentumOverride == nil && last3AllRed && last3VolIncreasing && currentRSI < 45 {
+                bearish += 2
+            }
+        }
+
         let total = bullish + bearish
         let bullPct = total > 0 ? (Double(bullish) / Double(total)) * 100.0 : 50.0
-        let bias: String
+        var bias: String
         if bullPct >= 75 { bias = "Strong Bullish" }
         else if bullPct >= 60 { bias = "Bullish" }
         else if bullPct <= 25 { bias = "Strong Bearish" }
         else if bullPct <= 40 { bias = "Bearish" }
         else { bias = "Neutral" }
+
+        // Momentum override forces minimum Neutral if bias contradicts clear reversal
+        if momentumOverride == "bullish_reversal" && bias.contains("Bearish") {
+            bias = "Neutral"
+        }
+        if momentumOverride == "bearish_reversal" && bias.contains("Bullish") {
+            bias = "Neutral"
+        }
 
         // Compute ATR percentile BEFORE truncation (needs full candle history)
         let atrPercentileResult = VolatilityRegime.atrPercentile(candles: candles)
@@ -198,7 +245,8 @@ enum IndicatorEngine {
             ema50Series: ema50SeriesData,
             ema200Series: ema200SeriesData,
             atrPercentile: atrPercentileResult?.percentile,
-            atrPercentileLabel: atrPercentileResult?.label
+            atrPercentileLabel: atrPercentileResult?.label,
+            momentumOverride: momentumOverride
         )
         result.volumeProfile = volProfile
         return result

@@ -135,6 +135,10 @@ export default {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       const storedToken = await env.ALERTS.get(`auth:${deviceId}`);
       if (!storedToken || !timingSafeEqual(storedToken, authToken)) return json({ error: 'Unauthorized' }, 401);
+
+      // Per-device request rate limit: 60 requests per minute
+      const globalLimited = await checkRateLimit(env, `global:${deviceId}`, 60, 60);
+      if (globalLimited) return json({ error: 'Rate limited. Try again in a minute.' }, 429);
     }
 
     // === Alert sync (per-device isolation) ===

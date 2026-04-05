@@ -27,6 +27,7 @@ targets:
     info:
       path: CryptoLens/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: MarketScope
         UIApplicationSceneManifest:
@@ -79,6 +80,7 @@ targets:
     info:
       path: MarketScopeWidget/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: MarketScope Widget
         NSExtension:
