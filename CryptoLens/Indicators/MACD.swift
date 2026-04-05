@@ -27,7 +27,7 @@ enum MACD {
         let rawSignal = signalLine.last!
         let macdVal = rawMacd.rounded(toPlaces: 2)
         let signalVal = rawSignal.rounded(toPlaces: 2)
-        let histogram = (macdVal - signalVal).rounded(toPlaces: 2)
+        let histogram = (rawMacd - rawSignal).rounded(toPlaces: 2)  // from raw values to avoid compounding rounding
 
         var crossover: String? = nil
         if macdLine.count >= 2, signalLine.count >= 2 {

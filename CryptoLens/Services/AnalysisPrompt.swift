@@ -803,8 +803,9 @@ enum AnalysisPrompt {
                 }
             }
 
-            if let volRegime = VolatilityRegime.atrPercentile(candles: daily.candles) {
-                lines.append("ATR Percentile: \(Int(volRegime.percentile))% (\(volRegime.label))")
+            // Use pre-computed ATR percentile (computed before candle truncation for full history)
+            if let pct = daily.atrPercentile, let label = daily.atrPercentileLabel {
+                lines.append("ATR Percentile: \(Int(pct))% (\(label))")
             }
         }
 

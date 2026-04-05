@@ -90,23 +90,23 @@ enum MarketStructure {
         let totalCandles = candles.count
         var levelTests = [(price: Double, tests: Int, candlesAgo: Int)]()
 
-        // Group nearby swings into levels
-        var processedPrices = Set<Int>()
+        // Group nearby swings into levels using ATR-based threshold
+        var processedIndices = Set<Int>()
         for swing in allSwings.sorted(by: { $0.price > $1.price }) {
-            let bucket = Int(swing.price * 100)  // Group within $0.01
-            if processedPrices.contains(bucket) { continue }
+            if processedIndices.contains(swing.index) { continue }
 
             let pctThreshold = swing.price * 0.003
             let atrThreshold = atr > 0 ? atr * 0.1 : pctThreshold
-            let threshold = min(pctThreshold, atrThreshold)  // Adapts to volatility
+            let threshold = max(pctThreshold, atrThreshold)  // Use LARGER threshold for proper clustering
             let nearbySwings = allSwings.filter { abs($0.price - swing.price) < threshold }
             let tests = nearbySwings.count
+            let avgPrice = nearbySwings.map(\.price).reduce(0, +) / Double(tests)
             let mostRecent = nearbySwings.map(\.index).max() ?? 0
             let candlesAgo = totalCandles - 1 - mostRecent
 
             if tests >= 1 {
-                levelTests.append((swing.price, tests, candlesAgo))
-                for ns in nearbySwings { processedPrices.insert(Int(ns.price * 100)) }
+                levelTests.append((avgPrice, tests, candlesAgo))
+                for ns in nearbySwings { processedIndices.insert(ns.index) }
             }
         }
 

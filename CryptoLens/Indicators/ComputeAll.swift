@@ -23,7 +23,18 @@ enum IndicatorEngine {
         let stochRSIFull = StochasticRSI.computeFull(closes: closes)
         let adxFull = ADX.computeFull(highs: highs, lows: lows, closes: closes)
         let adx = adxFull?.result
-        let vwap = VWAP.compute(highs: highs, lows: lows, closes: closes, volumes: volumes)
+        // Session-anchored VWAP based on timeframe
+        let vwapSessionCandles: Int?
+        if label.contains("1H") || label.contains("15m") {
+            vwapSessionCandles = 24
+        } else if label.contains("4H") {
+            vwapSessionCandles = 6
+        } else if label.contains("Daily") || label.contains("1D") {
+            vwapSessionCandles = 20
+        } else {
+            vwapSessionCandles = nil
+        }
+        let vwap = VWAP.compute(highs: highs, lows: lows, closes: closes, volumes: volumes, sessionCandles: vwapSessionCandles)
         let fib = Fibonacci.compute(highs: highs, lows: lows, closes: closes)
         let sr = SupportResistance.find(highs: highs, lows: lows, closes: closes)
         let patterns = CandlePatterns.detect(opens: opens, highs: highs, lows: lows, closes: closes)
@@ -57,7 +68,7 @@ enum IndicatorEngine {
             addv = ADDV.compute(closes: closes, volumes: volumes)
         }
 
-        // Composite bias score
+        // Composite bias score (magnitude-weighted)
         var bullish = 0
         var bearish = 0
         if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
@@ -66,13 +77,26 @@ enum IndicatorEngine {
             if current > e200 { bullish += 1 } else { bearish += 1 }
         }
         if let r = rsi {
-            if r > 50 { bullish += 1 } else { bearish += 1 }
+            // Scale by distance from 50 — RSI 75 scores more than RSI 51
+            if r > 70 { bullish += 2 }
+            else if r > 55 { bullish += 1 }
+            else if r < 30 { bearish += 2 }
+            else if r < 45 { bearish += 1 }
+            // 45-55 = neutral, no score
         }
         if let m = macd {
-            if m.histogram > 0 { bullish += 1 } else { bearish += 1 }
+            // Fresh crossover scores higher
+            if m.histogram > 0 {
+                bullish += m.crossover == "bullish" ? 2 : 1
+            } else {
+                bearish += m.crossover == "bearish" ? 2 : 1
+            }
         }
         if let a = adx {
-            if a.direction == "Bullish" { bullish += 1 } else { bearish += 1 }
+            // Only score direction if trend is meaningful (ADX > 20)
+            if a.adx >= 20 {
+                if a.direction == "Bullish" { bullish += 1 } else { bearish += 1 }
+            }
         }
         // Stock-only bias signals
         if market == .stock {
@@ -88,6 +112,9 @@ enum IndicatorEngine {
         else if bullPct <= 25 { bias = "Strong Bearish" }
         else if bullPct <= 40 { bias = "Bearish" }
         else { bias = "Neutral" }
+
+        // Compute ATR percentile BEFORE truncation (needs full candle history)
+        let atrPercentileResult = VolatilityRegime.atrPercentile(candles: candles)
 
         // Retain last 50 candles for chart display
         let chartCandles = Array(candles.suffix(50))
@@ -169,7 +196,9 @@ enum IndicatorEngine {
             volumeRatioSeries: volRatioSeries,
             ema20Series: ema20SeriesData,
             ema50Series: ema50SeriesData,
-            ema200Series: ema200SeriesData
+            ema200Series: ema200SeriesData,
+            atrPercentile: atrPercentileResult?.percentile,
+            atrPercentileLabel: atrPercentileResult?.label
         )
         result.volumeProfile = volProfile
         return result

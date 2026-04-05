@@ -146,8 +146,10 @@ struct IndicatorResult: Identifiable, Codable {
     let ema20Series: [Double]
     let ema50Series: [Double]
     let ema200Series: [Double]
+    let atrPercentile: Double?
+    let atrPercentileLabel: String?
 
-    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = []) {
+    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil) {
         self.id = UUID()
         self.timeframe = timeframe
         self.label = label
@@ -191,6 +193,8 @@ struct IndicatorResult: Identifiable, Codable {
         self.ema20Series = ema20Series
         self.ema50Series = ema50Series
         self.ema200Series = ema200Series
+        self.atrPercentile = atrPercentile
+        self.atrPercentileLabel = atrPercentileLabel
     }
 
     init(from decoder: Decoder) throws {
@@ -238,5 +242,7 @@ struct IndicatorResult: Identifiable, Codable {
         ema20Series = (try? container.decodeIfPresent([Double].self, forKey: .ema20Series)) ?? []
         ema50Series = (try? container.decodeIfPresent([Double].self, forKey: .ema50Series)) ?? []
         ema200Series = (try? container.decodeIfPresent([Double].self, forKey: .ema200Series)) ?? []
+        atrPercentile = try? container.decodeIfPresent(Double.self, forKey: .atrPercentile)
+        atrPercentileLabel = try? container.decodeIfPresent(String.self, forKey: .atrPercentileLabel)
     }
 }
