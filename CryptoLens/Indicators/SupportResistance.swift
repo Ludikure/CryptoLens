@@ -38,9 +38,11 @@ enum SupportResistance {
 
         let current = closes.last ?? 0
 
-        // Compute clustering tolerance from price range (~0.3% of range)
-        let highMax = highs.max() ?? 0
-        let lowMin = lows.min() ?? 0
+        // Scope tolerance to the lookback window, not the full candle array
+        let lookbackHighs = Array(highs.suffix(lookback + 4))
+        let lookbackLows = Array(lows.suffix(lookback + 4))
+        let highMax = lookbackHighs.max() ?? 0
+        let lowMin = lookbackLows.min() ?? 0
         let tolerance = (highMax - lowMin) * 0.003
 
         // Cluster nearby levels, then filter and sort
