@@ -146,7 +146,7 @@ private struct CandlestickCanvas: View {
 
     // Layout
     private let chartHeight: CGFloat = 240
-    private let subChartHeight: CGFloat = 120
+    private let subChartHeight: CGFloat = 160
     private let spacing: CGFloat = 6
     private let minVisibleCandles = 15
     private let maxVisibleCandles = 200
@@ -528,8 +528,23 @@ private struct CandlestickCanvas: View {
                 let width = geo.size.width
                 let height = subChartHeight - 14
                 let step = width / CGFloat(visibleRange.count)
-                let lo = range.lowerBound
-                let hi = range.upperBound
+
+                // Auto-scale to visible data with padding, ensuring level lines remain visible
+                let visibleVals: [Double] = series.flatMap { (data, _) in
+                    let off = candles.count - data.count
+                    return visibleRange.compactMap { idx in
+                        let si = idx - off; return (si >= 0 && si < data.count) ? data[si] : nil
+                    }
+                }
+                let dataMin = visibleVals.min() ?? range.lowerBound
+                let dataMax = visibleVals.max() ?? range.upperBound
+                let levelMin = levels.min() ?? range.lowerBound
+                let levelMax = levels.max() ?? range.upperBound
+                let rawLo = min(dataMin, levelMin)
+                let rawHi = max(dataMax, levelMax)
+                let padding = (rawHi - rawLo) * 0.1
+                let lo = max(range.lowerBound, rawLo - padding)
+                let hi = min(range.upperBound, rawHi + padding)
 
                 Canvas { context, size in
                     // Band fills
@@ -855,7 +870,7 @@ private struct CandlestickCanvas: View {
                         context.draw(Text("2x").font(.system(size: 7)).foregroundColor(.orange.opacity(0.6)), at: CGPoint(x: 10, y: y2x), anchor: .center)
                     }
 
-                    // Volume ratio bars
+                    // Volume ratio bars — colored by candle direction (green = bullish, red = bearish)
                     let cw = max(1.5, step - 1.5)
                     for (localIdx, globalIdx) in visibleRange.enumerated() {
                         let si = globalIdx - fullOffset
@@ -863,7 +878,8 @@ private struct CandlestickCanvas: View {
                         let val = volumeRatioSeries[si]
                         let x = step * CGFloat(localIdx) + step / 2
                         let barH = CGFloat(val / maxVal) * height
-                        let color: Color = val >= 2.0 ? .orange.opacity(0.7) : val >= 1.0 ? .blue.opacity(0.5) : .blue.opacity(0.3)
+                        let isUp = globalIdx < candles.count && candles[globalIdx].close >= candles[globalIdx].open
+                        let color: Color = isUp ? .green.opacity(val >= 2.0 ? 0.7 : 0.4) : .red.opacity(val >= 2.0 ? 0.7 : 0.4)
                         context.fill(
                             Path(CGRect(x: x - cw / 2, y: height - barH, width: cw, height: max(0.5, barH))),
                             with: .color(color)
