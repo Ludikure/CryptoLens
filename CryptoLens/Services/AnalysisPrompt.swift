@@ -806,25 +806,8 @@ enum AnalysisPrompt {
             }
         }
 
-        // Market structure + volatility regime + momentum alignment
-        if let daily = indicators.first, daily.candles.count >= 15 {
-            if let structure = MarketStructure.analyze(candles: daily.candles, atr: daily.atr?.atr ?? 0) {
-                lines.append("")
-                lines.append("=== MARKET STRUCTURE ===")
-                lines.append("Structure: \(structure.label)")
-                if !structure.swingHighs.isEmpty {
-                    lines.append("Swing Highs: \(structure.swingHighs.map { Formatters.formatPrice($0) }.joined(separator: " > "))")
-                }
-                if !structure.swingLows.isEmpty {
-                    lines.append("Swing Lows: \(structure.swingLows.map { Formatters.formatPrice($0) }.joined(separator: " > "))")
-                }
-                for level in structure.levelTests.prefix(3) {
-                    let freshness = level.candlesAgo <= 3 ? "fresh" : (level.candlesAgo <= 10 ? "recent" : "old")
-                    lines.append("\(Formatters.formatPrice(level.price)) (tested \(level.tests)×, \(freshness) — \(level.candlesAgo) candles ago)")
-                }
-            }
-
-            // Use pre-computed ATR percentile (computed before candle truncation for full history)
+        // Volatility regime + momentum alignment (market structure now per-timeframe above)
+        if let daily = indicators.first {
             if let pct = daily.atrPercentile, let label = daily.atrPercentileLabel {
                 lines.append("ATR Percentile: \(Int(pct))% (\(label))")
             }
@@ -913,6 +896,22 @@ enum AnalysisPrompt {
                 }
             }
 
+            // Add MarketStructure levels with test count metadata
+            for ind in indicators {
+                if let ms = ind.marketStructure {
+                    for level in ms.levelTests {
+                        let dist = abs(currentPrice - level.price) / max(atr, 0.0001)
+                        let freshness = level.candlesAgo <= 3 ? "fresh" : (level.candlesAgo <= 10 ? "recent" : "old")
+                        allLevels.append(TaggedLevel(
+                            price: level.price,
+                            type: "\(ind.label) structure (\(level.tests)× tested, \(freshness))",
+                            proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT",
+                            atrDistance: dist
+                        ))
+                    }
+                }
+            }
+
             // Deduplicate levels within 0.1%
             var uniqueLevels = [TaggedLevel]()
             for level in allLevels {
@@ -943,14 +942,27 @@ enum AnalysisPrompt {
                     let entryLevels = uniqueLevels.filter { $0.proximity == "IN_PLAY" }
                     var candidates = [String]()
 
+                    // Extract swing points for stop placement (prefer 1H, fallback 4H)
+                    let h1Structure = indicators.count > 2 ? indicators[2].marketStructure : nil
+                    let h4Structure = indicators.count > 1 ? indicators[1].marketStructure : nil
+
                     for entry in entryLevels {
+                        // Stop at swing invalidation point
                         let stop: Double
                         if direction4 == "SHORT" {
-                            let above = uniqueLevels.filter { $0.price > entry.price }.sorted { $0.price < $1.price }
-                            stop = (above.first?.price ?? entry.price) + atr * 0.5
+                            if let swingHigh = h1Structure?.swingHighs.first ?? h4Structure?.swingHighs.first {
+                                stop = swingHigh + atr * 0.3
+                            } else {
+                                let above = uniqueLevels.filter { $0.price > entry.price }.sorted { $0.price < $1.price }
+                                stop = (above.first?.price ?? entry.price) + atr * 0.5
+                            }
                         } else {
-                            let below = uniqueLevels.filter { $0.price < entry.price }.sorted { $0.price > $1.price }
-                            stop = (below.first?.price ?? entry.price) - atr * 0.5
+                            if let swingLow = h1Structure?.swingLows.first ?? h4Structure?.swingLows.first {
+                                stop = swingLow - atr * 0.3
+                            } else {
+                                let below = uniqueLevels.filter { $0.price < entry.price }.sorted { $0.price > $1.price }
+                                stop = (below.first?.price ?? entry.price) - atr * 0.5
+                            }
                         }
 
                         let risk = abs(entry.price - stop)
@@ -998,6 +1010,22 @@ enum AnalysisPrompt {
                 biasLine += " [MOMENTUM: \(override)]"
             }
             lines.append(biasLine)
+
+            // Per-timeframe market structure
+            if let ms = ind.marketStructure {
+                var msLine = "Structure: \(ms.label)"
+                if !ms.swingHighs.isEmpty {
+                    msLine += " | Highs: \(ms.swingHighs.prefix(3).map { Formatters.formatPrice($0) }.joined(separator: " > "))"
+                }
+                if !ms.swingLows.isEmpty {
+                    msLine += " | Lows: \(ms.swingLows.prefix(3).map { Formatters.formatPrice($0) }.joined(separator: " > "))"
+                }
+                lines.append(msLine)
+                for level in ms.levelTests.prefix(3) {
+                    let freshness = level.candlesAgo <= 3 ? "fresh" : (level.candlesAgo <= 10 ? "recent" : "old")
+                    lines.append("  \(Formatters.formatPrice(level.price)) (tested \(level.tests)×, \(freshness) — \(level.candlesAgo) candles ago)")
+                }
+            }
 
             if let rsi = ind.rsi {
                 var rsiStr = "RSI: \(rsi)"

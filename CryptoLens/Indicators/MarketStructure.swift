@@ -11,11 +11,17 @@ struct SwingPoint {
     let lastTestIndex: Int
 }
 
-struct MarketStructureResult {
+struct LevelTest: Codable {
+    let price: Double
+    let tests: Int
+    let candlesAgo: Int
+}
+
+struct MarketStructureResult: Codable {
     let label: String           // "HH/HL (bullish)", "LL/LH (bearish)", "HH/LL (expanding)", "Range"
     let swingHighs: [Double]    // Last 2-3 swing highs (newest first)
     let swingLows: [Double]     // Last 2-3 swing lows (newest first)
-    let levelTests: [(price: Double, tests: Int, candlesAgo: Int)]  // S/R with test count + recency
+    let levelTests: [LevelTest] // S/R with test count + recency
 }
 
 enum MarketStructure {
@@ -88,7 +94,7 @@ enum MarketStructure {
         // Count tests per level (within ATR proximity)
         let allSwings = swingHighs + swingLows
         let totalCandles = candles.count
-        var levelTests = [(price: Double, tests: Int, candlesAgo: Int)]()
+        var levelTests = [LevelTest]()
 
         // Group nearby swings into levels using ATR-based threshold
         var processedIndices = Set<Int>()
@@ -105,7 +111,7 @@ enum MarketStructure {
             let candlesAgo = totalCandles - 1 - mostRecent
 
             if tests >= 1 {
-                levelTests.append((avgPrice, tests, candlesAgo))
+                levelTests.append(LevelTest(price: avgPrice, tests: tests, candlesAgo: candlesAgo))
                 for ns in nearbySwings { processedIndices.insert(ns.index) }
             }
         }

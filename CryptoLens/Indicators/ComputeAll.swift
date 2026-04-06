@@ -35,8 +35,18 @@ enum IndicatorEngine {
             vwapSessionCandles = nil
         }
         let vwap = VWAP.compute(highs: highs, lows: lows, closes: closes, volumes: volumes, sessionCandles: vwapSessionCandles)
-        let fib = Fibonacci.compute(highs: highs, lows: lows, closes: closes)
         let sr = SupportResistance.find(highs: highs, lows: lows, closes: closes, atr: atr?.atr ?? 0)
+
+        // MarketStructure computed BEFORE Fibonacci (fibs use swing points)
+        let marketStructure = MarketStructure.analyze(candles: candles, atr: atr?.atr ?? 0)
+
+        // Fibonacci: prefer swing-based, fall back to absolute high/low
+        let fib: FibResult?
+        if let ms = marketStructure, !ms.swingHighs.isEmpty, !ms.swingLows.isEmpty {
+            fib = Fibonacci.computeFromSwings(swingHighs: ms.swingHighs, swingLows: ms.swingLows, closes: closes)
+        } else {
+            fib = Fibonacci.compute(highs: highs, lows: lows, closes: closes)
+        }
         let patterns = CandlePatterns.detect(opens: opens, highs: highs, lows: lows, closes: closes)
 
         // Moving averages
@@ -98,6 +108,12 @@ enum IndicatorEngine {
             else if e20 > e50 { score += 1 }
             else if e20 < e50 { score -= 1 }
             if current > e200 { score += 1 } else { score -= 1 }
+        }
+
+        // ── Layer 1b: Market Structure (HH/HL vs LL/LH) ──
+        if let ms = marketStructure {
+            if ms.label.contains("bullish") { score += 2 }
+            else if ms.label.contains("bearish") { score -= 2 }
         }
 
         // ── Layer 2: Trend Strength (ADX magnitude + direction) ──
@@ -217,22 +233,31 @@ enum IndicatorEngine {
         else { bias = "Neutral" }
 
         // Derive bullPercent for backward compatibility (UI + prompt)
-        let maxScore = 15.0
+        let maxScore = 17.0  // includes ±2 from market structure
         let clampedScore = min(max(Double(score), -maxScore), maxScore)
         let bullPct = ((clampedScore / maxScore) + 1.0) / 2.0 * 100.0
 
-        // ── EMA Structure Gate ──
+        // ── EMA Structure Gate (structure-aware) ──
+        let structureLabel = marketStructure?.label ?? ""
         if let _ = ema20, let _ = ema50, let _ = ema200 {
             switch emaRegime {
             case .bearish:
-                if priceBelowAll {
+                if priceBelowAll && !structureLabel.contains("bullish") {
+                    // Full bearish + structure confirms: hard cap at Bearish
                     if bias == "Strong Bullish" || bias == "Bullish" || bias == "Neutral" { bias = "Bearish" }
+                } else if priceBelowAll && structureLabel.contains("bullish") {
+                    // Bearish EMAs but bullish structure (transition): cap at Neutral
+                    if bias == "Strong Bullish" || bias == "Bullish" { bias = "Neutral" }
                 } else {
                     if bias == "Strong Bullish" || bias == "Bullish" { bias = "Neutral" }
                 }
             case .bullish:
-                if priceAboveAll {
+                if priceAboveAll && !structureLabel.contains("bearish") {
+                    // Full bullish + structure confirms: hard floor at Bullish
                     if bias == "Strong Bearish" || bias == "Bearish" || bias == "Neutral" { bias = "Bullish" }
+                } else if priceAboveAll && structureLabel.contains("bearish") {
+                    // Bullish EMAs but bearish structure (transition): floor at Neutral
+                    if bias == "Strong Bearish" || bias == "Bearish" { bias = "Neutral" }
                 } else {
                     if bias == "Strong Bearish" || bias == "Bearish" { bias = "Neutral" }
                 }
@@ -284,7 +309,8 @@ enum IndicatorEngine {
         // Volume profile (POC, VAH, VAL) — only for Daily and 4H (1H sample too thin)
         let volProfile: VolumeProfileResult?
         if let atrVal = atr, (timeframe == "1d" || timeframe == "4h" || timeframe == "D") {
-            volProfile = VolumeProfile.compute(candles: Array(candles.suffix(30)), atr: atrVal.atr)
+            let vpLookback = timeframe == "4h" ? 60 : 30  // 4H: 10 days, Daily: 6 weeks
+            volProfile = VolumeProfile.compute(candles: Array(candles.suffix(vpLookback)), atr: atrVal.atr)
         } else {
             volProfile = nil
         }
@@ -334,7 +360,8 @@ enum IndicatorEngine {
             atrPercentile: atrPercentileResult?.percentile,
             atrPercentileLabel: atrPercentileResult?.label,
             momentumOverride: momentumOverride,
-            biasScore: score
+            biasScore: score,
+            marketStructure: marketStructure
         )
         result.volumeProfile = volProfile
         return result

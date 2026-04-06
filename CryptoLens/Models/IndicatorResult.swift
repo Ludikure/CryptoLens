@@ -150,8 +150,9 @@ struct IndicatorResult: Identifiable, Codable {
     let atrPercentileLabel: String?
     let momentumOverride: String?  // "bullish_reversal", "bearish_reversal", or nil
     let biasScore: Int             // Signed score: positive=bullish, negative=bearish
+    var marketStructure: MarketStructureResult?
 
-    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil, momentumOverride: String? = nil, biasScore: Int = 0) {
+    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil, momentumOverride: String? = nil, biasScore: Int = 0, marketStructure: MarketStructureResult? = nil) {
         self.id = UUID()
         self.timeframe = timeframe
         self.label = label
@@ -199,6 +200,7 @@ struct IndicatorResult: Identifiable, Codable {
         self.atrPercentileLabel = atrPercentileLabel
         self.momentumOverride = momentumOverride
         self.biasScore = biasScore
+        self.marketStructure = marketStructure
     }
 
     init(from decoder: Decoder) throws {
@@ -250,5 +252,6 @@ struct IndicatorResult: Identifiable, Codable {
         atrPercentileLabel = try? container.decodeIfPresent(String.self, forKey: .atrPercentileLabel)
         momentumOverride = try? container.decodeIfPresent(String.self, forKey: .momentumOverride)
         biasScore = (try? container.decodeIfPresent(Int.self, forKey: .biasScore)) ?? 0
+        marketStructure = try? container.decodeIfPresent(MarketStructureResult.self, forKey: .marketStructure)
     }
 }
