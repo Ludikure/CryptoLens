@@ -450,7 +450,10 @@ class AnalysisService: ObservableObject {
         do {
             var dataQuality = DataQuality()
 
-            let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
+            // Cross-asset context for crypto (fetched concurrently with candles)
+            let crossAsset: CrossAssetContext? = market == .crypto ? await buildCrossAssetContext() : nil
+
+            let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset)
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
@@ -589,7 +592,8 @@ class AnalysisService: ObservableObject {
                     weeklyContext: weeklyContext,
                     spyContext: spyContext,
                     spotPressure: spotPressure,
-                    dataQuality: dataQuality
+                    dataQuality: dataQuality,
+                    crossAsset: crossAsset
                 )
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown
@@ -743,7 +747,7 @@ class AnalysisService: ObservableObject {
 
     // MARK: - Fetch + compute for any market
 
-    private func fetchAndCompute(symbol: String, market: Market) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult) {
+    private func fetchAndCompute(symbol: String, market: Market, crossAsset: CrossAssetContext? = nil) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult) {
         let tfs = market.timeframes
 
         switch market {
@@ -751,7 +755,8 @@ class AnalysisService: ObservableObject {
             async let c1 = binance.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
             async let c2 = binance.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
             async let c3 = binance.fetchCandles(symbol: symbol, interval: tfs[2].interval, limit: 300)
-            let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market)
+            // Cross-asset only passed to Daily (macro context doesn't change on 4H/1H)
+            let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset)
             let r2 = IndicatorEngine.computeAll(candles: try await c2, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
             let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
             return (r1, r2, r3)
@@ -773,6 +778,47 @@ class AnalysisService: ObservableObject {
             let r3 = IndicatorEngine.computeAll(candles: entry, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
             return (r1, r2, r3)
         }
+    }
+
+    // MARK: - Cross-Asset Context
+
+    /// Compute cross-asset directional signals for BTC scoring (DXY + SPY).
+    private func buildCrossAssetContext() async -> CrossAssetContext? {
+        async let dxyCandles = yahoo.fetchCandles(symbol: "DX-Y.NYB", interval: "1d")
+        async let spyCandles = yahoo.fetchCandles(symbol: "SPY", interval: "1d")
+
+        guard let dxy = try? await dxyCandles, dxy.count >= 25,
+              let spy = try? await spyCandles, spy.count >= 25 else { return nil }
+
+        let dxyCtx = computeDirectionalSignal(candles: dxy)
+        let spyCtx = computeDirectionalSignal(candles: spy)
+
+        return CrossAssetContext(
+            dxySignal: -dxyCtx.signal,  // INVERTED: DXY up = bearish for BTC
+            dxyTrend: dxyCtx.trend, dxyPrice: dxyCtx.price, dxyEma20: dxyCtx.ema20,
+            spySignal: spyCtx.signal,
+            spyTrend: spyCtx.trend, spyPrice: spyCtx.price, spyEma20: spyCtx.ema20
+        )
+    }
+
+    /// Determine if an asset is clearly trending up, down, or flat.
+    private func computeDirectionalSignal(candles: [Candle]) -> (signal: Int, trend: String, price: Double, ema20: Double) {
+        let closes = candles.map(\.close)
+        let ema20List = MovingAverages.computeEMA(values: closes, period: 20)
+        guard let price = closes.last, let ema20 = ema20List.last, price > 0 else {
+            return (0, "unknown", 0, 0)
+        }
+        let distPct = ((price - ema20) / ema20) * 100
+        let recentEMA = ema20List.suffix(5)
+
+        if distPct > 0.5 {
+            let rising = recentEMA.count >= 2 && recentEMA.last! > recentEMA.first!
+            return rising ? (1, "up", price, ema20) : (0, "flat", price, ema20)
+        } else if distPct < -0.5 {
+            let falling = recentEMA.count >= 2 && recentEMA.last! < recentEMA.first!
+            return falling ? (-1, "down", price, ema20) : (0, "flat", price, ema20)
+        }
+        return (0, "flat", price, ema20)
     }
 
     // MARK: - Shared Helpers

@@ -45,6 +45,7 @@
 		471CE5CDEF743E4519BED335 /* StockSentiment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AE84F39420DD84DD31D5AD2 /* StockSentiment.swift */; };
 		47D438CE90710F3741D9FA74 /* PriceAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7202C20B67FFB645DBDABA14 /* PriceAlert.swift */; };
 		49248B7514292C369167B8DB /* Candle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 049DFBBCC9A22BB296B0D816 /* Candle.swift */; };
+		4F88BD36B63AF59B583C0C72 /* CrossAssetContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9412F953130DE07CB5684628 /* CrossAssetContext.swift */; };
 		50ACB2B9121558062213C207 /* EconomicCalendarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8165A07DFF6E9010BBFA1091 /* EconomicCalendarService.swift */; };
 		52D9347C7ADB28DF90D6E1E3 /* InfoTooltip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE089BD3A094D186E3B2F2F /* InfoTooltip.swift */; };
 		588B4147414891AE4D92827E /* PriceActionAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B687FAC230FEB7E33BE75288 /* PriceActionAnalyzer.swift */; };
@@ -193,6 +194,7 @@
 		8D87BB163A44C9CA82CFF0F1 /* AnalysisStateMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisStateMigration.swift; sourceTree = "<group>"; };
 		9152F34D3CCD450200D49DC6 /* BiasNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiasNotificationManager.swift; sourceTree = "<group>"; };
 		91A2649852593EF35667B3E2 /* MarketHours.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketHours.swift; sourceTree = "<group>"; };
+		9412F953130DE07CB5684628 /* CrossAssetContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossAssetContext.swift; sourceTree = "<group>"; };
 		9782B049170E42032D87F710 /* ATR.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ATR.swift; sourceTree = "<group>"; };
 		97D8174D80F83C38A16FDA11 /* WhatsNewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatsNewView.swift; sourceTree = "<group>"; };
 		9AE108B1457B5F3BB52077EF /* DerivativesCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesCardView.swift; sourceTree = "<group>"; };
@@ -413,6 +415,7 @@
 				4C7ED8B1B8469C82E1E1B421 /* AnalysisState.swift */,
 				049DFBBCC9A22BB296B0D816 /* Candle.swift */,
 				29ADC5116EA585594CD2E515 /* CoinInfo.swift */,
+				9412F953130DE07CB5684628 /* CrossAssetContext.swift */,
 				CB185A3EE56E7A9E6F8C472B /* DataQuality.swift */,
 				082FF9FCE52776C592BFE849 /* DerivativesData.swift */,
 				42970ECF6D41089ED70B4361 /* EconomicEvent.swift */,
@@ -580,6 +583,7 @@
 				8F404DB314F6C7CAB7C2A111 /* ConnectionStatus.swift in Sources */,
 				09D02660E4C18D8A6CD520C1 /* Constants.swift in Sources */,
 				68B6B1452B61E92287BDC954 /* ContentView.swift in Sources */,
+				4F88BD36B63AF59B583C0C72 /* CrossAssetContext.swift in Sources */,
 				0B074A729A333B3D2633AC73 /* CryptoLensApp.swift in Sources */,
 				1B5CA24C22D0CBED6012138B /* DataQuality.swift in Sources */,
 				013DA6AEB813102D16159585 /* DerivativesCardView.swift in Sources */,

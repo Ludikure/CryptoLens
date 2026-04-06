@@ -335,7 +335,8 @@ enum AnalysisPrompt {
                                 economicEvents: [EconomicEvent] = [], macro: MacroSnapshot? = nil,
                                 weeklyContext: String? = nil, spyContext: String? = nil,
                                 spotPressure: SpotPressure? = nil,
-                                dataQuality: DataQuality? = nil) -> String {
+                                dataQuality: DataQuality? = nil,
+                                crossAsset: CrossAssetContext? = nil) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         // Data quality gate — warn about missing/stale data
@@ -343,6 +344,15 @@ enum AnalysisPrompt {
             lines.append("")
             lines.append("=== DATA QUALITY ===")
             lines.append(section)
+        }
+
+        // Cross-asset context (crypto only)
+        if let ca = crossAsset {
+            lines.append("")
+            lines.append("=== CROSS-ASSET CONTEXT ===")
+            lines.append(ca.summary)
+            lines.append("DXY: \(Formatters.formatPrice(ca.dxyPrice)) vs EMA20 \(Formatters.formatPrice(ca.dxyEma20)) → \(ca.dxyTrend)")
+            lines.append("SPY: \(Formatters.formatPrice(ca.spyPrice)) vs EMA20 \(Formatters.formatPrice(ca.spyEma20)) → \(ca.spyTrend)")
         }
 
         // === PRE-COMPUTED FLAGS (Phases 1-5) ===
@@ -1047,9 +1057,8 @@ enum AnalysisPrompt {
         for ind in indicators {
             lines.append("=== \(ind.label) ===")
             var biasLine = "Price: \(Formatters.formatPrice(ind.price)) | Bias: \(ind.bias) (score: \(ind.biasScore))"
-            if let override = ind.momentumOverride {
-                biasLine += " [MOMENTUM: \(override)]"
-            }
+            if let vs = ind.volScalar { biasLine += " [vol_scalar: \(String(format: "%.2f", vs))]" }
+            if let override = ind.momentumOverride { biasLine += " [MOMENTUM: \(override)]" }
             lines.append(biasLine)
 
             // Per-timeframe market structure

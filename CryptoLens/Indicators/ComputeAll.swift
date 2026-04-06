@@ -1,7 +1,7 @@
 import Foundation
 
 enum IndicatorEngine {
-    static func computeAll(candles: [Candle], timeframe: String, label: String, market: Market = .crypto) -> IndicatorResult {
+    static func computeAll(candles: [Candle], timeframe: String, label: String, market: Market = .crypto, crossAsset: CrossAssetContext? = nil) -> IndicatorResult {
         let closes = candles.map(\.close)
         let highs = candles.map(\.high)
         let lows = candles.map(\.low)
@@ -94,9 +94,32 @@ enum IndicatorEngine {
         let priceBelowAll = ema20 != nil && ema50 != nil && ema200 != nil
             && current < ema20! && current < ema50! && current < ema200!
 
+        // ── Volatility Scalar ──
+        // Scales label thresholds: low vol → easier triggers, high vol → more conviction needed.
+        // Linear from 0.75 (ATR pct 0%) to 1.35 (ATR pct 100%).
+        let rawAtrPercentile: Double
+        if candles.count >= 44 {
+            var atrs = [Double]()
+            for i in 14..<candles.count {
+                let window = Array(candles[(i - 14)...i])
+                var sum = 0.0
+                for j in 1..<window.count {
+                    let tr = max(window[j].high - window[j].low,
+                                 abs(window[j].high - window[j - 1].close),
+                                 abs(window[j].low - window[j - 1].close))
+                    sum += tr
+                }
+                atrs.append(sum / 14.0)
+            }
+            if let currentATR = atrs.last {
+                let sorted = atrs.sorted()
+                let rank = sorted.firstIndex(where: { $0 >= currentATR }) ?? sorted.count
+                rawAtrPercentile = (Double(rank) / Double(sorted.count)) * 100
+            } else { rawAtrPercentile = 50 }
+        } else { rawAtrPercentile = 50 }
+        let volScalar = max(0.75, min(1.35, 0.75 + (rawAtrPercentile / 100.0) * 0.6))
+
         // ── Signed Bias Score ──
-        // Positive = bullish, negative = bearish. Each indicator contributes to one number.
-        // No denominator — neutral indicators don't dilute the score.
         var score = 0
         let isDaily = label.contains("Daily") || label.contains("1D")
         let is4H = label.contains("4H")
@@ -136,17 +159,22 @@ enum IndicatorEngine {
                 if r > 60 { score -= 2 }
                 else if r > 50 { score -= 1 }
             case .mixed:
-                if r > 70 { score += 2 }
-                else if r > 55 { score += 1 }
-                else if r < 30 { score -= 2 }
-                else if r < 45 { score -= 1 }
+                // Dead zone widens in high vol, narrows in low vol
+                let rsiOB = min(75.0, 70.0 + (volScalar - 1.0) * 15)
+                let rsiBull = min(60.0, 55.0 + (volScalar - 1.0) * 15)
+                let rsiOS = max(25.0, 30.0 - (volScalar - 1.0) * 15)
+                let rsiBear = max(40.0, 45.0 - (volScalar - 1.0) * 15)
+                if r > rsiOB { score += 2 }
+                else if r > rsiBull { score += 1 }
+                else if r < rsiOS { score -= 2 }
+                else if r < rsiBear { score -= 1 }
             }
         }
 
         if let m = macd {
             let adxValue = adx?.adx ?? 0
             let atrValue = atr?.atr ?? (current * 0.01)
-            let histDeadZone = atrValue * 0.001
+            let histDeadZone = atrValue * 0.001 * volScalar
 
             if adxValue >= 20 && abs(m.histogram) > histDeadZone {
                 let macdWeight = adxValue >= 25 ? 2 : 1
@@ -164,8 +192,10 @@ enum IndicatorEngine {
         }
 
         if let stoch = stochRSIFull.result, !isDaily {
-            if stoch.k < 15 && stoch.crossover == "bullish" { score += 1 }
-            else if stoch.k > 85 && stoch.crossover == "bearish" { score -= 1 }
+            let stochLow = max(5.0, 15.0 - (volScalar - 1.0) * 20)
+            let stochHigh = min(95.0, 85.0 + (volScalar - 1.0) * 20)
+            if stoch.k < stochLow && stoch.crossover == "bullish" { score += 1 }
+            else if stoch.k > stochHigh && stoch.crossover == "bearish" { score -= 1 }
         }
 
         if let div = divergence {
@@ -179,6 +209,11 @@ enum IndicatorEngine {
             else if obv?.trend == "Falling" { score -= 1 }
             if let ad = adLine, ad.trend == "Accumulation" { score += 1 }
             else if adLine?.trend == "Distribution" { score -= 1 }
+        }
+
+        // ── Layer 5: Cross-Asset Confirmation (Daily only, crypto only) ──
+        if isDaily && market == .crypto, let ca = crossAsset {
+            score += ca.combinedSignal
         }
 
         // ── Momentum Override (volume-gated, reduced weight on 4H) ──
@@ -214,14 +249,18 @@ enum IndicatorEngine {
         }
 
         // ── Label Assignment (timeframe-specific thresholds) ──
+        // Adaptive thresholds: scaled by volatility (harder in high vol, easier in low vol)
         let strongThreshold: Int
         let directionalThreshold: Int
         if isDaily {
-            strongThreshold = 7; directionalThreshold = 4
+            strongThreshold = max(5, Int(round(7.0 * volScalar)))
+            directionalThreshold = max(3, Int(round(4.0 * volScalar)))
         } else if is4H {
-            strongThreshold = 6; directionalThreshold = 3
+            strongThreshold = max(4, Int(round(6.0 * volScalar)))
+            directionalThreshold = max(2, Int(round(3.0 * volScalar)))
         } else {
-            strongThreshold = 5; directionalThreshold = 2
+            strongThreshold = max(3, Int(round(5.0 * volScalar)))
+            directionalThreshold = max(1, Int(round(2.0 * volScalar)))
         }
 
         var bias: String
@@ -236,7 +275,7 @@ enum IndicatorEngine {
         print("[MarketScope] [\(label)] Bias score: \(score) → \(bias) (EMA: \(emaRegime), structure: \(marketStructure?.label ?? "none"), override: \(momentumOverride ?? "none"))")
         #endif
 
-        let maxScore = 17.0  // includes ±2 from market structure
+        let maxScore = 19.0  // includes ±2 structure, ±2 cross-asset
         let clampedScore = min(max(Double(score), -maxScore), maxScore)
         let bullPct = ((clampedScore / maxScore) + 1.0) / 2.0 * 100.0
 
@@ -364,7 +403,8 @@ enum IndicatorEngine {
             atrPercentileLabel: atrPercentileResult?.label,
             momentumOverride: momentumOverride,
             biasScore: score,
-            marketStructure: marketStructure
+            marketStructure: marketStructure,
+            volScalar: volScalar
         )
         result.volumeProfile = volProfile
         return result
