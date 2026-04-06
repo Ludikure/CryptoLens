@@ -127,9 +127,9 @@ enum IndicatorEngine {
 
             if macdWeight > 0 {
                 if m.histogram > 0 {
-                    bullish += m.crossover == "bullish" ? macdWeight : max(macdWeight - 1, 1)
+                    bullish += m.crossover == "bullish" ? macdWeight : macdWeight - 1
                 } else {
-                    bearish += m.crossover == "bearish" ? macdWeight : max(macdWeight - 1, 1)
+                    bearish += m.crossover == "bearish" ? macdWeight : macdWeight - 1
                 }
             }
         }
@@ -230,12 +230,14 @@ enum IndicatorEngine {
             }
         }
 
-        // Momentum override: can push toward Neutral but cannot breach the EMA gate
-        if momentumOverride == "bullish_reversal" && bias.contains("Bearish") {
-            bias = "Neutral"
-        }
-        if momentumOverride == "bearish_reversal" && bias.contains("Bullish") {
-            bias = "Neutral"
+        // Momentum override: only in mixed regime (gate already handles bullish/bearish regimes)
+        if emaRegime == .mixed {
+            if momentumOverride == "bullish_reversal" && bias.contains("Bearish") {
+                bias = "Neutral"
+            }
+            if momentumOverride == "bearish_reversal" && bias.contains("Bullish") {
+                bias = "Neutral"
+            }
         }
 
         // Compute ATR percentile BEFORE truncation (needs full candle history)
