@@ -228,7 +228,7 @@ enum AnalysisPrompt {
         ---
         At the very end, include a JSON block with trade setups:
         ```json
-        [{"direction": "LONG", "entry": 65000.0, "stopLoss": 63500.0, "tp1": 67000.0, "tp2": 69000.0, "tp3": 72000.0, "reasoning": "Brief reason"}]
+        [{"direction": "LONG", "entry": 65000.0, "stopLoss": 63500.0, "tp1": 67000.0, "tp2": 69000.0, "tp3": 72000.0, "suggestedQty": 0.33, "reasoning": "Brief reason"}]
         ```
         If no valid setup, output empty array: `[]`
         Use actual prices from the data. This JSON is machine-parsed to create alerts.
@@ -239,7 +239,7 @@ enum AnalysisPrompt {
         - Use ## headers exactly as shown above. The app parses these for section rendering.
         - Tables must use markdown pipe syntax with header row.
         - Do NOT list every indicator value — synthesize them into a narrative.
-        - Maximum 400 words before the JSON block (headers, level lists, and table rows count toward this limit).
+        - Maximum 500 words before the JSON block (headers, level lists, and table rows count toward this limit).
         - ALL times in your output must be in Eastern Time (ET). Convert any UTC timestamps to ET before displaying. Use "ET" suffix (e.g., "4:00 PM ET", "8:30 AM ET"). This applies to: Next decision point, economic event times, candle close times, and any other time references.
 
         ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
@@ -368,7 +368,8 @@ enum AnalysisPrompt {
             } else if adxDaily < 20 {
                 regime = "RANGING"
             } else {
-                regime = "TRENDING"
+                // ADX > 25 but MAs tangled = strong energy without clear trend
+                regime = "TRANSITIONING"
             }
 
             // Phase 2 — Regime staleness
@@ -414,11 +415,28 @@ enum AnalysisPrompt {
                 var killFunding = false
                 var killMacro = false
 
-                // 2b.1 — 4H divergence against bias (simplified: check MACD histogram direction)
-                if let macd = fourH.macd {
-                    // If bias is bearish but 4H MACD histogram is positive/contracting bearish → potential bullish divergence
-                    if dailyBearish && macd.histogram > 0 { killDivergence = true }
-                    if dailyBullish && macd.histogram < 0 { killDivergence = true }
+                // 2b.1 — 4H MACD histogram structural divergence
+                // Histogram sign alone is NOT divergence — compare trough/peak progression
+                if fourH.macdHistSeries.count >= 10 {
+                    let histSeries = fourH.macdHistSeries
+                    if dailyBearish {
+                        // Bullish divergence: histogram troughs getting shallower (less negative)
+                        let troughs = findTroughs(histSeries)
+                        if troughs.count >= 2 {
+                            let older = troughs[troughs.count - 2]
+                            let newer = troughs[troughs.count - 1]
+                            if older < 0 && newer < 0 && newer > older { killDivergence = true }
+                        }
+                    }
+                    if dailyBullish {
+                        // Bearish divergence: histogram peaks getting lower
+                        let peaks = findPeaks(histSeries)
+                        if peaks.count >= 2 {
+                            let older = peaks[peaks.count - 2]
+                            let newer = peaks[peaks.count - 1]
+                            if older > 0 && newer > 0 && newer < older { killDivergence = true }
+                        }
+                    }
                 }
                 // Also check 4H RSI divergence using swing point detection
                 if fourH.rsiSeries.count >= 15 && fourH.candles.count >= 15 {
@@ -468,13 +486,29 @@ enum AnalysisPrompt {
 
                 let anyKilled = killDivergence || killVolume || killFunding || killMacro
 
-                // Phase 3 — Kill duration tracking (persist across refreshes)
+                // Phase 3 — Kill duration tracking (candle-anchored, not refresh-anchored)
                 let killDurKey = "killDur_\(symbol)"
-                var durState = prevDurState  // prevDurState read in outer scope before write
-                durState["divergence"] = killDivergence ? (durState["divergence"] ?? 0) + 1 : 0
-                durState["volume"] = killVolume ? (durState["volume"] ?? 0) + 1 : 0
-                durState["funding"] = killFunding ? (durState["funding"] ?? 0) + 1 : 0
-                UserDefaults.standard.set(durState, forKey: killDurKey)
+                let killDurCandleKey = "killDurCandle_\(symbol)"
+                let lastTrackedCandle = UserDefaults.standard.object(forKey: killDurCandleKey) as? Date
+                let latest4HCandle = fourH.candles.last?.time
+                let isNewCandle = lastTrackedCandle == nil || (latest4HCandle != nil && latest4HCandle! > lastTrackedCandle!)
+
+                var durState = prevDurState
+                if isNewCandle {
+                    durState["divergence"] = killDivergence ? (durState["divergence"] ?? 0) + 1 : 0
+                    durState["volume"] = killVolume ? (durState["volume"] ?? 0) + 1 : 0
+                    durState["funding"] = killFunding ? (durState["funding"] ?? 0) + 1 : 0
+                    UserDefaults.standard.set(durState, forKey: killDurKey)
+                    if let candle = latest4HCandle {
+                        UserDefaults.standard.set(candle, forKey: killDurCandleKey)
+                    }
+                } else {
+                    // Same candle — don't increment, but clear if kill resolved mid-candle
+                    if !killDivergence { durState["divergence"] = 0 }
+                    if !killVolume { durState["volume"] = 0 }
+                    if !killFunding { durState["funding"] = 0 }
+                    UserDefaults.standard.set(durState, forKey: killDurKey)
+                }
 
                 // Divergence escalation: 6+ candles = trend transition, not pullback
                 let divergenceEscalated = (durState["divergence"] ?? 0) >= 6
@@ -968,6 +1002,13 @@ enum AnalysisPrompt {
                         let risk = abs(entry.price - stop)
                         guard risk > 0 else { continue }
 
+                        // Position sizing from user settings
+                        let acctSize = UserDefaults.standard.double(forKey: "accountSize")
+                        let riskPct = UserDefaults.standard.double(forKey: "riskPercent")
+                        let riskDollars = acctSize > 0 && riskPct > 0 ? acctSize * riskPct / 100.0 : 500.0
+                        let suggestedQty = riskDollars / risk
+                        let qtyStr = suggestedQty >= 1 ? String(format: "%.0f", suggestedQty) : String(format: "%.4f", suggestedQty)
+
                         let validTargets: [TaggedLevel]
                         if direction4 == "SHORT" {
                             validTargets = uniqueLevels.filter { $0.price < entry.price }.sorted { $0.price > $1.price }
@@ -986,7 +1027,7 @@ enum AnalysisPrompt {
                         candidates.append(
                             "Entry \(Formatters.formatPrice(entry.price)) (\(entry.type)) | " +
                             "Stop \(Formatters.formatPrice(stop)) | " +
-                            "Risk \(Formatters.formatPrice(risk)) | " +
+                            "Risk \(Formatters.formatPrice(risk)) (\(qtyStr) units @ \(Formatters.formatPrice(riskDollars)) risk) | " +
                             "Targets: \(targetLines.joined(separator: ", ")) | " +
                             "Viable: \(viable)"
                         )
@@ -1154,6 +1195,30 @@ enum AnalysisPrompt {
         print("[MarketScope] [\(symbol)] Sections: \(sections)")
         #endif
         return prompt
+    }
+
+    /// Find local minima (troughs) in a series.
+    private static func findTroughs(_ series: [Double]) -> [Double] {
+        guard series.count >= 3 else { return [] }
+        var troughs = [Double]()
+        for i in 1..<(series.count - 1) {
+            if series[i] < series[i - 1] && series[i] <= series[i + 1] {
+                troughs.append(series[i])
+            }
+        }
+        return troughs
+    }
+
+    /// Find local maxima (peaks) in a series.
+    private static func findPeaks(_ series: [Double]) -> [Double] {
+        guard series.count >= 3 else { return [] }
+        var peaks = [Double]()
+        for i in 1..<(series.count - 1) {
+            if series[i] > series[i - 1] && series[i] >= series[i + 1] {
+                peaks.append(series[i])
+            }
+        }
+        return peaks
     }
 
     private static func fmt(_ price: Double) -> String {

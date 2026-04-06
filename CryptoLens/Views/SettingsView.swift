@@ -8,6 +8,8 @@ struct SettingsView: View {
     @State private var selectedModel: String = ""
     @State private var autoAlerts = UserDefaults.standard.object(forKey: "auto_alerts_enabled") as? Bool ?? false
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
+    @AppStorage("accountSize") private var accountSize: Double = 25000
+    @AppStorage("riskPercent") private var riskPercent: Double = 2.0
 
     var body: some View {
         NavigationStack {
@@ -98,6 +100,26 @@ struct SettingsView: View {
                         Text("Dark").tag("dark")
                     }
                     .pickerStyle(.segmented)
+                }
+
+                Section("Risk Management") {
+                    HStack {
+                        Text("Account Size")
+                        Spacer()
+                        TextField("$", value: $accountSize, format: .currency(code: "USD"))
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    HStack {
+                        Text("Risk Per Trade (%)")
+                        Spacer()
+                        TextField("%", value: $riskPercent, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    Text("Max risk: \(Formatters.formatPrice(accountSize * riskPercent / 100)) per trade")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 Section("Data") {
