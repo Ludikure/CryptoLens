@@ -68,46 +68,91 @@ enum IndicatorEngine {
             addv = ADDV.compute(closes: closes, volumes: volumes)
         }
 
-        // Composite bias score (magnitude-weighted)
+        // ── EMA Regime Classification ──
+        // Determines trend structure BEFORE scoring. Used by RSI, MACD, momentum override, and final gate.
+        enum EMARegime { case bullish, bearish, mixed }
+        let emaRegime: EMARegime
+        if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
+            if e20 > e50 && e50 > e200 { emaRegime = .bullish }
+            else if e20 < e50 && e50 < e200 { emaRegime = .bearish }
+            else { emaRegime = .mixed }
+        } else {
+            emaRegime = .mixed
+        }
+        let priceAboveAll = ema20 != nil && ema50 != nil && ema200 != nil
+            && current > ema20! && current > ema50! && current > ema200!
+        let priceBelowAll = ema20 != nil && ema50 != nil && ema200 != nil
+            && current < ema20! && current < ema50! && current < ema200!
+
+        // ── Composite Bias Score ──
         var bullish = 0
         var bearish = 0
+
+        // Step 2: EMA stack scoring
         if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
             if e20 > e50 && e50 > e200 { bullish += 2 }
             else if e20 < e50 && e50 < e200 { bearish += 2 }
             if current > e200 { bullish += 1 } else { bearish += 1 }
         }
+
+        // Step 3: Regime-aware RSI scoring
         if let r = rsi {
-            // Scale by distance from 50 — RSI 75 scores more than RSI 51
-            if r > 70 { bullish += 2 }
-            else if r > 55 { bullish += 1 }
-            else if r < 30 { bearish += 2 }
-            else if r < 45 { bearish += 1 }
-            // 45-55 = neutral, no score
-        }
-        if let m = macd {
-            // Fresh crossover scores higher
-            if m.histogram > 0 {
-                bullish += m.crossover == "bullish" ? 2 : 1
-            } else {
-                bearish += m.crossover == "bearish" ? 2 : 1
+            switch emaRegime {
+            case .bullish:
+                // Uptrend: pullbacks are buying opportunities, OB is strength
+                if r < 40 { bullish += 2 }       // Oversold pullback in uptrend = buy signal
+                else if r < 50 { bullish += 1 }   // Mild pullback
+                // RSI > 70 in uptrend = NO score (strength, not exhaustion)
+            case .bearish:
+                // Downtrend: rallies are shorting opportunities, OS is weakness
+                if r > 60 { bearish += 2 }        // Overbought rally in downtrend = short signal
+                else if r > 50 { bearish += 1 }   // Mild rally
+                // RSI < 30 in downtrend = NO score (weakness, not bounce)
+            case .mixed:
+                // Ranging: OB/OS are fade signals
+                if r > 70 { bullish += 2 }
+                else if r > 55 { bullish += 1 }
+                else if r < 30 { bearish += 2 }
+                else if r < 45 { bearish += 1 }
             }
         }
+
+        // Step 4: ADX-weighted MACD scoring
+        if let m = macd {
+            let adxValue = adx?.adx ?? 0
+            let macdWeight: Int
+            if adxValue >= 25 { macdWeight = 2 }       // Trending: full weight
+            else if adxValue >= 20 { macdWeight = 1 }   // Marginal: half weight
+            else { macdWeight = 0 }                      // Ranging: ignore crossovers
+
+            if macdWeight > 0 {
+                if m.histogram > 0 {
+                    bullish += m.crossover == "bullish" ? macdWeight : max(macdWeight - 1, 1)
+                } else {
+                    bearish += m.crossover == "bearish" ? macdWeight : max(macdWeight - 1, 1)
+                }
+            }
+        }
+
+        // Step 5: ADX magnitude scoring
         if let a = adx {
-            // Only score direction if trend is meaningful (ADX > 20)
-            if a.adx >= 20 {
+            if a.adx >= 40 {
+                if a.direction == "Bullish" { bullish += 3 } else { bearish += 3 }
+            } else if a.adx >= 30 {
+                if a.direction == "Bullish" { bullish += 2 } else { bearish += 2 }
+            } else if a.adx >= 20 {
                 if a.direction == "Bullish" { bullish += 1 } else { bearish += 1 }
             }
         }
+
         // Stock-only bias signals
         if market == .stock {
             if let o = obv, o.trend == "Rising" { bullish += 1 } else if obv?.trend == "Falling" { bearish += 1 }
             if let ad = adLine, ad.trend == "Accumulation" { bullish += 1 } else if adLine?.trend == "Distribution" { bearish += 1 }
         }
 
-        // Momentum override: detect sharp reversals that lagging indicators haven't caught.
-        // Daily: NO override — trend authority must change via structure, not 3-candle patterns.
-        // 4H: Tight thresholds — RSI must move from <30 to >60 (convincing reversal).
-        // 1H: Standard thresholds — RSI from <35 to >60 (fast entry-timing reversals).
+        // Step 6: Volume-gated momentum override
+        // Daily: NO override. 4H: tight thresholds + volume required. 1H: standard + volume required.
         let isDaily = label.contains("Daily") || label.contains("1D")
         let is4H = label.contains("4H")
         var momentumOverride: String? = nil
@@ -121,25 +166,26 @@ enum IndicatorEngine {
             let last3AllRed = last3.allSatisfy { $0.close < $0.open }
             let last3VolIncreasing = last3.count == 3 && last3[2].volume >= last3[1].volume && last3[1].volume >= last3[0].volume
 
-            let oversoldThreshold: Double = is4H ? 30 : 35  // 4H needs deeper oversold
+            let oversoldThreshold: Double = is4H ? 30 : 35
             let overboughtThreshold: Double = is4H ? 70 : 65
+            let overrideWeight = is4H ? 2 : 3  // 4H gets less override authority
 
-            // Bullish reversal: RSI was oversold recently, now above 60, green candles
-            if rsiMin < oversoldThreshold && currentRSI > 60 && last3AllGreen {
+            // Bullish reversal: RSI recovery + green candles + VOLUME CONFIRMATION
+            if rsiMin < oversoldThreshold && currentRSI > 60 && last3AllGreen && last3VolIncreasing {
                 momentumOverride = "bullish_reversal"
-                bullish += 3
+                bullish += overrideWeight
             }
-            // Bearish reversal: RSI was overbought recently, now below 40, red candles
-            if rsiMax > overboughtThreshold && currentRSI < 40 && last3AllRed {
+            // Bearish reversal: RSI drop + red candles + VOLUME CONFIRMATION
+            if rsiMax > overboughtThreshold && currentRSI < 40 && last3AllRed && last3VolIncreasing {
                 momentumOverride = "bearish_reversal"
-                bearish += 3
+                bearish += overrideWeight
             }
-            // Weaker version: 3 consecutive candles with increasing volume
+            // Weaker: consecutive candles with volume (already volume-gated)
             if momentumOverride == nil && last3AllGreen && last3VolIncreasing && currentRSI > 55 {
-                bullish += 2
+                bullish += is4H ? 1 : 2
             }
             if momentumOverride == nil && last3AllRed && last3VolIncreasing && currentRSI < 45 {
-                bearish += 2
+                bearish += is4H ? 1 : 2
             }
         }
 
@@ -152,7 +198,39 @@ enum IndicatorEngine {
         else if bullPct <= 40 { bias = "Bearish" }
         else { bias = "Neutral" }
 
-        // Momentum override forces minimum Neutral if bias contradicts clear reversal
+        // Step 7: EMA Structure Gate — trend structure caps/floors the label
+        if let _ = ema20, let _ = ema50, let _ = ema200 {
+            switch emaRegime {
+            case .bearish:
+                if priceBelowAll {
+                    // Full bearish alignment + price below all: cap at Bearish
+                    if bias == "Strong Bullish" || bias == "Bullish" || bias == "Neutral" {
+                        bias = "Bearish"
+                    }
+                } else {
+                    // Bearish stack but price reclaiming some EMAs: cap at Neutral
+                    if bias == "Strong Bullish" || bias == "Bullish" {
+                        bias = "Neutral"
+                    }
+                }
+            case .bullish:
+                if priceAboveAll {
+                    // Full bullish alignment + price above all: floor at Bullish
+                    if bias == "Strong Bearish" || bias == "Bearish" || bias == "Neutral" {
+                        bias = "Bullish"
+                    }
+                } else {
+                    // Bullish stack but price pulling back: floor at Neutral
+                    if bias == "Strong Bearish" || bias == "Bearish" {
+                        bias = "Neutral"
+                    }
+                }
+            case .mixed:
+                break  // No gate — scoring decides
+            }
+        }
+
+        // Momentum override: can push toward Neutral but cannot breach the EMA gate
         if momentumOverride == "bullish_reversal" && bias.contains("Bearish") {
             bias = "Neutral"
         }
