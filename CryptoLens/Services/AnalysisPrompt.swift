@@ -993,9 +993,9 @@ enum AnalysisPrompt {
 
         for ind in indicators {
             lines.append("=== \(ind.label) ===")
-            var biasLine = "Price: \(Formatters.formatPrice(ind.price)) | Bias: \(ind.bias) (\(Int(ind.bullPercent))% bullish)"
+            var biasLine = "Price: \(Formatters.formatPrice(ind.price)) | Bias: \(ind.bias) (score: \(ind.biasScore))"
             if let override = ind.momentumOverride {
-                biasLine += " [MOMENTUM: \(override) — bias adjusted from lagging indicators due to sharp reversal in last 3-5 candles]"
+                biasLine += " [MOMENTUM: \(override)]"
             }
             lines.append(biasLine)
 
