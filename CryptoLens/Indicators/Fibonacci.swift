@@ -54,7 +54,7 @@ enum Fibonacci {
     }
 
     /// Compute Fibonacci from MarketStructure swing points (preferred).
-    static func computeFromSwings(swingHighs: [Double], swingLows: [Double], closes: [Double]) -> FibResult? {
+    static func computeFromSwings(swingHighs: [Double], swingLows: [Double], closes: [Double], structureLabel: String = "") -> FibResult? {
         guard let swingHigh = swingHighs.first,
               let swingLow = swingLows.first,
               let current = closes.last else { return nil }
@@ -62,11 +62,13 @@ enum Fibonacci {
         let diff = swingHigh - swingLow
         guard diff != 0 else { return nil }
 
-        let trend: String
+        // Use structure label for trend direction; fall back to price vs midpoint
+        let trend = structureLabel.contains("bullish") ? "uptrend" :
+                    structureLabel.contains("bearish") ? "downtrend" :
+                    (current > (swingHigh + swingLow) / 2 ? "uptrend" : "downtrend")
         var levels: [FibLevel]
 
-        if current > (swingHigh + swingLow) / 2 {
-            trend = "uptrend"
+        if trend == "uptrend" {
             levels = [
                 FibLevel(name: "0.0 (swing high)", price: swingHigh.rounded(toPlaces: 2)),
                 FibLevel(name: "0.236", price: (swingHigh - 0.236 * diff).rounded(toPlaces: 2)),
@@ -77,7 +79,6 @@ enum Fibonacci {
                 FibLevel(name: "1.0 (swing low)", price: swingLow.rounded(toPlaces: 2)),
             ]
         } else {
-            trend = "downtrend"
             levels = [
                 FibLevel(name: "0.0 (swing low)", price: swingLow.rounded(toPlaces: 2)),
                 FibLevel(name: "0.236", price: (swingLow + 0.236 * diff).rounded(toPlaces: 2)),

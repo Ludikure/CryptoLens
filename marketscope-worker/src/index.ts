@@ -403,7 +403,7 @@ export default {
 
     // === Macro Data — now powered by FRED (cached 5m, shared) ===
     if (path === '/macro') {
-      const cacheKey = 'cache:macro:v2';
+      const cacheKey = 'cache:macro:v3';  // bumped to clear stale DXY data
       const cached = await env.ALERTS.get(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);

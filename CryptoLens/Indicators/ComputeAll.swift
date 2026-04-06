@@ -43,7 +43,7 @@ enum IndicatorEngine {
         // Fibonacci: prefer swing-based, fall back to absolute high/low
         let fib: FibResult?
         if let ms = marketStructure, !ms.swingHighs.isEmpty, !ms.swingLows.isEmpty {
-            fib = Fibonacci.computeFromSwings(swingHighs: ms.swingHighs, swingLows: ms.swingLows, closes: closes)
+            fib = Fibonacci.computeFromSwings(swingHighs: ms.swingHighs, swingLows: ms.swingLows, closes: closes, structureLabel: ms.label)
         } else {
             fib = Fibonacci.compute(highs: highs, lows: lows, closes: closes)
         }
@@ -100,7 +100,6 @@ enum IndicatorEngine {
         var score = 0
         let isDaily = label.contains("Daily") || label.contains("1D")
         let is4H = label.contains("4H")
-
         // ── Layer 1: Structure (EMA stack + price position) ──
         if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
             if e20 > e50 && e50 > e200 { score += 3 }
@@ -233,6 +232,10 @@ enum IndicatorEngine {
         else { bias = "Neutral" }
 
         // Derive bullPercent for backward compatibility (UI + prompt)
+        #if DEBUG
+        print("[MarketScope] [\(label)] Bias score: \(score) → \(bias) (EMA: \(emaRegime), structure: \(marketStructure?.label ?? "none"), override: \(momentumOverride ?? "none"))")
+        #endif
+
         let maxScore = 17.0  // includes ±2 from market structure
         let clampedScore = min(max(Double(score), -maxScore), maxScore)
         let bullPct = ((clampedScore / maxScore) + 1.0) / 2.0 * 100.0
