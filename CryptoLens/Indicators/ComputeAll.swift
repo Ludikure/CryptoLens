@@ -218,7 +218,7 @@ enum IndicatorEngine {
         let strongThreshold: Int
         let directionalThreshold: Int
         if isDaily {
-            strongThreshold = 8; directionalThreshold = 5
+            strongThreshold = 7; directionalThreshold = 4
         } else if is4H {
             strongThreshold = 6; directionalThreshold = 3
         } else {
