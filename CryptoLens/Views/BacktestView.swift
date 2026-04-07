@@ -77,6 +77,38 @@ struct BacktestView: View {
             }
         }
         .navigationTitle("Backtest")
+        .toolbar {
+            if let r = engine.result {
+                ShareLink(item: shareText(r), preview: SharePreview("Backtest Results — \(r.symbol)"))
+            }
+        }
+    }
+
+    private func shareText(_ r: BacktestSummary) -> String {
+        """
+        MarketScope Backtest — \(r.symbol)
+        \(r.startDate.formatted(date: .abbreviated, time: .omitted)) → \(r.endDate.formatted(date: .abbreviated, time: .omitted))
+
+        Label Accuracy:
+        • Bars evaluated: \(r.evaluatedBars) / \(r.totalBars)
+        • Direction correct (4H): \(pct(r.accuracy4H))
+        • Direction correct (24H): \(pct(r.accuracy24H))
+        • Bearish: \(pct(r.bearishAccuracy)) | Bullish: \(pct(r.bullishAccuracy))
+
+        Score Strength:
+        • Strong: \(pct(r.strongAccuracy)) | Moderate: \(pct(r.moderateAccuracy)) | Weak: \(pct(r.weakAccuracy))
+
+        By Regime:
+        • Trending: \(pct(r.trendingAccuracy)) | Ranging: \(pct(r.rangingAccuracy)) | Transitioning: \(pct(r.transitioningAccuracy))
+
+        Adaptive vs Static:
+        • Adaptive: \(pct(r.adaptiveAccuracy)) | Static: \(pct(r.staticAccuracy)) | Delta: \(String(format: "%+.1f%%", r.adaptiveAccuracy - r.staticAccuracy))
+
+        FLAT Analysis:
+        • Total: \(r.totalFlats) | Correct: \(r.correctFlats) | False: \(r.falseFlats) | Accuracy: \(pct(r.flatAccuracy))
+
+        Top Threshold: Dir \(r.thresholdSweep.first?.directionalThreshold ?? 0) / Strong \(r.thresholdSweep.first?.strongThreshold ?? 0) → \(pct(r.thresholdSweep.first?.accuracy24H ?? 0))
+        """
     }
 
     private func row(_ label: String, _ value: String) -> some View {

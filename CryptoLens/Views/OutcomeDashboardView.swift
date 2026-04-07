@@ -43,6 +43,11 @@ struct OutcomeDashboardView: View {
         .navigationTitle("Outcome Tracking")
         .task { stats = OutcomeTracker.stats() }
         .refreshable { stats = OutcomeTracker.stats() }
+        .toolbar {
+            if let s = stats {
+                ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
+            }
+        }
     }
 
     private func statRow(_ label: String, value: String, color: Color = .primary) -> some View {
@@ -88,6 +93,22 @@ struct OutcomeDashboardView: View {
                 .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
+    }
+
+    private func shareText(_ s: OutcomeStats) -> String {
+        """
+        MarketScope Outcome Tracking
+
+        Trade Setups:
+        • Total: \(s.totalSetups) | Resolved: \(s.resolvedSetups)
+        • Win Rate: \(String(format: "%.0f%%", s.winRate))
+        • Wins: \(s.wins) | Losses: \(s.losses)
+        • Avg R:R Achieved: \(String(format: "%.1f", s.avgRRAchieved))
+
+        FLAT / Kill Decisions:
+        • Total: \(s.totalFlats) | Evaluated: \(s.evaluatedFlats)
+        • False FLATs: \(s.falseFlats) (\(String(format: "%.0f%%", s.falseFlatRate)))
+        """
     }
 
     private func outcomeColor(_ result: String) -> Color {
