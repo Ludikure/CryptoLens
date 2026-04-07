@@ -305,9 +305,16 @@ enum IndicatorEngine {
         let clampedScore = min(max(Double(score), -maxScore), maxScore)
         let bullPct = ((clampedScore / maxScore) + 1.0) / 2.0 * 100.0
 
+        // ── Exhaustion Cap ──
+        // Extreme scores (±8+) indicate indicator saturation, not higher conviction.
+        // When every indicator agrees, the move is typically extended.
+        // Cap at directional (not Strong) to avoid false confidence on exhausted moves.
+        if abs(score) > 8 && (bias == "Strong Bullish" || bias == "Strong Bearish") {
+            bias = bias.contains("Bullish") ? "Bullish" : "Bearish"
+        }
+
         // ── Ranging Regime Override (Daily only) ──
-        // ADX < 20 = no trend. Directional labels in ranges are 34-43% accurate (worse than
-        // coin flip). Force Neutral unless score is overwhelmingly strong.
+        // ADX < 20 = no trend. Force Neutral unless score exceeds strong threshold.
         if isDaily {
             let adxValue = adx?.adx ?? 0
             if adxValue < 20 && abs(score) < strongThreshold {

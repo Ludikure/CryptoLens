@@ -34,6 +34,14 @@ struct BacktestDataPoint: Codable {
         if biasAlignment.contains("bullish") { return future > price }
         return nil
     }
+
+    /// Did price move > 1% in the labeled direction at ANY point in 48H?
+    /// Measures "did a tradeable setup exist?" not "did the candle close confirm?"
+    var opportunityHit: Bool? {
+        guard let maxFav = maxFavorable24H, price > 0 else { return nil }
+        guard biasAlignment.contains("bearish") || biasAlignment.contains("bullish") else { return nil }
+        return (maxFav / price) * 100 > 1.0
+    }
 }
 
 /// Aggregate results from a backtest run.
@@ -59,6 +67,9 @@ struct BacktestSummary: Codable {
     let correctFlats: Int
     let falseFlats: Int
     let flatAccuracy: Double
+    let opportunityRate: Double       // % of directional labels where price moved >1% in direction
+    let bullishOpportunity: Double
+    let bearishOpportunity: Double
     let thresholdSweep: [ThresholdResult]
     let scoreDistribution: [ScoreBucket]
 }
@@ -70,6 +81,7 @@ struct ScoreBucket: Codable, Identifiable {
     let count: Int             // how many bars had this score
     let correct24H: Int        // how many were directionally correct at 24H
     let accuracy: Double       // correct / count * 100
+    let opportunity: Double    // % where price moved >1% in direction within 48H
     let avgMove: Double        // average % price move in 24H for this score
 }
 

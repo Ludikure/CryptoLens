@@ -38,6 +38,12 @@ struct BacktestView: View {
                     row("Bullish accuracy", pct(r.bullishAccuracy))
                 }
 
+                Section("Opportunity Rate (>1% move in direction)") {
+                    row("Overall", pct(r.opportunityRate))
+                    row("Bullish opportunity", pct(r.bullishOpportunity))
+                    row("Bearish opportunity", pct(r.bearishOpportunity))
+                }
+
                 Section("Score Strength") {
                     row("Strong signals", pct(r.strongAccuracy))
                     row("Moderate signals", pct(r.moderateAccuracy))
@@ -126,6 +132,10 @@ struct BacktestView: View {
         • Direction correct (4H): \(pct(r.accuracy4H))
         • Direction correct (24H): \(pct(r.accuracy24H))
         • Bearish: \(pct(r.bearishAccuracy)) | Bullish: \(pct(r.bullishAccuracy))
+
+        Opportunity Rate (>1% move in direction):
+        • Overall: \(pct(r.opportunityRate))
+        • Bullish: \(pct(r.bullishOpportunity)) | Bearish: \(pct(r.bearishOpportunity))
 
         Score Strength:
         • Strong: \(pct(r.strongAccuracy)) | Moderate: \(pct(r.moderateAccuracy)) | Weak: \(pct(r.weakAccuracy))

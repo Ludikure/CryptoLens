@@ -219,6 +219,20 @@ class BacktestEngine: ObservableObject {
             correctFlats: flatMoves.filter { $0 < 0.5 }.count,
             falseFlats: flatMoves.filter { $0 > 1.5 }.count,
             flatAccuracy: flatMoves.isEmpty ? 0 : Double(flatMoves.filter { $0 < 0.5 }.count) / Double(flatMoves.count) * 100,
+            opportunityRate: {
+                let hits = directional.filter { $0.opportunityHit == true }.count
+                return directional.isEmpty ? 0 : Double(hits) / Double(directional.count) * 100
+            }(),
+            bullishOpportunity: {
+                let b = directional.filter { $0.biasAlignment.contains("bullish") }
+                let hits = b.filter { $0.opportunityHit == true }.count
+                return b.isEmpty ? 0 : Double(hits) / Double(b.count) * 100
+            }(),
+            bearishOpportunity: {
+                let b = directional.filter { $0.biasAlignment.contains("bearish") }
+                let hits = b.filter { $0.opportunityHit == true }.count
+                return b.isEmpty ? 0 : Double(hits) / Double(b.count) * 100
+            }(),
             thresholdSweep: runThresholdSweep(points: points),
             scoreDistribution: computeScoreDistribution(points: points)
         )
@@ -283,11 +297,17 @@ class BacktestEngine: ObservableObject {
             }
             let avg = avgMove.isEmpty ? 0 : avgMove.reduce(0, +) / Double(avgMove.count)
 
+            let oppHits = pts.filter { pt in
+                guard let maxFav = pt.maxFavorable24H, pt.price > 0, score != 0 else { return false }
+                return (maxFav / pt.price) * 100 > 1.0
+            }.count
+
             return ScoreBucket(
                 score: score,
                 count: pts.count,
                 correct24H: correct,
                 accuracy: directional.isEmpty ? 0 : Double(correct) / Double(directional.count) * 100,
+                opportunity: score == 0 ? 0 : Double(oppHits) / Double(pts.count) * 100,
                 avgMove: avg
             )
         }.sorted { $0.score < $1.score }
