@@ -113,6 +113,25 @@ struct OptimizerView: View {
             }
 
             if engine.results.count > 1 {
+                if !engine.macroBreakdown.isEmpty {
+                    Section("By VIX Regime") {
+                        ForEach(engine.macroBreakdown) { m in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(m.regime).fontWeight(.bold)
+                                    Text("VIX \(m.vixRange)").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing) {
+                                    Text(String(format: "Opp: %.1f%%", m.oppRate))
+                                    Text(String(format: "Acc: %.1f%% | %d bars", m.accuracy, m.barCount))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 Section("Top 10 Results") {
                     ForEach(Array(engine.results.enumerated()), id: \.element.id) { idx, result in
                         VStack(alignment: .leading, spacing: 4) {

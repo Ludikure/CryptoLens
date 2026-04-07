@@ -2,6 +2,15 @@ import Foundation
 
 // MARK: - Metrics & Result
 
+struct MacroBreakdown: Identifiable {
+    var id: String { regime }
+    let regime: String
+    let vixRange: String
+    let oppRate: Double
+    let accuracy: Double
+    let barCount: Int
+}
+
 struct OptimizerMetrics: Identifiable {
     var id: String { symbol }
     let symbol: String
@@ -32,6 +41,7 @@ class OptimizerEngine: ObservableObject {
     @Published var statusMessage = ""
     @Published var results: [OptimizationResult] = []
     @Published var bestResult: OptimizationResult?
+    @Published var macroBreakdown: [MacroBreakdown] = []
 
     private let binance = BinanceService()
     private let yahoo = YahooFinanceService()
@@ -152,6 +162,12 @@ class OptimizerEngine: ObservableObject {
 
             results = Array(allResults.prefix(10))
             bestResult = results.first
+
+            // Macro breakdown by VIX regime
+            if let best = bestResult {
+                macroBreakdown = computeMacroBreakdown(params: best.params, snapshots: allSnapshots)
+            }
+
             progress = 1.0
             statusMessage = "Complete: \(allResults.count) combos evaluated, \(allSnapshots.count) assets"
 
@@ -282,7 +298,17 @@ class OptimizerEngine: ObservableObject {
             return []
         }
 
-        let evalCandles = isCrypto ? fourHCandles : fourHCandles  // Both use 4H now
+        // Fetch macro candles (VIX + DXY) for context
+        let vixCandles = (try? await CandleCache.loadOrFetch(
+            symbol: "^VIX", interval: "1d", startDate: fetchStart, endDate: endDate,
+            fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+        let dxyCandles = (try? await CandleCache.loadOrFetch(
+            symbol: "DX-Y.NYB", interval: "1d", startDate: fetchStart, endDate: endDate,
+            fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+        let dxyCloses = dxyCandles.map(\.close)
+        let dxyEma20List = MovingAverages.computeEMA(values: dxyCloses, period: 20)
+
+        let evalCandles = fourHCandles
         let evalStartIndex = evalCandles.firstIndex { $0.time >= startDate } ?? min(200, max(0, evalCandles.count - 50))
         var snapshots = [ScoringSnapshot]()
         var dailyIdx = 0
@@ -309,10 +335,21 @@ class OptimizerEngine: ObservableObject {
             let priceAfter1 = (i + 1 < evalCandles.count) ? evalCandles[i + 1].close : nil
             let priceAfterN = (i + forwardBars < evalCandles.count) ? evalCandles[i + forwardBars].close : nil
 
+            // Match VIX/DXY by date
+            let evalDate = Calendar.current.startOfDay(for: evalTime)
+            let vixValue = vixCandles.last(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate })?.close
+            let dxyValue = dxyCandles.last(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate })?.close
+            let dxyAbove: Bool? = {
+                guard let idx = dxyCandles.lastIndex(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate }),
+                      idx < dxyEma20List.count else { return nil }
+                return dxyCandles[idx].close > dxyEma20List[idx]
+            }()
+
             let snapshot = extractSnapshot(from: dailyResult, candles: Array(dailySlice.suffix(300)),
                                             price: price, time: evalTime, isCrypto: isCrypto,
                                             priceAfter4H: priceAfter1, priceAfter24H: priceAfterN,
-                                            forwardHigh24H: maxHigh, forwardLow24H: maxLow)
+                                            forwardHigh24H: maxHigh, forwardLow24H: maxLow,
+                                            vix: vixValue, dxyPrice: dxyValue, dxyAboveEma20: dxyAbove)
             snapshots.append(snapshot)
         }
 
@@ -324,7 +361,8 @@ class OptimizerEngine: ObservableObject {
     private func extractSnapshot(from result: IndicatorResult, candles: [Candle],
                                   price: Double, time: Date, isCrypto: Bool,
                                   priceAfter4H: Double?, priceAfter24H: Double?,
-                                  forwardHigh24H: Double?, forwardLow24H: Double?) -> ScoringSnapshot {
+                                  forwardHigh24H: Double?, forwardLow24H: Double?,
+                                  vix: Double? = nil, dxyPrice: Double? = nil, dxyAboveEma20: Bool? = nil) -> ScoringSnapshot {
         let ema20List = MovingAverages.computeEMA(values: candles.map(\.close), period: 20)
         let ema20Rising: Bool
         if ema20List.count >= 6 {
@@ -398,11 +436,63 @@ class OptimizerEngine: ObservableObject {
             volScalar: result.volScalar ?? 1.0,
             obvRising: result.obv?.trend == "Rising",
             adLineAccumulation: result.adLine?.trend == "Accumulation",
+            vix: vix,
+            dxyPrice: dxyPrice,
+            dxyAboveEma20: dxyAboveEma20,
             priceAfter4H: priceAfter4H,
             priceAfter24H: priceAfter24H,
             forwardHigh24H: forwardHigh24H,
             forwardLow24H: forwardLow24H
         )
+    }
+
+    // MARK: - Macro Breakdown
+
+    private func computeMacroBreakdown(params: ScoringParams, snapshots: [String: [ScoringSnapshot]]) -> [MacroBreakdown] {
+        let allSnaps = snapshots.values.flatMap { $0 }
+
+        let buckets: [(String, String, (Double) -> Bool)] = [
+            ("Low Vol",  "< 15",  { $0 < 15 }),
+            ("Normal",   "15-25", { $0 >= 15 && $0 < 25 }),
+            ("Elevated", "25-35", { $0 >= 25 && $0 < 35 }),
+            ("Crisis",   "> 35",  { $0 >= 35 }),
+        ]
+
+        return buckets.map { (regime, range, filter) in
+            let filtered = allSnaps.filter { snap in
+                guard let vix = snap.vix else { return false }
+                return filter(vix)
+            }
+
+            var directional = 0, oppHits = 0, correct = 0
+
+            for snap in filtered {
+                let (_, bias) = ScoringFunction.score(snapshot: snap, params: params)
+                let isBull = bias.contains("Bullish")
+                let isBear = bias.contains("Bearish")
+                guard isBull || isBear else { continue }
+                directional += 1
+
+                if let high = snap.forwardHigh24H, let low = snap.forwardLow24H {
+                    let fav = isBear
+                        ? (snap.price - low) / snap.price * 100
+                        : (high - snap.price) / snap.price * 100
+                    if fav > 1.0 { oppHits += 1 }
+                }
+
+                if let future = snap.priceAfter24H {
+                    if isBear && future < snap.price { correct += 1 }
+                    if isBull && future > snap.price { correct += 1 }
+                }
+            }
+
+            return MacroBreakdown(
+                regime: regime, vixRange: range,
+                oppRate: directional > 0 ? Double(oppHits) / Double(directional) * 100 : 0,
+                accuracy: directional > 0 ? Double(correct) / Double(directional) * 100 : 0,
+                barCount: directional
+            )
+        }
     }
 
     // MARK: - Evaluation

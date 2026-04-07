@@ -52,6 +52,11 @@ struct ScoringSnapshot: Codable {
     let obvRising: Bool
     let adLineAccumulation: Bool
 
+    // Macro context (matched by date from daily VIX/DXY candles)
+    let vix: Double?
+    let dxyPrice: Double?
+    let dxyAboveEma20: Bool?
+
     // Forward prices for evaluation
     let priceAfter4H: Double?
     let priceAfter24H: Double?
