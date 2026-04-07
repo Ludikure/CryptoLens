@@ -44,18 +44,10 @@ class BacktestEngine: ObservableObject {
                 statusMessage = "Fetching daily candles (Yahoo)..."
                 dailyCandles = try await yahoo.fetchHistoricalCandles(
                     symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
-                // Try Tiingo first, fall back to Alpha Vantage
-                statusMessage = "Fetching 1H candles (Tiingo)..."
-                var hourly: [Candle]
-                if let tiingoData = try? await tiingo.fetchHistoricalCandles(
-                    symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate),
-                   tiingoData.count >= 100 {
-                    hourly = tiingoData
-                } else {
-                    statusMessage = "Tiingo failed, trying Alpha Vantage..."
-                    hourly = try await alphaVantage.fetchHistoricalCandles(
-                        symbol: symbol, startDate: fetchStart, endDate: endDate)
-                }
+                // Yahoo provides 2 years of 1H data
+                statusMessage = "Fetching 1H candles (Yahoo)..."
+                let hourly = try await yahoo.fetchHistoricalCandles(
+                    symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
                 fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
                 oneHCandles = hourly
                 statusMessage = "1H: \(hourly.count) → 4H: \(fourHCandles.count)"
