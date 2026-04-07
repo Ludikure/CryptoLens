@@ -249,8 +249,8 @@ enum IndicatorEngine {
         let strongThreshold: Int
         let directionalThreshold: Int
         if isDaily {
-            strongThreshold = max(7, Int(round(9.0 * volScalar)))
-            directionalThreshold = max(5, Int(round(6.0 * volScalar)))
+            strongThreshold = max(6, Int(round(8.0 * volScalar)))
+            directionalThreshold = max(4, Int(round(5.0 * volScalar)))
         } else if is4H {
             strongThreshold = max(5, Int(round(7.0 * volScalar)))
             directionalThreshold = max(3, Int(round(4.0 * volScalar)))
