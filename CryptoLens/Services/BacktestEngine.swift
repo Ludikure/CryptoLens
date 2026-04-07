@@ -9,6 +9,7 @@ class BacktestEngine: ObservableObject {
     @Published var dataPoints: [BacktestDataPoint] = []
 
     private let binance = BinanceService()
+    private let yahoo = YahooFinanceService()
 
     func run(symbol: String, startDate: Date, endDate: Date) async {
         isRunning = true
@@ -16,21 +17,39 @@ class BacktestEngine: ObservableObject {
         statusMessage = "Fetching historical data..."
         dataPoints = []
 
+        let isCrypto = symbol.hasSuffix("USDT") || symbol.hasSuffix("BTC") || symbol.hasSuffix("BUSD")
+        let market: Market = isCrypto ? .crypto : .stock
+
         do {
             let warmupDays: TimeInterval = 220 * 86400
             let fetchStart = startDate.addingTimeInterval(-warmupDays)
 
-            statusMessage = "Fetching daily candles..."
-            let dailyCandles = try await binance.fetchHistoricalCandles(
-                symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
+            let dailyCandles: [Candle]
+            let fourHCandles: [Candle]
+            let oneHCandles: [Candle]
 
-            statusMessage = "Fetching 4H candles..."
-            let fourHCandles = try await binance.fetchHistoricalCandles(
-                symbol: symbol, interval: "4h", startDate: fetchStart, endDate: endDate)
-
-            statusMessage = "Fetching 1H candles..."
-            let oneHCandles = try await binance.fetchHistoricalCandles(
-                symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
+            if isCrypto {
+                statusMessage = "Fetching daily candles (Binance)..."
+                dailyCandles = try await binance.fetchHistoricalCandles(
+                    symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
+                statusMessage = "Fetching 4H candles..."
+                fourHCandles = try await binance.fetchHistoricalCandles(
+                    symbol: symbol, interval: "4h", startDate: fetchStart, endDate: endDate)
+                statusMessage = "Fetching 1H candles..."
+                oneHCandles = try await binance.fetchHistoricalCandles(
+                    symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
+            } else {
+                statusMessage = "Fetching daily candles (Yahoo)..."
+                dailyCandles = try await yahoo.fetchHistoricalCandles(
+                    symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
+                statusMessage = "Fetching 1H candles (Yahoo)..."
+                let hourly = try await yahoo.fetchHistoricalCandles(
+                    symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
+                // 4H aggregated from 1H (Yahoo doesn't have a 4H interval)
+                fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
+                oneHCandles = hourly
+                statusMessage = "4H aggregated: \(fourHCandles.count) from \(hourly.count) 1H"
+            }
 
             guard dailyCandles.count >= 250, fourHCandles.count >= 250 else {
                 statusMessage = "Insufficient data: D=\(dailyCandles.count), 4H=\(fourHCandles.count)"
@@ -65,11 +84,11 @@ class BacktestEngine: ObservableObject {
                 guard dailySlice.count >= 210, fourHSlice.count >= 210, oneHSlice.count >= 30 else { continue }
 
                 let dailyResult = IndicatorEngine.computeAll(
-                    candles: Array(dailySlice.suffix(300)), timeframe: "1d", label: "Daily (Trend)", market: .crypto)
+                    candles: Array(dailySlice.suffix(300)), timeframe: "1d", label: "Daily (Trend)", market: market)
                 let fourHResult = IndicatorEngine.computeAll(
-                    candles: Array(fourHSlice.suffix(300)), timeframe: "4h", label: "4H (Bias)", market: .crypto)
+                    candles: Array(fourHSlice.suffix(300)), timeframe: "4h", label: "4H (Bias)", market: market)
                 let oneHResult = IndicatorEngine.computeAll(
-                    candles: Array(oneHSlice.suffix(300)), timeframe: "1h", label: "1H (Entry)", market: .crypto)
+                    candles: Array(oneHSlice.suffix(300)), timeframe: "1h", label: "1H (Entry)", market: market)
 
                 let dBearish = dailyResult.bias.contains("Bearish")
                 let dBullish = dailyResult.bias.contains("Bullish")

@@ -13,6 +13,8 @@ struct BacktestView: View {
                 DatePicker("End", selection: $endDate, displayedComponents: .date)
                 TextField("Symbol", text: $symbol)
                     .textInputAutocapitalization(.characters)
+                Text(symbol.hasSuffix("USDT") || symbol.hasSuffix("BTC") ? "Crypto (Binance)" : "Stock (Yahoo)")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section {

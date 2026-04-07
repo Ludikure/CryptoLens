@@ -452,6 +452,30 @@ actor YahooFinanceService {
         } catch { return nil }
     }
 
+    /// Fetch historical candles with date range using period1/period2 timestamps.
+    func fetchHistoricalCandles(symbol: String, interval: String,
+                                 startDate: Date, endDate: Date) async throws -> [Candle] {
+        await throttle()
+        guard var components = URLComponents(string: "\(Constants.yahooBaseURL)/v8/finance/chart/\(symbol)") else {
+            throw YahooError.networkError("Invalid URL")
+        }
+        components.queryItems = [
+            URLQueryItem(name: "interval", value: interval),
+            URLQueryItem(name: "period1", value: String(Int(startDate.timeIntervalSince1970))),
+            URLQueryItem(name: "period2", value: String(Int(endDate.timeIntervalSince1970))),
+        ]
+        guard let url = components.url else { throw YahooError.networkError("Invalid URL") }
+
+        let (data, response) = try await session.data(from: url)
+        if let http = response as? HTTPURLResponse {
+            if http.statusCode == 404 { throw YahooError.invalidSymbol }
+            guard (200...299).contains(http.statusCode) else {
+                throw YahooError.networkError("HTTP \(http.statusCode)")
+            }
+        }
+        return try parseChartResponse(data)
+    }
+
     // MARK: - Private
 
     private func defaultRange(for interval: String) -> String {
