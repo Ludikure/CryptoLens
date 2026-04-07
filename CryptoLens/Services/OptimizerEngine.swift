@@ -259,53 +259,52 @@ class OptimizerEngine: ObservableObject {
                 symbol: symbol, interval: "4h", startDate: fetchStart, endDate: endDate,
                 fetcher: { s, i, sd, ed in try await self.binance.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
         } else {
+            // Stocks: use daily candles only (Yahoo 1H limited to ~60 days, insufficient for historical optimizer)
             dailyCandles = try await CandleCache.loadOrFetch(
                 symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate,
                 fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
-            let hourly = try await CandleCache.loadOrFetch(
-                symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate,
-                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
-            fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
+            fourHCandles = []  // Not available historically for stocks
         }
 
-        // Stocks: Yahoo 1H limited to ~60 days, so 4H candles will be fewer
-        let minFourH = isCrypto ? 250 : 50
-        guard dailyCandles.count >= 250, fourHCandles.count >= minFourH else {
+        guard dailyCandles.count >= 250 else {
             #if DEBUG
-            print("[Optimizer] \(symbol): insufficient data D=\(dailyCandles.count) 4H=\(fourHCandles.count)")
+            print("[Optimizer] \(symbol): insufficient daily data D=\(dailyCandles.count)")
             #endif
             return []
         }
 
-        // Walk-forward: evaluate at each 4H bar (use Daily-only for stocks if 4H insufficient)
-        let evalStartIndex = fourHCandles.firstIndex { $0.time >= startDate } ?? min(200, max(0, fourHCandles.count - 50))
+        // Walk-forward: crypto uses 4H bars, stocks use daily bars
+        let evalCandles = isCrypto ? fourHCandles : dailyCandles
+        guard evalCandles.count >= (isCrypto ? 250 : 250) else { return [] }
+        let evalStartIndex = evalCandles.firstIndex { $0.time >= startDate } ?? min(200, max(0, evalCandles.count - 50))
         var snapshots = [ScoringSnapshot]()
         var dailyIdx = 0
 
-        for i in evalStartIndex..<(fourHCandles.count - 6) {
-            let evalTime = fourHCandles[i].time
+        // For stocks: forward window is 6 daily bars (6 trading days ≈ 1 week)
+        // For crypto: forward window is 6 4H bars (24 hours)
+        let forwardBars = 6
+
+        for i in evalStartIndex..<(evalCandles.count - forwardBars) {
+            let evalTime = evalCandles[i].time
 
             while dailyIdx < dailyCandles.count && dailyCandles[dailyIdx].time <= evalTime { dailyIdx += 1 }
             let dailySlice = Array(dailyCandles[..<dailyIdx])
-            let fourHSlice = Array(fourHCandles[...i])
 
-            guard dailySlice.count >= 210, fourHSlice.count >= (isCrypto ? 210 : 20) else { continue }
+            guard dailySlice.count >= 210 else { continue }
 
-            // Compute indicators for daily
             let dailyResult = IndicatorEngine.computeAll(
                 candles: Array(dailySlice.suffix(300)), timeframe: "1d", label: "Daily (Trend)", market: market)
 
-            // Forward prices
-            let price = fourHCandles[i].close
-            let forward6 = Array(fourHCandles[(i+1)...min(i+6, fourHCandles.count - 1)])
+            let price = evalCandles[i].close
+            let forward6 = Array(evalCandles[(i+1)...min(i+forwardBars, evalCandles.count - 1)])
             let maxHigh = forward6.map(\.high).max()
             let maxLow = forward6.map(\.low).min()
-            let priceAfter4H: Double? = (i + 1 < fourHCandles.count) ? fourHCandles[i + 1].close : nil
-            let priceAfter24H: Double? = (i + 6 < fourHCandles.count) ? fourHCandles[i + 6].close : nil
+            let priceAfter1 = (i + 1 < evalCandles.count) ? evalCandles[i + 1].close : nil
+            let priceAfterN = (i + forwardBars < evalCandles.count) ? evalCandles[i + forwardBars].close : nil
 
             let snapshot = extractSnapshot(from: dailyResult, candles: Array(dailySlice.suffix(300)),
                                             price: price, time: evalTime, isCrypto: isCrypto,
-                                            priceAfter4H: priceAfter4H, priceAfter24H: priceAfter24H,
+                                            priceAfter4H: priceAfter1, priceAfter24H: priceAfterN,
                                             forwardHigh24H: maxHigh, forwardLow24H: maxLow)
             snapshots.append(snapshot)
         }
