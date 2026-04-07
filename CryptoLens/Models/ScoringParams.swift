@@ -65,21 +65,23 @@ struct ScoringParams: Codable, Identifiable, Equatable {
         "pp\(pricePositionWeight)_es\(emaSlopeWeight)_st\(structureWeight)_sc\(stackConfirmWeight)_adx\(adxStrongWeight)\(adxModWeight)\(adxWeakWeight)_r\(rsiWeight)_m\(macdMaxWeight)_v\(vwapWeight)_sk\(stochWeight)_dv\(divergenceWeight)_ca\(crossAssetWeight)_dt\(dailyDirectionalThreshold)s\(dailyStrongThreshold)_4t\(fourHDirectionalThreshold)s\(fourHStrongThreshold)"
     }
 
-    // MARK: - Persistence
+    // MARK: - Persistence (market-specific keys)
 
-    private static let userDefaultsKey = "optimizer_scoring_params"
+    private static func key(for market: Market) -> String {
+        "optimizer_scoring_params_\(market == .crypto ? "crypto" : "stock")"
+    }
 
-    static func loadSaved() -> ScoringParams? {
-        guard let data = UserDefaults.standard.data(forKey: userDefaultsKey) else { return nil }
+    static func loadSaved(for market: Market) -> ScoringParams? {
+        guard let data = UserDefaults.standard.data(forKey: key(for: market)) else { return nil }
         return try? JSONDecoder().decode(ScoringParams.self, from: data)
     }
 
-    func save() {
+    func save(for market: Market) {
         guard let data = try? JSONEncoder().encode(self) else { return }
-        UserDefaults.standard.set(data, forKey: Self.userDefaultsKey)
+        UserDefaults.standard.set(data, forKey: Self.key(for: market))
     }
 
-    static func clearSaved() {
-        UserDefaults.standard.removeObject(forKey: userDefaultsKey)
+    static func clearSaved(for market: Market) {
+        UserDefaults.standard.removeObject(forKey: key(for: market))
     }
 }

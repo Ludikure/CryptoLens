@@ -158,9 +158,9 @@ class OptimizerEngine: ObservableObject {
         isRunning = false
     }
 
-    func applyBest() {
-        bestResult?.params.save()
-        statusMessage = "Applied: \(bestResult?.params.label ?? "none")"
+    func applyBest(for market: Market) {
+        bestResult?.params.save(for: market)
+        statusMessage = "Applied to \(market == .crypto ? "crypto" : "stock"): \(bestResult?.params.label ?? "none")"
     }
 
     // MARK: - Combo Generators
@@ -446,7 +446,7 @@ class OptimizerEngine: ObservableObject {
             worstValidOpp: worstValid,
             avgTrainOpp: avgTrain,
             avgValidOpp: avgValid,
-            gap: avgTrain - avgValid
+            gap: abs(avgTrain - avgValid)
         )
     }
 }

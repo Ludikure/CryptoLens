@@ -105,8 +105,8 @@ struct OptimizerView: View {
                 }
 
                 Section {
-                    Button("Apply Winner") {
-                        engine.applyBest()
+                    Button("Apply Winner to \(market == .crypto ? "Crypto" : "Stock")") {
+                        engine.applyBest(for: market)
                     }
                     .foregroundStyle(.green)
                 }
