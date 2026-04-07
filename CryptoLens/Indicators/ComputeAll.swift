@@ -89,10 +89,6 @@ enum IndicatorEngine {
         } else {
             emaRegime = .mixed
         }
-        let priceAboveAll = ema20 != nil && ema50 != nil && ema200 != nil
-            && current > ema20! && current > ema50! && current > ema200!
-        let priceBelowAll = ema20 != nil && ema50 != nil && ema200 != nil
-            && current < ema20! && current < ema50! && current < ema200!
 
         // ── Volatility Scalar ──
         // Scales label thresholds: low vol → easier triggers, high vol → more conviction needed.
