@@ -52,8 +52,11 @@ class OptimizerEngine: ObservableObject {
                 statusMessage = "Building snapshots for \(symbol) (\(idx + 1)/\(symbols.count))..."
                 let snapshots = try await buildSnapshotsForSymbol(
                     symbol: symbol, market: market, startDate: startDate, endDate: endDate)
-                if snapshots.count >= 50 {
+                let minSnaps = market == .crypto ? 50 : 20
+                if snapshots.count >= minSnaps {
                     allSnapshots[symbol] = snapshots
+                } else {
+                    statusMessage = "\(symbol): only \(snapshots.count) bars, skipping"
                 }
                 progress = Double(idx + 1) / Double(symbols.count) * 0.3
                 await Task.yield()
@@ -265,12 +268,17 @@ class OptimizerEngine: ObservableObject {
             fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
         }
 
-        guard dailyCandles.count >= 250, fourHCandles.count >= 250 else {
+        // Stocks: Yahoo 1H limited to ~60 days, so 4H candles will be fewer
+        let minFourH = isCrypto ? 250 : 50
+        guard dailyCandles.count >= 250, fourHCandles.count >= minFourH else {
+            #if DEBUG
+            print("[Optimizer] \(symbol): insufficient data D=\(dailyCandles.count) 4H=\(fourHCandles.count)")
+            #endif
             return []
         }
 
-        // Walk-forward: evaluate at each 4H bar
-        let evalStartIndex = fourHCandles.firstIndex { $0.time >= startDate } ?? 200
+        // Walk-forward: evaluate at each 4H bar (use Daily-only for stocks if 4H insufficient)
+        let evalStartIndex = fourHCandles.firstIndex { $0.time >= startDate } ?? min(200, max(0, fourHCandles.count - 50))
         var snapshots = [ScoringSnapshot]()
         var dailyIdx = 0
 
@@ -281,7 +289,7 @@ class OptimizerEngine: ObservableObject {
             let dailySlice = Array(dailyCandles[..<dailyIdx])
             let fourHSlice = Array(fourHCandles[...i])
 
-            guard dailySlice.count >= 210, fourHSlice.count >= 210 else { continue }
+            guard dailySlice.count >= 210, fourHSlice.count >= (isCrypto ? 210 : 20) else { continue }
 
             // Compute indicators for daily
             let dailyResult = IndicatorEngine.computeAll(
