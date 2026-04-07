@@ -202,7 +202,8 @@ class BacktestEngine: ObservableObject {
             correctFlats: flatMoves.filter { $0 < 0.5 }.count,
             falseFlats: flatMoves.filter { $0 > 1.5 }.count,
             flatAccuracy: flatMoves.isEmpty ? 0 : Double(flatMoves.filter { $0 < 0.5 }.count) / Double(flatMoves.count) * 100,
-            thresholdSweep: runThresholdSweep(points: points)
+            thresholdSweep: runThresholdSweep(points: points),
+            scoreDistribution: computeScoreDistribution(points: points)
         )
     }
 
@@ -233,6 +234,46 @@ class BacktestEngine: ObservableObject {
             }
         }
         return results.sorted { $0.accuracy24H > $1.accuracy24H }
+    }
+
+    private func computeScoreDistribution(points: [BacktestDataPoint]) -> [ScoreBucket] {
+        // Group by Daily score
+        var groups = [Int: [BacktestDataPoint]]()
+        for pt in points {
+            groups[pt.dailyScore, default: []].append(pt)
+        }
+
+        return groups.map { score, pts in
+            let directional = pts.filter { pt in
+                // For this score, determine direction
+                if score > 0 { return true }   // positive = would be bullish
+                if score < 0 { return true }   // negative = would be bearish
+                return false                   // 0 = neutral
+            }
+
+            let correct = directional.filter { pt in
+                guard let future = pt.priceAfter6x4H else { return false }
+                if score > 0 { return future > pt.price }  // bullish score, price went up
+                if score < 0 { return future < pt.price }  // bearish score, price went down
+                return false
+            }.count
+
+            let avgMove = pts.compactMap { pt -> Double? in
+                guard let future = pt.priceAfter6x4H else { return nil }
+                let move = (future - pt.price) / pt.price * 100
+                // Return signed move relative to score direction
+                return score < 0 ? -move : move  // positive = moved in expected direction
+            }
+            let avg = avgMove.isEmpty ? 0 : avgMove.reduce(0, +) / Double(avgMove.count)
+
+            return ScoreBucket(
+                score: score,
+                count: pts.count,
+                correct24H: correct,
+                accuracy: directional.isEmpty ? 0 : Double(correct) / Double(directional.count) * 100,
+                avgMove: avg
+            )
+        }.sorted { $0.score < $1.score }
     }
 
     private func staticLabel(score: Int, dirThreshold: Int, strongThreshold: Int) -> String {

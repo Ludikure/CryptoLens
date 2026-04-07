@@ -60,6 +60,17 @@ struct BacktestSummary: Codable {
     let falseFlats: Int
     let flatAccuracy: Double
     let thresholdSweep: [ThresholdResult]
+    let scoreDistribution: [ScoreBucket]
+}
+
+/// Accuracy at each Daily score level.
+struct ScoreBucket: Codable, Identifiable {
+    var id: Int { score }
+    let score: Int             // e.g. -8, -7, ... 0, ... +7, +8
+    let count: Int             // how many bars had this score
+    let correct24H: Int        // how many were directionally correct at 24H
+    let accuracy: Double       // correct / count * 100
+    let avgMove: Double        // average % price move in 24H for this score
 }
 
 struct ThresholdResult: Codable, Identifiable {

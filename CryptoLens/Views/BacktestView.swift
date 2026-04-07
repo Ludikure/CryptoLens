@@ -61,6 +61,29 @@ struct BacktestView: View {
                     row("FLAT accuracy", pct(r.flatAccuracy))
                 }
 
+                Section("Score Distribution (Daily)") {
+                    ForEach(r.scoreDistribution) { bucket in
+                        HStack {
+                            Text("\(bucket.score >= 0 ? "+" : "")\(bucket.score)")
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundStyle(bucket.score > 0 ? .green : bucket.score < 0 ? .red : .secondary)
+                                .frame(width: 36, alignment: .trailing)
+                            Text("\(bucket.count) bars")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 60)
+                            Spacer()
+                            Text(pct(bucket.accuracy))
+                                .fontWeight(.semibold)
+                                .foregroundStyle(bucket.accuracy >= 60 ? .green : bucket.accuracy <= 40 ? .red : .primary)
+                            Text(String(format: "%+.2f%%", bucket.avgMove))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 60, alignment: .trailing)
+                        }
+                    }
+                }
+
                 Section("Optimal Thresholds (Top 5)") {
                     ForEach(Array(r.thresholdSweep.prefix(5))) { t in
                         HStack {
@@ -79,7 +102,14 @@ struct BacktestView: View {
         .navigationTitle("Backtest")
         .toolbar {
             if let r = engine.result {
-                ShareLink(item: shareText(r), preview: SharePreview("Backtest Results — \(r.symbol)"))
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        UIPasteboard.general.string = shareText(r)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    ShareLink(item: shareText(r), preview: SharePreview("Backtest Results — \(r.symbol)"))
+                }
             }
         }
     }
@@ -106,6 +136,9 @@ struct BacktestView: View {
 
         FLAT Analysis:
         • Total: \(r.totalFlats) | Correct: \(r.correctFlats) | False: \(r.falseFlats) | Accuracy: \(pct(r.flatAccuracy))
+
+        Score Distribution (Daily):
+        \(r.scoreDistribution.map { "\($0.score >= 0 ? "+" : "")\($0.score): \($0.count) bars, \(pct($0.accuracy)) acc, \(String(format: "%+.2f%%", $0.avgMove)) avg move" }.joined(separator: "\n"))
 
         Top Threshold: Dir \(r.thresholdSweep.first?.directionalThreshold ?? 0) / Strong \(r.thresholdSweep.first?.strongThreshold ?? 0) → \(pct(r.thresholdSweep.first?.accuracy24H ?? 0))
         """

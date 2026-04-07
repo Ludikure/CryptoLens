@@ -45,7 +45,14 @@ struct OutcomeDashboardView: View {
         .refreshable { stats = OutcomeTracker.stats() }
         .toolbar {
             if let s = stats {
-                ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        UIPasteboard.general.string = shareText(s)
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                    }
+                    ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
+                }
             }
         }
     }
