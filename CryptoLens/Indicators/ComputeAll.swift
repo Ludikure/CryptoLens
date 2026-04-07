@@ -248,12 +248,24 @@ enum IndicatorEngine {
         // Adaptive thresholds: scaled by volatility (harder in high vol, easier in low vol)
         let strongThreshold: Int
         let directionalThreshold: Int
+        // Market-specific thresholds: stocks have narrower score range than crypto
+        // (no derivatives, cross-asset, spot pressure layers)
         if isDaily {
-            strongThreshold = max(6, Int(round(8.0 * volScalar)))
-            directionalThreshold = max(4, Int(round(5.0 * volScalar)))
+            if market == .crypto {
+                strongThreshold = max(6, Int(round(8.0 * volScalar)))
+                directionalThreshold = max(4, Int(round(5.0 * volScalar)))
+            } else {
+                strongThreshold = max(4, Int(round(6.0 * volScalar)))
+                directionalThreshold = max(2, Int(round(3.0 * volScalar)))
+            }
         } else if is4H {
-            strongThreshold = max(5, Int(round(7.0 * volScalar)))
-            directionalThreshold = max(3, Int(round(4.0 * volScalar)))
+            if market == .crypto {
+                strongThreshold = max(5, Int(round(7.0 * volScalar)))
+                directionalThreshold = max(3, Int(round(4.0 * volScalar)))
+            } else {
+                strongThreshold = max(3, Int(round(5.0 * volScalar)))
+                directionalThreshold = max(2, Int(round(3.0 * volScalar)))
+            }
         } else {
             strongThreshold = max(3, Int(round(5.0 * volScalar)))
             directionalThreshold = max(1, Int(round(2.0 * volScalar)))
