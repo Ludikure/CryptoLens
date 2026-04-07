@@ -157,8 +157,6 @@ class BacktestEngine: ObservableObject {
 
         let bearish = directional.filter { $0.biasAlignment.contains("bearish") }
         let bullish = directional.filter { $0.biasAlignment.contains("bullish") }
-        let bearishCorrect = bearish.filter { $0.directionCorrect24H == true }.count
-        let bullishCorrect = bullish.filter { $0.directionCorrect24H == true }.count
 
         let strong = directional.filter { abs($0.dailyScore) >= 7 || abs($0.fourHScore) >= 6 }
         let moderate = directional.filter { abs($0.dailyScore) >= 4 && abs($0.dailyScore) < 7 }
