@@ -155,6 +155,45 @@ struct OptimizerView: View {
             }
         }
         .navigationTitle("Optimizer")
+        .toolbar {
+            if engine.bestResult != nil {
+                Button {
+                    UIPasteboard.general.string = shareText()
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    private func shareText() -> String {
+        guard let best = engine.bestResult else { return "" }
+        let f = { (v: Double) in String(format: "%.1f%%", v) }
+        var text = """
+        MarketScope Optimizer — \(market == .crypto ? "Crypto" : "Stocks")
+        Assets: \(symbols.joined(separator: ", "))
+        \(startDate.formatted(date: .abbreviated, time: .omitted)) → \(endDate.formatted(date: .abbreviated, time: .omitted))
+
+        Winner: \(best.params.label)
+        Train Opp: \(f(best.avgTrainOpp)) | Valid Opp: \(f(best.avgValidOpp))
+        Worst Train: \(f(best.worstTrainOpp)) | Worst Valid: \(f(best.worstValidOpp))
+        Gap: \(f(best.gap))
+
+        Parameters:
+        PP=\(best.params.pricePositionWeight) ES=\(best.params.emaSlopeWeight) ST=\(best.params.structureWeight) SC=\(best.params.stackConfirmWeight)
+        ADX=\(best.params.adxWeakWeight)/\(best.params.adxModWeight)/\(best.params.adxStrongWeight) RSI=\(best.params.rsiWeight) MACD=\(best.params.macdMaxWeight)
+        Daily: Dir \(best.params.dailyDirectionalThreshold) / Strong \(best.params.dailyStrongThreshold)
+        4H: Dir \(best.params.fourHDirectionalThreshold) / Strong \(best.params.fourHStrongThreshold)
+        """
+
+        let allMetrics = best.trainMetrics + best.validMetrics
+        if !allMetrics.isEmpty {
+            text += "\n\nPer-Asset:"
+            for m in best.validMetrics {
+                text += "\n\(m.symbol): Opp \(f(m.opportunityRate)) | Acc \(f(m.accuracy24H)) | \(m.directionalBars)/\(m.totalBars) bars"
+            }
+        }
+        return text
     }
 
     // MARK: - Subviews
