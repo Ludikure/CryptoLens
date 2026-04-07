@@ -89,7 +89,7 @@ class AlphaVantageProvider {
             }
 
             // Rate limit: Alpha Vantage free = 25 req/day, 5 req/min
-            try? await Task.sleep(nanoseconds: 15_000_000_000)  // 15s between months
+            try? await Task.sleep(nanoseconds: 13_000_000_000)  // 13s between months (4.6 req/min)
         }
 
         allCandles.sort { $0.time < $1.time }
