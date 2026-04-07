@@ -44,12 +44,23 @@ class BacktestEngine: ObservableObject {
             let totalBars = fourHCandles.count - evalStartIndex - 6
             var points = [BacktestDataPoint]()
 
+            #if DEBUG
+            print("[Backtest] Data: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
+            #endif
+
+            // Precompute index boundaries — O(n) total instead of O(n×m) filter per iteration
+            var dailyIdx = 0, oneHIdx = 0
+
             for i in evalStartIndex..<(fourHCandles.count - 6) {
                 let evalTime = fourHCandles[i].time
 
-                let dailySlice = dailyCandles.filter { $0.time <= evalTime }
-                let fourHSlice = fourHCandles.filter { $0.time <= evalTime }
-                let oneHSlice = oneHCandles.filter { $0.time <= evalTime }
+                // Advance indices to current eval time (monotonically increasing)
+                while dailyIdx < dailyCandles.count && dailyCandles[dailyIdx].time <= evalTime { dailyIdx += 1 }
+                while oneHIdx < oneHCandles.count && oneHCandles[oneHIdx].time <= evalTime { oneHIdx += 1 }
+
+                let dailySlice = Array(dailyCandles[..<dailyIdx])
+                let fourHSlice = Array(fourHCandles[...i])
+                let oneHSlice = Array(oneHCandles[..<oneHIdx])
 
                 guard dailySlice.count >= 210, fourHSlice.count >= 210, oneHSlice.count >= 30 else { continue }
 
