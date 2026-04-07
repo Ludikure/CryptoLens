@@ -129,6 +129,9 @@ struct SettingsView: View {
                     NavigationLink("Backtest") {
                         BacktestView()
                     }
+                    NavigationLink("Optimizer") {
+                        OptimizerView()
+                    }
                 }
 
                 // About
