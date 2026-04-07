@@ -78,13 +78,18 @@ enum IndicatorEngine {
             addv = ADDV.compute(closes: closes, volumes: volumes)
         }
 
-        // ── EMA Regime Classification ──
-        // Determines trend structure BEFORE scoring. Used by RSI, MACD, momentum override, and final gate.
+        // ── EMA Regime Classification (price-position based, not stack-based) ──
+        // Where PRICE is relative to EMAs determines the regime — responds immediately
+        // to trend changes instead of waiting months for stack alignment.
         enum EMARegime { case bullish, bearish, mixed }
         let emaRegime: EMARegime
+        var emaCrossCount = 0
         if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
-            if e20 > e50 && e50 > e200 { emaRegime = .bullish }
-            else if e20 < e50 && e50 < e200 { emaRegime = .bearish }
+            if current > e20 { emaCrossCount += 1 }
+            if current > e50 { emaCrossCount += 1 }
+            if current > e200 { emaCrossCount += 1 }
+            if emaCrossCount == 3 { emaRegime = .bullish }
+            else if emaCrossCount == 0 { emaRegime = .bearish }
             else { emaRegime = .mixed }
         } else {
             emaRegime = .mixed
@@ -119,19 +124,37 @@ enum IndicatorEngine {
         var score = 0
         let isDaily = label.contains("Daily") || label.contains("1D")
         let is4H = label.contains("4H")
-        // ── Layer 1: Structure (EMA stack + price position) ──
-        if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
-            if e20 > e50 && e50 > e200 { score += 2 }
-            else if e20 < e50 && e50 < e200 { score -= 2 }
-            else if e20 > e50 { score += 1 }
-            else if e20 < e50 { score -= 1 }
-            if current > e200 { score += 1 } else { score -= 1 }
+        // ── Layer 1: Trend (leading + confirming signals) ──
+
+        // 1a: Price position — how many EMAs is price above? (LEADING, ±2)
+        if let _ = ema20, let _ = ema50, let _ = ema200 {
+            switch emaCrossCount {
+            case 3: score += 2     // Above all — clearly bullish
+            case 2: score += 1     // Above most — transitioning bullish
+            case 1: score -= 1     // Below most — transitioning bearish
+            case 0: score -= 2     // Below all — clearly bearish
+            default: break
+            }
         }
 
-        // ── Layer 1b: Market Structure (HH/HL vs LL/LH) ──
+        // 1b: EMA20 slope — is short-term trend rising or falling? (LEADING, ±1)
+        if ema20List.count >= 6 {
+            let ema20Now = ema20List[ema20List.count - 1]
+            let ema20Prior = ema20List[ema20List.count - 6]
+            if ema20Now > ema20Prior { score += 1 }
+            else if ema20Now < ema20Prior { score -= 1 }
+        }
+
+        // 1c: Market structure — HH/HL vs LL/LH (LEADING, ±2)
         if let ms = marketStructure {
             if ms.label.contains("bullish") { score += 2 }
             else if ms.label.contains("bearish") { score -= 2 }
+        }
+
+        // 1d: EMA stack confirmation (LAGGING, reduced to ±1)
+        if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
+            if e20 > e50 && e50 > e200 { score += 1 }
+            else if e20 < e50 && e50 < e200 { score -= 1 }
         }
 
         // ── Layer 2: Trend Strength (ADX magnitude + direction) ──
@@ -248,8 +271,8 @@ enum IndicatorEngine {
         // Adaptive thresholds: scaled by volatility (harder in high vol, easier in low vol)
         let strongThreshold: Int
         let directionalThreshold: Int
-        // Market-specific thresholds: stocks have narrower score range than crypto
-        // (no derivatives, cross-asset, spot pressure layers)
+        // Market-specific Daily thresholds (stocks have narrower score range)
+        // 4H and 1H unified across markets
         if isDaily {
             if market == .crypto {
                 strongThreshold = max(6, Int(round(8.0 * volScalar)))
@@ -259,13 +282,8 @@ enum IndicatorEngine {
                 directionalThreshold = max(2, Int(round(3.0 * volScalar)))
             }
         } else if is4H {
-            if market == .crypto {
-                strongThreshold = max(5, Int(round(7.0 * volScalar)))
-                directionalThreshold = max(3, Int(round(4.0 * volScalar)))
-            } else {
-                strongThreshold = max(3, Int(round(5.0 * volScalar)))
-                directionalThreshold = max(2, Int(round(3.0 * volScalar)))
-            }
+            strongThreshold = max(4, Int(round(6.0 * volScalar)))
+            directionalThreshold = max(3, Int(round(4.0 * volScalar)))
         } else {
             strongThreshold = max(3, Int(round(5.0 * volScalar)))
             directionalThreshold = max(1, Int(round(2.0 * volScalar)))
