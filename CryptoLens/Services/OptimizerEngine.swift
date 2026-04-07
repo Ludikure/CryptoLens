@@ -281,10 +281,10 @@ class OptimizerEngine: ObservableObject {
             dailyCandles = try await CandleCache.loadOrFetch(
                 symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate,
                 fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
-            // Yahoo provides 2 years of 1H data via period1/period2
-            let hourly = try await CandleCache.loadOrFetch(
-                symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate,
-                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
+            // Stitch Yahoo (2yr) + Alpha Vantage (older) for maximum 1H history
+            let hourly = try await CandleCache.loadOrFetchStitched(
+                symbol: symbol, startDate: fetchStart, endDate: endDate,
+                yahoo: yahoo, alphaVantage: alphaVantage)
             fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
             #if DEBUG
             print("[Optimizer] \(symbol): Tiingo 1H=\(hourly.count) → 4H=\(fourHCandles.count)")

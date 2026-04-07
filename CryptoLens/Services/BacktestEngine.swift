@@ -44,10 +44,11 @@ class BacktestEngine: ObservableObject {
                 statusMessage = "Fetching daily candles (Yahoo)..."
                 dailyCandles = try await yahoo.fetchHistoricalCandles(
                     symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
-                // Yahoo provides 2 years of 1H data
-                statusMessage = "Fetching 1H candles (Yahoo)..."
-                let hourly = try await yahoo.fetchHistoricalCandles(
-                    symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
+                // Stitch Yahoo (2yr) + Alpha Vantage (older) for max history
+                statusMessage = "Fetching 1H candles (stitched)..."
+                let hourly = try await CandleCache.loadOrFetchStitched(
+                    symbol: symbol, startDate: fetchStart, endDate: endDate,
+                    yahoo: yahoo, alphaVantage: alphaVantage)
                 fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
                 oneHCandles = hourly
                 statusMessage = "1H: \(hourly.count) → 4H: \(fourHCandles.count)"
