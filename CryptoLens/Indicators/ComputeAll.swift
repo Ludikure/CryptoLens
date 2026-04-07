@@ -283,7 +283,7 @@ enum IndicatorEngine {
             }
         } else if is4H {
             strongThreshold = max(4, Int(round(6.0 * volScalar)))
-            directionalThreshold = max(3, Int(round(4.0 * volScalar)))
+            directionalThreshold = max(2, Int(round(3.0 * volScalar)))
         } else {
             strongThreshold = max(3, Int(round(5.0 * volScalar)))
             directionalThreshold = max(1, Int(round(2.0 * volScalar)))
