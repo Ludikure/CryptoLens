@@ -46,6 +46,7 @@ class OptimizerEngine: ObservableObject {
     private let binance = BinanceService()
     private let yahoo = YahooFinanceService()
     private let tiingo = TiingoProvider()
+    private let alphaVantage = AlphaVantageProvider()
 
     // MARK: - Public API
 
@@ -280,9 +281,21 @@ class OptimizerEngine: ObservableObject {
             dailyCandles = try await CandleCache.loadOrFetch(
                 symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate,
                 fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
-            let hourly = try await CandleCache.loadOrFetch(
+            // Try Tiingo first, fall back to Alpha Vantage for 1H stock data
+            var hourly: [Candle]
+            if let tiingoData = try? await CandleCache.loadOrFetch(
                 symbol: symbol, interval: "1h_tiingo", startDate: fetchStart, endDate: endDate,
-                fetcher: { s, _, sd, ed in try await self.tiingo.fetchHistoricalCandles(symbol: s, interval: "1h", startDate: sd, endDate: ed) })
+                fetcher: { s, _, sd, ed in try await self.tiingo.fetchHistoricalCandles(symbol: s, interval: "1h", startDate: sd, endDate: ed) }),
+               tiingoData.count >= 100 {
+                hourly = tiingoData
+            } else {
+                hourly = try await CandleCache.loadOrFetch(
+                    symbol: symbol, interval: "1h_av", startDate: fetchStart, endDate: endDate,
+                    fetcher: { s, _, sd, ed in try await self.alphaVantage.fetchHistoricalCandles(symbol: s, startDate: sd, endDate: ed) })
+                #if DEBUG
+                print("[Optimizer] \(symbol): Tiingo failed, using Alpha Vantage (\(hourly.count) 1H candles)")
+                #endif
+            }
             fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
             #if DEBUG
             print("[Optimizer] \(symbol): Tiingo 1H=\(hourly.count) → 4H=\(fourHCandles.count)")

@@ -93,6 +93,7 @@
 		AC89010EB36B5AC846E9FAF6 /* StockInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC47550CD92B9388BB0D39AC /* StockInfo.swift */; };
 		B0473DA25E0FB1469CD0E785 /* DivergenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8DF82CEFFA137403724AA0 /* DivergenceDetector.swift */; };
 		B940F520D3BC655317D7466D /* AnalysisHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EBF83E06BDADDF2BE47A46C /* AnalysisHistoryView.swift */; };
+		B9D81CD659D2D3DB491CBD80 /* AlphaVantageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88962AFDC19CD371678672A7 /* AlphaVantageProvider.swift */; };
 		BADE194C52C24FD656FBE75C /* CandleCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE62F3218DFF4127E5AD290A /* CandleCache.swift */; };
 		BCEF01959EB182E6FA771303 /* StockInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFA633D2B542DD98F048501E /* StockInfoView.swift */; };
 		C05DE975C43EE58FD3D930EF /* ViewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62CE99FFC8BC38D6E0F4D297 /* ViewHelpers.swift */; };
@@ -205,6 +206,7 @@
 		8251FCFAA56BF737CFEDAC8B /* MACD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MACD.swift; sourceTree = "<group>"; };
 		84D908C74E2725C15BE1CCCB /* HapticManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
 		8829EA677390B0BFA2AACCC2 /* DerivativesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesService.swift; sourceTree = "<group>"; };
+		88962AFDC19CD371678672A7 /* AlphaVantageProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlphaVantageProvider.swift; sourceTree = "<group>"; };
 		8D87BB163A44C9CA82CFF0F1 /* AnalysisStateMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisStateMigration.swift; sourceTree = "<group>"; };
 		9152F34D3CCD450200D49DC6 /* BiasNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiasNotificationManager.swift; sourceTree = "<group>"; };
 		91A2649852593EF35667B3E2 /* MarketHours.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketHours.swift; sourceTree = "<group>"; };
@@ -286,6 +288,7 @@
 			children = (
 				714F80BAAC4263133724FD5B /* AIProvider.swift */,
 				D71998F783820C9E88C9D533 /* AlertsStore.swift */,
+				88962AFDC19CD371678672A7 /* AlphaVantageProvider.swift */,
 				1D96C0465266CF918A8844FA /* AnalysisHistoryStore.swift */,
 				3D1B2E6EF4E4D25DA359BC7D /* AnalysisPrompt.swift */,
 				E687573C82B61768A3DA2604 /* AnalysisService.swift */,
@@ -583,6 +586,7 @@
 				6F7BB3AED8D48BDF7D2253FD /* ATR.swift in Sources */,
 				0536BF3C68DE7FA0FF600EC7 /* AlertsStore.swift in Sources */,
 				453071FE065A474BB06375C3 /* AlertsView.swift in Sources */,
+				B9D81CD659D2D3DB491CBD80 /* AlphaVantageProvider.swift in Sources */,
 				94551F3646473CFCB6FAA4A0 /* AnalysisHistoryStore.swift in Sources */,
 				B940F520D3BC655317D7466D /* AnalysisHistoryView.swift in Sources */,
 				20A85053FF422B346C4F9605 /* AnalysisPrompt.swift in Sources */,
