@@ -22,6 +22,14 @@ class TiingoProvider {
         }
     }
 
+    /// Fetch historical candles with date range. For optimizer/backtester.
+    func fetchHistoricalCandles(symbol: String, interval: String,
+                                 startDate: Date, endDate: Date) async throws -> [Candle] {
+        let tiingoInterval = interval == "1d" ? "1day" : "1hour"
+        return try await fetchRawWithDates(symbol: symbol, interval: tiingoInterval,
+                                            startDate: startDate, endDate: endDate)
+    }
+
     // MARK: - Raw Fetch via Worker
 
     private func fetchRaw(symbol: String, interval: String, days: Int) async throws -> [Candle] {
@@ -90,6 +98,71 @@ class TiingoProvider {
         print("[MarketScope] [\(symbol)] Tiingo \(interval): \(candles.count) candles")
         #endif
 
+        return candles
+    }
+
+    /// Fetch with explicit start/end dates (for historical backtesting/optimization)
+    private func fetchRawWithDates(symbol: String, interval: String,
+                                    startDate: Date, endDate: Date) async throws -> [Candle] {
+        guard var components = URLComponents(string: "\(workerURL)/tiingo/candles") else {
+            throw TiingoError.networkError("Invalid URL")
+        }
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        components.queryItems = [
+            URLQueryItem(name: "symbol", value: symbol),
+            URLQueryItem(name: "interval", value: interval),
+            URLQueryItem(name: "startDate", value: df.string(from: startDate)),
+            URLQueryItem(name: "endDate", value: df.string(from: endDate)),
+        ]
+        guard let url = components.url else { throw TiingoError.networkError("Invalid URL") }
+
+        var request = URLRequest(url: url)
+        PushService.addAuthHeaders(&request)
+
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse {
+            if http.statusCode == 401 { throw TiingoError.unauthorized }
+            if http.statusCode == 429 { throw TiingoError.rateLimited }
+            guard (200...299).contains(http.statusCode) else {
+                throw TiingoError.networkError("HTTP \(http.statusCode)")
+            }
+        }
+
+        guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            throw TiingoError.decodingError("Invalid response")
+        }
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        var candles = [Candle]()
+        for item in arr {
+            guard let dateStr = item["date"] as? String else { continue }
+            let open: Double
+            let high: Double
+            let low: Double
+            let close: Double
+            let volume: Double
+
+            if let o = item["open"] as? Double {
+                open = o; high = item["high"] as? Double ?? o
+                low = item["low"] as? Double ?? o; close = item["close"] as? Double ?? o
+                volume = item["volume"] as? Double ?? 0
+            } else if let o = item["adjOpen"] as? Double {
+                open = o; high = item["adjHigh"] as? Double ?? o
+                low = item["adjLow"] as? Double ?? o; close = item["adjClose"] as? Double ?? o
+                volume = item["adjVolume"] as? Double ?? 0
+            } else { continue }
+
+            guard open > 0 else { continue }
+            let time = formatter.date(from: dateStr) ?? Date()
+            candles.append(Candle(time: time, open: open, high: high, low: low, close: close, volume: volume))
+        }
+
+        #if DEBUG
+        print("[MarketScope] [\(symbol)] Tiingo historical \(interval): \(candles.count) candles")
+        #endif
         return candles
     }
 

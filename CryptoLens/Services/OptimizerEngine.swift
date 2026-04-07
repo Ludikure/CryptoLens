@@ -35,6 +35,7 @@ class OptimizerEngine: ObservableObject {
 
     private let binance = BinanceService()
     private let yahoo = YahooFinanceService()
+    private let tiingo = TiingoProvider()
 
     // MARK: - Public API
 
@@ -259,23 +260,29 @@ class OptimizerEngine: ObservableObject {
                 symbol: symbol, interval: "4h", startDate: fetchStart, endDate: endDate,
                 fetcher: { s, i, sd, ed in try await self.binance.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
         } else {
-            // Stocks: use daily candles only (Yahoo 1H limited to ~60 days, insufficient for historical optimizer)
+            // Stocks: Daily from Yahoo (full history), 1H from Tiingo (full history) → aggregate to 4H
             dailyCandles = try await CandleCache.loadOrFetch(
                 symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate,
                 fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(symbol: s, interval: i, startDate: sd, endDate: ed) })
-            fourHCandles = []  // Not available historically for stocks
+            let hourly = try await CandleCache.loadOrFetch(
+                symbol: symbol, interval: "1h_tiingo", startDate: fetchStart, endDate: endDate,
+                fetcher: { s, _, sd, ed in try await self.tiingo.fetchHistoricalCandles(symbol: s, interval: "1h", startDate: sd, endDate: ed) })
+            fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
+            #if DEBUG
+            print("[Optimizer] \(symbol): Tiingo 1H=\(hourly.count) → 4H=\(fourHCandles.count)")
+            #endif
         }
 
-        guard dailyCandles.count >= 250 else {
+        let minDaily = 250
+        let minFourH = isCrypto ? 250 : 50
+        guard dailyCandles.count >= minDaily, fourHCandles.count >= minFourH else {
             #if DEBUG
-            print("[Optimizer] \(symbol): insufficient daily data D=\(dailyCandles.count)")
+            print("[Optimizer] \(symbol): insufficient data D=\(dailyCandles.count) 4H=\(fourHCandles.count)")
             #endif
             return []
         }
 
-        // Walk-forward: crypto uses 4H bars, stocks use daily bars
-        let evalCandles = isCrypto ? fourHCandles : dailyCandles
-        guard evalCandles.count >= (isCrypto ? 250 : 250) else { return [] }
+        let evalCandles = isCrypto ? fourHCandles : fourHCandles  // Both use 4H now
         let evalStartIndex = evalCandles.firstIndex { $0.time >= startDate } ?? min(200, max(0, evalCandles.count - 50))
         var snapshots = [ScoringSnapshot]()
         var dailyIdx = 0

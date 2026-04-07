@@ -265,12 +265,16 @@ export default {
       }
 
       try {
-        const startDate = new Date(Date.now() - parseInt(days) * 86400_000).toISOString().split('T')[0];
+        // Support explicit startDate/endDate params (for optimizer/backtester) or days-based
+        const explicitStart = url.searchParams.get('startDate');
+        const explicitEnd = url.searchParams.get('endDate');
+        const startDate = explicitStart || new Date(Date.now() - parseInt(days) * 86400_000).toISOString().split('T')[0];
+        const endParam = explicitEnd ? `&endDate=${explicitEnd}` : '';
         let apiUrl: string;
         if (interval === '1day') {
-          apiUrl = `${TIINGO_DAILY}/${symbol}/prices?startDate=${startDate}&token=${env.TIINGO_API_KEY}`;
+          apiUrl = `${TIINGO_DAILY}/${symbol}/prices?startDate=${startDate}${endParam}&token=${env.TIINGO_API_KEY}`;
         } else {
-          apiUrl = `${TIINGO_IEX}/${symbol}/prices?startDate=${startDate}&resampleFreq=${interval}&columns=open,high,low,close,volume&token=${env.TIINGO_API_KEY}`;
+          apiUrl = `${TIINGO_IEX}/${symbol}/prices?startDate=${startDate}${endParam}&resampleFreq=${interval}&columns=open,high,low,close,volume&token=${env.TIINGO_API_KEY}`;
         }
         const resp = await fetch(apiUrl, {
           headers: { 'Content-Type': 'application/json' },

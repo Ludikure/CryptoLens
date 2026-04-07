@@ -10,6 +10,7 @@ class BacktestEngine: ObservableObject {
 
     private let binance = BinanceService()
     private let yahoo = YahooFinanceService()
+    private let tiingo = TiingoProvider()
 
     func run(symbol: String, startDate: Date, endDate: Date) async {
         isRunning = true
@@ -42,13 +43,12 @@ class BacktestEngine: ObservableObject {
                 statusMessage = "Fetching daily candles (Yahoo)..."
                 dailyCandles = try await yahoo.fetchHistoricalCandles(
                     symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
-                statusMessage = "Fetching 1H candles (Yahoo)..."
-                let hourly = try await yahoo.fetchHistoricalCandles(
+                statusMessage = "Fetching 1H candles (Tiingo)..."
+                let hourly = try await tiingo.fetchHistoricalCandles(
                     symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
-                // 4H aggregated from 1H (Yahoo doesn't have a 4H interval)
                 fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
                 oneHCandles = hourly
-                statusMessage = "4H aggregated: \(fourHCandles.count) from \(hourly.count) 1H"
+                statusMessage = "Tiingo 1H: \(hourly.count) → 4H: \(fourHCandles.count)"
             }
 
             guard dailyCandles.count >= 250, fourHCandles.count >= 250 else {
