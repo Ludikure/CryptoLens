@@ -67,4 +67,57 @@ class BinanceService {
             return Candle(time: time, open: open, high: high, low: low, close: close, volume: volume)
         }
     }
+
+    /// Fetch historical candles with date range. Paginates automatically (1000 per request).
+    func fetchHistoricalCandles(symbol: String, interval: String,
+                                 startDate: Date, endDate: Date) async throws -> [Candle] {
+        var allCandles = [Candle]()
+        var currentStart = Int(startDate.timeIntervalSince1970 * 1000)
+        let endMs = Int(endDate.timeIntervalSince1970 * 1000)
+
+        while currentStart < endMs {
+            guard var components = URLComponents(string: "\(Constants.binanceBaseURL)/klines") else { break }
+            components.queryItems = [
+                URLQueryItem(name: "symbol", value: symbol),
+                URLQueryItem(name: "interval", value: interval),
+                URLQueryItem(name: "startTime", value: String(currentStart)),
+                URLQueryItem(name: "endTime", value: String(endMs)),
+                URLQueryItem(name: "limit", value: "1000"),
+            ]
+            guard let url = components.url else { break }
+
+            let (data, response) = try await RetryHelper.withRetry {
+                try await self.session.data(from: url)
+            }
+            if let http = response as? HTTPURLResponse {
+                if http.statusCode == 429 {
+                    try await Task.sleep(nanoseconds: 30_000_000_000)
+                    continue
+                }
+                guard (200...299).contains(http.statusCode) else { break }
+            }
+
+            guard let rawArray = try JSONSerialization.jsonObject(with: data) as? [[Any]] else { break }
+            if rawArray.isEmpty { break }
+
+            let batch = rawArray.compactMap { k -> Candle? in
+                guard k.count >= 6,
+                      let timeMs = k[0] as? Double,
+                      let openStr = k[1] as? String, let open = Double(openStr),
+                      let highStr = k[2] as? String, let high = Double(highStr),
+                      let lowStr = k[3] as? String, let low = Double(lowStr),
+                      let closeStr = k[4] as? String, let close = Double(closeStr),
+                      let volStr = k[5] as? String, let volume = Double(volStr)
+                else { return nil }
+                return Candle(time: Date(timeIntervalSince1970: timeMs / 1000.0),
+                              open: open, high: high, low: low, close: close, volume: volume)
+            }
+            allCandles.append(contentsOf: batch)
+            if let lastTime = batch.last?.time {
+                currentStart = Int(lastTime.timeIntervalSince1970 * 1000) + 1
+            } else { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return allCandles
+    }
 }

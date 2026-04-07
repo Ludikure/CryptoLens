@@ -126,6 +126,9 @@ struct SettingsView: View {
                     NavigationLink("Outcome Tracking") {
                         OutcomeDashboardView()
                     }
+                    NavigationLink("Backtest") {
+                        BacktestView()
+                    }
                 }
 
                 // About

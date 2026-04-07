@@ -24,11 +24,13 @@
 		18D912E232187A438231C694 /* BinanceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026EE4E09E43FF634D4E9AE7 /* BinanceService.swift */; };
 		1B5CA24C22D0CBED6012138B /* DataQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB185A3EE56E7A9E6F8C472B /* DataQuality.swift */; };
 		1DD589421F6653D764A6D74B /* FavoritesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 712D5923C993CB356F7E558C /* FavoritesStore.swift */; };
+		1F05C6097D91290B4A4D7DB2 /* BacktestEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B521AE59799747247D533AC /* BacktestEngine.swift */; };
 		20A85053FF422B346C4F9605 /* AnalysisPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D1B2E6EF4E4D25DA359BC7D /* AnalysisPrompt.swift */; };
 		223A902641D57D1AE1F97CA6 /* RSI.swift in Sources */ = {isa = PBXBuildFile; fileRef = C42F95C498D7EC4D47ADA97E /* RSI.swift */; };
 		2720DFD9514AD90629E838C0 /* BollingerBands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A1CF837C126DFFF6C4C67F0 /* BollingerBands.swift */; };
 		28C17907B776E97E558A7380 /* MarketHours.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91A2649852593EF35667B3E2 /* MarketHours.swift */; };
 		2F0D3B89106AFD561F6CD781 /* MarketStructure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BDD8D7D8E1CE4C82A4E3CDF /* MarketStructure.swift */; };
+		2FECD2548D9B6C9B0B9A79C4 /* BacktestView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0277576DC7D8F4EF562D54BD /* BacktestView.swift */; };
 		311277D07A0E6B0CC72E55C3 /* OutcomeTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3E353FC7C48DFCAF7BB3931 /* OutcomeTracker.swift */; };
 		326096D60B4A374B7625C959 /* SentimentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02DC95AF0031BFDF1DFF203 /* SentimentView.swift */; };
 		344E6DE5C93D918308661C0A /* StockSentimentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 092DF23B357D97EB5420DC31 /* StockSentimentView.swift */; };
@@ -63,6 +65,7 @@
 		783FD4A0A781E187452CF062 /* AnalysisState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C7ED8B1B8469C82E1E1B421 /* AnalysisState.swift */; };
 		7D4EB1918FE1BBF9492608B4 /* MacroContextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08FE6A3E4EF46DDD47822E60 /* MacroContextView.swift */; };
 		824D6229F52EB9358A96F310 /* SparklineChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA1CC172A0CDA5D6AF0FE979 /* SparklineChart.swift */; };
+		86279EB54EA1D1D8CBB694A8 /* BacktestResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 35078859CD028B303009EF75 /* BacktestResult.swift */; };
 		87121C584DFD81D359CBBEF8 /* AnalysisResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB3A257C06C78BA23D12112 /* AnalysisResult.swift */; };
 		8809C7CC7470E386776C7ABF /* SplashView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9543475960F1776ED8D9352 /* SplashView.swift */; };
 		8D4CAF99FFD787EAFF31DDBC /* FearGreedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC50FD5E89801E8670B98C86 /* FearGreedView.swift */; };
@@ -138,6 +141,7 @@
 /* Begin PBXFileReference section */
 		008CC90F7DBD27EC7A8E2136 /* WatchlistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistView.swift; sourceTree = "<group>"; };
 		026EE4E09E43FF634D4E9AE7 /* BinanceService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinanceService.swift; sourceTree = "<group>"; };
+		0277576DC7D8F4EF562D54BD /* BacktestView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BacktestView.swift; sourceTree = "<group>"; };
 		049DFBBCC9A22BB296B0D816 /* Candle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Candle.swift; sourceTree = "<group>"; };
 		04E451D5B1A589DBED045C12 /* OutcomeDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutcomeDashboardView.swift; sourceTree = "<group>"; };
 		082FF9FCE52776C592BFE849 /* DerivativesData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesData.swift; sourceTree = "<group>"; };
@@ -160,6 +164,7 @@
 		303EF4C61079D31610E22F9C /* Tooltips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tooltips.swift; sourceTree = "<group>"; };
 		312DE29A86DEB38F755C0596 /* VolumeProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeProfile.swift; sourceTree = "<group>"; };
 		33CD9FF6F190A00C9532669B /* AlertsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertsView.swift; sourceTree = "<group>"; };
+		35078859CD028B303009EF75 /* BacktestResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BacktestResult.swift; sourceTree = "<group>"; };
 		37A622A7632909155C34F191 /* ShimmerModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShimmerModifier.swift; sourceTree = "<group>"; };
 		3AFF083AB8789D5AAF4BEB53 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3CEBC7A6029CF08B65BAF4A4 /* ClaudeAnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeAnalysisView.swift; sourceTree = "<group>"; };
@@ -178,6 +183,7 @@
 		58B2E5EFCF02DC42400FCA88 /* SpotPressureAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotPressureAnalyzer.swift; sourceTree = "<group>"; };
 		608D366EBB5762F3FAEB5E7B /* NavigationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationCoordinator.swift; sourceTree = "<group>"; };
 		62CE99FFC8BC38D6E0F4D297 /* ViewHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewHelpers.swift; sourceTree = "<group>"; };
+		6B521AE59799747247D533AC /* BacktestEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BacktestEngine.swift; sourceTree = "<group>"; };
 		6EBF83E06BDADDF2BE47A46C /* AnalysisHistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisHistoryView.swift; sourceTree = "<group>"; };
 		712D5923C993CB356F7E558C /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
 		714F80BAAC4263133724FD5B /* AIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvider.swift; sourceTree = "<group>"; };
@@ -273,6 +279,7 @@
 				E687573C82B61768A3DA2604 /* AnalysisService.swift */,
 				8D87BB163A44C9CA82CFF0F1 /* AnalysisStateMigration.swift */,
 				DD5DC1D4B6985572D77BF179 /* BackgroundRefreshManager.swift */,
+				6B521AE59799747247D533AC /* BacktestEngine.swift */,
 				9152F34D3CCD450200D49DC6 /* BiasNotificationManager.swift */,
 				026EE4E09E43FF634D4E9AE7 /* BinanceService.swift */,
 				789F2DF1B44B021D2E901B4D /* ClaudeService.swift */,
@@ -358,6 +365,7 @@
 				6EBF83E06BDADDF2BE47A46C /* AnalysisHistoryView.swift */,
 				D1946FA77C8C32F6D51B1003 /* AnalysisSnapshotView.swift */,
 				AB439BCEE474102426A11B6A /* AssetToolbarModifier.swift */,
+				0277576DC7D8F4EF562D54BD /* BacktestView.swift */,
 				C6E8D06DE337DB8681FAF8A9 /* CandlestickChartView.swift */,
 				3CEBC7A6029CF08B65BAF4A4 /* ClaudeAnalysisView.swift */,
 				9C188735F2331F1002B4B991 /* CoinPickerView.swift */,
@@ -413,6 +421,7 @@
 			children = (
 				0BB3A257C06C78BA23D12112 /* AnalysisResult.swift */,
 				4C7ED8B1B8469C82E1E1B421 /* AnalysisState.swift */,
+				35078859CD028B303009EF75 /* BacktestResult.swift */,
 				049DFBBCC9A22BB296B0D816 /* Candle.swift */,
 				29ADC5116EA585594CD2E515 /* CoinInfo.swift */,
 				9412F953130DE07CB5684628 /* CrossAssetContext.swift */,
@@ -566,6 +575,9 @@
 				D29E865FEFB95906739B0EAF /* AnalysisStateMigration.swift in Sources */,
 				07EA492CB9679924093FA645 /* AssetToolbarModifier.swift in Sources */,
 				5C7FDA370C9AE19DFA2D31E3 /* BackgroundRefreshManager.swift in Sources */,
+				1F05C6097D91290B4A4D7DB2 /* BacktestEngine.swift in Sources */,
+				86279EB54EA1D1D8CBB694A8 /* BacktestResult.swift in Sources */,
+				2FECD2548D9B6C9B0B9A79C4 /* BacktestView.swift in Sources */,
 				AAD231397B0F9D3E6B125BFC /* BiasNotificationManager.swift in Sources */,
 				18D912E232187A438231C694 /* BinanceService.swift in Sources */,
 				2720DFD9514AD90629E838C0 /* BollingerBands.swift in Sources */,
