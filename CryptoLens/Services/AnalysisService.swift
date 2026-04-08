@@ -450,10 +450,19 @@ class AnalysisService: ObservableObject {
         do {
             var dataQuality = DataQuality()
 
-            // Cross-asset context for crypto (fetched concurrently with candles)
-            let crossAsset: CrossAssetContext? = market == .crypto ? await buildCrossAssetContext() : nil
+            // Cross-asset context + derivatives for crypto (fetched concurrently)
+            let crossAsset: CrossAssetContext?
+            var earlyDerivData: DerivativesData? = nil
+            if market == .crypto {
+                async let ca = buildCrossAssetContext()
+                async let dd = derivativesService.fetchDerivativesData(symbol: symbol)
+                crossAsset = await ca
+                earlyDerivData = await dd
+            } else {
+                crossAsset = nil
+            }
 
-            let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset)
+            let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
@@ -522,11 +531,10 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
-            // Crypto derivatives (fall back to cached if fresh fetch fails)
-            var derivData: DerivativesData? = nil
+            // Crypto derivatives (reuse early fetch, fall back to cached)
+            var derivData: DerivativesData? = earlyDerivData
             var positioning: PositioningSnapshot? = nil
             if market == .crypto {
-                derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
                 if derivData == nil, let cached = resultsBySymbol[symbol] {
                     derivData = cached.derivatives
                     #if DEBUG
@@ -747,7 +755,7 @@ class AnalysisService: ObservableObject {
 
     // MARK: - Fetch + compute for any market
 
-    private func fetchAndCompute(symbol: String, market: Market, crossAsset: CrossAssetContext? = nil) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult) {
+    private func fetchAndCompute(symbol: String, market: Market, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesData? = nil) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult) {
         let tfs = market.timeframes
 
         switch market {
@@ -755,7 +763,18 @@ class AnalysisService: ObservableObject {
             async let c1 = binance.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
             async let c2 = binance.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
             async let c3 = binance.fetchCandles(symbol: symbol, interval: tfs[2].interval, limit: 300)
-            // Cross-asset only passed to Daily (macro context doesn't change on 4H/1H)
+            // Build derivatives context from live data (uses 4H candle direction)
+            var derivCtx: DerivativesContext? = nil
+            if let d = derivatives {
+                let candles4H = try await c2
+                let priceRising = candles4H.count >= 2 && candles4H.last!.close > candles4H[candles4H.count - 2].close
+                derivCtx = DerivativesContext.from(data: d, priceRising: priceRising)
+                // Cross-asset + derivatives only passed to Daily
+                let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset, derivatives: derivCtx)
+                let r2 = IndicatorEngine.computeAll(candles: candles4H, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
+                let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
+                return (r1, r2, r3)
+            }
             let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset)
             let r2 = IndicatorEngine.computeAll(candles: try await c2, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
             let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)

@@ -1,7 +1,7 @@
 import Foundation
 
 enum IndicatorEngine {
-    static func computeAll(candles: [Candle], timeframe: String, label: String, market: Market = .crypto, crossAsset: CrossAssetContext? = nil) -> IndicatorResult {
+    static func computeAll(candles: [Candle], timeframe: String, label: String, market: Market = .crypto, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesContext? = nil) -> IndicatorResult {
         let closes = candles.map(\.close)
         let highs = candles.map(\.high)
         let lows = candles.map(\.low)
@@ -240,6 +240,11 @@ enum IndicatorEngine {
             score += ca.combinedSignal * params.crossAssetWeight
         }
 
+        // ── Layer 6: Derivatives (Daily crypto only, non-price-derived) ──
+        if isDaily && market == .crypto, let dctx = derivatives {
+            score += dctx.combinedSignal * params.derivativesWeight
+        }
+
         // ── Momentum Override (volume-gated, reduced weight on 4H) ──
         var momentumOverride: String? = nil
         if !isDaily && validRSI.count >= 5 && candles.count >= 3 {
@@ -328,7 +333,7 @@ enum IndicatorEngine {
         print("[MarketScope] [\(label)] score: \(score) → \(bias) | params: \(params.label) | vol: \(String(format: "%.2f", volScalar))")
         #endif
 
-        let maxScore = 18.0  // EMA stack ±2, structure ±2, cross-asset ±2
+        let maxScore = 21.0  // was 18 — derivatives adds ±3 (crypto only)
         let clampedScore = min(max(Double(score), -maxScore), maxScore)
         let bullPct = ((clampedScore / maxScore) + 1.0) / 2.0 * 100.0
 

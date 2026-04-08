@@ -291,6 +291,17 @@ class OptimizerEngine: ObservableObject {
             #endif
         }
 
+        // Fetch historical derivatives data (crypto only, cached)
+        var derivativesHistory = [Date: HistoricalDerivativesService.DerivativesBar]()
+        if isCrypto {
+            statusMessage = "Fetching derivatives history for \(symbol)..."
+            derivativesHistory = await DerivativesCache.loadOrFetch(
+                symbol: symbol, startDate: fetchStart, endDate: endDate)
+            #if DEBUG
+            print("[Optimizer] \(symbol) derivatives: \(derivativesHistory.count) bars")
+            #endif
+        }
+
         let minDaily = 250
         let minFourH = isCrypto ? 250 : 50
         guard dailyCandles.count >= minDaily, fourHCandles.count >= minFourH else {
@@ -347,11 +358,30 @@ class OptimizerEngine: ObservableObject {
                 return dxyCandles[idx].close > dxyEma20List[idx]
             }()
 
+            // Match derivatives data to this 4H bar
+            let derivCtx: DerivativesContext?
+            if isCrypto {
+                let barTime = HistoricalDerivativesService.round4H(evalTime)
+                let derivBar = derivativesHistory[barTime]
+                let prevBarTime = barTime.addingTimeInterval(-4 * 3600)
+                let prevDerivBar = derivativesHistory[prevBarTime]
+                let priceRising = i > 0 && evalCandles[i].close > evalCandles[i - 1].close
+                if let db = derivBar {
+                    derivCtx = DerivativesContext.fromHistorical(
+                        bar: db, previousOI: prevDerivBar?.openInterest, priceRising: priceRising)
+                } else {
+                    derivCtx = nil
+                }
+            } else {
+                derivCtx = nil
+            }
+
             let snapshot = extractSnapshot(from: dailyResult, candles: Array(dailySlice.suffix(300)),
                                             price: price, time: evalTime, isCrypto: isCrypto,
                                             priceAfter4H: priceAfter1, priceAfter24H: priceAfterN,
                                             forwardHigh24H: maxHigh, forwardLow24H: maxLow,
-                                            vix: vixValue, dxyPrice: dxyValue, dxyAboveEma20: dxyAbove)
+                                            vix: vixValue, dxyPrice: dxyValue, dxyAboveEma20: dxyAbove,
+                                            derivativesContext: derivCtx)
             snapshots.append(snapshot)
         }
 
@@ -364,7 +394,8 @@ class OptimizerEngine: ObservableObject {
                                   price: Double, time: Date, isCrypto: Bool,
                                   priceAfter4H: Double?, priceAfter24H: Double?,
                                   forwardHigh24H: Double?, forwardLow24H: Double?,
-                                  vix: Double? = nil, dxyPrice: Double? = nil, dxyAboveEma20: Bool? = nil) -> ScoringSnapshot {
+                                  vix: Double? = nil, dxyPrice: Double? = nil, dxyAboveEma20: Bool? = nil,
+                                  derivativesContext: DerivativesContext? = nil) -> ScoringSnapshot {
         let ema20List = MovingAverages.computeEMA(values: candles.map(\.close), period: 20)
         let ema20Rising: Bool
         if ema20List.count >= 6 {
@@ -438,6 +469,11 @@ class OptimizerEngine: ObservableObject {
             volScalar: result.volScalar ?? 1.0,
             obvRising: result.obv?.trend == "Rising",
             adLineAccumulation: result.adLine?.trend == "Accumulation",
+            derivativesCombinedSignal: derivativesContext?.combinedSignal ?? 0,
+            fundingSignal: derivativesContext?.fundingSignal ?? 0,
+            oiSignal: derivativesContext?.oiSignal ?? 0,
+            takerSignal: derivativesContext?.takerSignal ?? 0,
+            crowdingSignal: derivativesContext?.crowdingSignal ?? 0,
             vix: vix,
             dxyPrice: dxyPrice,
             dxyAboveEma20: dxyAboveEma20,

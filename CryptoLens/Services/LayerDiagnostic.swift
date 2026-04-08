@@ -27,6 +27,7 @@ enum LayerDiagnostic {
             ("Stoch RSI (4)", isolatedParams { $0.stochWeight = 1 }),
             ("Divergence (4)", isolatedParams { $0.divergenceWeight = 1 }),
             ("Cross-Asset (5)", isolatedParams { $0.crossAssetWeight = 1 }),
+            ("Derivatives (6)", isolatedParams { $0.derivativesWeight = 1 }),
         ]
 
         return layerConfigs.map { name, params in
@@ -48,6 +49,7 @@ enum LayerDiagnostic {
             ("Without Stoch RSI", { $0.stochWeight = 0 }),
             ("Without Divergence", { $0.divergenceWeight = 0 }),
             ("Without Cross-Asset", { $0.crossAssetWeight = 0 }),
+            ("Without Derivatives", { $0.derivativesWeight = 0 }),
         ]
 
         let baseResult = evaluateLayer(name: "Base (all layers)", params: baseParams, snapshots: snapshots)
@@ -67,7 +69,7 @@ enum LayerDiagnostic {
         p.pricePositionWeight = 0; p.emaSlopeWeight = 0; p.structureWeight = 0; p.stackConfirmWeight = 0
         p.adxWeakWeight = 0; p.adxModWeight = 0; p.adxStrongWeight = 0
         p.rsiWeight = 0; p.macdMaxWeight = 0
-        p.vwapWeight = 0; p.stochWeight = 0; p.divergenceWeight = 0; p.crossAssetWeight = 0
+        p.vwapWeight = 0; p.stochWeight = 0; p.divergenceWeight = 0; p.crossAssetWeight = 0; p.derivativesWeight = 0
         p.dailyDirectionalThreshold = 1; p.dailyStrongThreshold = 99
         p.fourHDirectionalThreshold = 1; p.fourHStrongThreshold = 99
         p.useAdaptive = false

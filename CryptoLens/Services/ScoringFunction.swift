@@ -112,6 +112,11 @@ enum ScoringFunction {
             score += s.crossAssetSignal * p.crossAssetWeight
         }
 
+        // ── Layer 6: Derivatives (daily crypto only, non-price-derived) ──
+        if isDaily && s.isCrypto {
+            score += s.derivativesCombinedSignal * p.derivativesWeight
+        }
+
         // ── Momentum override (non-daily only) ──
         if !isDaily {
             let oversoldThreshold: Double = is4H ? 30 : 35

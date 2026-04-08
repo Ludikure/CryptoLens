@@ -52,6 +52,13 @@ struct ScoringSnapshot: Codable {
     let obvRising: Bool
     let adLineAccumulation: Bool
 
+    // Derivatives signals (crypto only, Layer 6)
+    let derivativesCombinedSignal: Int  // -3 to +3
+    let fundingSignal: Int              // -1, 0, +1
+    let oiSignal: Int                   // -1, 0, +1
+    let takerSignal: Int                // -1, 0, +1
+    let crowdingSignal: Int             // -1, 0, +1
+
     // Macro context (matched by date from daily VIX/DXY candles)
     let vix: Double?
     let dxyPrice: Double?

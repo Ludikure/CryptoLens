@@ -31,6 +31,9 @@ struct ScoringParams: Codable, Identifiable, Equatable {
     // Layer 5: Cross-asset (daily crypto only)
     var crossAssetWeight: Int = 1         // multiplied by cross-asset signal (±2)
 
+    // Layer 6: Derivatives (daily crypto only)
+    var derivativesWeight: Int = 1        // multiplied by combined derivatives signal (±3)
+
     // Thresholds
     var dailyStrongThreshold: Int = 7
     var dailyDirectionalThreshold: Int = 4
@@ -58,11 +61,12 @@ struct ScoringParams: Codable, Identifiable, Equatable {
         p.fourHStrongThreshold = 6
         p.fourHDirectionalThreshold = 3
         p.crossAssetWeight = 0
+        p.derivativesWeight = 0
         return p
     }
 
     var label: String {
-        "pp\(pricePositionWeight)_es\(emaSlopeWeight)_st\(structureWeight)_sc\(stackConfirmWeight)_adx\(adxStrongWeight)\(adxModWeight)\(adxWeakWeight)_r\(rsiWeight)_m\(macdMaxWeight)_v\(vwapWeight)_sk\(stochWeight)_dv\(divergenceWeight)_ca\(crossAssetWeight)_dt\(dailyDirectionalThreshold)s\(dailyStrongThreshold)_4t\(fourHDirectionalThreshold)s\(fourHStrongThreshold)"
+        "pp\(pricePositionWeight)_es\(emaSlopeWeight)_st\(structureWeight)_sc\(stackConfirmWeight)_adx\(adxStrongWeight)\(adxModWeight)\(adxWeakWeight)_r\(rsiWeight)_m\(macdMaxWeight)_v\(vwapWeight)_sk\(stochWeight)_dv\(divergenceWeight)_ca\(crossAssetWeight)_dr\(derivativesWeight)_dt\(dailyDirectionalThreshold)s\(dailyStrongThreshold)_4t\(fourHDirectionalThreshold)s\(fourHStrongThreshold)"
     }
 
     // MARK: - Persistence (market-specific keys)
