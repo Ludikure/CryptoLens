@@ -65,6 +65,15 @@ struct IndicatorTableView: View {
                 .background(Color(.systemGray5))
 
                 // Rows
+                row("Bias Score", tooltip: "Signed score from all indicators combined. ±7+ = high conviction (backtest-proven). ±5-6 = tradeable with confluence. Below ±5 = no trade.") { r in
+                    let score = r.biasScore
+                    let color: Color = abs(score) >= 7 ? (score > 0 ? .green : .red) :
+                                       abs(score) >= 5 ? (score > 0 ? Color.green.opacity(0.7) : Color.red.opacity(0.7)) :
+                                       .secondary
+                    Text("\(score > 0 ? "+" : "")\(score)")
+                        .fontWeight(abs(score) >= 7 ? .bold : .regular)
+                        .foregroundStyle(color)
+                }
                 row("RSI", tooltip: Tooltips.rsi) { r in
                     if let rsi = r.rsi {
                         Text(String(format: "%.1f", rsi))

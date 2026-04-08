@@ -589,6 +589,87 @@ class BacktestEngine: ObservableObject {
                 avgBarsToOutcome: tradeCount > 0 ? Double(totalBars)/Double(tradeCount) : 0))
         }
 
+        // ── Score Authority Test: which timeframe predicts best? ──
+        for (filterLabel, filter) in [
+            // Daily only (current system)
+            ("Daily |s|≥5", { (pt: BacktestDataPoint) in abs(pt.dailyScore) >= 5 }),
+            ("Daily |s|≥6", { (pt: BacktestDataPoint) in abs(pt.dailyScore) >= 6 }),
+            ("Daily |s|≥7", { (pt: BacktestDataPoint) in abs(pt.dailyScore) >= 7 }),
+            // 4H only
+            ("4H |s|≥5", { (pt: BacktestDataPoint) in abs(pt.fourHScore) >= 5 }),
+            ("4H |s|≥6", { (pt: BacktestDataPoint) in abs(pt.fourHScore) >= 6 }),
+            ("4H |s|≥7", { (pt: BacktestDataPoint) in abs(pt.fourHScore) >= 7 }),
+            // Either (max of both)
+            ("Either |s|≥5", { (pt: BacktestDataPoint) in max(abs(pt.dailyScore), abs(pt.fourHScore)) >= 5 }),
+            ("Either |s|≥6", { (pt: BacktestDataPoint) in max(abs(pt.dailyScore), abs(pt.fourHScore)) >= 6 }),
+            ("Either |s|≥7", { (pt: BacktestDataPoint) in max(abs(pt.dailyScore), abs(pt.fourHScore)) >= 7 }),
+            // Both (min of both)
+            ("Both |s|≥5", { (pt: BacktestDataPoint) in min(abs(pt.dailyScore), abs(pt.fourHScore)) >= 5 }),
+            ("Both |s|≥7", { (pt: BacktestDataPoint) in min(abs(pt.dailyScore), abs(pt.fourHScore)) >= 7 }),
+        ] as [(String, (BacktestDataPoint) -> Bool)] {
+            var tp1W = 0, tp2W = 0, stoppedN = 0, expiredN = 0
+            var totalPnlW = 0.0, totalPnlL = 0.0, totalBars = 0, tradeCount = 0
+
+            for pt in points {
+                guard let ctx = pt.entryContext else { continue }
+                guard filter(pt) else { continue }
+
+                // Trade direction: use whichever timeframe has higher |score|
+                let useDailyDir = abs(pt.dailyScore) >= abs(pt.fourHScore)
+                let dirBias = useDailyDir ? pt.dailyBias : pt.fourHBias
+                let isBullish = dirBias.contains("Bullish")
+                let isBearish = dirBias.contains("Bearish")
+                guard isBullish || isBearish else { continue }
+
+                tradeCount += 1
+                let atr = ctx.atr; let e = ctx.price
+                let sd = atr * 2.0; let t1d = atr * 2.0; let t2d = atr * 4.0
+                let s = isBullish ? e - sd : e + sd
+                let t1 = isBullish ? e + t1d : e - t1d
+                let t2 = isBullish ? e + t2d : e - t2d
+
+                var outcome = "EXPIRED"; var bars = 72
+                for bar in 0..<72 {
+                    let idx = ctx.oneHStartIdx + bar
+                    guard idx < oneHCandles.count else { break }
+                    let c = oneHCandles[idx]
+                    if isBullish {
+                        if c.low <= s { outcome = "STOPPED"; bars = bar+1; break }
+                        if c.high >= t2 { outcome = "TP2"; bars = bar+1; break }
+                        if c.high >= t1 { outcome = "TP1"; bars = bar+1; break }
+                    } else {
+                        if c.high >= s { outcome = "STOPPED"; bars = bar+1; break }
+                        if c.low <= t2 { outcome = "TP2"; bars = bar+1; break }
+                        if c.low <= t1 { outcome = "TP1"; bars = bar+1; break }
+                    }
+                }
+                totalBars += bars
+                switch outcome {
+                case "TP1": tp1W += 1; totalPnlW += t1d / e * 100
+                case "TP2": tp2W += 1; totalPnlW += t2d / e * 100
+                case "STOPPED": stoppedN += 1; totalPnlL += sd / e * 100
+                default: expiredN += 1
+                }
+            }
+
+            let wins = tp1W + tp2W
+            let resolved = wins + stoppedN
+            let wr = tradeCount > 0 ? Double(wins) / Double(tradeCount) * 100 : 0
+            let resolvedWR = resolved > 0 ? Double(wins) / Double(resolved) * 100 : 0
+            let avgW = wins > 0 ? totalPnlW / Double(wins) : 0
+            let avgL = stoppedN > 0 ? -totalPnlL / Double(stoppedN) : 0
+            let exp = tradeCount > 0
+                ? (Double(wins)/Double(tradeCount))*avgW + (Double(stoppedN)/Double(tradeCount))*avgL : 0
+
+            results.append(SweepResult(
+                label: filterLabel,
+                stopDesc: "2.0 ATR", tp1Desc: "2.0 ATR", tp2Desc: "4.0 ATR",
+                totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W,
+                stopped: stoppedN, expired: expiredN,
+                winRate: wr, resolvedWinRate: resolvedWR, expectancy: exp,
+                avgBarsToOutcome: tradeCount > 0 ? Double(totalBars)/Double(tradeCount) : 0))
+        }
+
         return results.sorted { $0.expectancy > $1.expectancy }
     }
 
