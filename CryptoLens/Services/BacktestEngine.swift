@@ -181,10 +181,12 @@ class BacktestEngine: ObservableObject {
                 } else {
                     tradeResult = nil
                 }
-                let entryContext: TradeEntryContext? = (alignment.contains("bearish") || alignment.contains("bullish"))
-                    ? TradeEntryContext(price: price, isBullish: alignment.contains("bullish"),
-                                        atr: fourHResult.atr?.atr ?? (price * 0.015), oneHStartIdx: oneHIdx)
-                    : nil
+                // Set entryContext for ALL bars (needed for conflict sweep)
+                let entryContext = TradeEntryContext(
+                    price: price,
+                    isBullish: dBullish,  // Daily direction for conflict bars
+                    atr: fourHResult.atr?.atr ?? (price * 0.015),
+                    oneHStartIdx: oneHIdx)
 
                 let point = BacktestDataPoint(
                     timestamp: evalTime, price: price,
@@ -517,6 +519,72 @@ class BacktestEngine: ObservableObject {
             results.append(SweepResult(
                 label: "2.0ATR/72h \(filterLabel)", stopDesc: "2.0 ATR", tp1Desc: "2.0 ATR", tp2Desc: "4.0 ATR",
                 totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W, stopped: stoppedN, expired: expiredN,
+                winRate: wr, resolvedWinRate: resolvedWR, expectancy: exp,
+                avgBarsToOutcome: tradeCount > 0 ? Double(totalBars)/Double(tradeCount) : 0))
+        }
+
+        // ── Rule 2 Override Test: trade Daily direction even when 4H conflicts ──
+        for (filterLabel, minScore) in [("conflict |s|≥7", 7), ("conflict |s|≥8", 8), ("conflict |s|≥9", 9)] {
+            var tp1W = 0, tp2W = 0, stoppedN = 0, expiredN = 0
+            var totalPnlW = 0.0, totalPnlL = 0.0, totalBars = 0, tradeCount = 0
+
+            for pt in points {
+                // ONLY conflict bars (currently skipped as FLAT)
+                guard pt.biasAlignment == "conflict" || pt.biasAlignment == "neutral" else { continue }
+                guard abs(pt.dailyScore) >= minScore else { continue }
+                guard let ctx = pt.entryContext else { continue }
+
+                // Trade in Daily's direction, ignoring 4H
+                let isBullish = pt.dailyBias.contains("Bullish")
+                let isBearish = pt.dailyBias.contains("Bearish")
+                guard isBullish || isBearish else { continue }
+
+                tradeCount += 1
+                let atr = ctx.atr
+                let e = ctx.price
+                let sd = atr * 2.0; let t1d = atr * 2.0; let t2d = atr * 4.0
+                let s = isBullish ? e - sd : e + sd
+                let t1 = isBullish ? e + t1d : e - t1d
+                let t2 = isBullish ? e + t2d : e - t2d
+
+                var outcome = "EXPIRED"; var bars = 72
+                for bar in 0..<72 {
+                    let idx = ctx.oneHStartIdx + bar
+                    guard idx < oneHCandles.count else { break }
+                    let c = oneHCandles[idx]
+                    if isBullish {
+                        if c.low <= s { outcome = "STOPPED"; bars = bar+1; break }
+                        if c.high >= t2 { outcome = "TP2"; bars = bar+1; break }
+                        if c.high >= t1 { outcome = "TP1"; bars = bar+1; break }
+                    } else {
+                        if c.high >= s { outcome = "STOPPED"; bars = bar+1; break }
+                        if c.low <= t2 { outcome = "TP2"; bars = bar+1; break }
+                        if c.low <= t1 { outcome = "TP1"; bars = bar+1; break }
+                    }
+                }
+                totalBars += bars
+                switch outcome {
+                case "TP1": tp1W += 1; totalPnlW += t1d / e * 100
+                case "TP2": tp2W += 1; totalPnlW += t2d / e * 100
+                case "STOPPED": stoppedN += 1; totalPnlL += sd / e * 100
+                default: expiredN += 1
+                }
+            }
+
+            let wins = tp1W + tp2W
+            let resolved = wins + stoppedN
+            let wr = tradeCount > 0 ? Double(wins) / Double(tradeCount) * 100 : 0
+            let resolvedWR = resolved > 0 ? Double(wins) / Double(resolved) * 100 : 0
+            let avgW = wins > 0 ? totalPnlW / Double(wins) : 0
+            let avgL = stoppedN > 0 ? -totalPnlL / Double(stoppedN) : 0
+            let exp = tradeCount > 0
+                ? (Double(wins)/Double(tradeCount))*avgW + (Double(stoppedN)/Double(tradeCount))*avgL : 0
+
+            results.append(SweepResult(
+                label: "R2 override \(filterLabel)",
+                stopDesc: "2.0 ATR", tp1Desc: "2.0 ATR", tp2Desc: "4.0 ATR",
+                totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W,
+                stopped: stoppedN, expired: expiredN,
                 winRate: wr, resolvedWinRate: resolvedWR, expectancy: exp,
                 avgBarsToOutcome: tradeCount > 0 ? Double(totalBars)/Double(tradeCount) : 0))
         }
