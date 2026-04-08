@@ -25,6 +25,7 @@ class AnalysisService: ObservableObject {
     @Published var error: String?
     @Published var currentMarket: Market = .crypto
     @Published var currentSymbol: String?
+    var watchlistSymbols: [String] = []
     @Published var aiLoadingPhase: AILoadingPhase = .idle
     @Published var isAIStale = false
     @Published var spotPressure: SpotPressure?
@@ -130,6 +131,7 @@ class AnalysisService: ObservableObject {
     /// Pass 1: disk cache or quick fetch (daily only) for fast watchlist cards.
     /// Pass 2: full refresh for crypto only (stocks skip to avoid Twelve Data rate limit).
     func prefetchFavorites(_ symbols: [String]) {
+        watchlistSymbols = symbols
         Task {
             // Pass 1: disk cache or quick fetch
             for symbol in symbols where resultsBySymbol[symbol] == nil {
@@ -187,11 +189,18 @@ class AnalysisService: ObservableObject {
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(nanoseconds: 60_000_000_000) // 60s
-                } catch {
-                    return // Task was cancelled
-                }
+                } catch { return }
                 guard !Task.isCancelled, let self else { return }
+
+                // Refresh current symbol first (UI updates)
                 await self.refreshIndicators(symbol: symbol)
+
+                // Then cycle through other watchlist crypto symbols (score alerts)
+                for fav in self.watchlistSymbols
+                    where fav != symbol && self.marketFor(fav) == .crypto {
+                    guard !Task.isCancelled else { return }
+                    await self.refreshIndicators(symbol: fav)
+                }
             }
         }
     }
@@ -404,6 +413,24 @@ class AnalysisService: ObservableObject {
                UserDefaults.standard.bool(forKey: "notify_bias_flips") {
                 let ticker = Constants.asset(for: symbol)?.ticker ?? symbol
                 BiasNotificationManager.send(ticker: ticker, oldBias: prev.daily.bias, newBias: result.daily.bias)
+            }
+
+            // Score threshold notification — fires for ANY watchlist symbol
+            if let prev = prevResult,
+               UserDefaults.standard.bool(forKey: "notify_score_threshold") {
+                let prevAbsScore = abs(prev.daily.biasScore)
+                let newAbsScore = abs(result.daily.biasScore)
+                let threshold = 5
+
+                // Only notify when score CROSSES above threshold (not every refresh)
+                if prevAbsScore < threshold && newAbsScore >= threshold {
+                    let ticker = Constants.asset(for: symbol)?.ticker ?? symbol
+                    let direction = result.daily.bias.contains("Bullish") ? "Bullish" : "Bearish"
+                    BiasNotificationManager.sendScoreAlert(
+                        ticker: ticker,
+                        score: result.daily.biasScore,
+                        direction: direction)
+                }
             }
 
         } catch is CancellationError {

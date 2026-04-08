@@ -86,6 +86,13 @@ struct SettingsView: View {
                         get: { UserDefaults.standard.bool(forKey: "notify_bias_flips") },
                         set: { UserDefaults.standard.set($0, forKey: "notify_bias_flips") }
                     ))
+                    Toggle("Score Threshold Alerts", isOn: Binding(
+                        get: { UserDefaults.standard.bool(forKey: "notify_score_threshold") },
+                        set: { UserDefaults.standard.set($0, forKey: "notify_score_threshold") }
+                    ))
+                    Text("Notifies when any watchlist asset's Daily score crosses \u{00B1}5")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 } header: {
                     Text("Notifications")
                 } footer: {
