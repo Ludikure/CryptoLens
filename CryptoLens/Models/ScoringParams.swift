@@ -61,10 +61,22 @@ struct ScoringParams: Codable, Identifiable, Equatable {
 
     static var cryptoDefault: ScoringParams {
         var p = ScoringParams()
-        p.dailyStrongThreshold = 7
+        p.pricePositionWeight = 1
+        p.emaSlopeWeight = 0
+        p.structureWeight = 1
+        p.stackConfirmWeight = 1
+        p.adxWeakWeight = 1; p.adxModWeight = 2; p.adxStrongWeight = 3
+        p.rsiWeight = 3
+        p.macdMaxWeight = 3
+        p.vwapWeight = 0
+        p.stochWeight = 0
+        p.divergenceWeight = 0
+        p.crossAssetWeight = 1
+        p.derivativesWeight = 1
         p.dailyDirectionalThreshold = 4
-        p.fourHStrongThreshold = 6
-        p.fourHDirectionalThreshold = 3
+        p.dailyStrongThreshold = 8
+        p.fourHDirectionalThreshold = 2
+        p.fourHStrongThreshold = 4
         return p
     }
 
