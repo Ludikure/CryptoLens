@@ -13,6 +13,7 @@ export interface Env {
   FINNHUB_API_KEY: string;
   FRED_API_KEY: string;
   TIINGO_API_KEY: string;
+  ALPHAVANTAGE_API_KEY: string;
 }
 
 interface Alert {
@@ -36,6 +37,7 @@ const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 const FRED_BASE = 'https://api.stlouisfed.org/fred/series/observations';
 const TIINGO_IEX = 'https://api.tiingo.com/iex';
 const TIINGO_DAILY = 'https://api.tiingo.com/tiingo/daily';
+const ALPHAVANTAGE_BASE = 'https://www.alphavantage.co/query';
 
 const CORS = {
   'Access-Control-Allow-Origin': 'capacitor://com.ludikure.CryptoLens',
@@ -285,6 +287,25 @@ export default {
         return json(data);
       } catch {
         return json({ error: 'Tiingo fetch failed' }, 502);
+      }
+    }
+
+    // === Alpha Vantage Intraday (proxied, API key server-side) ===
+    if (path === '/alphavantage/intraday') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      const interval = url.searchParams.get('interval') || '60min';
+      const month = url.searchParams.get('month') || '';
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      if (!env.ALPHAVANTAGE_API_KEY) return json({ error: 'Alpha Vantage not configured' }, 503);
+
+      try {
+        const apiUrl = `${ALPHAVANTAGE_BASE}?function=TIME_SERIES_INTRADAY&symbol=${symbol}&interval=${interval}&month=${month}&outputsize=full&apikey=${env.ALPHAVANTAGE_API_KEY}`;
+        const resp = await fetch(apiUrl);
+        if (!resp.ok) return json({ error: `Alpha Vantage ${resp.status}` }, 502);
+        const data = await resp.json();
+        return json(data);
+      } catch {
+        return json({ error: 'Alpha Vantage fetch failed' }, 502);
       }
     }
 

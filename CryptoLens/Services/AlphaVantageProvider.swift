@@ -5,8 +5,7 @@ import Foundation
 /// Free tier: 25 req/day — sufficient with disk caching.
 class AlphaVantageProvider {
     private let session = URLSession.shared
-    private let apiKey = "0qRAaTvX7XrZoIya_1mPWIA3uARznaFw"
-    private let baseURL = "https://www.alphavantage.co/query"
+    private let workerURL = PushService.workerURL
 
     /// Fetch historical 1H candles by paginating month-by-month.
     /// Alpha Vantage requires `month=YYYY-MM` param for historical intraday data.
@@ -41,24 +40,24 @@ class AlphaVantageProvider {
         var allCandles = [Candle]()
 
         for month in months {
-            guard var components = URLComponents(string: baseURL) else { continue }
+            guard var components = URLComponents(string: "\(workerURL)/alphavantage/intraday") else { continue }
             components.queryItems = [
-                URLQueryItem(name: "function", value: "TIME_SERIES_INTRADAY"),
                 URLQueryItem(name: "symbol", value: symbol),
                 URLQueryItem(name: "interval", value: avInterval),
                 URLQueryItem(name: "month", value: month),
-                URLQueryItem(name: "outputsize", value: "full"),
-                URLQueryItem(name: "apikey", value: apiKey),
             ]
             guard let url = components.url else { continue }
 
-            let (data, response) = try await session.data(from: url)
+            var request = URLRequest(url: url)
+            PushService.addAuthHeaders(&request)
+
+            let (data, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse {
                 if http.statusCode == 429 || http.statusCode == 503 {
                     #if DEBUG
                     print("[AlphaVantage] Rate limited at month \(month), stopping")
                     #endif
-                    break  // Hit rate limit — return what we have
+                    break
                 }
                 guard (200...299).contains(http.statusCode) else { continue }
             }
@@ -89,7 +88,7 @@ class AlphaVantageProvider {
             }
 
             // Rate limit: Alpha Vantage free = 25 req/day, 5 req/min
-            try? await Task.sleep(nanoseconds: 13_000_000_000)  // 13s between months (4.6 req/min)
+            try? await Task.sleep(nanoseconds: 13_000_000_000)
         }
 
         allCandles.sort { $0.time < $1.time }
