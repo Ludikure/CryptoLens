@@ -59,6 +59,18 @@ enum AnalysisPrompt {
 
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
+        SCORE CONVICTION GATE (evaluate before kill gate and Step 4):
+        The Daily bias score is pre-computed and shown in the data header. Backtesting over 5 years (10,950 bars) proved:
+        - |score| >= 7: 60% resolved win rate, +0.750% expectancy per trade
+        - |score| < 7: ~50% resolved win rate, marginal expectancy
+        - |score| < 4: below 50% — actively harmful
+        If Daily |bias score| < 7:
+          → NO SETUP regardless of bias alignment or confluence.
+          → Output: "NO SETUP — Daily conviction insufficient (score: X, minimum: ±7). Watching for score to strengthen."
+          → Proceed to Risk Factors with what would change the score.
+          → Output empty JSON [].
+        This gate fires BEFORE the kill condition gate.
+
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
 
@@ -96,11 +108,12 @@ enum AnalysisPrompt {
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2, TP3 rows showing Price, Why, and R:R.
-        Rate conviction:
-        - HIGH: 3+ confluences, all timeframes aligned (D + 4H + 1H same direction), no macro event within 12 hours, derivatives positioning supports direction.
-        - MODERATE: 2+ confluences, D + 4H aligned with 1H counter-trend providing entry (counter-trend pullback setup), no macro event within 4 hours. OR: All timeframes aligned but only 2 confluences.
-        - LOW: Fewer than 2 confluences, OR macro event within 2 hours, OR derivatives positioning strongly opposes the setup. → NO TRADE.
-        - FLAT: Daily and 4H pre-computed bias labels conflict (one Bearish, one Bullish), OR both labels are Neutral. → NO TRADE.
+        Rate conviction (SCORE-BASED — backtest-validated):
+        - HIGH: Daily |score| >= 8, D+4H aligned, level + signal + risk all present, no macro event within 12 hours. These setups have the highest expectancy.
+        - MODERATE: Daily |score| = 7, D+4H aligned or Rule 3 applies, at least 2 of 3 (level/signal/risk) present, no macro event within 4 hours.
+        - LOW: Daily |score| < 7, OR macro event within 2 hours, OR fewer than 2 confluences. → NO TRADE.
+        - FLAT: D+4H labels conflict, or both Neutral. → NO TRADE.
+        The score conviction gate already filters out LOW — this section distinguishes HIGH from MODERATE among qualifying setups.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
@@ -127,12 +140,15 @@ enum AnalysisPrompt {
         - "Confirms" = 1H candle close showing rejection (wick > body at the level), OR 1H close back below/above the level after a false breakout.
 
         STOP PLACEMENT:
-        - Beyond the 1H counter-move extreme (the high of the rally for shorts, the low of the selloff for longs).
-        - Must satisfy minimum R:R requirement.
+        - Primary: beyond the 1H counter-move extreme (the high of the rally for shorts, the low of the selloff for longs).
+        - MINIMUM FLOOR: 2.0x ATR (4H). Backtesting proved stops tighter than 2.0 ATR get wicked out — the signal is directionally correct but noise shakes you out. If the structural stop is closer than 2.0 ATR, use 2.0 ATR.
+        - If the structural stop is wider than 2.0 ATR, use the structural level — do not cap it.
 
         TARGET:
-        - T1: Next 4H support/resistance level in the direction of bias.
-        - T2: Prior Daily swing low (for shorts) or swing high (for longs).
+        - TP1: 2.0x ATR from entry, aligned with the nearest structural level (S/R, fib, VWAP). 1:1 R:R with a 2.0 ATR stop.
+        - TP2: 4.0x ATR from entry, aligned with the next structural level. 1:2 R:R.
+        - If structural levels align closely with the ATR-based targets, conviction increases.
+        - If no structural level exists near the ATR targets, use the ATR targets as-is — they are backtest-proven.
 
         KILL CONDITIONS (do NOT enter even if pattern forms):
         - 4H shows bullish/bearish divergence AGAINST the Daily bias direction (suggests Daily trend is weakening, not just a pullback).
@@ -187,6 +203,8 @@ enum AnalysisPrompt {
         - Market Structure: HH/HL = bullish until broken. LL/LH = bearish until broken. Structure change on the higher TF overrides lower TF structure. Fresh levels (1× test) are highest probability reactions. Worn levels (4×+) are likely to break on next test — each test absorbs resting orders.
         - Volume Profile: POC is fair value — price reverts to it in ranges. VAH/VAL act as S/R. Break above VAH with volume = acceptance higher. Break below VAL with volume = acceptance lower. In ranging regimes, fade moves to VAH/VAL back toward POC.
         - Overbought/oversold is a condition, not a signal. RSI 80 in an uptrend is strength, not a short trigger. RSI 20 in a downtrend is weakness, not a buy. Only treat OB/OS as actionable when it coincides with a level + divergence or a regime change.
+        - Trades need time to work. Backtesting proved the optimal resolution window is 72 hours at 2.0 ATR stop/target sizing. Do not present this as "hold for 72 hours" — instead, frame it as: "This setup targets $X. Allow 1-3 days for price to reach the target. Re-evaluate at the next Daily close if neither TP1 nor SL is hit."
+        - Most setups resolve within 40 hours on average. Expired trades (no TP or SL hit in 72h) close at market — typically near breakeven.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -200,19 +218,19 @@ enum AnalysisPrompt {
         State which rule fired: "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback." This must match your Step 3 declaration.
 
         ## Trade Setup
-        Only if bias is LONG or SHORT with MODERATE+ conviction. Present as a markdown table:
+        Only if Daily |score| >= 7, bias is LONG or SHORT, and conviction is MODERATE+. Present as a markdown table:
         | Level | Price | Why | R:R |
         |-------|-------|-----|-----|
         | Entry | $X | reason | - |
-        | Stop Loss | $X | reason | - |
+        | Stop Loss | $X | reason (min 2.0 ATR) | - |
         | TP1 | $X | reason | 1:X |
         | TP2 | $X | reason | 1:X |
-        | TP3 | $X | reason | 1:X |
 
         Conviction: HIGH / MODERATE
+        Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
-        If bias is FLAT, conviction is LOW, or regime contradicts direction:
-        "NO SETUP — [specific reason]." Skip the table entirely. No conditional or hypothetical entries.
+        If Daily |score| < 7, bias is FLAT, or conviction is LOW:
+        "NO SETUP — [specific reason]." Skip the table entirely.
 
         ## Risk Factors
         Maximum 3 bullets. Ranked by what is most likely to change the picture in the next 1-4 hours. Do not restate information already covered in the Bias or Trade Setup sections. Focus on:
