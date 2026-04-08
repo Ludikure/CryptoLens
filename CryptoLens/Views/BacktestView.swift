@@ -115,6 +115,29 @@ struct BacktestView: View {
                     }
                 }
 
+                if !r.sweepResults.isEmpty {
+                    Section("Stop/Target Sweep (by expectancy)") {
+                        ForEach(r.sweepResults) { s in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(s.label).font(.caption).fontWeight(.bold)
+                                    Spacer()
+                                    Text(String(format: "%.3f%%", s.expectancy))
+                                        .foregroundStyle(s.expectancy > 0 ? .green : .red)
+                                        .font(.caption).fontWeight(.bold)
+                                }
+                                HStack {
+                                    Text("WR: \(pct(s.winRate))")
+                                    Spacer()
+                                    Text("TP1:\(s.tp1Wins) TP2:\(s.tp2Wins) SL:\(s.stopped) Exp:\(s.expired)")
+                                }
+                                .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
                 Section("Optimal Thresholds (Top 5)") {
                     ForEach(Array(r.thresholdSweep.prefix(5))) { t in
                         HStack {
@@ -178,6 +201,9 @@ struct BacktestView: View {
         • Expectancy: \(String(format: "%.3f%%", r.expectancy)) | Avg \(String(format: "%.1f", r.avgBarsToOutcome))h
         • By Regime: Trend \(pct(r.trendingWinRate)) | Range \(pct(r.rangingWinRate)) | Trans \(pct(r.transitioningWinRate))
         • By Strength: Strong \(pct(r.strongWinRate)) | Mod \(pct(r.moderateWinRate)) | Weak \(pct(r.weakWinRate))
+
+        Stop/Target Sweep:
+        \(r.sweepResults.map { "• \($0.label): WR \(pct($0.winRate)), Exp \(String(format: "%.3f%%", $0.expectancy)), TP1 \($0.tp1Wins) TP2 \($0.tp2Wins) SL \($0.stopped)" }.joined(separator: "\n"))
 
         Score Distribution (Daily):
         \(r.scoreDistribution.map { "\($0.score >= 0 ? "+" : "")\($0.score): \($0.count) bars, \(pct($0.accuracy)) acc, \(String(format: "%+.2f%%", $0.avgMove)) avg move" }.joined(separator: "\n"))

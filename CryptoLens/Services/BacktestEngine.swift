@@ -181,6 +181,10 @@ class BacktestEngine: ObservableObject {
                 } else {
                     tradeResult = nil
                 }
+                let entryContext: TradeEntryContext? = (alignment.contains("bearish") || alignment.contains("bullish"))
+                    ? TradeEntryContext(price: price, isBullish: alignment.contains("bullish"),
+                                        atr: fourHResult.atr?.atr ?? (price * 0.015), oneHStartIdx: oneHIdx)
+                    : nil
 
                 let point = BacktestDataPoint(
                     timestamp: evalTime, price: price,
@@ -200,7 +204,8 @@ class BacktestEngine: ObservableObject {
                     priceAfter3x4H: fourHCandles[i + 3].close,
                     priceAfter6x4H: fourHCandles[i + 6].close,
                     maxFavorable24H: maxFav, maxAdverse24H: maxAdv,
-                    tradeResult: tradeResult
+                    tradeResult: tradeResult,
+                    entryContext: entryContext
                 )
                 points.append(point)
 
@@ -215,6 +220,10 @@ class BacktestEngine: ObservableObject {
             dataPoints = points
             statusMessage = "Computing statistics..."
             result = computeSummary(points: points, symbol: symbol, startDate: startDate, endDate: endDate)
+
+            statusMessage = "Running stop/target sweep..."
+            result?.sweepResults = runSweep(points: points, oneHCandles: oneHCandles)
+
             statusMessage = "Complete: \(points.count) bars evaluated"
         } catch {
             statusMessage = "Error: \(error.localizedDescription)"
@@ -350,6 +359,7 @@ class BacktestEngine: ObservableObject {
                 let w = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
                 return t.isEmpty ? 0 : Double(w) / Double(t.count) * 100
             }(),
+            sweepResults: [],  // Populated after computeSummary
             thresholdSweep: runThresholdSweep(points: points),
             scoreDistribution: computeScoreDistribution(points: points)
         )
@@ -382,6 +392,84 @@ class BacktestEngine: ObservableObject {
             }
         }
         return results.sorted { $0.accuracy24H > $1.accuracy24H }
+    }
+
+    private func runSweep(points: [BacktestDataPoint], oneHCandles: [Candle]) -> [SweepResult] {
+        struct SC {
+            let label: String; let stopDesc: String; let tp1Desc: String; let tp2Desc: String
+            let distances: (Double, Double) -> (Double, Double, Double) // (price, atr) → (stop, tp1, tp2) distances
+        }
+        let configs: [SC] = [
+            SC(label: "0.5/0.75/1.0 ATR", stopDesc: "0.5 ATR", tp1Desc: "0.75 ATR", tp2Desc: "1.0 ATR",
+               distances: { _, a in (a*0.5, a*0.75, a*1.0) }),
+            SC(label: "0.75/0.75/1.5 ATR", stopDesc: "0.75 ATR", tp1Desc: "0.75 ATR", tp2Desc: "1.5 ATR",
+               distances: { _, a in (a*0.75, a*0.75, a*1.5) }),
+            SC(label: "0.75/1.0/2.0 ATR", stopDesc: "0.75 ATR", tp1Desc: "1.0 ATR", tp2Desc: "2.0 ATR",
+               distances: { _, a in (a*0.75, a*1.0, a*2.0) }),
+            SC(label: "1.0/1.0/2.0 ATR", stopDesc: "1.0 ATR", tp1Desc: "1.0 ATR", tp2Desc: "2.0 ATR",
+               distances: { _, a in (a*1.0, a*1.0, a*2.0) }),
+            SC(label: "1.5/1.5/3.0 ATR (current)", stopDesc: "1.5 ATR", tp1Desc: "1.5 ATR", tp2Desc: "3.0 ATR",
+               distances: { _, a in (a*1.5, a*1.5, a*3.0) }),
+            SC(label: "2.0/2.0/4.0 ATR", stopDesc: "2.0 ATR", tp1Desc: "2.0 ATR", tp2Desc: "4.0 ATR",
+               distances: { _, a in (a*2.0, a*2.0, a*4.0) }),
+            SC(label: "0.5%/0.75%/1.0%", stopDesc: "0.5%", tp1Desc: "0.75%", tp2Desc: "1.0%",
+               distances: { p, _ in (p*0.005, p*0.0075, p*0.01) }),
+            SC(label: "0.75%/0.75%/1.25%", stopDesc: "0.75%", tp1Desc: "0.75%", tp2Desc: "1.25%",
+               distances: { p, _ in (p*0.0075, p*0.0075, p*0.0125) }),
+            SC(label: "0.75%/1.0%/1.5%", stopDesc: "0.75%", tp1Desc: "1.0%", tp2Desc: "1.5%",
+               distances: { p, _ in (p*0.0075, p*0.01, p*0.015) }),
+            SC(label: "1.0%/1.0%/1.5%", stopDesc: "1.0%", tp1Desc: "1.0%", tp2Desc: "1.5%",
+               distances: { p, _ in (p*0.01, p*0.01, p*0.015) }),
+            SC(label: "1.0%/1.5%/2.0%", stopDesc: "1.0%", tp1Desc: "1.5%", tp2Desc: "2.0%",
+               distances: { p, _ in (p*0.01, p*0.015, p*0.02) }),
+        ]
+
+        return configs.map { cfg in
+            var tp1W = 0, tp2W = 0, stoppedN = 0, expiredN = 0
+            var totalPnlW = 0.0, totalPnlL = 0.0, totalBars = 0, tradeCount = 0
+
+            for pt in points {
+                guard let ctx = pt.entryContext else { continue }
+                tradeCount += 1
+                let (sd, t1d, t2d) = cfg.distances(ctx.price, ctx.atr)
+                let e = ctx.price
+                let s = ctx.isBullish ? e - sd : e + sd
+                let t1 = ctx.isBullish ? e + t1d : e - t1d
+                let t2 = ctx.isBullish ? e + t2d : e - t2d
+
+                var outcome = "EXPIRED"; var bars = 24
+                for bar in 0..<24 {
+                    let idx = ctx.oneHStartIdx + bar
+                    guard idx < oneHCandles.count else { break }
+                    let c = oneHCandles[idx]
+                    if ctx.isBullish {
+                        if c.low <= s { outcome = "STOPPED"; bars = bar+1; break }
+                        if c.high >= t2 { outcome = "TP2"; bars = bar+1; break }
+                        if c.high >= t1 { outcome = "TP1"; bars = bar+1; break }
+                    } else {
+                        if c.high >= s { outcome = "STOPPED"; bars = bar+1; break }
+                        if c.low <= t2 { outcome = "TP2"; bars = bar+1; break }
+                        if c.low <= t1 { outcome = "TP1"; bars = bar+1; break }
+                    }
+                }
+                totalBars += bars
+                switch outcome {
+                case "TP1": tp1W += 1; totalPnlW += t1d / e * 100
+                case "TP2": tp2W += 1; totalPnlW += t2d / e * 100
+                case "STOPPED": stoppedN += 1; totalPnlL += sd / e * 100
+                default: expiredN += 1
+                }
+            }
+            let wins = tp1W + tp2W
+            let wr = tradeCount > 0 ? Double(wins) / Double(tradeCount) * 100 : 0
+            let avgW = wins > 0 ? totalPnlW / Double(wins) : 0
+            let avgL = stoppedN > 0 ? -totalPnlL / Double(stoppedN) : 0
+            let exp = tradeCount > 0 ? (Double(wins)/Double(tradeCount))*avgW + (Double(stoppedN)/Double(tradeCount))*avgL : 0
+
+            return SweepResult(label: cfg.label, stopDesc: cfg.stopDesc, tp1Desc: cfg.tp1Desc, tp2Desc: cfg.tp2Desc,
+                totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W, stopped: stoppedN, expired: expiredN,
+                winRate: wr, expectancy: exp, avgBarsToOutcome: tradeCount > 0 ? Double(totalBars)/Double(tradeCount) : 0)
+        }.sorted { $0.expectancy > $1.expectancy }
     }
 
     private func computeScoreDistribution(points: [BacktestDataPoint]) -> [ScoreBucket] {

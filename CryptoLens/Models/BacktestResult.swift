@@ -14,6 +14,31 @@ struct TradeSimOutcome: Codable {
     let pnlPercent: Double
 }
 
+/// Stored per-bar so the sweep can re-simulate without refetching.
+struct TradeEntryContext: Codable {
+    let price: Double
+    let isBullish: Bool
+    let atr: Double
+    let oneHStartIdx: Int
+}
+
+/// Sweep result for one stop/target configuration.
+struct SweepResult: Codable, Identifiable {
+    var id: String { label }
+    let label: String
+    let stopDesc: String
+    let tp1Desc: String
+    let tp2Desc: String
+    let totalTrades: Int
+    let tp1Wins: Int
+    let tp2Wins: Int
+    let stopped: Int
+    let expired: Int
+    let winRate: Double
+    let expectancy: Double
+    let avgBarsToOutcome: Double
+}
+
 /// A single evaluation point in the backtest.
 struct BacktestDataPoint: Codable {
     let timestamp: Date
@@ -35,6 +60,7 @@ struct BacktestDataPoint: Codable {
     var maxFavorable24H: Double?
     var maxAdverse24H: Double?
     var tradeResult: TradeSimOutcome?
+    var entryContext: TradeEntryContext?
 
     var directionCorrect4H: Bool? {
         guard let future = priceAfter4H else { return nil }
@@ -102,6 +128,7 @@ struct BacktestSummary: Codable {
     let moderateWinRate: Double
     let weakWinRate: Double
 
+    var sweepResults: [SweepResult]
     let thresholdSweep: [ThresholdResult]
     let scoreDistribution: [ScoreBucket]
 }
