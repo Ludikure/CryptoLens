@@ -86,9 +86,10 @@ enum HistoricalDerivativesService {
             }
 
             for entry in data {
-                guard let ts = entry["fundingTime"] as? Int64,
+                guard let tsNum = entry["fundingTime"] as? NSNumber,
                       let rateStr = entry["fundingRate"] as? String,
                       let rate = Double(rateStr) else { continue }
+                let ts = tsNum.int64Value
                 results.append((Date(timeIntervalSince1970: Double(ts) / 1000), rate * 100))
             }
 
@@ -149,7 +150,8 @@ enum HistoricalDerivativesService {
             }
 
             for entry in data {
-                guard let ts = entry["timestamp"] as? Int64 else { continue }
+                guard let tsNum = entry["timestamp"] as? NSNumber else { continue }
+                let ts = tsNum.int64Value
                 let value: Double
                 if let str = entry[valueKey] as? String, let v = Double(str) { value = v }
                 else if let v = entry[valueKey] as? Double { value = v }

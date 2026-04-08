@@ -187,6 +187,7 @@ struct OptimizerView: View {
                 Button("Clear All Caches", role: .destructive) {
                     CandleCache.clearAll()
                     SnapshotCache.clearAll()
+                    DerivativesCache.clearAll()
                     engine.statusMessage = "Caches cleared"
                 }
 
