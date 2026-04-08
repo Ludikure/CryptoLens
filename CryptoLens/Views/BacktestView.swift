@@ -128,8 +128,10 @@ struct BacktestView: View {
                                 }
                                 HStack {
                                     Text("WR: \(pct(s.winRate))")
+                                    Text("Res: \(pct(s.resolvedWinRate))")
+                                        .foregroundStyle(s.resolvedWinRate >= 55 ? .green : s.resolvedWinRate >= 50 ? .primary : .red)
                                     Spacer()
-                                    Text("TP1:\(s.tp1Wins) TP2:\(s.tp2Wins) SL:\(s.stopped) Exp:\(s.expired)")
+                                    Text("SL:\(s.stopped) Exp:\(s.expired)")
                                 }
                                 .font(.caption2).foregroundStyle(.secondary)
                             }
@@ -203,7 +205,7 @@ struct BacktestView: View {
         • By Strength: Strong \(pct(r.strongWinRate)) | Mod \(pct(r.moderateWinRate)) | Weak \(pct(r.weakWinRate))
 
         Stop/Target Sweep:
-        \(r.sweepResults.map { "• \($0.label): WR \(pct($0.winRate)), Exp \(String(format: "%.3f%%", $0.expectancy)), TP1 \($0.tp1Wins) TP2 \($0.tp2Wins) SL \($0.stopped)" }.joined(separator: "\n"))
+        \(r.sweepResults.map { "• \($0.label): WR \(pct($0.winRate)) Res \(pct($0.resolvedWinRate)), Exp \(String(format: "%.3f%%", $0.expectancy)), TP1 \($0.tp1Wins) TP2 \($0.tp2Wins) SL \($0.stopped) Expired \($0.expired)" }.joined(separator: "\n"))
 
         Score Distribution (Daily):
         \(r.scoreDistribution.map { "\($0.score >= 0 ? "+" : "")\($0.score): \($0.count) bars, \(pct($0.accuracy)) acc, \(String(format: "%+.2f%%", $0.avgMove)) avg move" }.joined(separator: "\n"))

@@ -35,6 +35,7 @@ struct SweepResult: Codable, Identifiable {
     let stopped: Int
     let expired: Int
     let winRate: Double
+    let resolvedWinRate: Double   // wins / (wins + stopped) — excludes expired
     let expectancy: Double
     let avgBarsToOutcome: Double
 }
