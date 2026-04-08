@@ -69,7 +69,7 @@ struct BacktestView: View {
                     row("FLAT accuracy", pct(r.flatAccuracy))
                 }
 
-                Section("Trade Simulation (2.0 ATR stop, 1:1 / 1:2 R:R)") {
+                Section("Trade Simulation (2.0 ATR, 1:1/1:2 R:R, 72h window)") {
                     row("Total Trades", "\(r.totalTrades)")
                     row("Win Rate", String(format: "%.1f%%", r.tradeWinRate))
                     row("TP1 Wins", "\(r.tp1Wins)")

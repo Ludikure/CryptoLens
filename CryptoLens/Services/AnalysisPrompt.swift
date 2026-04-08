@@ -150,7 +150,7 @@ enum AnalysisPrompt {
         ENTRY RULES:
         1. Primary entries must be near current price, anchored to the nearest meaningful level (S/R, fib, EMA) that price is actually interacting with. Check the Price Action Summary and recent candles to confirm price is near or moving toward the proposed entry.
         2. If the best setup requires waiting for a pullback, breakout, or retest, present it as a conditional: "Enter at $X on confirmation of Y." Label it clearly as a conditional setup, separate from any current-price setup.
-        3. Calculate R:R honestly from realistic levels. Minimum acceptable R:R is 1:1.5. If no setup meets 1:1.5 from a realistic entry, say "no trade" and state what conditions would create a setup.
+        3. Calculate R:R honestly from realistic levels. Minimum acceptable R:R is 1:1. If TP1 at 1:1 with a 2 ATR stop aligns with a structural level, that is a valid setup. If no setup meets 1:1 from a realistic entry, say "no trade" and state what conditions would create a setup.
         4. Before proposing any entry, verify: Is price near this level or moving toward it? Is this entry within 1x ATR of current price? If further, explain specifically why waiting for that level is worth it. Does recent candle data support this level holding?
         5. Never move an entry to force R:R compliance. The entry comes from structure. R:R is a consequence, not a target.
         6. If your bias is FLAT — there is no setup. Output "NO SETUP" with a reason and an empty JSON []. Do not present conditional or hypothetical entries.
@@ -1009,7 +1009,13 @@ enum AnalysisPrompt {
                             }
                         }
 
-                        let risk = abs(entry.price - stop)
+                        // Enforce minimum stop distance of 2.0 ATR (backtest-proven optimal)
+                        var adjustedStop = stop
+                        let minStopDist = atr * 2.0
+                        if abs(entry.price - adjustedStop) < minStopDist {
+                            adjustedStop = direction4 == "SHORT" ? entry.price + minStopDist : entry.price - minStopDist
+                        }
+                        let risk = abs(entry.price - adjustedStop)
                         guard risk > 0 else { continue }
 
                         // Position sizing from user settings
@@ -1032,11 +1038,11 @@ enum AnalysisPrompt {
                             return "\(Formatters.formatPrice(t.price)) (\(t.type)) R:R=\(String(format: "%.2f", rr))"
                         }
 
-                        let viable = validTargets.prefix(3).contains { abs($0.price - entry.price) / risk >= 1.5 }
+                        let viable = validTargets.prefix(3).contains { abs($0.price - entry.price) / risk >= 1.0 }
 
                         candidates.append(
                             "Entry \(Formatters.formatPrice(entry.price)) (\(entry.type)) | " +
-                            "Stop \(Formatters.formatPrice(stop)) | " +
+                            "Stop \(Formatters.formatPrice(adjustedStop)) | " +
                             "Risk \(Formatters.formatPrice(risk)) (\(qtyStr) units @ \(Formatters.formatPrice(riskDollars)) risk) | " +
                             "Targets: \(targetLines.joined(separator: ", ")) | " +
                             "Viable: \(viable)"
