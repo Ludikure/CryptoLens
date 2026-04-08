@@ -130,6 +130,58 @@ class BacktestEngine: ObservableObject {
                     maxFav = max(maxHigh - price, price - maxLow); maxAdv = 0
                 }
 
+                // ── Trade Outcome Simulation ──
+                let tradeResult: TradeSimOutcome?
+                if alignment.contains("bearish") || alignment.contains("bullish") {
+                    let simATR = fourHResult.atr?.atr ?? (price * 0.015)
+                    let isBull = alignment.contains("bullish")
+                    let entry = price
+                    let stop = isBull ? entry - simATR * 1.5 : entry + simATR * 1.5
+                    let tp1 = isBull ? entry + simATR * 1.5 : entry - simATR * 1.5
+                    let tp2 = isBull ? entry + simATR * 3.0 : entry - simATR * 3.0
+                    let risk = abs(entry - stop)
+
+                    var scanIdx = oneHIdx
+                    let maxScan = 24
+                    var outcome = "EXPIRED"
+                    var bars = maxScan
+                    var peakFav = 0.0, peakAdv = 0.0
+
+                    for bar in 0..<maxScan {
+                        let idx = scanIdx + bar
+                        guard idx < oneHCandles.count else { break }
+                        let c = oneHCandles[idx]
+                        if isBull {
+                            peakFav = max(peakFav, c.high - entry)
+                            peakAdv = max(peakAdv, entry - c.low)
+                            if c.low <= stop { outcome = "STOPPED"; bars = bar + 1; break }
+                            if c.high >= tp2 { outcome = "TP2"; bars = bar + 1; break }
+                            if c.high >= tp1 { outcome = "TP1"; bars = bar + 1; break }
+                        } else {
+                            peakFav = max(peakFav, entry - c.low)
+                            peakAdv = max(peakAdv, c.high - entry)
+                            if c.high >= stop { outcome = "STOPPED"; bars = bar + 1; break }
+                            if c.low <= tp2 { outcome = "TP2"; bars = bar + 1; break }
+                            if c.low <= tp1 { outcome = "TP1"; bars = bar + 1; break }
+                        }
+                    }
+
+                    let pnl: Double
+                    switch outcome {
+                    case "TP1": pnl = abs(tp1 - entry) / entry * 100
+                    case "TP2": pnl = abs(tp2 - entry) / entry * 100
+                    case "STOPPED": pnl = -risk / entry * 100
+                    default: pnl = 0
+                    }
+
+                    tradeResult = TradeSimOutcome(
+                        entryPrice: entry, stopPrice: stop, tp1Price: tp1, tp2Price: tp2,
+                        riskAmount: risk, outcome: outcome, barsToOutcome: bars,
+                        maxFavorable: peakFav, maxAdverse: peakAdv, pnlPercent: pnl)
+                } else {
+                    tradeResult = nil
+                }
+
                 let point = BacktestDataPoint(
                     timestamp: evalTime, price: price,
                     dailyScore: dailyResult.biasScore, dailyBias: dailyResult.bias,
@@ -147,7 +199,8 @@ class BacktestEngine: ObservableObject {
                     priceAfter4H: fourHCandles[i + 1].close,
                     priceAfter3x4H: fourHCandles[i + 3].close,
                     priceAfter6x4H: fourHCandles[i + 6].close,
-                    maxFavorable24H: maxFav, maxAdverse24H: maxAdv
+                    maxFavorable24H: maxFav, maxAdverse24H: maxAdv,
+                    tradeResult: tradeResult
                 )
                 points.append(point)
 
@@ -235,6 +288,67 @@ class BacktestEngine: ObservableObject {
                 let b = directional.filter { $0.biasAlignment.contains("bearish") }
                 let hits = b.filter { $0.opportunityHit == true }.count
                 return b.isEmpty ? 0 : Double(hits) / Double(b.count) * 100
+            }(),
+            totalTrades: {
+                let trades = points.compactMap(\.tradeResult)
+                return trades.count
+            }(),
+            tp1Wins: points.compactMap(\.tradeResult).filter { $0.outcome == "TP1" }.count,
+            tp2Wins: points.compactMap(\.tradeResult).filter { $0.outcome == "TP2" }.count,
+            stopped: points.compactMap(\.tradeResult).filter { $0.outcome == "STOPPED" }.count,
+            expired: points.compactMap(\.tradeResult).filter { $0.outcome == "EXPIRED" }.count,
+            tradeWinRate: {
+                let t = points.compactMap(\.tradeResult)
+                let wins = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
+                return t.isEmpty ? 0 : Double(wins) / Double(t.count) * 100
+            }(),
+            avgPnlPercent: {
+                let t = points.compactMap(\.tradeResult)
+                return t.isEmpty ? 0 : t.reduce(0.0) { $0 + $1.pnlPercent } / Double(t.count)
+            }(),
+            expectancy: {
+                let t = points.compactMap(\.tradeResult)
+                guard !t.isEmpty else { return 0.0 }
+                let wins = t.filter { $0.pnlPercent > 0 }
+                let losses = t.filter { $0.pnlPercent < 0 }
+                let wr = Double(wins.count) / Double(t.count)
+                let avgW = wins.isEmpty ? 0 : wins.reduce(0.0) { $0 + $1.pnlPercent } / Double(wins.count)
+                let avgL = losses.isEmpty ? 0 : losses.reduce(0.0) { $0 + $1.pnlPercent } / Double(losses.count)
+                return wr * avgW + (1 - wr) * avgL
+            }(),
+            avgBarsToOutcome: {
+                let t = points.compactMap(\.tradeResult)
+                return t.isEmpty ? 0 : Double(t.reduce(0) { $0 + $1.barsToOutcome }) / Double(t.count)
+            }(),
+            trendingWinRate: {
+                let t = points.filter { $0.regime == "TRENDING" }.compactMap(\.tradeResult)
+                let w = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
+                return t.isEmpty ? 0 : Double(w) / Double(t.count) * 100
+            }(),
+            rangingWinRate: {
+                let t = points.filter { $0.regime == "RANGING" }.compactMap(\.tradeResult)
+                let w = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
+                return t.isEmpty ? 0 : Double(w) / Double(t.count) * 100
+            }(),
+            transitioningWinRate: {
+                let t = points.filter { $0.regime == "TRANSITIONING" }.compactMap(\.tradeResult)
+                let w = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
+                return t.isEmpty ? 0 : Double(w) / Double(t.count) * 100
+            }(),
+            strongWinRate: {
+                let t = points.filter { abs($0.dailyScore) >= 7 }.compactMap(\.tradeResult)
+                let w = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
+                return t.isEmpty ? 0 : Double(w) / Double(t.count) * 100
+            }(),
+            moderateWinRate: {
+                let t = points.filter { abs($0.dailyScore) >= 4 && abs($0.dailyScore) < 7 }.compactMap(\.tradeResult)
+                let w = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
+                return t.isEmpty ? 0 : Double(w) / Double(t.count) * 100
+            }(),
+            weakWinRate: {
+                let t = points.filter { abs($0.dailyScore) < 4 }.compactMap(\.tradeResult)
+                let w = t.filter { $0.outcome == "TP1" || $0.outcome == "TP2" }.count
+                return t.isEmpty ? 0 : Double(w) / Double(t.count) * 100
             }(),
             thresholdSweep: runThresholdSweep(points: points),
             scoreDistribution: computeScoreDistribution(points: points)

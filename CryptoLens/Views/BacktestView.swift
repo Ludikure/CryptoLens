@@ -69,6 +69,29 @@ struct BacktestView: View {
                     row("FLAT accuracy", pct(r.flatAccuracy))
                 }
 
+                Section("Trade Simulation (1.5 ATR stop, 1:1 / 1:2 R:R)") {
+                    row("Total Trades", "\(r.totalTrades)")
+                    row("Win Rate", String(format: "%.1f%%", r.tradeWinRate))
+                    row("TP1 Wins", "\(r.tp1Wins)")
+                    row("TP2 Wins", "\(r.tp2Wins)")
+                    row("Stopped Out", "\(r.stopped)")
+                    row("Expired", "\(r.expired)")
+                    row("Expectancy", String(format: "%.3f%%", r.expectancy))
+                    row("Avg Bars to Outcome", String(format: "%.1f hrs", r.avgBarsToOutcome))
+                }
+
+                Section("Trade Win Rate by Regime") {
+                    row("Trending", pct(r.trendingWinRate))
+                    row("Ranging", pct(r.rangingWinRate))
+                    row("Transitioning", pct(r.transitioningWinRate))
+                }
+
+                Section("Trade Win Rate by Score Strength") {
+                    row("Strong (|score| >= 7)", pct(r.strongWinRate))
+                    row("Moderate (4-6)", pct(r.moderateWinRate))
+                    row("Weak (< 4)", pct(r.weakWinRate))
+                }
+
                 Section("Score Distribution (Daily)") {
                     ForEach(r.scoreDistribution) { bucket in
                         HStack {
@@ -148,6 +171,13 @@ struct BacktestView: View {
 
         FLAT Analysis:
         • Total: \(r.totalFlats) | Correct: \(r.correctFlats) | False: \(r.falseFlats) | Accuracy: \(pct(r.flatAccuracy))
+
+        Trade Simulation (1.5 ATR stop, 1:1/1:2 R:R):
+        • Trades: \(r.totalTrades) | Win Rate: \(pct(r.tradeWinRate))
+        • TP1: \(r.tp1Wins) | TP2: \(r.tp2Wins) | Stopped: \(r.stopped) | Expired: \(r.expired)
+        • Expectancy: \(String(format: "%.3f%%", r.expectancy)) | Avg \(String(format: "%.1f", r.avgBarsToOutcome))h
+        • By Regime: Trend \(pct(r.trendingWinRate)) | Range \(pct(r.rangingWinRate)) | Trans \(pct(r.transitioningWinRate))
+        • By Strength: Strong \(pct(r.strongWinRate)) | Mod \(pct(r.moderateWinRate)) | Weak \(pct(r.weakWinRate))
 
         Score Distribution (Daily):
         \(r.scoreDistribution.map { "\($0.score >= 0 ? "+" : "")\($0.score): \($0.count) bars, \(pct($0.accuracy)) acc, \(String(format: "%+.2f%%", $0.avgMove)) avg move" }.joined(separator: "\n"))

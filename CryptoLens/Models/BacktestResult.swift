@@ -1,5 +1,19 @@
 import Foundation
 
+/// Trade simulation result for one bar.
+struct TradeSimOutcome: Codable {
+    let entryPrice: Double
+    let stopPrice: Double
+    let tp1Price: Double
+    let tp2Price: Double
+    let riskAmount: Double
+    let outcome: String        // "TP1", "TP2", "STOPPED", "EXPIRED"
+    let barsToOutcome: Int
+    let maxFavorable: Double
+    let maxAdverse: Double
+    let pnlPercent: Double
+}
+
 /// A single evaluation point in the backtest.
 struct BacktestDataPoint: Codable {
     let timestamp: Date
@@ -20,6 +34,7 @@ struct BacktestDataPoint: Codable {
     var priceAfter6x4H: Double?
     var maxFavorable24H: Double?
     var maxAdverse24H: Double?
+    var tradeResult: TradeSimOutcome?
 
     var directionCorrect4H: Bool? {
         guard let future = priceAfter4H else { return nil }
@@ -70,6 +85,23 @@ struct BacktestSummary: Codable {
     let opportunityRate: Double       // % of directional labels where price moved >1% in direction
     let bullishOpportunity: Double
     let bearishOpportunity: Double
+    // Trade simulation
+    let totalTrades: Int
+    let tp1Wins: Int
+    let tp2Wins: Int
+    let stopped: Int
+    let expired: Int
+    let tradeWinRate: Double
+    let avgPnlPercent: Double
+    let expectancy: Double
+    let avgBarsToOutcome: Double
+    let trendingWinRate: Double
+    let rangingWinRate: Double
+    let transitioningWinRate: Double
+    let strongWinRate: Double
+    let moderateWinRate: Double
+    let weakWinRate: Double
+
     let thresholdSweep: [ThresholdResult]
     let scoreDistribution: [ScoreBucket]
 }
