@@ -2,7 +2,7 @@ import SwiftUI
 
 struct BacktestView: View {
     @StateObject private var engine = BacktestEngine()
-    @State private var startDate = Calendar.current.date(byAdding: .year, value: -2, to: Date())!
+    @State private var startDate = Calendar.current.date(byAdding: .year, value: -5, to: Date())!
     @State private var endDate = Date()
     @State private var symbol = "BTCUSDT"
 

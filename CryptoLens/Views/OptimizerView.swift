@@ -3,7 +3,7 @@ import SwiftUI
 struct OptimizerView: View {
     @StateObject private var engine = OptimizerEngine()
     @State private var market: Market = .crypto
-    @State private var startDate = Calendar.current.date(byAdding: .year, value: -2, to: Date())!
+    @State private var startDate = Calendar.current.date(byAdding: .year, value: -5, to: Date())!
     @State private var endDate = Date()
     @State private var symbolInput = ""
     @State private var symbols: [String] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
