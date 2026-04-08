@@ -136,9 +136,9 @@ class BacktestEngine: ObservableObject {
                     let simATR = fourHResult.atr?.atr ?? (price * 0.015)
                     let isBull = alignment.contains("bullish")
                     let entry = price
-                    let stop = isBull ? entry - simATR * 1.5 : entry + simATR * 1.5
-                    let tp1 = isBull ? entry + simATR * 1.5 : entry - simATR * 1.5
-                    let tp2 = isBull ? entry + simATR * 3.0 : entry - simATR * 3.0
+                    let stop = isBull ? entry - simATR * 2.0 : entry + simATR * 2.0
+                    let tp1 = isBull ? entry + simATR * 2.0 : entry - simATR * 2.0
+                    let tp2 = isBull ? entry + simATR * 4.0 : entry - simATR * 4.0
                     let risk = abs(entry - stop)
 
                     let scanIdx = oneHIdx
@@ -323,7 +323,8 @@ class BacktestEngine: ObservableObject {
                 let wr = Double(wins.count) / Double(t.count)
                 let avgW = wins.isEmpty ? 0 : wins.reduce(0.0) { $0 + $1.pnlPercent } / Double(wins.count)
                 let avgL = losses.isEmpty ? 0 : losses.reduce(0.0) { $0 + $1.pnlPercent } / Double(losses.count)
-                return wr * avgW + (1 - wr) * avgL
+                let lr = Double(losses.count) / Double(t.count)
+                return wr * avgW + lr * avgL
             }(),
             avgBarsToOutcome: {
                 let t = points.compactMap(\.tradeResult)
