@@ -78,19 +78,23 @@ enum IndicatorEngine {
             addv = ADDV.compute(closes: closes, volumes: volumes)
         }
 
-        // ── EMA Regime Classification (price-position based, not stack-based) ──
-        // Where PRICE is relative to EMAs determines the regime — responds immediately
-        // to trend changes instead of waiting months for stack alignment.
+        // ── EMA Regime Classification ──
+        // Two separate concepts:
+        // 1. emaRegime (stack order) → RSI interpretation + EMA gate. Structural, changes slowly.
+        // 2. emaCrossCount (price position) → Layer 1a scoring. Leading, changes fast.
+        // These must NOT be conflated. RSI 70 in a bearish stack is a short signal, not strength.
         enum EMARegime { case bullish, bearish, mixed }
         let emaRegime: EMARegime
         var emaCrossCount = 0
         if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
+            // Stack order → regime
+            if e20 > e50 && e50 > e200 { emaRegime = .bullish }
+            else if e20 < e50 && e50 < e200 { emaRegime = .bearish }
+            else { emaRegime = .mixed }
+            // Price position → scoring
             if current > e20 { emaCrossCount += 1 }
             if current > e50 { emaCrossCount += 1 }
             if current > e200 { emaCrossCount += 1 }
-            if emaCrossCount == 3 { emaRegime = .bullish }
-            else if emaCrossCount == 0 { emaRegime = .bearish }
-            else { emaRegime = .mixed }
         } else {
             emaRegime = .mixed
         }
@@ -290,7 +294,36 @@ enum IndicatorEngine {
         else if score <= -directionalThreshold { bias = "Bearish" }
         else { bias = "Neutral" }
 
-        // Derive bullPercent for backward compatibility (UI + prompt)
+        // ── EMA Structure Gate (structure-aware) ──
+        // Trend structure caps/floors the label. Momentum can soften but not flip.
+        let structureLabel = marketStructure?.label ?? ""
+        let priceBelowAll = emaCrossCount == 0
+        let priceAboveAll = emaCrossCount == 3
+        if let _ = ema20, let _ = ema50, let _ = ema200 {
+            switch emaRegime {
+            case .bearish:
+                if priceBelowAll && !structureLabel.contains("bullish") {
+                    if bias == "Strong Bullish" || bias == "Bullish" || bias == "Neutral" { bias = "Bearish" }
+                } else {
+                    if bias == "Strong Bullish" || bias == "Bullish" { bias = "Neutral" }
+                }
+            case .bullish:
+                if priceAboveAll && !structureLabel.contains("bearish") {
+                    if bias == "Strong Bearish" || bias == "Bearish" || bias == "Neutral" { bias = "Bullish" }
+                } else {
+                    if bias == "Strong Bearish" || bias == "Bearish" { bias = "Neutral" }
+                }
+            case .mixed:
+                break
+            }
+        }
+
+        // Momentum override: only in mixed regime (gate handles bullish/bearish)
+        if emaRegime == .mixed {
+            if momentumOverride == "bullish_reversal" && bias.contains("Bearish") { bias = "Neutral" }
+            if momentumOverride == "bearish_reversal" && bias.contains("Bullish") { bias = "Neutral" }
+        }
+
         #if DEBUG
         print("[MarketScope] [\(label)] score: \(score) → \(bias) | params: \(params.label) | vol: \(String(format: "%.2f", volScalar))")
         #endif

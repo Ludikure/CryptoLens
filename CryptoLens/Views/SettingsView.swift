@@ -132,6 +132,20 @@ struct SettingsView: View {
                     NavigationLink("Optimizer") {
                         OptimizerView()
                     }
+                    if let cp = ScoringParams.loadSaved(for: .crypto) {
+                        HStack {
+                            Text("Crypto Params")
+                            Spacer()
+                            Text(cp.label).font(.caption2).foregroundStyle(.green)
+                        }
+                    }
+                    if let sp = ScoringParams.loadSaved(for: .stock) {
+                        HStack {
+                            Text("Stock Params")
+                            Spacer()
+                            Text(sp.label).font(.caption2).foregroundStyle(.green)
+                        }
+                    }
                 }
 
                 // About

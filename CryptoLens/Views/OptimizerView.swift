@@ -6,6 +6,7 @@ struct OptimizerView: View {
     @State private var startDate = Calendar.current.date(byAdding: .year, value: -5, to: Date())!
     @State private var endDate = Date()
     @State private var symbolInput = ""
+    @State private var showAppliedAlert = false
     @State private var symbols: [String] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
     var body: some View {
@@ -107,8 +108,24 @@ struct OptimizerView: View {
                 Section {
                     Button("Apply Winner to \(market == .crypto ? "Crypto" : "Stock")") {
                         engine.applyBest(for: market)
+                        showAppliedAlert = true
                     }
                     .foregroundStyle(.green)
+
+                    // Show currently active params
+                    if let active = ScoringParams.loadSaved(for: market) {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            Text("Active: \(active.label)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        HStack {
+                            Image(systemName: "info.circle").foregroundStyle(.secondary)
+                            Text("Using defaults")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
 
@@ -174,6 +191,11 @@ struct OptimizerView: View {
             }
         }
         .navigationTitle("Optimizer")
+        .alert("Parameters Applied", isPresented: $showAppliedAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Optimized \(market == .crypto ? "crypto" : "stock") parameters are now active. Next analysis will use them.")
+        }
         .toolbar {
             if engine.bestResult != nil {
                 Button {
