@@ -43,8 +43,10 @@ enum AnalysisPrompt {
         Rule 2 — DAILY + 4H LABELS CONFLICT (one Bearish, one Bullish):
            → If Daily |score| >= 5: Bias = Daily direction. The 4H opposition is a counter-trend pullback providing a better entry. Proceed to Step 4.
            → Output: "Bias: [DIRECTION] (Rule 2 override — Daily score X, 4H pullback providing entry)"
-           → If Daily |score| < 5: Bias = FLAT. Skip Step 4. No trade.
-           → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label], insufficient Daily conviction to override)"
+           → If 4H |score| >= 5 but Daily |score| < 5: Bias = 4H direction. Daily is indecisive, 4H has conviction. Proceed to Step 4.
+           → Output: "Bias: [DIRECTION] (Rule 2 — 4H score X overrides weak Daily)"
+           → If both |score| < 5: Bias = FLAT. Skip Step 4. No trade.
+           → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label], neither has sufficient conviction)"
 
         Rule 3 — DAILY OR 4H LABEL IS NEUTRAL:
            → If one is directional and the other is Neutral: Bias = the directional label. Use 1H for timing.
@@ -62,13 +64,17 @@ enum AnalysisPrompt {
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
         SCORE CONVICTION GATE (evaluate before kill gate and Step 4):
-        The Daily bias score is pre-computed and shown in the data header. Backtesting over 5 years (10,950 bars) proved:
-        - |score| >= 7: 60% resolved win rate, +0.750% expectancy per trade
-        - |score| 5-6: tradeable with strict confluence requirements (all 3: level + signal + risk)
-        - |score| < 5: below 50% — actively harmful
-        If Daily |bias score| < 5:
+        Both Daily and 4H bias scores are pre-computed. Use the STRONGER score (higher absolute value) for gating.
+        Backtesting over 5 years (10,950 bars, 2.0 ATR stop, 72h window) proved:
+        - Both |score| >= 7: 66% resolved WR, +1.023% expectancy (best)
+        - D/4H conflict with stronger |score| >= 7: 69% resolved WR, +1.161% expectancy (pullback entry)
+        - Either |score| >= 7: 57% resolved WR, +0.510% expectancy
+        - Either |score| 5-6: 55% resolved WR, +0.452% expectancy (with full confluence)
+        - Both |score| < 5: ~50% — no edge
+
+        If max(|Daily score|, |4H score|) < 5:
           → NO SETUP regardless of bias alignment or confluence.
-          → Output: "NO SETUP — Daily conviction insufficient (score: X, minimum: ±5). Watching for score to strengthen."
+          → Output: "NO SETUP — Insufficient conviction (Daily: X, 4H: Y, minimum: ±5 on either). Watching for score to strengthen."
           → Proceed to Risk Factors with what would change the score.
           → Output empty JSON [].
         This gate fires BEFORE the kill condition gate.
@@ -110,12 +116,12 @@ enum AnalysisPrompt {
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2 rows showing Price, Why, and R:R.
-        Rate conviction (SCORE-BASED — backtest-validated):
-        - HIGH: Daily |score| >= 8, D+4H aligned, level + signal + risk all present, no macro event within 12 hours. These setups have the highest expectancy.
-        - MODERATE: Daily |score| >= 7, D+4H aligned or Rule 2 override, at least 2 of 3 (level/signal/risk) present, no macro event within 4 hours.
-        - MODERATE-LOW: Daily |score| 5-6. ONLY trade if all three exist (level + signal + risk). One missing = no trade. This range is marginal — be selective. Prefer setups at multi-timeframe confluence levels with clear rejection signals. Skip if "close but not quite."
-        - LOW: Daily |score| < 5, OR macro event within 2 hours. → NO TRADE.
-        The score conviction gate already filters out LOW — this section distinguishes HIGH from MODERATE among qualifying setups.
+        Rate conviction (SCORE-BASED — backtest-validated over 5 years):
+        - HIGH: Both Daily AND 4H |score| >= 7 (66% resolved WR, +1.023% expectancy). OR: D/4H conflict with Daily |score| >= 7 — pullback entry (69% resolved WR, +1.161% expectancy). Level + signal + risk all present. No macro event within 12 hours.
+        - MODERATE: Daily |score| >= 7 with 4H any value (61% resolved WR). OR: 4H |score| >= 7 with Daily any value (55% resolved WR). At least 2 of 3 (level/signal/risk) present. No macro event within 4 hours.
+        - MODERATE-LOW: Either Daily or 4H |score| 5-6. ONLY trade if all three exist (level + signal + risk). One missing = no trade. This range is marginal — be selective. Prefer setups at multi-timeframe confluence levels with clear rejection signals.
+        - LOW: Both |score| < 5, OR macro event within 2 hours. → NO TRADE.
+        The score conviction gate already filters out LOW. Direction follows the timeframe with the stronger |score|. If both are equal, Daily has authority.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
@@ -220,7 +226,7 @@ enum AnalysisPrompt {
         State which rule fired: "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback." This must match your Step 3 declaration.
 
         ## Trade Setup
-        Only if Daily |score| >= 5, bias is LONG or SHORT, and conviction is MODERATE-LOW+. Present as a markdown table:
+        Only if max(|Daily score|, |4H score|) >= 5, bias is LONG or SHORT, and conviction is MODERATE-LOW+. Present as a markdown table:
         | Level | Price | Why | R:R |
         |-------|-------|-----|-----|
         | Entry | $X | reason | - |
@@ -231,7 +237,7 @@ enum AnalysisPrompt {
         Conviction: HIGH / MODERATE / MODERATE-LOW
         Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
-        If Daily |score| < 5, bias is FLAT, or conviction is LOW:
+        If both |Daily score| and |4H score| < 5, bias is FLAT, or conviction is LOW:
         "NO SETUP — [specific reason]." Skip the table entirely.
 
         ## Risk Factors
