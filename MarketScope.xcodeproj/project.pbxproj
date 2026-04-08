@@ -57,6 +57,7 @@
 		5A12CD0571201B779989DCE1 /* NavigationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608D366EBB5762F3FAEB5E7B /* NavigationCoordinator.swift */; };
 		5C7FDA370C9AE19DFA2D31E3 /* BackgroundRefreshManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD5DC1D4B6985572D77BF179 /* BackgroundRefreshManager.swift */; };
 		5CCE623F7BA2E6CB6A441EA2 /* VolumeProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 312DE29A86DEB38F755C0596 /* VolumeProfile.swift */; };
+		5EECD991E44E2BD735AFDDBF /* LayerDiagnostic.swift in Sources */ = {isa = PBXBuildFile; fileRef = E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */; };
 		62795D11B0D1547323A7837D /* IndicatorTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACC70EF9EA70BD6354CD915 /* IndicatorTableView.swift */; };
 		645957246AA55759B2DBDC92 /* DerivativesData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 082FF9FCE52776C592BFE849 /* DerivativesData.swift */; };
 		67394120CA5C7843E63E02C4 /* OptimizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B04F275F9252C0997309B63 /* OptimizerView.swift */; };
@@ -249,6 +250,7 @@
 		DD5DC1D4B6985572D77BF179 /* BackgroundRefreshManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackgroundRefreshManager.swift; sourceTree = "<group>"; };
 		DD8AFB3FA541ACB57F2BA870 /* ScoringParams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoringParams.swift; sourceTree = "<group>"; };
 		DE62F3218DFF4127E5AD290A /* CandleCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandleCache.swift; sourceTree = "<group>"; };
+		E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerDiagnostic.swift; sourceTree = "<group>"; };
 		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E687573C82B61768A3DA2604 /* AnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisService.swift; sourceTree = "<group>"; };
 		EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeSetup.swift; sourceTree = "<group>"; };
@@ -307,6 +309,7 @@
 				712D5923C993CB356F7E558C /* FavoritesStore.swift */,
 				EF69570E9D61A3D79BB147E9 /* FinnhubProvider.swift */,
 				265CADECA7DA8D2B4EC1B20A /* GeminiService.swift */,
+				E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */,
 				09AAF6BFAA40D31F154B42C7 /* MacroDataService.swift */,
 				608D366EBB5762F3FAEB5E7B /* NavigationCoordinator.swift */,
 				2375646B3479EA716AE7270B /* NetworkMonitor.swift */,
@@ -639,6 +642,7 @@
 				C6BB796BC7207CC9E1E8E40D /* IndicatorResult.swift in Sources */,
 				62795D11B0D1547323A7837D /* IndicatorTableView.swift in Sources */,
 				52D9347C7ADB28DF90D6E1E3 /* InfoTooltip.swift in Sources */,
+				5EECD991E44E2BD735AFDDBF /* LayerDiagnostic.swift in Sources */,
 				DD41AFA234F03EFA66B4D337 /* MACD.swift in Sources */,
 				7D4EB1918FE1BBF9492608B4 /* MacroContextView.swift in Sources */,
 				8FBDB414578031715BF63F96 /* MacroDataService.swift in Sources */,

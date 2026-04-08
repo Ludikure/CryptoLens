@@ -10,12 +10,12 @@ enum ScoringFunction {
         let isDaily = s.timeframe == "1d" || s.timeframe == "D"
         let is4H = s.timeframe == "4h"
 
-        // ── Regime classification from emaCrossCount ──
+        // ── Regime classification from EMA stack order (NOT price position) ──
         enum EMARegime { case bullish, bearish, mixed }
         let emaRegime: EMARegime
         if s.ema20 != nil && s.ema50 != nil && s.ema200 != nil {
-            if s.emaCrossCount == 3 { emaRegime = .bullish }
-            else if s.emaCrossCount == 0 { emaRegime = .bearish }
+            if s.stackBullish { emaRegime = .bullish }
+            else if s.stackBearish { emaRegime = .bearish }
             else { emaRegime = .mixed }
         } else {
             emaRegime = .mixed
@@ -168,6 +168,28 @@ enum ScoringFunction {
         else if score <= -strongThreshold { bias = "Strong Bearish" }
         else if score <= -directionalThreshold { bias = "Bearish" }
         else { bias = "Neutral" }
+
+        // ── EMA Structure Gate ──
+        let priceBelowAll = s.emaCrossCount == 0
+        let priceAboveAll = s.emaCrossCount == 3
+        if s.ema20 != nil && s.ema50 != nil && s.ema200 != nil {
+            switch emaRegime {
+            case .bearish:
+                if priceBelowAll && !s.structureBullish {
+                    if bias == "Strong Bullish" || bias == "Bullish" || bias == "Neutral" { bias = "Bearish" }
+                } else {
+                    if bias == "Strong Bullish" || bias == "Bullish" { bias = "Neutral" }
+                }
+            case .bullish:
+                if priceAboveAll && !s.structureBearish {
+                    if bias == "Strong Bearish" || bias == "Bearish" || bias == "Neutral" { bias = "Bullish" }
+                } else {
+                    if bias == "Strong Bearish" || bias == "Bearish" { bias = "Neutral" }
+                }
+            case .mixed:
+                break
+            }
+        }
 
         // ── Exhaustion cap ──
         if abs(score) > 8 && (bias == "Strong Bullish" || bias == "Strong Bearish") {

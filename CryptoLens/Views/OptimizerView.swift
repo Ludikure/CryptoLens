@@ -8,6 +8,9 @@ struct OptimizerView: View {
     @State private var symbolInput = ""
     @State private var showAppliedAlert = false
     @State private var symbols: [String] = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    @State private var layerResults: [LayerDiagnostic.LayerResult] = []
+    @State private var marginalResults: [LayerDiagnostic.LayerResult] = []
+    @State private var showDiagnostic = false
 
     var body: some View {
         List {
@@ -186,8 +189,58 @@ struct OptimizerView: View {
                     SnapshotCache.clearAll()
                     engine.statusMessage = "Caches cleared"
                 }
+
+                Button("Run Layer Diagnostic") {
+                    let params = ScoringParams.loadSaved(for: market) ?? (market == .crypto ? .cryptoDefault : .stockDefault)
+                    // Collect all cached snapshots across symbols
+                    var allSnaps = [ScoringSnapshot]()
+                    for sym in symbols {
+                        if let snaps = SnapshotCache.load(symbol: sym, timeframe: "daily_4h") {
+                            allSnaps.append(contentsOf: snaps)
+                        }
+                    }
+                    guard !allSnaps.isEmpty else {
+                        engine.statusMessage = "No cached snapshots — run optimizer first"
+                        return
+                    }
+                    layerResults = LayerDiagnostic.diagnose(snapshots: allSnaps)
+                    marginalResults = LayerDiagnostic.marginalContribution(snapshots: allSnaps, baseParams: params)
+                    showDiagnostic = true
+                    engine.statusMessage = "Diagnostic: \(allSnaps.count) snapshots analyzed"
+                }
             } header: {
-                Text("Cache")
+                Text("Cache & Diagnostics")
+            }
+
+            if showDiagnostic {
+                Section("Isolated Layer Accuracy") {
+                    ForEach(layerResults) { r in
+                        HStack {
+                            Text(r.name).font(.caption)
+                            Spacer()
+                            Text(String(format: "%.1f%%", r.accuracy24H))
+                                .fontWeight(.bold)
+                                .foregroundStyle(r.accuracy24H >= 55 ? .green : r.accuracy24H < 50 ? .red : .primary)
+                            Text(String(format: "%.0f", r.avgContribution))
+                                .font(.caption2).foregroundStyle(.secondary).frame(width: 25)
+                        }
+                    }
+                }
+
+                Section("Marginal Contribution (remove → accuracy)") {
+                    ForEach(marginalResults) { r in
+                        HStack {
+                            Text(r.name).font(.caption)
+                            Spacer()
+                            Text(String(format: "%.1f%%", r.accuracy24H))
+                                .fontWeight(.bold)
+                                .foregroundStyle(r.name == "Base (all layers)" ? .blue :
+                                    r.accuracy24H > (marginalResults.first?.accuracy24H ?? 0) ? .green : .primary)
+                            Text("\(r.totalDirectional)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
         }
         .navigationTitle("Optimizer")
