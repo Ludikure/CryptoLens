@@ -41,9 +41,9 @@ enum AnalysisPrompt {
            → Output: "Bias: [DIRECTION] (Rule 1 — D+4H aligned [direction], 1H [state] classified as counter-trend pullback)"
 
         Rule 2 — DAILY + 4H LABELS CONFLICT (one Bearish, one Bullish):
-           → If Daily |score| >= 7: Bias = Daily direction. The 4H opposition is a counter-trend pullback providing a better entry. Proceed to Step 4.
+           → If Daily |score| >= 5: Bias = Daily direction. The 4H opposition is a counter-trend pullback providing a better entry. Proceed to Step 4.
            → Output: "Bias: [DIRECTION] (Rule 2 override — Daily score X, 4H pullback providing entry)"
-           → If Daily |score| < 7: Bias = FLAT. Skip Step 4. No trade.
+           → If Daily |score| < 5: Bias = FLAT. Skip Step 4. No trade.
            → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label], insufficient Daily conviction to override)"
 
         Rule 3 — DAILY OR 4H LABEL IS NEUTRAL:
@@ -64,11 +64,11 @@ enum AnalysisPrompt {
         SCORE CONVICTION GATE (evaluate before kill gate and Step 4):
         The Daily bias score is pre-computed and shown in the data header. Backtesting over 5 years (10,950 bars) proved:
         - |score| >= 7: 60% resolved win rate, +0.750% expectancy per trade
-        - |score| < 7: ~50% resolved win rate, marginal expectancy
-        - |score| < 4: below 50% — actively harmful
-        If Daily |bias score| < 7:
+        - |score| 5-6: tradeable with strict confluence requirements (all 3: level + signal + risk)
+        - |score| < 5: below 50% — actively harmful
+        If Daily |bias score| < 5:
           → NO SETUP regardless of bias alignment or confluence.
-          → Output: "NO SETUP — Daily conviction insufficient (score: X, minimum: ±7). Watching for score to strengthen."
+          → Output: "NO SETUP — Daily conviction insufficient (score: X, minimum: ±5). Watching for score to strengthen."
           → Proceed to Risk Factors with what would change the score.
           → Output empty JSON [].
         This gate fires BEFORE the kill condition gate.
@@ -112,9 +112,9 @@ enum AnalysisPrompt {
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2 rows showing Price, Why, and R:R.
         Rate conviction (SCORE-BASED — backtest-validated):
         - HIGH: Daily |score| >= 8, D+4H aligned, level + signal + risk all present, no macro event within 12 hours. These setups have the highest expectancy.
-        - MODERATE: Daily |score| = 7, D+4H aligned or Rule 3 applies, at least 2 of 3 (level/signal/risk) present, no macro event within 4 hours.
-        - LOW: Daily |score| < 7, OR macro event within 2 hours, OR fewer than 2 confluences. → NO TRADE.
-        - FLAT: D+4H labels conflict, or both Neutral. → NO TRADE.
+        - MODERATE: Daily |score| >= 7, D+4H aligned or Rule 2 override, at least 2 of 3 (level/signal/risk) present, no macro event within 4 hours.
+        - MODERATE-LOW: Daily |score| 5-6. ONLY trade if all three exist (level + signal + risk). One missing = no trade. This range is marginal — be selective. Prefer setups at multi-timeframe confluence levels with clear rejection signals. Skip if "close but not quite."
+        - LOW: Daily |score| < 5, OR macro event within 2 hours. → NO TRADE.
         The score conviction gate already filters out LOW — this section distinguishes HIGH from MODERATE among qualifying setups.
         One line: what makes it work, what kills it.
 
@@ -220,7 +220,7 @@ enum AnalysisPrompt {
         State which rule fired: "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback." This must match your Step 3 declaration.
 
         ## Trade Setup
-        Only if Daily |score| >= 7, bias is LONG or SHORT, and conviction is MODERATE+. Present as a markdown table:
+        Only if Daily |score| >= 5, bias is LONG or SHORT, and conviction is MODERATE-LOW+. Present as a markdown table:
         | Level | Price | Why | R:R |
         |-------|-------|-----|-----|
         | Entry | $X | reason | - |
@@ -228,10 +228,10 @@ enum AnalysisPrompt {
         | TP1 | $X | reason | 1:X |
         | TP2 | $X | reason | 1:X |
 
-        Conviction: HIGH / MODERATE
+        Conviction: HIGH / MODERATE / MODERATE-LOW
         Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
-        If Daily |score| < 7, bias is FLAT, or conviction is LOW:
+        If Daily |score| < 5, bias is FLAT, or conviction is LOW:
         "NO SETUP — [specific reason]." Skip the table entirely.
 
         ## Risk Factors
