@@ -112,8 +112,8 @@ enum ScoringFunction {
             score += s.crossAssetSignal * p.crossAssetWeight
         }
 
-        // ── Layer 6: Derivatives (daily crypto only, non-price-derived) ──
-        if isDaily && s.isCrypto {
+        // ── Layer 6: Derivatives (crypto only, non-price-derived) ──
+        if s.isCrypto {
             score += s.derivativesCombinedSignal * p.derivativesWeight
         }
 
@@ -174,36 +174,39 @@ enum ScoringFunction {
         else if score <= -directionalThreshold { bias = "Bearish" }
         else { bias = "Neutral" }
 
-        // ── EMA Structure Gate ──
-        let priceBelowAll = s.emaCrossCount == 0
-        let priceAboveAll = s.emaCrossCount == 3
-        if s.ema20 != nil && s.ema50 != nil && s.ema200 != nil {
-            switch emaRegime {
-            case .bearish:
-                if priceBelowAll && !s.structureBullish {
-                    if bias == "Strong Bullish" || bias == "Bullish" || bias == "Neutral" { bias = "Bearish" }
-                } else {
-                    if bias == "Strong Bullish" || bias == "Bullish" { bias = "Neutral" }
+        // ── Post-processing gates (skipped in diagnostic isolation mode) ──
+        if !p.skipGates {
+            // EMA Structure Gate
+            let priceBelowAll = s.emaCrossCount == 0
+            let priceAboveAll = s.emaCrossCount == 3
+            if s.ema20 != nil && s.ema50 != nil && s.ema200 != nil {
+                switch emaRegime {
+                case .bearish:
+                    if priceBelowAll && !s.structureBullish {
+                        if bias == "Strong Bullish" || bias == "Bullish" || bias == "Neutral" { bias = "Bearish" }
+                    } else {
+                        if bias == "Strong Bullish" || bias == "Bullish" { bias = "Neutral" }
+                    }
+                case .bullish:
+                    if priceAboveAll && !s.structureBearish {
+                        if bias == "Strong Bearish" || bias == "Bearish" || bias == "Neutral" { bias = "Bullish" }
+                    } else {
+                        if bias == "Strong Bearish" || bias == "Bearish" { bias = "Neutral" }
+                    }
+                case .mixed:
+                    break
                 }
-            case .bullish:
-                if priceAboveAll && !s.structureBearish {
-                    if bias == "Strong Bearish" || bias == "Bearish" || bias == "Neutral" { bias = "Bullish" }
-                } else {
-                    if bias == "Strong Bearish" || bias == "Bearish" { bias = "Neutral" }
-                }
-            case .mixed:
-                break
             }
-        }
 
-        // ── Exhaustion cap ──
-        if abs(score) > 8 && (bias == "Strong Bullish" || bias == "Strong Bearish") {
-            bias = bias.contains("Bullish") ? "Bullish" : "Bearish"
-        }
+            // Exhaustion cap
+            if abs(score) > 8 && (bias == "Strong Bullish" || bias == "Strong Bearish") {
+                bias = bias.contains("Bullish") ? "Bullish" : "Bearish"
+            }
 
-        // ── Ranging override (daily only) ──
-        if isDaily && s.adxValue < 20 && abs(score) < strongThreshold {
-            bias = "Neutral"
+            // Ranging override (daily only)
+            if isDaily && s.adxValue < 20 && abs(score) < strongThreshold {
+                bias = "Neutral"
+            }
         }
 
         return (score: score, bias: bias)

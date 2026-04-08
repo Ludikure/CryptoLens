@@ -257,12 +257,14 @@ class OptimizerEngine: ObservableObject {
     private func buildSnapshotsForSymbol(symbol: String, market: Market,
                                           startDate: Date, endDate: Date) async throws -> [ScoringSnapshot] {
         // Check cache first
+        let isCrypto = market == .crypto
         if let cached = SnapshotCache.load(symbol: symbol, timeframe: "daily_4h") {
             let filtered = cached.filter { $0.timestamp >= startDate && $0.timestamp <= endDate }
-            if filtered.count >= 50 { return filtered }
+            // Invalidate cache if crypto snapshots lack derivatives data
+            let hasDerivatives = !isCrypto || filtered.contains { $0.derivativesCombinedSignal != 0 }
+            if filtered.count >= 50 && hasDerivatives { return filtered }
         }
 
-        let isCrypto = market == .crypto
         let warmupDays: TimeInterval = 220 * 86400
         let fetchStart = startDate.addingTimeInterval(-warmupDays)
 

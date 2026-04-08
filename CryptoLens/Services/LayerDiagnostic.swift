@@ -73,6 +73,7 @@ enum LayerDiagnostic {
         p.dailyDirectionalThreshold = 1; p.dailyStrongThreshold = 99
         p.fourHDirectionalThreshold = 1; p.fourHStrongThreshold = 99
         p.useAdaptive = false
+        p.skipGates = true  // skip EMA structure gate & ranging override for true isolation
         configure(&p)
         return p
     }

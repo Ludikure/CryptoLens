@@ -146,6 +146,9 @@ class BacktestEngine: ObservableObject {
                     var outcome = "EXPIRED"
                     var bars = maxScan
                     var peakFav = 0.0, peakAdv = 0.0
+                    let trailTrigger = simATR * 1.0  // Move stop to breakeven after 1.0 ATR favorable
+                    var currentStop = stop
+                    var trailed = false
 
                     for bar in 0..<maxScan {
                         let idx = scanIdx + bar
@@ -154,13 +157,19 @@ class BacktestEngine: ObservableObject {
                         if isBull {
                             peakFav = max(peakFav, c.high - entry)
                             peakAdv = max(peakAdv, entry - c.low)
-                            if c.low <= stop { outcome = "STOPPED"; bars = bar + 1; break }
+                            if !trailed && peakFav >= trailTrigger { currentStop = entry; trailed = true }
+                            if c.low <= currentStop {
+                                outcome = trailed ? "BREAKEVEN" : "STOPPED"; bars = bar + 1; break
+                            }
                             if c.high >= tp2 { outcome = "TP2"; bars = bar + 1; break }
                             if c.high >= tp1 { outcome = "TP1"; bars = bar + 1; break }
                         } else {
                             peakFav = max(peakFav, entry - c.low)
                             peakAdv = max(peakAdv, c.high - entry)
-                            if c.high >= stop { outcome = "STOPPED"; bars = bar + 1; break }
+                            if !trailed && peakFav >= trailTrigger { currentStop = entry; trailed = true }
+                            if c.high >= currentStop {
+                                outcome = trailed ? "BREAKEVEN" : "STOPPED"; bars = bar + 1; break
+                            }
                             if c.low <= tp2 { outcome = "TP2"; bars = bar + 1; break }
                             if c.low <= tp1 { outcome = "TP1"; bars = bar + 1; break }
                         }
@@ -171,6 +180,7 @@ class BacktestEngine: ObservableObject {
                     case "TP1": pnl = abs(tp1 - entry) / entry * 100
                     case "TP2": pnl = abs(tp2 - entry) / entry * 100
                     case "STOPPED": pnl = -risk / entry * 100
+                    case "BREAKEVEN": pnl = 0
                     default: pnl = 0
                     }
 
@@ -305,6 +315,7 @@ class BacktestEngine: ObservableObject {
             tp1Wins: points.compactMap(\.tradeResult).filter { $0.outcome == "TP1" }.count,
             tp2Wins: points.compactMap(\.tradeResult).filter { $0.outcome == "TP2" }.count,
             stopped: points.compactMap(\.tradeResult).filter { $0.outcome == "STOPPED" }.count,
+            breakeven: points.compactMap(\.tradeResult).filter { $0.outcome == "BREAKEVEN" }.count,
             expired: points.compactMap(\.tradeResult).filter { $0.outcome == "EXPIRED" }.count,
             tradeWinRate: {
                 let t = points.compactMap(\.tradeResult)
@@ -419,7 +430,7 @@ class BacktestEngine: ObservableObject {
         var results = [SweepResult]()
         for window in scanWindows {
             for cfg in sizeConfigs {
-                var tp1W = 0, tp2W = 0, stoppedN = 0, expiredN = 0
+                var tp1W = 0, tp2W = 0, stoppedN = 0, breakEvenN = 0, expiredN = 0
                 var totalPnlW = 0.0, totalPnlL = 0.0, totalBars = 0, tradeCount = 0
 
                 for pt in points {
@@ -432,16 +443,27 @@ class BacktestEngine: ObservableObject {
                     let t2 = ctx.isBullish ? e + t2d : e - t2d
 
                     var outcome = "EXPIRED"; var bars = window
+                    let trailTrigger = sd  // 1.0x the stop distance as trail trigger
+                    var currentStop = s
+                    var trailed = false
                     for bar in 0..<window {
                         let idx = ctx.oneHStartIdx + bar
                         guard idx < oneHCandles.count else { break }
                         let c = oneHCandles[idx]
                         if ctx.isBullish {
-                            if c.low <= s { outcome = "STOPPED"; bars = bar+1; break }
+                            let fav = c.high - e
+                            if !trailed && fav >= trailTrigger { currentStop = e; trailed = true }
+                            if c.low <= currentStop {
+                                outcome = trailed ? "BREAKEVEN" : "STOPPED"; bars = bar+1; break
+                            }
                             if c.high >= t2 { outcome = "TP2"; bars = bar+1; break }
                             if c.high >= t1 { outcome = "TP1"; bars = bar+1; break }
                         } else {
-                            if c.high >= s { outcome = "STOPPED"; bars = bar+1; break }
+                            let fav = e - c.low
+                            if !trailed && fav >= trailTrigger { currentStop = e; trailed = true }
+                            if c.high >= currentStop {
+                                outcome = trailed ? "BREAKEVEN" : "STOPPED"; bars = bar+1; break
+                            }
                             if c.low <= t2 { outcome = "TP2"; bars = bar+1; break }
                             if c.low <= t1 { outcome = "TP1"; bars = bar+1; break }
                         }
@@ -451,11 +473,12 @@ class BacktestEngine: ObservableObject {
                     case "TP1": tp1W += 1; totalPnlW += t1d / e * 100
                     case "TP2": tp2W += 1; totalPnlW += t2d / e * 100
                     case "STOPPED": stoppedN += 1; totalPnlL += sd / e * 100
+                    case "BREAKEVEN": breakEvenN += 1
                     default: expiredN += 1
                     }
                 }
                 let wins = tp1W + tp2W
-                let resolved = wins + stoppedN
+                let resolved = wins + stoppedN + breakEvenN
                 let wr = tradeCount > 0 ? Double(wins) / Double(tradeCount) * 100 : 0
                 let resolvedWR = resolved > 0 ? Double(wins) / Double(resolved) * 100 : 0
                 let avgW = wins > 0 ? totalPnlW / Double(wins) : 0
@@ -465,7 +488,7 @@ class BacktestEngine: ObservableObject {
 
                 results.append(SweepResult(
                     label: "\(cfg.label) / \(window)h", stopDesc: cfg.stopDesc, tp1Desc: cfg.tp1Desc, tp2Desc: cfg.tp2Desc,
-                    totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W, stopped: stoppedN, expired: expiredN,
+                    totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W, stopped: stoppedN, breakeven: breakEvenN, expired: expiredN,
                     winRate: wr, resolvedWinRate: resolvedWR, expectancy: exp,
                     avgBarsToOutcome: tradeCount > 0 ? Double(totalBars)/Double(tradeCount) : 0))
             }
@@ -474,7 +497,7 @@ class BacktestEngine: ObservableObject {
         let bestCfg = SC(label: "2.0/2.0/4.0 ATR", stopDesc: "2.0 ATR", tp1Desc: "2.0 ATR", tp2Desc: "4.0 ATR",
                          distances: { _, a in (a*2.0, a*2.0, a*4.0) })
         for (filterLabel, minScore) in [("all", 0), ("|s|≥3", 3), ("|s|≥4", 4), ("|s|≥5", 5), ("|s|≥6", 6), ("|s|≥7", 7)] {
-            var tp1W = 0, tp2W = 0, stoppedN = 0, expiredN = 0
+            var tp1W = 0, tp2W = 0, stoppedN = 0, breakEvenN = 0, expiredN = 0
             var totalPnlW = 0.0, totalPnlL = 0.0, totalBars = 0, tradeCount = 0
             for pt in points {
                 guard let ctx = pt.entryContext, abs(pt.dailyScore) >= minScore else { continue }
@@ -485,16 +508,27 @@ class BacktestEngine: ObservableObject {
                 let t1 = ctx.isBullish ? e + t1d : e - t1d
                 let t2 = ctx.isBullish ? e + t2d : e - t2d
                 var outcome = "EXPIRED"; var bars = 72
+                let trailTrigger = sd
+                var currentStop = s
+                var trailed = false
                 for bar in 0..<72 {
                     let idx = ctx.oneHStartIdx + bar
                     guard idx < oneHCandles.count else { break }
                     let c = oneHCandles[idx]
                     if ctx.isBullish {
-                        if c.low <= s { outcome = "STOPPED"; bars = bar+1; break }
+                        let fav = c.high - e
+                        if !trailed && fav >= trailTrigger { currentStop = e; trailed = true }
+                        if c.low <= currentStop {
+                            outcome = trailed ? "BREAKEVEN" : "STOPPED"; bars = bar+1; break
+                        }
                         if c.high >= t2 { outcome = "TP2"; bars = bar+1; break }
                         if c.high >= t1 { outcome = "TP1"; bars = bar+1; break }
                     } else {
-                        if c.high >= s { outcome = "STOPPED"; bars = bar+1; break }
+                        let fav = e - c.low
+                        if !trailed && fav >= trailTrigger { currentStop = e; trailed = true }
+                        if c.high >= currentStop {
+                            outcome = trailed ? "BREAKEVEN" : "STOPPED"; bars = bar+1; break
+                        }
                         if c.low <= t2 { outcome = "TP2"; bars = bar+1; break }
                         if c.low <= t1 { outcome = "TP1"; bars = bar+1; break }
                     }
@@ -504,11 +538,12 @@ class BacktestEngine: ObservableObject {
                 case "TP1": tp1W += 1; totalPnlW += t1d / e * 100
                 case "TP2": tp2W += 1; totalPnlW += t2d / e * 100
                 case "STOPPED": stoppedN += 1; totalPnlL += sd / e * 100
+                case "BREAKEVEN": breakEvenN += 1
                 default: expiredN += 1
                 }
             }
             let wins = tp1W + tp2W
-            let resolved = wins + stoppedN
+            let resolved = wins + stoppedN + breakEvenN
             let wr = tradeCount > 0 ? Double(wins) / Double(tradeCount) * 100 : 0
             let resolvedWR = resolved > 0 ? Double(wins) / Double(resolved) * 100 : 0
             let avgW = wins > 0 ? totalPnlW / Double(wins) : 0
@@ -516,7 +551,7 @@ class BacktestEngine: ObservableObject {
             let exp = tradeCount > 0 ? (Double(wins)/Double(tradeCount))*avgW + (Double(stoppedN)/Double(tradeCount))*avgL : 0
             results.append(SweepResult(
                 label: "2.0ATR/72h \(filterLabel)", stopDesc: "2.0 ATR", tp1Desc: "2.0 ATR", tp2Desc: "4.0 ATR",
-                totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W, stopped: stoppedN, expired: expiredN,
+                totalTrades: tradeCount, tp1Wins: tp1W, tp2Wins: tp2W, stopped: stoppedN, breakeven: breakEvenN, expired: expiredN,
                 winRate: wr, resolvedWinRate: resolvedWR, expectancy: exp,
                 avgBarsToOutcome: tradeCount > 0 ? Double(totalBars)/Double(tradeCount) : 0))
         }

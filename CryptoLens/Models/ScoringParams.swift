@@ -43,6 +43,20 @@ struct ScoringParams: Codable, Identifiable, Equatable {
     // Adaptive
     var useAdaptive: Bool = true          // scale thresholds by volScalar
 
+    // Diagnostic mode: skip EMA structure gate + ranging override (not persisted)
+    var skipGates: Bool = false
+
+    private enum CodingKeys: String, CodingKey {
+        case pricePositionWeight, emaSlopeWeight, structureWeight, stackConfirmWeight
+        case adxStrongBreak, adxModBreak, adxWeakBreak, adxStrongWeight, adxModWeight, adxWeakWeight
+        case rsiWeight, macdMaxWeight
+        case vwapWeight, stochWeight, divergenceWeight
+        case crossAssetWeight, derivativesWeight
+        case dailyStrongThreshold, dailyDirectionalThreshold, fourHStrongThreshold, fourHDirectionalThreshold
+        case useAdaptive
+        // skipGates excluded — diagnostic-only, not persisted
+    }
+
     // MARK: - Presets
 
     static var cryptoDefault: ScoringParams {
