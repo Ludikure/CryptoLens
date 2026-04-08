@@ -46,6 +46,7 @@ class OptimizerEngine: ObservableObject {
     private let binance = BinanceService()
     private let yahoo = YahooFinanceService()
     private let tiingo = TiingoProvider()
+    private let twelveData = TwelveDataProvider()
     private let alphaVantage = AlphaVantageProvider()
 
     // MARK: - Public API
@@ -286,7 +287,7 @@ class OptimizerEngine: ObservableObject {
             // Stitch Yahoo (2yr) + Alpha Vantage (older) for maximum 1H history
             let hourly = try await CandleCache.loadOrFetchStitched(
                 symbol: symbol, startDate: fetchStart, endDate: endDate,
-                yahoo: yahoo, alphaVantage: alphaVantage)
+                yahoo: yahoo, alphaVantage: alphaVantage, twelveData: twelveData)
             fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
             #if DEBUG
             print("[Optimizer] \(symbol): Tiingo 1H=\(hourly.count) → 4H=\(fourHCandles.count)")

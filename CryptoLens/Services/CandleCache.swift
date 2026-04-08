@@ -43,11 +43,13 @@ enum CandleCache {
     static func clearAll() { try? FileManager.default.removeItem(at: cacheDir) }
 
     /// Stitch together 1H stock candles from multiple providers for maximum history.
-    /// Yahoo: recent 2 years. Alpha Vantage: 2-5 years back (month-by-month).
+    /// Twelve Data: up to 5000 candles (~2.8yr) per request. Yahoo: recent 2 years.
+    /// Alpha Vantage: remaining gaps (month-by-month, slow).
     /// Deduplicates by timestamp, caches the stitched result permanently.
     static func loadOrFetchStitched(symbol: String, startDate: Date, endDate: Date,
                                      yahoo: YahooFinanceService,
-                                     alphaVantage: AlphaVantageProvider) async throws -> [Candle] {
+                                     alphaVantage: AlphaVantageProvider,
+                                     twelveData: TwelveDataProvider? = nil) async throws -> [Candle] {
         let key = "\(symbol)_1h_stitched"
         let url = cacheDir.appendingPathComponent("\(key).json")
 
@@ -75,13 +77,34 @@ enum CandleCache {
             #endif
         }
 
-        // Layer 2: Alpha Vantage — anything before Yahoo's range (month-by-month, slower)
-        if startDate < yahooStart {
+        // Layer 2: Twelve Data — up to 5000 candles per request (~2.8yr), fills pre-Yahoo gap
+        if startDate < yahooStart, let td = twelveData {
+            // Split into chunks of ~2.5 years to stay within 5000 candle limit
+            let chunkDays = 2 * 365  // ~2 years per chunk (conservative)
+            var chunkEnd = yahooStart
+            while chunkEnd > startDate {
+                let chunkStart = max(startDate, Calendar.current.date(byAdding: .day, value: -chunkDays, to: chunkEnd)!)
+                if let tdCandles = try? await td.fetchHistoricalCandles(
+                    symbol: symbol, interval: "1h", startDate: chunkStart, endDate: chunkEnd) {
+                    allCandles.append(contentsOf: tdCandles)
+                    #if DEBUG
+                    print("[CandleCache] \(symbol) TwelveData 1H: \(tdCandles.count) candles (\(chunkStart) → \(chunkEnd))")
+                    #endif
+                }
+                chunkEnd = chunkStart
+                // Respect 8 req/min rate limit
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+            }
+        }
+
+        // Layer 3: Alpha Vantage — anything still missing (month-by-month, slowest)
+        let earliestSoFar = allCandles.map(\.time).min() ?? endDate
+        if startDate < earliestSoFar {
             if let avCandles = try? await alphaVantage.fetchHistoricalCandles(
-                symbol: symbol, startDate: startDate, endDate: yahooStart) {
+                symbol: symbol, startDate: startDate, endDate: earliestSoFar) {
                 allCandles.append(contentsOf: avCandles)
                 #if DEBUG
-                print("[CandleCache] \(symbol) Alpha Vantage 1H: \(avCandles.count) candles (pre-Yahoo range)")
+                print("[CandleCache] \(symbol) Alpha Vantage 1H: \(avCandles.count) candles (pre-TwelveData range)")
                 #endif
             }
         }

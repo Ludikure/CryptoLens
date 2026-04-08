@@ -17,6 +17,80 @@ class TwelveDataProvider {
         }
     }
 
+    /// Fetch historical candles with date range. Twelve Data supports up to 5000 per request.
+    /// For 1H data: 5000 candles ≈ 2.8 years of trading days.
+    func fetchHistoricalCandles(symbol: String, interval: String,
+                                 startDate: Date, endDate: Date) async throws -> [Candle] {
+        let tdInterval = resolveInterval(interval)
+        guard var components = URLComponents(string: "\(workerURL)/twelvedata/candles") else {
+            throw TwelveDataError.networkError("Invalid URL")
+        }
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        components.queryItems = [
+            URLQueryItem(name: "symbol", value: symbol),
+            URLQueryItem(name: "interval", value: tdInterval),
+            URLQueryItem(name: "start_date", value: df.string(from: startDate)),
+            URLQueryItem(name: "end_date", value: df.string(from: endDate)),
+        ]
+        guard let url = components.url else {
+            throw TwelveDataError.networkError("Invalid URL")
+        }
+
+        var request = URLRequest(url: url)
+        PushService.addAuthHeaders(&request)
+
+        let (data, response) = try await session.data(for: request)
+
+        if let http = response as? HTTPURLResponse {
+            if http.statusCode == 401 { throw TwelveDataError.unauthorized }
+            if http.statusCode == 429 { throw TwelveDataError.rateLimited }
+            guard (200...299).contains(http.statusCode) else {
+                throw TwelveDataError.networkError("HTTP \(http.statusCode)")
+            }
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw TwelveDataError.decodingError("Invalid JSON")
+        }
+
+        if let code = json["code"] as? Int, code != 200 {
+            let message = json["message"] as? String ?? "Unknown error"
+            throw TwelveDataError.apiError(code, message)
+        }
+
+        guard let values = json["values"] as? [[String: Any]] else {
+            throw TwelveDataError.decodingError("Missing values array")
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "America/New_York")
+
+        var candles = [Candle]()
+        for item in values {
+            guard let dateStr = item["datetime"] as? String,
+                  let open = Double(item["open"] as? String ?? ""),
+                  let high = Double(item["high"] as? String ?? ""),
+                  let low = Double(item["low"] as? String ?? ""),
+                  let close = Double(item["close"] as? String ?? "")
+            else { continue }
+
+            let volume = Double(item["volume"] as? String ?? "") ?? 0
+            formatter.dateFormat = dateStr.count > 10 ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd"
+            let time = formatter.date(from: dateStr) ?? Date()
+            candles.append(Candle(time: time, open: open, high: high, low: low, close: close, volume: volume))
+        }
+
+        candles.reverse()
+
+        #if DEBUG
+        print("[MarketScope] [\(symbol)] TwelveData historical \(tdInterval): \(candles.count) candles")
+        #endif
+
+        return candles
+    }
+
     /// Fetch OHLCV candles via worker proxy (cached 60s server-side).
     func fetchCandles(symbol: String, interval: String, limit: Int = 300) async throws -> [Candle] {
         let tdInterval = resolveInterval(interval)

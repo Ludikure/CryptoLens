@@ -11,6 +11,7 @@ class BacktestEngine: ObservableObject {
     private let binance = BinanceService()
     private let yahoo = YahooFinanceService()
     private let tiingo = TiingoProvider()
+    private let twelveData = TwelveDataProvider()
     private let alphaVantage = AlphaVantageProvider()
 
     func run(symbol: String, startDate: Date, endDate: Date) async {
@@ -48,7 +49,7 @@ class BacktestEngine: ObservableObject {
                 statusMessage = "Fetching 1H candles (stitched)..."
                 let hourly = try await CandleCache.loadOrFetchStitched(
                     symbol: symbol, startDate: fetchStart, endDate: endDate,
-                    yahoo: yahoo, alphaVantage: alphaVantage)
+                    yahoo: yahoo, alphaVantage: alphaVantage, twelveData: twelveData)
                 fourHCandles = CandleAggregator.aggregate1HTo4H(hourly)
                 oneHCandles = hourly
                 statusMessage = "1H: \(hourly.count) → 4H: \(fourHCandles.count)"

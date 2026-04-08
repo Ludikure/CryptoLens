@@ -313,11 +313,13 @@ export default {
     if (path === '/twelvedata/candles') {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       const interval = url.searchParams.get('interval')?.replace(/[^0-9a-zA-Z]/g, '') || '1day';
-      const outputsize = Math.min(parseInt(url.searchParams.get('outputsize') || '50'), 300);
+      const startDate = url.searchParams.get('start_date')?.replace(/[^0-9\-\s:]/g, '') || '';
+      const endDate = url.searchParams.get('end_date')?.replace(/[^0-9\-\s:]/g, '') || '';
+      const outputsize = Math.min(parseInt(url.searchParams.get('outputsize') || '50'), 5000);
       if (!symbol) return json({ error: 'Missing symbol' }, 400);
       if (!env.TWELVE_DATA_API_KEY) return json({ error: 'Twelve Data not configured' }, 503);
 
-      const cacheKey = `cache:td:${symbol}:${interval}:${outputsize}`;
+      const cacheKey = `cache:td:${symbol}:${interval}:${startDate || outputsize}`;
       const cached = await env.ALERTS.get(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
@@ -326,7 +328,13 @@ export default {
 
       try {
         // Note: Twelve Data requires API key in URL. Server-to-server only.
-        const resp = await fetch(`${TWELVE_DATA_BASE}/time_series?symbol=${symbol}&interval=${interval}&outputsize=${outputsize}&apikey=${env.TWELVE_DATA_API_KEY}`);
+        let apiUrl = `${TWELVE_DATA_BASE}/time_series?symbol=${symbol}&interval=${interval}&apikey=${env.TWELVE_DATA_API_KEY}`;
+        if (startDate && endDate) {
+          apiUrl += `&start_date=${startDate}&end_date=${endDate}&outputsize=5000`;
+        } else {
+          apiUrl += `&outputsize=${outputsize}`;
+        }
+        const resp = await fetch(apiUrl);
         if (!resp.ok) return json({ error: `Twelve Data ${resp.status}` }, 502);
         const data = await resp.json();
         await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
