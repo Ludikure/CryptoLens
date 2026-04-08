@@ -141,7 +141,7 @@ class BacktestEngine: ObservableObject {
                     let tp2 = isBull ? entry + simATR * 3.0 : entry - simATR * 3.0
                     let risk = abs(entry - stop)
 
-                    var scanIdx = oneHIdx
+                    let scanIdx = oneHIdx
                     let maxScan = 24
                     var outcome = "EXPIRED"
                     var bars = maxScan
