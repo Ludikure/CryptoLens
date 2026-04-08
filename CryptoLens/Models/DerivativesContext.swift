@@ -10,7 +10,7 @@ struct DerivativesContext {
     let crowdingSignal: Int     // -1, 0, +1
 
     var combinedSignal: Int {
-        fundingSignal + oiSignal + takerSignal + crowdingSignal
+        max(-3, min(3, fundingSignal + oiSignal + takerSignal + crowdingSignal))
     }
 
     // MARK: - Factory: Live Data
