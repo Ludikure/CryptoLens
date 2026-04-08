@@ -41,8 +41,10 @@ enum AnalysisPrompt {
            → Output: "Bias: [DIRECTION] (Rule 1 — D+4H aligned [direction], 1H [state] classified as counter-trend pullback)"
 
         Rule 2 — DAILY + 4H LABELS CONFLICT (one Bearish, one Bullish):
-           → Bias = FLAT. Skip Step 4. No trade.
-           → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label])"
+           → If Daily |score| >= 7: Bias = Daily direction. The 4H opposition is a counter-trend pullback providing a better entry. Proceed to Step 4.
+           → Output: "Bias: [DIRECTION] (Rule 2 override — Daily score X, 4H pullback providing entry)"
+           → If Daily |score| < 7: Bias = FLAT. Skip Step 4. No trade.
+           → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label], insufficient Daily conviction to override)"
 
         Rule 3 — DAILY OR 4H LABEL IS NEUTRAL:
            → If one is directional and the other is Neutral: Bias = the directional label. Use 1H for timing.
