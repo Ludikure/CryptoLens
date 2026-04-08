@@ -443,7 +443,7 @@ class BacktestEngine: ObservableObject {
                     let t2 = ctx.isBullish ? e + t2d : e - t2d
 
                     var outcome = "EXPIRED"; var bars = window
-                    let trailTrigger = sd  // 1.0x the stop distance as trail trigger
+                    let trailTrigger = ctx.atr * 1.0  // 1.0 ATR regardless of stop config
                     var currentStop = s
                     var trailed = false
                     for bar in 0..<window {
@@ -508,7 +508,7 @@ class BacktestEngine: ObservableObject {
                 let t1 = ctx.isBullish ? e + t1d : e - t1d
                 let t2 = ctx.isBullish ? e + t2d : e - t2d
                 var outcome = "EXPIRED"; var bars = 72
-                let trailTrigger = sd
+                let trailTrigger = ctx.atr * 1.0  // 1.0 ATR regardless of stop config
                 var currentStop = s
                 var trailed = false
                 for bar in 0..<72 {
