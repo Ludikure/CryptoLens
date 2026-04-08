@@ -75,7 +75,6 @@ struct BacktestView: View {
                     row("TP1 Wins", "\(r.tp1Wins)")
                     row("TP2 Wins", "\(r.tp2Wins)")
                     row("Stopped Out", "\(r.stopped)")
-                    row("Breakeven", "\(r.breakeven)")
                     row("Expired", "\(r.expired)")
                     row("Expectancy", String(format: "%.3f%%", r.expectancy))
                     row("Avg Bars to Outcome", String(format: "%.1f hrs", r.avgBarsToOutcome))
@@ -132,7 +131,7 @@ struct BacktestView: View {
                                     Text("Res: \(pct(s.resolvedWinRate))")
                                         .foregroundStyle(s.resolvedWinRate >= 55 ? .green : s.resolvedWinRate >= 50 ? .primary : .red)
                                     Spacer()
-                                    Text("SL:\(s.stopped) BE:\(s.breakeven) Exp:\(s.expired)")
+                                    Text("SL:\(s.stopped) Exp:\(s.expired)")
                                 }
                                 .font(.caption2).foregroundStyle(.secondary)
                             }
@@ -200,13 +199,13 @@ struct BacktestView: View {
 
         Trade Simulation (1.5 ATR stop, 1:1/1:2 R:R):
         • Trades: \(r.totalTrades) | Win Rate: \(pct(r.tradeWinRate))
-        • TP1: \(r.tp1Wins) | TP2: \(r.tp2Wins) | Stopped: \(r.stopped) | BE: \(r.breakeven) | Expired: \(r.expired)
+        • TP1: \(r.tp1Wins) | TP2: \(r.tp2Wins) | Stopped: \(r.stopped) | Expired: \(r.expired)
         • Expectancy: \(String(format: "%.3f%%", r.expectancy)) | Avg \(String(format: "%.1f", r.avgBarsToOutcome))h
         • By Regime: Trend \(pct(r.trendingWinRate)) | Range \(pct(r.rangingWinRate)) | Trans \(pct(r.transitioningWinRate))
         • By Strength: Strong \(pct(r.strongWinRate)) | Mod \(pct(r.moderateWinRate)) | Weak \(pct(r.weakWinRate))
 
         Stop/Target Sweep:
-        \(r.sweepResults.map { "• \($0.label): WR \(pct($0.winRate)) Res \(pct($0.resolvedWinRate)), Exp \(String(format: "%.3f%%", $0.expectancy)), TP1 \($0.tp1Wins) TP2 \($0.tp2Wins) SL \($0.stopped) BE \($0.breakeven) Expired \($0.expired)" }.joined(separator: "\n"))
+        \(r.sweepResults.map { "• \($0.label): WR \(pct($0.winRate)) Res \(pct($0.resolvedWinRate)), Exp \(String(format: "%.3f%%", $0.expectancy)), TP1 \($0.tp1Wins) TP2 \($0.tp2Wins) SL \($0.stopped) Expired \($0.expired)" }.joined(separator: "\n"))
 
         Score Distribution (Daily):
         \(r.scoreDistribution.map { "\($0.score >= 0 ? "+" : "")\($0.score): \($0.count) bars, \(pct($0.accuracy)) acc, \(String(format: "%+.2f%%", $0.avgMove)) avg move" }.joined(separator: "\n"))

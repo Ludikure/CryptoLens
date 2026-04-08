@@ -93,7 +93,7 @@ class ClaudeService: AIProvider {
 
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": 2500,
+            "max_tokens": 4000,
             "temperature": 0,
             "system": system,
             "messages": [["role": "user", "content": prompt]],

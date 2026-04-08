@@ -241,7 +241,7 @@ enum IndicatorEngine {
         }
 
         // ── Layer 6: Derivatives (crypto only, non-price-derived) ──
-        if market == .crypto, let dctx = derivatives {
+        if isDaily && market == .crypto, let dctx = derivatives {
             score += dctx.combinedSignal * params.derivativesWeight
         }
 

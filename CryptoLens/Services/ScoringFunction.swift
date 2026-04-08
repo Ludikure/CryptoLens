@@ -113,7 +113,7 @@ enum ScoringFunction {
         }
 
         // ── Layer 6: Derivatives (crypto only, non-price-derived) ──
-        if s.isCrypto {
+        if isDaily && s.isCrypto {
             score += s.derivativesCombinedSignal * p.derivativesWeight
         }
 

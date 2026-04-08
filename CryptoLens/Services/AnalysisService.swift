@@ -770,8 +770,8 @@ class AnalysisService: ObservableObject {
                 let priceRising = candles4H.count >= 2 && candles4H.last!.close > candles4H[candles4H.count - 2].close
                 derivCtx = DerivativesContext.from(data: d, priceRising: priceRising)
                 let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset, derivatives: derivCtx)
-                let r2 = IndicatorEngine.computeAll(candles: candles4H, timeframe: tfs[1].interval, label: tfs[1].label, market: market, derivatives: derivCtx)
-                let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market, derivatives: derivCtx)
+                let r2 = IndicatorEngine.computeAll(candles: candles4H, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
+                let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
                 return (r1, r2, r3)
             }
             let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset)

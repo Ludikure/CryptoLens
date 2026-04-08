@@ -7,7 +7,7 @@ struct TradeSimOutcome: Codable {
     let tp1Price: Double
     let tp2Price: Double
     let riskAmount: Double
-    let outcome: String        // "TP1", "TP2", "STOPPED", "BREAKEVEN", "EXPIRED"
+    let outcome: String        // "TP1", "TP2", "STOPPED", "EXPIRED"
     let barsToOutcome: Int
     let maxFavorable: Double
     let maxAdverse: Double
@@ -33,10 +33,9 @@ struct SweepResult: Codable, Identifiable {
     let tp1Wins: Int
     let tp2Wins: Int
     let stopped: Int
-    let breakeven: Int
     let expired: Int
     let winRate: Double
-    let resolvedWinRate: Double   // wins / (wins + stopped + breakeven) — excludes expired
+    let resolvedWinRate: Double   // wins / (wins + stopped) — excludes expired
     let expectancy: Double
     let avgBarsToOutcome: Double
 }
@@ -118,7 +117,6 @@ struct BacktestSummary: Codable {
     let tp1Wins: Int
     let tp2Wins: Int
     let stopped: Int
-    let breakeven: Int
     let expired: Int
     let tradeWinRate: Double
     let avgPnlPercent: Double

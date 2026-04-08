@@ -107,7 +107,7 @@ enum AnalysisPrompt {
         2. A SIGNAL — something happening at that level (candle pattern, RSI divergence, volume spike, Stoch RSI cross\(market == .crypto ? ", squeeze risk, taker flow" : "")). A level without a signal is just a number.
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
-        If all three exist, present the setup as a table with Entry, SL, TP1, TP2, TP3 rows showing Price, Why, and R:R.
+        If all three exist, present the setup as a table with Entry, SL, TP1, TP2 rows showing Price, Why, and R:R.
         Rate conviction (SCORE-BASED — backtest-validated):
         - HIGH: Daily |score| >= 8, D+4H aligned, level + signal + risk all present, no macro event within 12 hours. These setups have the highest expectancy.
         - MODERATE: Daily |score| = 7, D+4H aligned or Rule 3 applies, at least 2 of 3 (level/signal/risk) present, no macro event within 4 hours.
@@ -246,7 +246,7 @@ enum AnalysisPrompt {
         ---
         At the very end, include a JSON block with trade setups:
         ```json
-        [{"direction": "LONG", "entry": 65000.0, "stopLoss": 63500.0, "tp1": 67000.0, "tp2": 69000.0, "tp3": 72000.0, "suggestedQty": 0.33, "reasoning": "Brief reason"}]
+        [{"direction": "LONG", "entry": 65000.0, "stopLoss": 63500.0, "tp1": 67000.0, "tp2": 69000.0, "suggestedQty": 0.33, "reasoning": "Brief reason"}]
         ```
         If no valid setup, output empty array: `[]`
         Use actual prices from the data. This JSON is machine-parsed to create alerts.
@@ -257,7 +257,7 @@ enum AnalysisPrompt {
         - Use ## headers exactly as shown above. The app parses these for section rendering.
         - Tables must use markdown pipe syntax with header row.
         - Do NOT list every indicator value — synthesize them into a narrative.
-        - Maximum 500 words before the JSON block (headers, level lists, and table rows count toward this limit).
+        - Maximum 600 words before the JSON block (headers, level lists, and table rows count toward this limit).
         - ALL times in your output must be in Eastern Time (ET). Convert any UTC timestamps to ET before displaying. Use "ET" suffix (e.g., "4:00 PM ET", "8:30 AM ET"). This applies to: Next decision point, economic event times, candle close times, and any other time references.
 
         ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
@@ -1132,15 +1132,7 @@ enum AnalysisPrompt {
             if let e20 = ind.ema20 { maParts.append("EMA20=\(Formatters.formatPrice(e20))") }
             if let e50 = ind.ema50 { maParts.append("EMA50=\(Formatters.formatPrice(e50))") }
             if let e200 = ind.ema200 { maParts.append("EMA200=\(Formatters.formatPrice(e200))") }
-            if let s50 = ind.sma50 { maParts.append("SMA50=\(Formatters.formatPrice(s50))") }
-            if let s200 = ind.sma200 { maParts.append("SMA200=\(Formatters.formatPrice(s200))") }
             if !maParts.isEmpty { lines.append("MAs: \(maParts.joined(separator: " "))") }
-
-            if let e20 = ind.ema20, let e50 = ind.ema50, let e200 = ind.ema200 {
-                if e20 > e50 && e50 > e200 { lines.append("Structure: Bullish (EMA 20 > 50 > 200)") }
-                else if e20 < e50 && e50 < e200 { lines.append("Structure: Bearish (EMA 20 < 50 < 200)") }
-                else { lines.append("Structure: Mixed") }
-            }
 
             if let vwap = ind.vwap {
                 lines.append("VWAP: \(Formatters.formatPrice(vwap.vwap)) (\(vwap.priceVsVwap), \(Formatters.formatPercent(vwap.distancePercent)))")
