@@ -2,6 +2,7 @@ import Foundation
 
 /// Pure scoring function: takes a snapshot + params, returns (score, bias).
 /// Mirrors the logic in IndicatorEngine.computeAll but is parameterized for optimization.
+/// IMPORTANT: Keep in sync with ComputeAll scoring layers. Any edit here must be reflected there and vice versa.
 enum ScoringFunction {
 
     static func score(snapshot s: ScoringSnapshot, params p: ScoringParams) -> (score: Int, bias: String) {

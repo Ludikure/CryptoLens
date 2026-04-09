@@ -114,16 +114,17 @@ class AnalysisService: ObservableObject {
             lastResult = cached
         }
         switchTask?.cancel()
-        switchTask = Task {
-            await selectSymbol(symbol)
+        switchTask = Task { [weak self] in
+            guard let self else { return }
+            await self.selectSymbol(symbol)
             guard !Task.isCancelled else { return }
-            if marketFor(symbol) == .crypto {
-                spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
+            if self.marketFor(symbol) == .crypto {
+                self.spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
             } else {
-                spotPressure = nil
+                self.spotPressure = nil
             }
             guard !Task.isCancelled else { return }
-            macroSnapshot = await macroData.fetchMacroSnapshot()
+            self.macroSnapshot = await self.macroData.fetchMacroSnapshot()
         }
     }
 
@@ -132,7 +133,8 @@ class AnalysisService: ObservableObject {
     /// Pass 2: full refresh for crypto only (stocks skip to avoid Twelve Data rate limit).
     func prefetchFavorites(_ symbols: [String]) {
         watchlistSymbols = symbols
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             // Pass 1: disk cache or quick fetch
             for symbol in symbols where resultsBySymbol[symbol] == nil {
                 if let diskCached = loadCache(symbol: symbol) {

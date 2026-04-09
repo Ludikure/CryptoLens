@@ -18,6 +18,7 @@ enum BinanceError: LocalizedError {
 
 class BinanceService {
     private let session: URLSession
+    private static let bybitBaseURL = "https://api.bybit.com/v5/market"
 
     init() {
         let config = URLSessionConfiguration.default
@@ -26,6 +27,18 @@ class BinanceService {
     }
 
     func fetchCandles(symbol: String, interval: String, limit: Int = 300) async throws -> [Candle] {
+        do {
+            return try await fetchBinanceCandles(symbol: symbol, interval: interval, limit: limit)
+        } catch {
+            // Fallback to Bybit on Binance network failure (VPN, geo-block, etc.)
+            #if DEBUG
+            print("[BinanceService] Binance failed (\(error.localizedDescription)), trying Bybit fallback")
+            #endif
+            return try await fetchBybitCandles(symbol: symbol, interval: interval, limit: limit)
+        }
+    }
+
+    private func fetchBinanceCandles(symbol: String, interval: String, limit: Int) async throws -> [Candle] {
         guard var components = URLComponents(string: "\(Constants.binanceBaseURL)/klines") else {
             throw BinanceError.networkError("Invalid URL")
         }
@@ -119,5 +132,65 @@ class BinanceService {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
         return allCandles
+    }
+
+    // MARK: - Bybit Fallback
+
+    /// Bybit interval mapping: Binance "1d" → Bybit "D", "4h" → "240", "1h" → "60"
+    private func bybitInterval(_ binanceInterval: String) -> String {
+        switch binanceInterval {
+        case "1d": return "D"
+        case "4h": return "240"
+        case "1h": return "60"
+        case "15m": return "15"
+        case "5m": return "5"
+        case "1m": return "1"
+        default: return "60"
+        }
+    }
+
+    private func fetchBybitCandles(symbol: String, interval: String, limit: Int) async throws -> [Candle] {
+        guard var components = URLComponents(string: "\(Self.bybitBaseURL)/kline") else {
+            throw BinanceError.networkError("Invalid Bybit URL")
+        }
+        components.queryItems = [
+            URLQueryItem(name: "category", value: "linear"),
+            URLQueryItem(name: "symbol", value: symbol),
+            URLQueryItem(name: "interval", value: bybitInterval(interval)),
+            URLQueryItem(name: "limit", value: String(min(limit, 200))),
+        ]
+        guard let url = components.url else {
+            throw BinanceError.networkError("Invalid Bybit URL")
+        }
+
+        let (data, response) = try await session.data(from: url)
+        if let http = response as? HTTPURLResponse {
+            guard (200...299).contains(http.statusCode) else {
+                throw BinanceError.networkError("Bybit HTTP \(http.statusCode)")
+            }
+        }
+
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let result = json["result"] as? [String: Any],
+              let list = result["list"] as? [[Any]] else {
+            throw BinanceError.decodingError("Unexpected Bybit response")
+        }
+
+        // Bybit returns [startTime, open, high, low, close, volume, turnover] newest first
+        let candles: [Candle] = list.compactMap { k in
+            guard k.count >= 6,
+                  let timeStr = k[0] as? String, let timeMs = Double(timeStr),
+                  let openStr = k[1] as? String, let open = Double(openStr),
+                  let highStr = k[2] as? String, let high = Double(highStr),
+                  let lowStr = k[3] as? String, let low = Double(lowStr),
+                  let closeStr = k[4] as? String, let close = Double(closeStr),
+                  let volStr = k[5] as? String, let volume = Double(volStr)
+            else { return nil }
+            return Candle(time: Date(timeIntervalSince1970: timeMs / 1000.0),
+                          open: open, high: high, low: low, close: close, volume: volume)
+        }
+
+        // Bybit returns newest first — reverse to oldest first (Binance convention)
+        return candles.reversed()
     }
 }

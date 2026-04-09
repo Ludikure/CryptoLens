@@ -5,14 +5,14 @@ enum Fibonacci {
         guard closes.count >= lookback else { return nil }
         let recentHighs = Array(highs.suffix(lookback))
         let recentLows = Array(lows.suffix(lookback))
-        let swingHigh = recentHighs.max()!
-        let swingLow = recentLows.min()!
+        guard let swingHigh = recentHighs.max(),
+              let swingLow = recentLows.min(),
+              let current = closes.last else { return nil }
         let diff = swingHigh - swingLow
         guard diff != 0 else { return nil }
 
-        let current = closes.last!
-        let highIdx = recentHighs.firstIndex(of: swingHigh)!
-        let lowIdx = recentLows.firstIndex(of: swingLow)!
+        let highIdx = recentHighs.firstIndex(of: swingHigh) ?? 0
+        let lowIdx = recentLows.firstIndex(of: swingLow) ?? 0
 
         let trend: String
         var levels: [FibLevel]
@@ -41,7 +41,7 @@ enum Fibonacci {
             ]
         }
 
-        let nearest = levels.min(by: { abs($0.price - current) < abs($1.price - current) })!
+        guard let nearest = levels.min(by: { abs($0.price - current) < abs($1.price - current) }) else { return nil }
 
         return FibResult(
             trend: trend,
@@ -90,7 +90,7 @@ enum Fibonacci {
             ]
         }
 
-        let nearest = levels.min(by: { abs($0.price - current) < abs($1.price - current) })!
+        guard let nearest = levels.min(by: { abs($0.price - current) < abs($1.price - current) }) else { return nil }
 
         return FibResult(
             trend: trend,
