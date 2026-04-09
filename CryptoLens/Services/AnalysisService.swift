@@ -195,9 +195,8 @@ class AnalysisService: ObservableObject {
                 // Refresh current symbol first (UI updates)
                 await self.refreshIndicators(symbol: symbol)
 
-                // Then cycle through other watchlist crypto symbols (score alerts)
-                for fav in self.watchlistSymbols
-                    where fav != symbol && self.marketFor(fav) == .crypto {
+                // Then cycle through other watchlist symbols (score alerts)
+                for fav in self.watchlistSymbols where fav != symbol {
                     guard !Task.isCancelled else { return }
                     await self.refreshIndicators(symbol: fav)
                 }
@@ -418,17 +417,20 @@ class AnalysisService: ObservableObject {
             // Score threshold notification — fires for ANY watchlist symbol
             if let prev = prevResult,
                UserDefaults.standard.bool(forKey: "notify_score_threshold") {
-                let prevAbsScore = abs(prev.daily.biasScore)
-                let newAbsScore = abs(result.daily.biasScore)
-                let threshold = 5
+                let prevMax = max(abs(prev.daily.biasScore), abs(prev.h4.biasScore))
+                let newMax = max(abs(result.daily.biasScore), abs(result.h4.biasScore))
+                let threshold = marketFor(symbol) == .crypto ? 5 : 3
 
                 // Only notify when score CROSSES above threshold (not every refresh)
-                if prevAbsScore < threshold && newAbsScore >= threshold {
+                if prevMax < threshold && newMax >= threshold {
                     let ticker = Constants.asset(for: symbol)?.ticker ?? symbol
-                    let direction = result.daily.bias.contains("Bullish") ? "Bullish" : "Bearish"
+                    let dailyScore = result.daily.biasScore
+                    let fourHScore = result.h4.biasScore
+                    let strongerScore = abs(dailyScore) >= abs(fourHScore) ? dailyScore : fourHScore
+                    let direction = strongerScore > 0 ? "Bullish" : "Bearish"
                     BiasNotificationManager.sendScoreAlert(
                         ticker: ticker,
-                        score: result.daily.biasScore,
+                        score: strongerScore,
                         direction: direction)
                 }
             }
