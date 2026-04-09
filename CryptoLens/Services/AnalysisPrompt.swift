@@ -303,6 +303,25 @@ enum AnalysisPrompt {
             - If fundamentals provided (P/E, earnings proximity), factor them in.
             - Timeframes: \(tf.trend) (trend), \(tf.bias) (bias), \(tf.entry) (entry).
 
+            STOCK TRADE STRUCTURE (backtest-validated):
+            - Default stop: 1.5x ATR (4H). Stocks have lower volatility than crypto — 2.0 ATR targets are harder to reach.
+            - If the structural stop is wider than 1.5 ATR, use the structural level.
+            - TP1: 1.5x ATR from entry. TP2: 3.0x ATR.
+            - Hold window: up to 72h. Most stock setups resolve within 24h due to market hours.
+
+            STOCK BIAS RULES:
+            - Rule 2 override does NOT apply to stocks. D/4H conflict = FLAT regardless of Daily score.
+            - Stock trends are more mean-reverting than crypto — trading through D/4H conflicts loses money.
+
+            STOCK SCORE GATE:
+            - max(|Daily|, |4H|) >= 3 to consider a setup (lower bar than crypto).
+            - Stocks rely more on level quality and fundamentals than score magnitude.
+            - Conviction hierarchy for stocks:
+              - HIGH: Both |score| >= 6, level + signal + risk present.
+              - MODERATE: Either |score| >= 6, at least 2 of 3 present.
+              - MODERATE-LOW: Either |score| 3-5 with all three present.
+              - LOW: Both |score| < 3. → NO TRADE.
+
             STOCK SENTIMENT DATA (if provided):
             - VIX (Intraday): Real-time from Yahoo Finance. >30 = extreme fear (historically bullish). <15 = complacency (watch for pullback). Prefer this over VIX EOD during market hours.
             - SHORT INTEREST: High short % of float (>10%) = crowded shorts, squeeze potential. Days to cover > 5 = shorts trapped.
