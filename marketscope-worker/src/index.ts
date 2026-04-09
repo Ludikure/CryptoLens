@@ -1,6 +1,8 @@
 // MarketScope Worker — Secure proxy with per-device isolation
 // All API keys stay server-side. Device auth via signed tokens.
 
+import { computeScore, type Candle as ScoreCandle } from './scoring';
+
 export interface Env {
   ALERTS: KVNamespace;
   APNS_KEY_ID: string;
@@ -568,11 +570,32 @@ export default {
       }
     }
 
+    // === Watchlist Sync (for server-side score notifications) ===
+    if (path === '/watchlist' && request.method === 'POST') {
+      const auth = await authenticate(request, env);
+      if (!auth) return json({ error: 'Unauthorized' }, 401);
+
+      const body = await request.json() as any;
+      const symbols = (body.symbols || []).slice(0, 20).filter(
+        (s: any) => typeof s === 'string' && s.length <= 20
+      );
+      const config = {
+        symbols,
+        cryptoThreshold: body.cryptoThreshold || 5,
+        stockThreshold: body.stockThreshold || 3,
+        updatedAt: Date.now()
+      };
+      await env.ALERTS.put(`watchlist:${auth.deviceId}`, JSON.stringify(config),
+        { expirationTtl: 86400 * 30 });
+      return json({ ok: true, symbols: symbols.length });
+    }
+
     return json({ error: 'Not found' }, 404);
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(checkAllDeviceAlerts(env));
+    ctx.waitUntil(checkAllDeviceScores(env));
   },
 };
 
@@ -777,6 +800,121 @@ async function buildAPNsJWT(env: Env): Promise<string | null> {
   } catch {
     console.error('JWT build failed');
     return null;
+  }
+}
+
+// === Server-Side Score Notifications ===
+
+async function checkAllDeviceScores(env: Env) {
+  let cursor: string | undefined = undefined;
+  do {
+    const listResult = await env.ALERTS.list({ prefix: 'watchlist:', cursor });
+    for (const key of listResult.keys) {
+      const deviceId = key.name.replace('watchlist:', '');
+      try {
+        await checkDeviceScores(env, deviceId);
+      } catch (e) {
+        console.log(`[score] device ${deviceId} error: ${e}`);
+      }
+    }
+    cursor = listResult.list_complete ? undefined : (listResult as any).cursor;
+  } while (cursor);
+}
+
+async function checkDeviceScores(env: Env, deviceId: string) {
+  const configRaw = await env.ALERTS.get(`watchlist:${deviceId}`);
+  if (!configRaw) return;
+  const config = JSON.parse(configRaw);
+
+  // Load previous scores
+  const prevRaw = await env.ALERTS.get(`scores:${deviceId}`);
+  const prevScores: Record<string, number> = prevRaw ? JSON.parse(prevRaw) : {};
+  const newScores: Record<string, number> = {};
+  const triggered: { symbol: string; score: number; direction: string }[] = [];
+
+  for (const symbol of config.symbols) {
+    try {
+      const isCrypto = symbol.endsWith('USDT');
+      const threshold = isCrypto ? config.cryptoThreshold : config.stockThreshold;
+
+      // Check candle cache first (5-min TTL)
+      const cacheKey = `candles:${symbol}:1d`;
+      let candles: ScoreCandle[];
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        candles = JSON.parse(cached);
+      } else {
+        candles = await fetchScoreCandles(symbol, isCrypto);
+        if (candles.length > 0) {
+          await env.ALERTS.put(cacheKey, JSON.stringify(candles), { expirationTtl: 300 });
+        }
+      }
+      if (candles.length < 210) continue;
+
+      const result = computeScore(candles, isCrypto);
+      newScores[symbol] = result.score;
+
+      const prevAbs = Math.abs(prevScores[symbol] || 0);
+      const newAbs = Math.abs(result.score);
+
+      // Crossing detection — same logic as app
+      if (prevAbs < threshold && newAbs >= threshold) {
+        triggered.push({ symbol, score: result.score, direction: result.bias });
+      }
+    } catch (e) {
+      console.log(`[score] ${symbol} error: ${e}`);
+    }
+  }
+
+  // Save new scores
+  await env.ALERTS.put(`scores:${deviceId}`, JSON.stringify(newScores),
+    { expirationTtl: 86400 * 7 });
+
+  // Send push notifications for crossings
+  if (triggered.length === 0) return;
+
+  const deviceData = await env.ALERTS.get(`device:${deviceId}`);
+  if (!deviceData) return;
+  const device = JSON.parse(deviceData);
+  if (!device.pushToken && !device.token) return;
+  const pushToken = device.pushToken || device.token;
+
+  for (const t of triggered) {
+    const ticker = t.symbol.replace('USDT', '');
+    await sendAPNs(env, pushToken,
+      `${ticker} — High Conviction ${t.direction}`,
+      `Daily score: ${t.score > 0 ? '+' : ''}${t.score}. Tap to analyze.`
+    );
+  }
+}
+
+async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<ScoreCandle[]> {
+  if (isCrypto) {
+    const resp = await fetch(
+      `${BINANCE_SPOT}/klines?symbol=${symbol}&interval=1d&limit=260`
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json() as any[];
+    return data.map((k: any) => ({
+      time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
+    }));
+  } else {
+    const resp = await fetch(
+      `${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=2y`,
+      { headers: { 'User-Agent': 'Mozilla/5.0' } }
+    );
+    if (!resp.ok) return [];
+    const data = await resp.json() as any;
+    const r = data?.chart?.result?.[0];
+    if (!r?.timestamp) return [];
+    const ts = r.timestamp;
+    const q = r.indicators.quote[0];
+    return ts.map((t: number, i: number) => ({
+      time: t * 1000,
+      open: q.open[i] || 0, high: q.high[i] || 0,
+      low: q.low[i] || 0, close: q.close[i] || 0,
+      volume: q.volume[i] || 0
+    })).filter((c: ScoreCandle) => c.close > 0);
   }
 }
 

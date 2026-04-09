@@ -3,7 +3,7 @@ import Foundation
 @MainActor
 class FavoritesStore: ObservableObject {
     @Published var orderedFavorites: [String] {
-        didSet { save() }
+        didSet { save(); PushService.syncWatchlist(orderedFavorites) }
     }
 
     @Published var customStocks: [AssetDefinition] {

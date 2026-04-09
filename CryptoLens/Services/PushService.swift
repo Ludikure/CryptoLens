@@ -197,4 +197,25 @@ enum PushService {
             }
         }
     }
+
+    /// Sync watchlist symbols to worker for server-side score notifications.
+    nonisolated static func syncWatchlist(_ symbols: [String]) {
+        Task { @MainActor in
+            await ensureAuth()
+            guard let url = URL(string: "\(workerURL)/watchlist") else { return }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            addAuthHeaders(&request)
+            request.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "symbols": symbols,
+                "cryptoThreshold": 5,
+                "stockThreshold": 3
+            ])
+            _ = try? await URLSession.shared.data(for: request)
+            #if DEBUG
+            print("[MarketScope] Synced \(symbols.count) watchlist symbols to worker")
+            #endif
+        }
+    }
 }

@@ -70,6 +70,7 @@ struct MarketScopeApp: App {
                 .onAppear {
                     analysisService.configure(alertsStore: alertsStore)
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)
+                    PushService.syncWatchlist(favoritesStore.orderedFavorites)
                     alertsStore.syncFromServer()
                     // Show What's New after splash dismisses
                     if WhatsNewManager.shouldShow {
