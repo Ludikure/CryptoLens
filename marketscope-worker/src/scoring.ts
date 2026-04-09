@@ -40,7 +40,7 @@ function macd(closes: number[]): { histogram: number; signal: number; macd: numb
     for (let i = 0; i < closes.length; i++) {
         macdLine.push(ema12[i] - ema26[i]);
     }
-    const signalLine = ema(macdLine.slice(-9), 9);
+    const signalLine = ema(macdLine, 9);
     const m = macdLine[macdLine.length - 1];
     const s = signalLine[signalLine.length - 1];
     return { macd: m, signal: s, histogram: m - s };
