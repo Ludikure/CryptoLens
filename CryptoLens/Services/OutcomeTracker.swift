@@ -35,7 +35,8 @@ enum OutcomeTracker {
                 let setup = tracked[i].setup
                 let isLong = setup.direction == "LONG"
 
-                // Scan all candles for entry, SL, and TP hits
+                // Scan candles for entry, SL, and TP hits
+                // Only check candles at or after entry time (not historical candles before entry)
                 for point in checkPoints {
                     // Check entry hit
                     if !tracked[i].outcome.entryHit {
@@ -46,6 +47,11 @@ enum OutcomeTracker {
                             changed = true
                         }
                         continue  // Don't check targets until entry is hit
+                    }
+
+                    // Skip candles that occurred before entry was hit
+                    if let entryTime = tracked[i].outcome.entryHitTime, point.time < entryTime {
+                        continue
                     }
 
                     // Track excursions
