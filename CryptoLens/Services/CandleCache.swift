@@ -56,7 +56,7 @@ enum CandleCache {
         // Check if we already have a stitched cache that covers the requested range
         if let cached = loadFromDisk(url: url) {
             let filtered = cached.filter { $0.time >= startDate && $0.time <= endDate }
-            let coversStart = cached.contains { $0.time <= startDate.addingTimeInterval(86400 * 7) }
+            let coversStart = cached.contains { $0.time <= startDate }
             if filtered.count >= 100 && coversStart {
                 #if DEBUG
                 print("[CandleCache] \(symbol) stitched: \(filtered.count) from cache")
@@ -73,11 +73,16 @@ enum CandleCache {
         // Layer 1: Yahoo — recent 2 years (fast, no rate limit)
         let twoYearsAgo = Calendar.current.date(byAdding: .year, value: -2, to: endDate)!
         let yahooStart = max(startDate, twoYearsAgo)
-        if let yahooCandles = try? await yahoo.fetchHistoricalCandles(
-            symbol: symbol, interval: "1h", startDate: yahooStart, endDate: endDate) {
+        do {
+            let yahooCandles = try await yahoo.fetchHistoricalCandles(
+                symbol: symbol, interval: "1h", startDate: yahooStart, endDate: endDate)
             allCandles.append(contentsOf: yahooCandles)
             #if DEBUG
             print("[CandleCache] \(symbol) Yahoo 1H: \(yahooCandles.count) candles")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[CandleCache] \(symbol) Yahoo 1H fetch failed: \(error.localizedDescription)")
             #endif
         }
 
@@ -88,11 +93,16 @@ enum CandleCache {
             var chunkEnd = yahooStart
             while chunkEnd > startDate {
                 let chunkStart = max(startDate, Calendar.current.date(byAdding: .day, value: -chunkDays, to: chunkEnd)!)
-                if let tdCandles = try? await td.fetchHistoricalCandles(
-                    symbol: symbol, interval: "1h", startDate: chunkStart, endDate: chunkEnd) {
+                do {
+                    let tdCandles = try await td.fetchHistoricalCandles(
+                        symbol: symbol, interval: "1h", startDate: chunkStart, endDate: chunkEnd)
                     allCandles.append(contentsOf: tdCandles)
                     #if DEBUG
                     print("[CandleCache] \(symbol) TwelveData 1H: \(tdCandles.count) candles (\(chunkStart) → \(chunkEnd))")
+                    #endif
+                } catch {
+                    #if DEBUG
+                    print("[CandleCache] \(symbol) TwelveData 1H fetch failed: \(error.localizedDescription)")
                     #endif
                 }
                 chunkEnd = chunkStart
@@ -104,11 +114,16 @@ enum CandleCache {
         // Layer 3: Alpha Vantage — anything still missing (month-by-month, slowest)
         let earliestSoFar = allCandles.map(\.time).min() ?? endDate
         if startDate < earliestSoFar {
-            if let avCandles = try? await alphaVantage.fetchHistoricalCandles(
-                symbol: symbol, startDate: startDate, endDate: earliestSoFar) {
+            do {
+                let avCandles = try await alphaVantage.fetchHistoricalCandles(
+                    symbol: symbol, startDate: startDate, endDate: earliestSoFar)
                 allCandles.append(contentsOf: avCandles)
                 #if DEBUG
                 print("[CandleCache] \(symbol) Alpha Vantage 1H: \(avCandles.count) candles (pre-TwelveData range)")
+                #endif
+            } catch {
+                #if DEBUG
+                print("[CandleCache] \(symbol) Alpha Vantage 1H fetch failed: \(error.localizedDescription)")
                 #endif
             }
         }

@@ -186,6 +186,7 @@ class AnalysisService: ObservableObject {
     func startAutoRefresh(symbol: String) {
         refreshTimer?.cancel()
         refreshTimer = Task { [weak self] in
+            var cycleCount = 0
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(nanoseconds: 60_000_000_000) // 60s
@@ -196,10 +197,13 @@ class AnalysisService: ObservableObject {
                 await self.refreshIndicators(symbol: symbol)
 
                 // Then cycle through other watchlist symbols (score alerts)
+                // Stocks refresh every 5th cycle (~5min) to avoid Yahoo rate pressure
                 for fav in self.watchlistSymbols where fav != symbol {
                     guard !Task.isCancelled else { return }
+                    if self.marketFor(fav) == .stock && cycleCount % 5 != 0 { continue }
                     await self.refreshIndicators(symbol: fav)
                 }
+                cycleCount += 1
             }
         }
     }
@@ -414,6 +418,8 @@ class AnalysisService: ObservableObject {
                 BiasNotificationManager.send(ticker: ticker, oldBias: prev.daily.bias, newBias: result.daily.bias)
             }
 
+            // Note: bias flip and score threshold notifications are independent —
+            // both can fire for the same refresh if a flip coincides with a threshold crossing.
             // Score threshold notification — fires for ANY watchlist symbol
             if let prev = prevResult,
                UserDefaults.standard.bool(forKey: "notify_score_threshold") {

@@ -78,7 +78,7 @@ class TwelveDataProvider {
 
             let volume = Double(item["volume"] as? String ?? "") ?? 0
             formatter.dateFormat = dateStr.count > 10 ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd"
-            let time = formatter.date(from: dateStr) ?? Date()
+            guard let time = formatter.date(from: dateStr) else { continue }
             candles.append(Candle(time: time, open: open, high: high, low: low, close: close, volume: volume))
         }
 
@@ -151,7 +151,7 @@ class TwelveDataProvider {
 
             // Parse datetime — Twelve Data uses "2026-03-28" for daily, "2026-03-28 10:00:00" for intraday
             formatter.dateFormat = dateStr.count > 10 ? "yyyy-MM-dd HH:mm:ss" : "yyyy-MM-dd"
-            let time = formatter.date(from: dateStr) ?? Date()
+            guard let time = formatter.date(from: dateStr) else { continue }
 
             candles.append(Candle(time: time, open: open, high: high, low: low, close: close, volume: volume))
         }

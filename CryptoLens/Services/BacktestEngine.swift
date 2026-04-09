@@ -81,18 +81,17 @@ class BacktestEngine: ObservableObject {
                 while dailyIdx < dailyCandles.count && dailyCandles[dailyIdx].time <= evalTime { dailyIdx += 1 }
                 while oneHIdx < oneHCandles.count && oneHCandles[oneHIdx].time <= evalTime { oneHIdx += 1 }
 
-                let dailySlice = Array(dailyCandles[..<dailyIdx])
-                let fourHSlice = Array(fourHCandles[...i])
-                let oneHSlice = Array(oneHCandles[..<oneHIdx])
-
-                guard dailySlice.count >= 210, fourHSlice.count >= 210, oneHSlice.count >= 30 else { continue }
+                guard dailyIdx >= 210, i + 1 >= 210, oneHIdx >= 30 else { continue }
 
                 let dailyResult = IndicatorEngine.computeAll(
-                    candles: Array(dailySlice.suffix(300)), timeframe: "1d", label: "Daily (Trend)", market: market)
+                    candles: Array(dailyCandles[max(0, dailyIdx - 300)..<dailyIdx]),
+                    timeframe: "1d", label: "Daily (Trend)", market: market)
                 let fourHResult = IndicatorEngine.computeAll(
-                    candles: Array(fourHSlice.suffix(300)), timeframe: "4h", label: "4H (Bias)", market: market)
+                    candles: Array(fourHCandles[max(0, i + 1 - 300)...i]),
+                    timeframe: "4h", label: "4H (Bias)", market: market)
                 let oneHResult = IndicatorEngine.computeAll(
-                    candles: Array(oneHSlice.suffix(300)), timeframe: "1h", label: "1H (Entry)", market: market)
+                    candles: Array(oneHCandles[max(0, oneHIdx - 300)..<oneHIdx]),
+                    timeframe: "1h", label: "1H (Entry)", market: market)
 
                 let dBearish = dailyResult.bias.contains("Bearish")
                 let dBullish = dailyResult.bias.contains("Bullish")
@@ -183,9 +182,13 @@ class BacktestEngine: ObservableObject {
                     tradeResult = nil
                 }
                 // Set entryContext for ALL bars (needed for conflict sweep)
+                // Aligned bars use alignment direction; conflict/neutral use Daily direction
+                let ctxBullish = alignment.contains("bullish") ? true :
+                                 alignment.contains("bearish") ? false :
+                                 dBullish
                 let entryContext = TradeEntryContext(
                     price: price,
-                    isBullish: dBullish,  // Daily direction for conflict bars
+                    isBullish: ctxBullish,
                     atr: fourHResult.atr?.atr ?? (price * 0.015),
                     oneHStartIdx: oneHIdx)
 

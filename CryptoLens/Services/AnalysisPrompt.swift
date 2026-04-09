@@ -212,7 +212,7 @@ enum AnalysisPrompt {
         - Volume Profile: POC is fair value — price reverts to it in ranges. VAH/VAL act as S/R. Break above VAH with volume = acceptance higher. Break below VAL with volume = acceptance lower. In ranging regimes, fade moves to VAH/VAL back toward POC.
         - Overbought/oversold is a condition, not a signal. RSI 80 in an uptrend is strength, not a short trigger. RSI 20 in a downtrend is weakness, not a buy. Only treat OB/OS as actionable when it coincides with a level + divergence or a regime change.
         - Trades need time to work. Backtesting proved the optimal resolution window is 72 hours at 2.0 ATR stop/target sizing. Do not present this as "hold for 72 hours" — instead, frame it as: "This setup targets $X. Allow 1-3 days for price to reach the target. Re-evaluate at the next Daily close if neither TP1 nor SL is hit."
-        - Most setups resolve within 40 hours on average. Expired trades (no TP or SL hit in 72h) close at market — typically near breakeven.
+        - Most setups resolve within 40 hours on average. Expired trades (no TP or SL hit in 72h) close at market at 0% P&L.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -226,7 +226,7 @@ enum AnalysisPrompt {
         State which rule fired: "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback." This must match your Step 3 declaration.
 
         ## Trade Setup
-        Only if max(|Daily score|, |4H score|) >= 5, bias is LONG or SHORT, and conviction is MODERATE-LOW+. Present as a markdown table:
+        Only if conviction is MODERATE-LOW or higher, bias is LONG or SHORT, and score gate is met (crypto: max(|Daily|,|4H|) >= 5; stocks: >= 3). Present as a markdown table:
         | Level | Price | Why | R:R |
         |-------|-------|-----|-----|
         | Entry | $X | reason | - |
@@ -237,7 +237,7 @@ enum AnalysisPrompt {
         Conviction: HIGH / MODERATE / MODERATE-LOW
         Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
-        If both |Daily score| and |4H score| < 5, bias is FLAT, or conviction is LOW:
+        If score gate not met (crypto: both < 5; stocks: both < 3), bias is FLAT, or conviction is LOW:
         "NO SETUP — [specific reason]." Skip the table entirely.
 
         ## Risk Factors

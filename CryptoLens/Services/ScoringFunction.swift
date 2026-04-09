@@ -24,6 +24,7 @@ enum ScoringFunction {
         // ── Layer 1: Trend ──
 
         // 1a: Price position relative to EMAs
+        // Full cross (all 3 above/below) gets full weight; partial cross gets weight-1 (min 1)
         if s.ema20 != nil && s.ema50 != nil && s.ema200 != nil {
             switch s.emaCrossCount {
             case 3: score += p.pricePositionWeight
@@ -112,8 +113,8 @@ enum ScoringFunction {
             score += s.crossAssetSignal * p.crossAssetWeight
         }
 
-        // ── Layer 6: Derivatives (crypto only, non-price-derived) ──
-        if isDaily && s.isCrypto {
+        // ── Layer 6: Derivatives (daily crypto only, non-price-derived) ──
+        if isDaily && s.isCrypto && p.derivativesWeight > 0 {
             score += s.derivativesCombinedSignal * p.derivativesWeight
         }
 

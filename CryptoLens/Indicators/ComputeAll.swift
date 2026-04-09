@@ -333,7 +333,8 @@ enum IndicatorEngine {
         print("[MarketScope] [\(label)] score: \(score) → \(bias) | params: \(params.label) | vol: \(String(format: "%.2f", volScalar))")
         #endif
 
-        let maxScore = 21.0  // was 18 — derivatives adds ±3 (crypto only)
+        // Crypto daily: base 18 + derivatives ±3 = 21. Stock: no derivatives, max ~18.
+        let maxScore: Double = (market == .crypto && isDaily) ? 21.0 : 18.0
         let clampedScore = min(max(Double(score), -maxScore), maxScore)
         let bullPct = ((clampedScore / maxScore) + 1.0) / 2.0 * 100.0
 
