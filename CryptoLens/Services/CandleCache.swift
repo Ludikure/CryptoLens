@@ -53,15 +53,19 @@ enum CandleCache {
         let key = "\(symbol)_1h_stitched"
         let url = cacheDir.appendingPathComponent("\(key).json")
 
-        // Check if we already have a stitched cache
+        // Check if we already have a stitched cache that covers the requested range
         if let cached = loadFromDisk(url: url) {
             let filtered = cached.filter { $0.time >= startDate && $0.time <= endDate }
-            if filtered.count >= 100 {
+            let coversStart = cached.contains { $0.time <= startDate.addingTimeInterval(86400 * 7) }
+            if filtered.count >= 100 && coversStart {
                 #if DEBUG
                 print("[CandleCache] \(symbol) stitched: \(filtered.count) from cache")
                 #endif
                 return filtered
             }
+            #if DEBUG
+            print("[CandleCache] \(symbol) cache exists (\(cached.count)) but doesn't cover start \(startDate) — re-fetching")
+            #endif
         }
 
         var allCandles = [Candle]()
