@@ -372,13 +372,60 @@ class AnalysisService: ObservableObject {
 
             if needsEnrichment { lastEnrichmentFetch[symbol] = Date() }
 
+            // ML win probability — computed from Daily + 4H features
+            var tf1ML = tf1
+            tf1ML.mlWinProbability = MLScoring.predict(
+                dRsi: tf1.rsi ?? 50, dMacdHist: tf1.macd?.histogram ?? 0,
+                dAdx: tf1.adx?.adx ?? 0, dAdxBullish: tf1.adx?.direction == "Bullish",
+                dEmaCross: {
+                    var c = 0
+                    if let e = tf1.ema20 { c += tf1.price > e ? 1 : -1 }
+                    if let e = tf1.ema50 { c += tf1.price > e ? 1 : -1 }
+                    if let e = tf1.ema200 { c += tf1.price > e ? 1 : -1 }
+                    return c
+                }(),
+                dStackBull: {
+                    guard let e20 = tf1.ema20, let e50 = tf1.ema50, let e200 = tf1.ema200 else { return false }
+                    return e20 > e50 && e50 > e200
+                }(),
+                dStackBear: {
+                    guard let e20 = tf1.ema20, let e50 = tf1.ema50, let e200 = tf1.ema200 else { return false }
+                    return e20 < e50 && e50 < e200
+                }(),
+                dStructBull: tf1.marketStructure?.label.contains("bullish") ?? false,
+                dStructBear: tf1.marketStructure?.label.contains("bearish") ?? false,
+                hRsi: tf2.rsi ?? 50, hMacdHist: tf2.macd?.histogram ?? 0,
+                hAdx: tf2.adx?.adx ?? 0, hAdxBullish: tf2.adx?.direction == "Bullish",
+                hEmaCross: {
+                    var c = 0
+                    if let e = tf2.ema20 { c += tf2.price > e ? 1 : -1 }
+                    if let e = tf2.ema50 { c += tf2.price > e ? 1 : -1 }
+                    if let e = tf2.ema200 { c += tf2.price > e ? 1 : -1 }
+                    return c
+                }(),
+                hStackBull: {
+                    guard let e20 = tf2.ema20, let e50 = tf2.ema50, let e200 = tf2.ema200 else { return false }
+                    return e20 > e50 && e50 > e200
+                }(),
+                hStackBear: {
+                    guard let e20 = tf2.ema20, let e50 = tf2.ema50, let e200 = tf2.ema200 else { return false }
+                    return e20 < e50 && e50 < e200
+                }(),
+                hStructBull: tf2.marketStructure?.label.contains("bullish") ?? false,
+                hStructBear: tf2.marketStructure?.label.contains("bearish") ?? false,
+                atrPercent: tf2.atr?.atrPercent ?? 0,
+                volScalar: tf1.volScalar ?? 1.0,
+                atrPercentile: tf1.atrPercentile ?? 50,
+                dailyScore: tf1.biasScore, fourHScore: tf2.biasScore
+            )
+
             let prevResult = resultsBySymbol[symbol]
             let result = AnalysisResult(
                 symbol: symbol,
                 market: market,
                 timestamp: Date(),
                 analysisTimestamp: prevResult?.analysisTimestamp,
-                tf1: tf1, tf2: tf2, tf3: tf3,
+                tf1: tf1ML, tf2: tf2, tf3: tf3,
                 sentiment: sentiment,
                 fearGreed: fearGreed,
                 stockInfo: stockInfo,
@@ -420,17 +467,17 @@ class AnalysisService: ObservableObject {
                 BiasNotificationManager.send(ticker: ticker, oldBias: prev.daily.bias, newBias: result.daily.bias)
             }
 
-            // Note: bias flip and score threshold notifications are independent —
+            // Note: bias flip and ML threshold notifications are independent —
             // both can fire for the same refresh if a flip coincides with a threshold crossing.
-            // Score threshold notification — fires for ANY watchlist symbol
+            // ML probability notification — fires when win probability crosses 0.60
             if let prev = prevResult,
                UserDefaults.standard.bool(forKey: "notify_score_threshold") {
-                let prevMax = max(abs(prev.daily.biasScore), abs(prev.h4.biasScore))
-                let newMax = max(abs(result.daily.biasScore), abs(result.h4.biasScore))
-                let threshold = marketFor(symbol) == .crypto ? 5 : 3
+                let prevML = prev.daily.mlWinProbability ?? 0
+                let newML = result.daily.mlWinProbability ?? 0
+                let mlThreshold = 0.60
 
-                // Only notify when score CROSSES above threshold (not every refresh)
-                if prevMax < threshold && newMax >= threshold {
+                // Only notify when ML probability CROSSES above threshold (not every refresh)
+                if prevML < mlThreshold && newML >= mlThreshold {
                     let ticker = Constants.asset(for: symbol)?.ticker ?? symbol
                     let dailyScore = result.daily.biasScore
                     let fourHScore = result.h4.biasScore
@@ -439,7 +486,7 @@ class AnalysisService: ObservableObject {
                     BiasNotificationManager.sendScoreAlert(
                         ticker: ticker,
                         score: strongerScore,
-                        direction: direction)
+                        direction: "\(direction) (ML: \(Int(newML * 100))%)")
                 }
             }
 

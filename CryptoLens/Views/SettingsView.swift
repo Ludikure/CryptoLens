@@ -90,7 +90,7 @@ struct SettingsView: View {
                         get: { UserDefaults.standard.bool(forKey: "notify_score_threshold") },
                         set: { UserDefaults.standard.set($0, forKey: "notify_score_threshold") }
                     ))
-                    Text("Notifies when any watchlist asset's score crosses the threshold (\u{00B1}5 crypto, \u{00B1}3 stocks)")
+                    Text("Notifies when ML win probability crosses 60% for any watchlist asset")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } header: {
