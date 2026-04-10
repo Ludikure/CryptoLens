@@ -852,17 +852,47 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       }
       if (candles.length < 210) continue;
 
-      // Compute linear score (for features) and ML probability
+      // Fetch 4H candles for ML features (cached 5min)
+      let fourHCandles: ScoreCandle[] = [];
+      if (isCrypto) {
+        const cacheKey4H = `candles:${symbol}:4h`;
+        const cached4H = await env.ALERTS.get(cacheKey4H);
+        if (cached4H) {
+          fourHCandles = JSON.parse(cached4H);
+        } else {
+          try {
+            const resp = await fetch(
+              `${BINANCE_SPOT}/klines?symbol=${symbol}&interval=4h&limit=260`
+            );
+            if (resp.ok) {
+              const data = await resp.json() as any[];
+              fourHCandles = data.map((k: any) => ({
+                time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
+              }));
+              await env.ALERTS.put(cacheKey4H, JSON.stringify(fourHCandles), { expirationTtl: 300 });
+            }
+          } catch { /* 4H fetch failed — proceed with daily-only */ }
+        }
+      }
+
+      // Compute daily score + features
       const result = computeScore(candles, isCrypto);
+
+      // Compute 4H features if available
+      let h4Result: ScoreResult | null = null;
+      if (fourHCandles.length >= 210) {
+        h4Result = computeScore(fourHCandles, isCrypto);
+      }
+
       const mlInput = buildMLInput(
         result.dRsi ?? 50, result.dMacdHist ?? 0, result.dAdx ?? 0, result.dAdxBullish ?? false,
         result.dEmaCross ?? 0, result.dStackBull ?? false, result.dStackBear ?? false,
         result.dStructBull ?? false, result.dStructBear ?? false,
-        result.hRsi ?? 50, result.hMacdHist ?? 0, result.hAdx ?? 0, result.hAdxBullish ?? false,
-        result.hEmaCross ?? 0, result.hStackBull ?? false, result.hStackBear ?? false,
-        result.hStructBull ?? false, result.hStructBear ?? false,
+        h4Result?.dRsi ?? 50, h4Result?.dMacdHist ?? 0, h4Result?.dAdx ?? 0, h4Result?.dAdxBullish ?? false,
+        h4Result?.dEmaCross ?? 0, h4Result?.dStackBull ?? false, h4Result?.dStackBear ?? false,
+        h4Result?.dStructBull ?? false, h4Result?.dStructBear ?? false,
         result.atrPercent ?? 0, result.volScalar ?? 1.0, result.atrPercentile ?? 50,
-        result.score, result.fourHScore ?? 0
+        result.score, h4Result?.score ?? 0
       );
       const mlProb = mlPredict(mlInput);
       newProbs[symbol] = mlProb;
