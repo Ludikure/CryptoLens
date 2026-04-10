@@ -12,7 +12,6 @@ struct TradeSetupChartView: View {
     private var allLevels: [Double] {
         var levels = [setup.entry, setup.stopLoss, setup.tp1]
         if let tp2 = setup.tp2 { levels.append(tp2) }
-        if let tp3 = setup.tp3 { levels.append(tp3) }
         return levels
     }
 
@@ -64,10 +63,6 @@ struct TradeSetupChartView: View {
                     if let tp2 = setup.tp2 {
                         setupLine(label: "TP2", price: tp2, color: .green.opacity(0.7), height: chartHeight, width: width)
                     }
-                    if let tp3 = setup.tp3 {
-                        setupLine(label: "TP3", price: tp3, color: .green.opacity(0.5), height: chartHeight, width: width)
-                    }
-
                     // Current price line
                     currentPriceLine(height: chartHeight, width: width)
 

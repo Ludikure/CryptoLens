@@ -80,7 +80,7 @@ enum AnalysisPrompt {
         This gate fires BEFORE the kill condition gate.
 
         ML WIN PROBABILITY (if shown in data header):
-        ML_WIN is a machine learning model's prediction of resolved win probability — the likelihood that TP is hit before SL. Trained on 14,000+ resolved trades across BTC/ETH/SOL/XRP using XGBoost on indicator features from Daily + 4H timeframes.
+        ML_WIN is a machine learning model's prediction of resolved win probability — the likelihood that TP is hit before SL. Trained on 23,000+ resolved trades across 16 symbols (BTC/ETH/SOL/XRP + 12 stocks) using XGBoost with 51 features spanning Daily, 4H, and 1H indicators, Bollinger Bands, StochRSI, VWAP, derivatives (crypto), VIX, and DXY. Separate crypto and stock models are selected automatically.
 
         ML_WIN adjusts conviction AFTER the score gate passes:
         - ML_WIN >= 70%: Upgrade conviction by one level. MODERATE → HIGH, MODERATE-LOW → MODERATE. The model sees non-linear feature interactions the linear score misses.
@@ -243,7 +243,7 @@ enum AnalysisPrompt {
         Bullet list of the 3-5 most important levels (S/R, fib, EMA) with prices. Mark which ones price is near.
 
         ## Bias
-        State which rule fired: "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback." This must match your Step 3 declaration.
+        State which rule fired AND the ML probability (if present in data): "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback. (ML: 65%)" This must match your Step 3 declaration. If ML_WIN is in the data header, you MUST include it in the Bias line — never omit it.
 
         ## Trade Setup
         Only if conviction is MODERATE-LOW or higher, bias is LONG or SHORT, and score gate is met (crypto: max(|Daily|,|4H|) >= 5; stocks: >= 3). Present as a markdown table:

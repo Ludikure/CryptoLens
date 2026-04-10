@@ -7,11 +7,10 @@ struct TradeSetup: Codable, Identifiable {
     let stopLoss: Double
     let tp1: Double
     let tp2: Double?
-    let tp3: Double?
     let reasoning: String
 
     enum CodingKeys: String, CodingKey {
-        case id, direction, entry, stopLoss, tp1, tp2, tp3, reasoning
+        case id, direction, entry, stopLoss, tp1, tp2, reasoning
     }
 
     init(from decoder: Decoder) throws {
@@ -22,18 +21,16 @@ struct TradeSetup: Codable, Identifiable {
         self.stopLoss = try c.decode(Double.self, forKey: .stopLoss)
         self.tp1 = try c.decode(Double.self, forKey: .tp1)
         self.tp2 = try c.decodeIfPresent(Double.self, forKey: .tp2)
-        self.tp3 = try c.decodeIfPresent(Double.self, forKey: .tp3)
         self.reasoning = (try? c.decode(String.self, forKey: .reasoning)) ?? ""
     }
 
-    init(direction: String, entry: Double, stopLoss: Double, tp1: Double, tp2: Double? = nil, tp3: Double? = nil, reasoning: String = "") {
+    init(direction: String, entry: Double, stopLoss: Double, tp1: Double, tp2: Double? = nil, reasoning: String = "") {
         self.id = UUID()
         self.direction = direction
         self.entry = entry
         self.stopLoss = stopLoss
         self.tp1 = tp1
         self.tp2 = tp2
-        self.tp3 = tp3
         self.reasoning = reasoning
     }
 
@@ -46,14 +43,11 @@ struct TradeSetup: Codable, Identifiable {
 
     var rrTP1: Double { rrRatio(for: tp1) }
     var rrTP2: Double? { tp2.map { rrRatio(for: $0) } }
-    var rrTP3: Double? { tp3.map { rrRatio(for: $0) } }
 
     /// Generate price alerts for this setup.
-    /// `currentPrice` is needed to determine the correct alert direction
-    /// (alert fires when price crosses the target FROM the current side).
     func toAlerts(symbol: String, currentPrice: Double) -> [PriceAlert] {
         var alerts = [PriceAlert]()
-        let groupId = UUID()  // Shared ID to group all alerts from this setup
+        let groupId = UUID()
 
         func alertCondition(for target: Double) -> PriceAlert.Condition {
             currentPrice > target ? .below : .above
@@ -91,15 +85,6 @@ struct TradeSetup: Codable, Identifiable {
                 setupId: groupId
             ))
         }
-        if let tp3 = tp3 {
-            alerts.append(PriceAlert(
-                symbol: symbol,
-                targetPrice: tp3,
-                condition: alertCondition(for: tp3),
-                note: "\(direction) TP3",
-                setupId: groupId
-            ))
-        }
 
         return alerts
     }
@@ -112,22 +97,20 @@ struct TradeOutcome: Codable {
     var stopHit: Bool
     var tp1Hit: Bool
     var tp2Hit: Bool
-    var tp3Hit: Bool
-    var maxFavorable: Double   // max move in trade direction from entry
-    var maxAdverse: Double     // max move against trade direction from entry
-    var outcomeTime: Date?     // when the trade resolved (hit TP or SL)
+    var maxFavorable: Double
+    var maxAdverse: Double
+    var outcomeTime: Date?
     var resolved: Bool { stopHit || tp1Hit }
 
     init() {
         entryHit = false; entryHitTime = nil; stopHit = false
-        tp1Hit = false; tp2Hit = false; tp3Hit = false
+        tp1Hit = false; tp2Hit = false
         maxFavorable = 0; maxAdverse = 0; outcomeTime = nil
     }
 
     var result: String {
         if !entryHit { return "not_triggered" }
         if stopHit { return "loss" }
-        if tp3Hit { return "tp3_win" }
         if tp2Hit { return "tp2_win" }
         if tp1Hit { return "tp1_win" }
         return "open"
@@ -139,10 +122,10 @@ struct FlatOutcome: Codable {
     let symbol: String
     let priceAtFlat: Double
     let timestamp: Date
-    let reason: String           // "FLAT_Rule2", "KILL_divergence", etc.
+    let reason: String
     var priceAfter3Refreshes: Double?
     var refreshCount: Int
-    var falseFlat: Bool?         // true if price moved >1.5% directionally
+    var falseFlat: Bool?
 
     init(symbol: String, price: Double, reason: String) {
         self.symbol = symbol; self.priceAtFlat = price

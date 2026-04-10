@@ -56,9 +56,6 @@ enum IndicatorEngine {
         let ema20 = ema20List.last.map { $0.rounded(toPlaces: 2) }
         let ema50 = ema50List.last.map { $0.rounded(toPlaces: 2) }
         let ema200 = ema200List.last.map { $0.rounded(toPlaces: 2) }
-        let sma50 = MovingAverages.computeSMA(values: closes, period: 50).map { $0.rounded(toPlaces: 2) }
-        let sma200 = MovingAverages.computeSMA(values: closes, period: 200).map { $0.rounded(toPlaces: 2) }
-
         // Volume ratio
         let avgVol: Double? = volumes.count >= 20 ? volumes.suffix(20).reduce(0, +) / 20.0 : nil
         let volRatio: Double? = avgVol.flatMap { avg in volumes.last.map { ($0 / avg).rounded(toPlaces: 2) } }
@@ -411,8 +408,8 @@ enum IndicatorEngine {
             ema20: ema20,
             ema50: ema50,
             ema200: ema200,
-            sma50: sma50,
-            sma200: sma200,
+            sma50: nil,
+            sma200: nil,
             vwap: vwap,
             fibonacci: fib,
             supportResistance: sr,

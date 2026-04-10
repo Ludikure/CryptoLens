@@ -120,7 +120,7 @@ struct OutcomeDashboardView: View {
 
     private func outcomeColor(_ result: String) -> Color {
         switch result {
-        case "tp1_win", "tp2_win", "tp3_win": return .green
+        case "tp1_win", "tp2_win": return .green
         case "loss": return .red
         case "open": return .blue
         default: return .secondary

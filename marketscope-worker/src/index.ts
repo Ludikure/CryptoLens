@@ -493,7 +493,7 @@ export default {
           const dxyData = await dxyResp.json() as any;
           const meta = dxyData?.chart?.result?.[0]?.meta;
           const price = meta?.regularMarketPrice ?? meta?.previousClose;
-          if (price != null && !isNaN(price)) {
+          if (price != null && !isNaN(price) && price > 70 && price < 130) {
             data['usdIndex'] = Math.round(price * 100) / 100;
           }
         }

@@ -85,14 +85,6 @@ enum OutcomeTracker {
                         let hit = isLong ? point.high >= tp2 : point.low <= tp2
                         if hit { tracked[i].outcome.tp2Hit = true; changed = true }
                     }
-                    if let tp3 = setup.tp3, !tracked[i].outcome.tp3Hit {
-                        let hit = isLong ? point.high >= tp3 : point.low <= tp3
-                        if hit {
-                            tracked[i].outcome.tp3Hit = true
-                            tracked[i].outcome.outcomeTime = tracked[i].outcome.outcomeTime ?? point.time
-                            changed = true
-                        }
-                    }
                 }
             }
 

@@ -123,8 +123,7 @@ struct AlertsView: View {
         if note.contains("stop") { return 1 }
         if note.contains("TP1") { return 2 }
         if note.contains("TP2") { return 3 }
-        if note.contains("TP3") { return 4 }
-        return 5
+        return 4
     }
 
     /// Clear old setup alerts and regenerate from the latest cached analysis.
@@ -314,8 +313,6 @@ private struct SetupCard: View {
         if l.contains("tp1") {
             return String(format: "1:%.1f", setup.rrTP1)
         } else if l.contains("tp2"), let rr = setup.rrTP2 {
-            return String(format: "1:%.1f", rr)
-        } else if l.contains("tp3"), let rr = setup.rrTP3 {
             return String(format: "1:%.1f", rr)
         }
         return "\u{2014}"
