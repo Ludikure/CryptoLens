@@ -192,6 +192,44 @@ class BacktestEngine: ObservableObject {
                     atr: fourHResult.atr?.atr ?? (price * 0.015),
                     oneHStartIdx: oneHIdx)
 
+                // Extract ML features from indicator results
+                let mlf = MLFeatures(
+                    dRsi: dailyResult.rsi ?? 50, dMacdHist: dailyResult.macd?.histogram ?? 0,
+                    dAdx: dailyResult.adx?.adx ?? 0, dAdxBullish: dailyResult.adx?.direction == "Bullish",
+                    dEmaCross: {
+                        var c = 0
+                        if let e = dailyResult.ema20, price > e { c += 1 }
+                        if let e = dailyResult.ema50, price > e { c += 1 }
+                        if let e = dailyResult.ema200, price > e { c += 1 }
+                        return c
+                    }(),
+                    dStackBull: maAlign == "bullish_stacked", dStackBear: maAlign == "bearish_stacked",
+                    dStructBull: dailyResult.marketStructure?.label.contains("bullish") ?? false,
+                    dStructBear: dailyResult.marketStructure?.label.contains("bearish") ?? false,
+                    hRsi: fourHResult.rsi ?? 50, hMacdHist: fourHResult.macd?.histogram ?? 0,
+                    hAdx: fourHResult.adx?.adx ?? 0, hAdxBullish: fourHResult.adx?.direction == "Bullish",
+                    hEmaCross: {
+                        var c = 0
+                        if let e = fourHResult.ema20, price > e { c += 1 }
+                        if let e = fourHResult.ema50, price > e { c += 1 }
+                        if let e = fourHResult.ema200, price > e { c += 1 }
+                        return c
+                    }(),
+                    hStackBull: {
+                        if let e20 = fourHResult.ema20, let e50 = fourHResult.ema50, let e200 = fourHResult.ema200 {
+                            return e20 > e50 && e50 > e200
+                        }; return false
+                    }(),
+                    hStackBear: {
+                        if let e20 = fourHResult.ema20, let e50 = fourHResult.ema50, let e200 = fourHResult.ema200 {
+                            return e20 < e50 && e50 < e200
+                        }; return false
+                    }(),
+                    hStructBull: fourHResult.marketStructure?.label.contains("bullish") ?? false,
+                    hStructBear: fourHResult.marketStructure?.label.contains("bearish") ?? false,
+                    atrPercent: fourHResult.atr?.atrPercent ?? 0
+                )
+
                 let point = BacktestDataPoint(
                     timestamp: evalTime, price: price,
                     dailyScore: dailyResult.biasScore, dailyBias: dailyResult.bias,
@@ -211,7 +249,8 @@ class BacktestEngine: ObservableObject {
                     priceAfter6x4H: fourHCandles[i + 6].close,
                     maxFavorable24H: maxFav, maxAdverse24H: maxAdv,
                     tradeResult: tradeResult,
-                    entryContext: entryContext
+                    entryContext: entryContext,
+                    mlFeatures: mlf
                 )
                 points.append(point)
 
@@ -249,6 +288,14 @@ class BacktestEngine: ObservableObject {
             "dailyBias", "fourHBias", "oneHBias",
             "biasAlignment", "regime", "emaRegime",
             "volScalar", "atrPercentile",
+            // ML features — Daily
+            "dRsi", "dMacdHist", "dAdx", "dAdxBullish",
+            "dEmaCross", "dStackBull", "dStackBear", "dStructBull", "dStructBear",
+            // ML features — 4H
+            "hRsi", "hMacdHist", "hAdx", "hAdxBullish",
+            "hEmaCross", "hStackBull", "hStackBear", "hStructBull", "hStructBear",
+            "atrPercent",
+            // Trade outcome (bar-by-bar resolved)
             "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
             "tradeMaxFavorable", "tradeMaxAdverse"
         ].joined(separator: ",")
@@ -260,6 +307,7 @@ class BacktestEngine: ObservableObject {
             let bars = pt.tradeResult?.barsToOutcome ?? 0
             let maxFav = pt.tradeResult?.maxFavorable ?? 0
             let maxAdv = pt.tradeResult?.maxAdverse ?? 0
+            let f = pt.mlFeatures
 
             let row = [
                 "\(Int(pt.timestamp.timeIntervalSince1970))",
@@ -269,6 +317,24 @@ class BacktestEngine: ObservableObject {
                 pt.biasAlignment, pt.regime, pt.emaRegime,
                 String(format: "%.2f", pt.volScalar),
                 String(format: "%.0f", pt.atrPercentile),
+                // ML features — Daily
+                String(format: "%.1f", f?.dRsi ?? 50),
+                String(format: "%.6f", f?.dMacdHist ?? 0),
+                String(format: "%.1f", f?.dAdx ?? 0),
+                "\(f?.dAdxBullish == true ? 1 : 0)",
+                "\(f?.dEmaCross ?? 0)",
+                "\(f?.dStackBull == true ? 1 : 0)", "\(f?.dStackBear == true ? 1 : 0)",
+                "\(f?.dStructBull == true ? 1 : 0)", "\(f?.dStructBear == true ? 1 : 0)",
+                // ML features — 4H
+                String(format: "%.1f", f?.hRsi ?? 50),
+                String(format: "%.6f", f?.hMacdHist ?? 0),
+                String(format: "%.1f", f?.hAdx ?? 0),
+                "\(f?.hAdxBullish == true ? 1 : 0)",
+                "\(f?.hEmaCross ?? 0)",
+                "\(f?.hStackBull == true ? 1 : 0)", "\(f?.hStackBear == true ? 1 : 0)",
+                "\(f?.hStructBull == true ? 1 : 0)", "\(f?.hStructBear == true ? 1 : 0)",
+                String(format: "%.4f", f?.atrPercent ?? 0),
+                // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv)
             ].joined(separator: ",")

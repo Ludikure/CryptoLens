@@ -41,6 +41,20 @@ struct SweepResult: Codable, Identifiable {
 }
 
 /// A single evaluation point in the backtest.
+/// ML feature snapshot extracted at each backtest bar.
+struct MLFeatures: Codable {
+    // Daily
+    let dRsi: Double; let dMacdHist: Double; let dAdx: Double; let dAdxBullish: Bool
+    let dEmaCross: Int; let dStackBull: Bool; let dStackBear: Bool
+    let dStructBull: Bool; let dStructBear: Bool
+    // 4H
+    let hRsi: Double; let hMacdHist: Double; let hAdx: Double; let hAdxBullish: Bool
+    let hEmaCross: Int; let hStackBull: Bool; let hStackBear: Bool
+    let hStructBull: Bool; let hStructBear: Bool
+    // ATR
+    let atrPercent: Double
+}
+
 struct BacktestDataPoint: Codable {
     let timestamp: Date
     let price: Double
@@ -62,6 +76,7 @@ struct BacktestDataPoint: Codable {
     var maxAdverse24H: Double?
     var tradeResult: TradeSimOutcome?
     var entryContext: TradeEntryContext?
+    var mlFeatures: MLFeatures?
 
     var directionCorrect4H: Bool? {
         guard let future = priceAfter4H else { return nil }
