@@ -53,6 +53,8 @@ struct MLFeatures: Codable {
     let hStructBull: Bool; let hStructBear: Bool
     // ATR
     let atrPercent: Double
+    // Market type
+    let isCrypto: Bool
 }
 
 struct BacktestDataPoint: Codable {

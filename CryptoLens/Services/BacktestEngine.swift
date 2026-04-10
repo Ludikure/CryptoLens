@@ -227,7 +227,8 @@ class BacktestEngine: ObservableObject {
                     }(),
                     hStructBull: fourHResult.marketStructure?.label.contains("bullish") ?? false,
                     hStructBear: fourHResult.marketStructure?.label.contains("bearish") ?? false,
-                    atrPercent: fourHResult.atr?.atrPercent ?? 0
+                    atrPercent: fourHResult.atr?.atrPercent ?? 0,
+                    isCrypto: isCrypto
                 )
 
                 let point = BacktestDataPoint(
@@ -294,7 +295,7 @@ class BacktestEngine: ObservableObject {
             // ML features — 4H
             "hRsi", "hMacdHist", "hAdx", "hAdxBullish",
             "hEmaCross", "hStackBull", "hStackBear", "hStructBull", "hStructBear",
-            "atrPercent",
+            "atrPercent", "isCrypto",
             // Trade outcome (bar-by-bar resolved)
             "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
             "tradeMaxFavorable", "tradeMaxAdverse"
@@ -334,6 +335,7 @@ class BacktestEngine: ObservableObject {
                 "\(f?.hStackBull == true ? 1 : 0)", "\(f?.hStackBear == true ? 1 : 0)",
                 "\(f?.hStructBull == true ? 1 : 0)", "\(f?.hStructBear == true ? 1 : 0)",
                 String(format: "%.4f", f?.atrPercent ?? 0),
+                "\(f?.isCrypto == true ? 1 : 0)",
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv)

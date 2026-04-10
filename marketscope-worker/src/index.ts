@@ -13,6 +13,7 @@ export interface Env {
   CLAUDE_API_KEY: string;
   GEMINI_API_KEY: string;
   TWELVE_DATA_API_KEY: string;
+  TWELVE_DATA_API_KEY_2?: string;
   FINNHUB_API_KEY: string;
   FRED_API_KEY: string;
   TIINGO_API_KEY: string;
@@ -330,8 +331,10 @@ export default {
       }
 
       try {
-        // Note: Twelve Data requires API key in URL. Server-to-server only.
-        let apiUrl = `${TWELVE_DATA_BASE}/time_series?symbol=${symbol}&interval=${interval}&apikey=${env.TWELVE_DATA_API_KEY}`;
+        // Round-robin between two API keys to double rate limit (16 req/min)
+        const tdKeys = [env.TWELVE_DATA_API_KEY, env.TWELVE_DATA_API_KEY_2].filter(Boolean) as string[];
+        const tdKey = tdKeys[Math.floor(Math.random() * tdKeys.length)];
+        let apiUrl = `${TWELVE_DATA_BASE}/time_series?symbol=${symbol}&interval=${interval}&apikey=${tdKey}`;
         if (startDate && endDate) {
           apiUrl += `&start_date=${startDate}&end_date=${endDate}&outputsize=5000`;
         } else {
@@ -361,7 +364,9 @@ export default {
       }
 
       try {
-        const resp = await fetch(`${TWELVE_DATA_BASE}/quote?symbol=${symbol}&apikey=${env.TWELVE_DATA_API_KEY}`);
+        const tdKeys2 = [env.TWELVE_DATA_API_KEY, env.TWELVE_DATA_API_KEY_2].filter(Boolean) as string[];
+        const tdKey2 = tdKeys2[Math.floor(Math.random() * tdKeys2.length)];
+        const resp = await fetch(`${TWELVE_DATA_BASE}/quote?symbol=${symbol}&apikey=${tdKey2}`);
         if (!resp.ok) return json({ error: `Twelve Data ${resp.status}` }, 502);
         const data = await resp.json();
         await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
