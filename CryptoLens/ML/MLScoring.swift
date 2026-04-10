@@ -27,7 +27,7 @@ enum MLScoring {
     ) -> Double? {
         guard let model = model else { return nil }
 
-        let input: [String: Any] = [
+        let input: [String: Double] = [
             "dRsi": dRsi,
             "dMacdHist": dMacdHist,
             "dAdx": dAdx,
@@ -53,14 +53,23 @@ enum MLScoring {
             "fourHScore": Double(fourHScore)
         ]
 
-        guard let provider = try? MLDictionaryFeatureProvider(dictionary: input),
-              let output = try? model.prediction(from: provider) else { return nil }
+        let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
+        guard let provider = try? MLDictionaryFeatureProvider(dictionary: nsInput),
+              let output = try? model.prediction(from: provider) else {
+            #if DEBUG
+            print("[MLScoring] Prediction failed")
+            #endif
+            return nil
+        }
 
-        // The model outputs classProbability as a dictionary {0: prob_loss, 1: prob_win}
+        // classProbability keys are Int64 (from XGBoost class_labels [0, 1])
         if let probs = output.featureValue(for: "classProbability")?.dictionaryValue,
-           let winProb = probs[1] as? Double {
+           let winProb = probs[Int64(1)] as? Double {
             return winProb
         }
+        #if DEBUG
+        print("[MLScoring] Could not extract classProbability")
+        #endif
         return nil
     }
 
