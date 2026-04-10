@@ -79,6 +79,23 @@ enum AnalysisPrompt {
           → Output empty JSON [].
         This gate fires BEFORE the kill condition gate.
 
+        ML WIN PROBABILITY (if shown in data header):
+        ML_WIN is a machine learning model's prediction of resolved win probability — the likelihood that TP is hit before SL. Trained on 14,000+ resolved trades across BTC/ETH/SOL/XRP using XGBoost on indicator features from Daily + 4H timeframes.
+
+        ML_WIN adjusts conviction AFTER the score gate passes:
+        - ML_WIN >= 70%: Upgrade conviction by one level. MODERATE → HIGH, MODERATE-LOW → MODERATE. The model sees non-linear feature interactions the linear score misses.
+        - ML_WIN 60-69%: Confirms the linear score. No adjustment needed.
+        - ML_WIN 50-59%: Weak ML signal. If linear conviction is MODERATE-LOW, downgrade to LOW → NO TRADE.
+        - ML_WIN < 50%: ML contradicts the setup — the model predicts the stop is more likely to hit first. Override to NO TRADE regardless of linear score or conviction.
+
+        When ML_WIN and linear score disagree:
+        - Score +8 but ML_WIN 42% → NO TRADE. Indicators align but the pattern historically loses.
+        - Score +5 but ML_WIN 71% → MODERATE (upgraded from MODERATE-LOW). Marginal indicators but high-probability pattern.
+
+        ML_WIN does NOT override the score gate. If max(|Daily|, |4H|) < 5, it's still NO SETUP even if ML_WIN is 80%. The gate ensures minimum indicator alignment; ML refines within that.
+
+        If ML_WIN is not present in the data header, ignore this section entirely and use the linear conviction hierarchy as-is.
+
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
 
@@ -116,12 +133,14 @@ enum AnalysisPrompt {
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2 rows showing Price, Why, and R:R.
-        Rate conviction (SCORE-BASED — backtest-validated over 5 years):
-        - HIGH: Both Daily AND 4H |score| >= 7 (66% resolved WR, +1.023% expectancy). OR: D/4H conflict with Daily |score| >= 7 — pullback entry (69% resolved WR, +1.161% expectancy). Level + signal + risk all present. No macro event within 12 hours.
-        - MODERATE: Daily |score| >= 7 with 4H any value (61% resolved WR). OR: 4H |score| >= 7 with Daily any value (55% resolved WR). At least 2 of 3 (level/signal/risk) present. No macro event within 4 hours.
-        - MODERATE-LOW: Either Daily or 4H |score| 5-6. ONLY trade if all three exist (level + signal + risk). One missing = no trade. This range is marginal — be selective. Prefer setups at multi-timeframe confluence levels with clear rejection signals.
-        - LOW: Both |score| < 5, OR macro event within 2 hours. → NO TRADE.
-        The score conviction gate already filters out LOW. Direction follows the timeframe with the stronger |score|. If both are equal, Daily has authority.
+        Rate conviction (backtest-validated, ML-adjusted):
+        - HIGH: Linear HIGH (Both D+4H |score| >= 7 or D/4H conflict with D >= 7) AND ML_WIN >= 60%. OR: Linear MODERATE with ML_WIN >= 70% (ML upgrade).
+          Level + signal + risk all present. No macro event within 12 hours.
+        - MODERATE: Linear MODERATE (Either |score| >= 7) AND ML_WIN >= 50%. OR: Linear MODERATE-LOW with ML_WIN >= 70% (ML upgrade).
+          At least 2 of 3 (level/signal/risk) present. No macro event within 4 hours.
+        - MODERATE-LOW: Either |score| 5-6, ML_WIN >= 50%. All three (level + signal + risk) required. One missing = no trade.
+        - LOW: Both |score| < 5, OR ML_WIN < 50%, OR macro event within 2 hours. → NO TRADE.
+        Direction follows the timeframe with the stronger |score|. If both are equal, Daily has authority.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
@@ -178,7 +197,7 @@ enum AnalysisPrompt {
         4. Before proposing any entry, verify: Is price near this level or moving toward it? Is this entry within 1x ATR of current price? If further, explain specifically why waiting for that level is worth it. Does recent candle data support this level holding?
         5. Never move an entry to force R:R compliance. The entry comes from structure. R:R is a consequence, not a target.
         6. If your bias is FLAT — there is no setup. Output "NO SETUP" with a reason and an empty JSON []. Do not present conditional or hypothetical entries.
-        7. If your conviction is below MODERATE — there is no setup. A LOW conviction idea is not a trade.
+        7. If your conviction is below MODERATE — there is no setup. A LOW conviction idea is not a trade. If ML_WIN < 50%, there is no setup regardless of linear conviction — the model predicts a losing pattern.
         8. If you identify a trap (bull trap, bear trap, false breakout) — there is no setup. Do not hedge it with a conditional entry.
         9. The setup MUST agree with your regime read and your bias. TRANSITIONING regime + FLAT bias = no setup. A long setup in a regime you just called bearish = contradiction = no setup.
 
@@ -213,6 +232,7 @@ enum AnalysisPrompt {
         - Overbought/oversold is a condition, not a signal. RSI 80 in an uptrend is strength, not a short trigger. RSI 20 in a downtrend is weakness, not a buy. Only treat OB/OS as actionable when it coincides with a level + divergence or a regime change.
         - Trades need time to work. Backtesting proved the optimal resolution window is 72 hours at 2.0 ATR stop/target sizing. Do not present this as "hold for 72 hours" — instead, frame it as: "This setup targets $X. Allow 1-3 days for price to reach the target. Re-evaluate at the next Daily close if neither TP1 nor SL is hit."
         - Most setups resolve within 40 hours on average. Expired trades (no TP or SL hit in 72h) close at market at 0% P&L.
+        - ML_WIN probability captures non-linear indicator interactions that the linear score misses. A high ML_WIN with a low linear score means the specific combination of features — not any individual indicator — predicts success. Trust the model when it disagrees with the score, especially on altcoins where the linear system is weakest.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -234,7 +254,7 @@ enum AnalysisPrompt {
         | TP1 | $X | reason | 1:X |
         | TP2 | $X | reason | 1:X |
 
-        Conviction: HIGH / MODERATE / MODERATE-LOW
+        Conviction: HIGH / MODERATE / MODERATE-LOW (ML: XX%)
         Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
         If score gate not met (crypto: both < 5; stocks: both < 3), bias is FLAT, or conviction is LOW:
