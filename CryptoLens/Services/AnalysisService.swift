@@ -416,7 +416,8 @@ class AnalysisService: ObservableObject {
                 atrPercent: tf2.atr?.atrPercent ?? 0,
                 volScalar: tf1.volScalar ?? 1.0,
                 atrPercentile: tf1.atrPercentile ?? 50,
-                dailyScore: tf1.biasScore, fourHScore: tf2.biasScore
+                dailyScore: tf1.biasScore, fourHScore: tf2.biasScore,
+                isCrypto: market == .crypto
             )
 
             let prevResult = resultsBySymbol[symbol]
@@ -591,7 +592,8 @@ class AnalysisService: ObservableObject {
                 atrPercent: tf2.atr?.atrPercent ?? 0,
                 volScalar: tf1.volScalar ?? 1.0,
                 atrPercentile: tf1.atrPercentile ?? 50,
-                dailyScore: tf1.biasScore, fourHScore: tf2.biasScore
+                dailyScore: tf1.biasScore, fourHScore: tf2.biasScore,
+                isCrypto: market == .crypto
             )
 
             // Candle staleness check: how old is the latest candle?

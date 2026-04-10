@@ -1,13 +1,24 @@
 import CoreML
 
-/// ML scoring using XGBoost model converted to CoreML.
-/// Trained on 14k resolved trades across BTC/ETH/SOL/XRP.
+/// ML scoring using dual XGBoost models converted to CoreML.
+/// Crypto model: 150 trees, trained on BTC/ETH/SOL/XRP.
+/// Stock model: 50 trees, trained on AAPL/MSFT/NVDA/TSLA/AMZN.
 /// Returns probability of resolved win (TP hit before SL).
 enum MLScoring {
-    private static let model: MLModel? = {
-        guard let url = Bundle.main.url(forResource: "MarketScoreML", withExtension: "mlmodelc") else {
+    private static let cryptoModel: MLModel? = {
+        guard let url = Bundle.main.url(forResource: "MarketScoreML_crypto", withExtension: "mlmodelc") else {
             #if DEBUG
-            print("[MLScoring] MarketScoreML.mlmodelc not found in bundle")
+            print("[MLScoring] MarketScoreML_crypto.mlmodelc not found in bundle")
+            #endif
+            return nil
+        }
+        return try? MLModel(contentsOf: url)
+    }()
+
+    private static let stockModel: MLModel? = {
+        guard let url = Bundle.main.url(forResource: "MarketScoreML_stock", withExtension: "mlmodelc") else {
+            #if DEBUG
+            print("[MLScoring] MarketScoreML_stock.mlmodelc not found in bundle")
             #endif
             return nil
         }
@@ -23,9 +34,11 @@ enum MLScoring {
         hEmaCross: Int, hStackBull: Bool, hStackBear: Bool,
         hStructBull: Bool, hStructBear: Bool,
         atrPercent: Double, volScalar: Double, atrPercentile: Double,
-        dailyScore: Int, fourHScore: Int
+        dailyScore: Int, fourHScore: Int,
+        isCrypto: Bool
     ) -> Double? {
-        guard let model = model else { return nil }
+        let model = isCrypto ? cryptoModel : stockModel
+        guard let model else { return nil }
 
         let input: [String: Double] = [
             "dRsi": dRsi,
@@ -84,7 +97,8 @@ enum MLScoring {
             hEmaCross: f.hEmaCross, hStackBull: f.hStackBull, hStackBear: f.hStackBear,
             hStructBull: f.hStructBull, hStructBear: f.hStructBear,
             atrPercent: f.atrPercent, volScalar: volScalar, atrPercentile: atrPercentile,
-            dailyScore: dailyScore, fourHScore: fourHScore
+            dailyScore: dailyScore, fourHScore: fourHScore,
+            isCrypto: f.isCrypto
         )
     }
 }

@@ -899,7 +899,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         result.atrPercent ?? 0, result.volScalar ?? 1.0, result.atrPercentile ?? 50,
         result.score, h4Result?.score ?? 0
       );
-      const mlProb = mlPredict(mlInput);
+      const mlProb = mlPredict(mlInput, isCrypto);
       newProbs[symbol] = mlProb;
 
       const prevProb = prevProbs[symbol] || 0;

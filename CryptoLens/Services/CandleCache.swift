@@ -106,8 +106,8 @@ enum CandleCache {
                     #endif
                 }
                 chunkEnd = chunkStart
-                // Respect 8 req/min rate limit
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                // Respect rate limit (2 keys × 8 req/min = 16 req/min)
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
             }
         }
 
