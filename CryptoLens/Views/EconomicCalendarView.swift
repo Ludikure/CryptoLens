@@ -34,6 +34,16 @@ struct EconomicCalendarView: View {
                                         .font(.caption2)
                                         .foregroundStyle(.tertiary)
                                 }
+                                if let prev = event.previous, !prev.isEmpty {
+                                    Text("Prev: \(prev)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                                if event.hasActual {
+                                    Text("Act: \(event.actual!)")
+                                        .font(.caption2).fontWeight(.semibold)
+                                        .foregroundStyle(event.surprise == "BEAT" ? .green : event.surprise == "MISS" ? .red : .primary)
+                                }
                             }
                         }
 
@@ -49,11 +59,7 @@ struct EconomicCalendarView: View {
                                 .foregroundStyle(.secondary)
                         }
 
-                        if event.hasActual {
-                            Text(event.actual!)
-                                .font(.caption2.bold())
-                                .foregroundStyle(event.surprise == "BEAT" ? .green : event.surprise == "MISS" ? .red : .primary)
-                        } else if event.isUpcoming {
+                        if !event.hasActual && event.isUpcoming {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2)
                                 .foregroundStyle(.orange)

@@ -400,6 +400,30 @@ export default {
       }
     }
 
+    // Finnhub Economic Calendar (no symbol needed)
+    if (path === '/finnhub/economic-calendar') {
+      if (!env.FINNHUB_API_KEY) return json({ error: 'Finnhub not configured' }, 503);
+      const cacheKey = 'cache:fh:economic-calendar';
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 900_000) return json(parsed.data); // 15min cache
+      }
+      try {
+        const from = new Date(Date.now() - 2 * 86400_000).toISOString().split('T')[0];
+        const to = new Date(Date.now() + 7 * 86400_000).toISOString().split('T')[0];
+        const resp = await fetch(`${FINNHUB_BASE}/calendar/economic?from=${from}&to=${to}`, {
+          headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY },
+        });
+        if (!resp.ok) return json({ error: `Finnhub ${resp.status}` }, 502);
+        const data = await resp.json();
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 900 });
+        return json(data);
+      } catch {
+        return json({ error: 'Finnhub economic calendar fetch failed' }, 502);
+      }
+    }
+
     if (path.startsWith('/finnhub/')) {
       const endpoint = path.replace('/finnhub/', '');
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
