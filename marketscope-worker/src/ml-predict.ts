@@ -1,12 +1,12 @@
 // XGBoost inference in TypeScript — evaluates exported tree JSON.
-// Dual models: crypto (150 trees), stock (50 trees).
+// v3: Dual models with 51 features each. Crypto (150 trees), Stock (150 trees).
 
 import cryptoModelData from './ml-model-crypto.json';
 import stockModelData from './ml-model-stock.json';
 
 interface TreeNode {
     nodeid: number;
-    split?: string;       // feature name
+    split?: string;
     split_condition?: number;
     yes?: number;
     no?: number;
@@ -38,7 +38,6 @@ function sigmoid(x: number): number {
     return 1.0 / (1.0 + Math.exp(-x));
 }
 
-/// Returns win probability (0.0 to 1.0)
 export function mlPredict(input: Record<string, number>, isCrypto: boolean): number {
     const trees = isCrypto ? cryptoTrees : stockTrees;
     let sum = 0;
@@ -48,7 +47,8 @@ export function mlPredict(input: Record<string, number>, isCrypto: boolean): num
     return sigmoid(sum);
 }
 
-/// Build feature dict from scoring results + candle data
+/// Build feature dict from scoring results + candle data.
+/// Some features (Bollinger, StochRSI, VWAP) are not computed on the worker — defaults used.
 export function buildMLInput(
     dRsi: number, dMacdHist: number, dAdx: number, dAdxBullish: boolean,
     dEmaCross: number, dStackBull: boolean, dStackBear: boolean,
@@ -60,13 +60,34 @@ export function buildMLInput(
     dailyScore: number, fourHScore: number
 ): Record<string, number> {
     return {
+        // Daily core
         dRsi, dMacdHist, dAdx, dAdxBullish: dAdxBullish ? 1 : 0,
         dEmaCross, dStackBull: dStackBull ? 1 : 0, dStackBear: dStackBear ? 1 : 0,
         dStructBull: dStructBull ? 1 : 0, dStructBear: dStructBear ? 1 : 0,
+        // Daily momentum (defaults — not computed on worker)
+        dStochK: 50, dStochCross: 0, dMacdCross: 0, dDivergence: 0, dEma20Rising: 0,
+        // Daily vol/volume (defaults)
+        dBBPercentB: 0.5, dBBSqueeze: 0, dBBBandwidth: 0, dVolumeRatio: 1.0, dAboveVwap: 0,
+        // 4H core
         hRsi, hMacdHist, hAdx, hAdxBullish: hAdxBullish ? 1 : 0,
         hEmaCross, hStackBull: hStackBull ? 1 : 0, hStackBear: hStackBear ? 1 : 0,
         hStructBull: hStructBull ? 1 : 0, hStructBear: hStructBear ? 1 : 0,
-        atrPercent, volScalar, atrPercentile,
+        // 4H momentum (defaults)
+        hStochK: 50, hStochCross: 0, hMacdCross: 0, hDivergence: 0, hEma20Rising: 0,
+        // 4H vol/volume (defaults)
+        hBBPercentB: 0.5, hBBSqueeze: 0, hBBBandwidth: 0, hVolumeRatio: 1.0, hAboveVwap: 0,
+        // 1H entry (defaults — no 1H data on worker)
+        eRsi: 50, eEmaCross: 0, eStochK: 50, eMacdHist: 0,
+        // Derivatives (defaults — could add Binance API calls later)
+        fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0,
+        // Macro (defaults)
+        vix: 20, dxyAboveEma20: 0, volScalarML: volScalar,
+        // Candle patterns (defaults)
+        last3Green: 0, last3Red: 0, last3VolIncreasing: 0,
+        // Stock-only (defaults)
+        obvRising: 0, adLineAccumulation: 0,
+        // Context
+        atrPercent, atrPercentile,
         dailyScore, fourHScore
     };
 }

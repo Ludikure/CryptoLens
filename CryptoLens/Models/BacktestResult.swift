@@ -43,17 +43,39 @@ struct SweepResult: Codable, Identifiable {
 /// A single evaluation point in the backtest.
 /// ML feature snapshot extracted at each backtest bar.
 struct MLFeatures: Codable {
-    // Daily
+    // Daily core
     let dRsi: Double; let dMacdHist: Double; let dAdx: Double; let dAdxBullish: Bool
     let dEmaCross: Int; let dStackBull: Bool; let dStackBear: Bool
     let dStructBull: Bool; let dStructBear: Bool
-    // 4H
+    // Daily momentum
+    let dStochK: Double; let dStochCross: Int; let dMacdCross: Int
+    let dDivergence: Int; let dEma20Rising: Bool
+    // Daily volatility/volume
+    let dBBPercentB: Double; let dBBSqueeze: Bool; let dBBBandwidth: Double
+    let dVolumeRatio: Double; let dAboveVwap: Bool
+    // 4H core
     let hRsi: Double; let hMacdHist: Double; let hAdx: Double; let hAdxBullish: Bool
     let hEmaCross: Int; let hStackBull: Bool; let hStackBear: Bool
     let hStructBull: Bool; let hStructBear: Bool
-    // ATR
-    let atrPercent: Double
-    // Market type
+    // 4H momentum
+    let hStochK: Double; let hStochCross: Int; let hMacdCross: Int
+    let hDivergence: Int; let hEma20Rising: Bool
+    // 4H volatility/volume
+    let hBBPercentB: Double; let hBBSqueeze: Bool; let hBBBandwidth: Double
+    let hVolumeRatio: Double; let hAboveVwap: Bool
+    // 1H entry
+    let eRsi: Double; let eEmaCross: Int; let eStochK: Double; let eMacdHist: Double
+    // Derivatives (crypto only, 0 for stocks)
+    let fundingSignal: Int; let oiSignal: Int; let takerSignal: Int
+    let crowdingSignal: Int; let derivativesCombined: Int
+    // Macro/cross-asset
+    let vix: Double; let dxyAboveEma20: Bool; let volScalar: Double
+    // Candle patterns
+    let last3Green: Bool; let last3Red: Bool; let last3VolIncreasing: Bool
+    // Stock-only (false for crypto)
+    let obvRising: Bool; let adLineAccumulation: Bool
+    // Context
+    let atrPercent: Double; let atrPercentile: Double
     let isCrypto: Bool
 }
 

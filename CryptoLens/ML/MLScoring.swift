@@ -1,9 +1,8 @@
 import CoreML
 
 /// ML scoring using dual XGBoost models converted to CoreML.
-/// Crypto model: 150 trees, trained on BTC/ETH/SOL/XRP.
-/// Stock model: 50 trees, trained on AAPL/MSFT/NVDA/TSLA/AMZN.
-/// Returns probability of resolved win (TP hit before SL).
+/// v3: 51 features including Bollinger, StochRSI, derivatives, VIX/DXY.
+/// Crypto: 150 trees (BTC/ETH/SOL/XRP). Stock: 150 trees (12 symbols).
 enum MLScoring {
     private static let cryptoModel: MLModel? = {
         guard let url = Bundle.main.url(forResource: "MarketScoreML_crypto", withExtension: "mlmodelc") else {
@@ -25,45 +24,59 @@ enum MLScoring {
         return try? MLModel(contentsOf: url)
     }()
 
-    /// Returns probability of resolved win (0.0 to 1.0), or nil if model unavailable.
-    static func predict(
-        dRsi: Double, dMacdHist: Double, dAdx: Double, dAdxBullish: Bool,
-        dEmaCross: Int, dStackBull: Bool, dStackBear: Bool,
-        dStructBull: Bool, dStructBear: Bool,
-        hRsi: Double, hMacdHist: Double, hAdx: Double, hAdxBullish: Bool,
-        hEmaCross: Int, hStackBull: Bool, hStackBear: Bool,
-        hStructBull: Bool, hStructBear: Bool,
-        atrPercent: Double, volScalar: Double, atrPercentile: Double,
-        dailyScore: Int, fourHScore: Int,
-        isCrypto: Bool
-    ) -> Double? {
-        let model = isCrypto ? cryptoModel : stockModel
+    /// Predict from expanded MLFeatures struct.
+    static func predict(features f: MLFeatures, dailyScore: Int, fourHScore: Int) -> Double? {
+        let model = f.isCrypto ? cryptoModel : stockModel
         guard let model else { return nil }
 
         let input: [String: Double] = [
-            "dRsi": dRsi,
-            "dMacdHist": dMacdHist,
-            "dAdx": dAdx,
-            "dAdxBullish": dAdxBullish ? 1.0 : 0.0,
-            "dEmaCross": Double(dEmaCross),
-            "dStackBull": dStackBull ? 1.0 : 0.0,
-            "dStackBear": dStackBear ? 1.0 : 0.0,
-            "dStructBull": dStructBull ? 1.0 : 0.0,
-            "dStructBear": dStructBear ? 1.0 : 0.0,
-            "hRsi": hRsi,
-            "hMacdHist": hMacdHist,
-            "hAdx": hAdx,
-            "hAdxBullish": hAdxBullish ? 1.0 : 0.0,
-            "hEmaCross": Double(hEmaCross),
-            "hStackBull": hStackBull ? 1.0 : 0.0,
-            "hStackBear": hStackBear ? 1.0 : 0.0,
-            "hStructBull": hStructBull ? 1.0 : 0.0,
-            "hStructBear": hStructBear ? 1.0 : 0.0,
-            "atrPercent": atrPercent,
-            "volScalar": volScalar,
-            "atrPercentile": atrPercentile,
-            "dailyScore": Double(dailyScore),
-            "fourHScore": Double(fourHScore)
+            // Daily core
+            "dRsi": f.dRsi, "dMacdHist": f.dMacdHist, "dAdx": f.dAdx,
+            "dAdxBullish": f.dAdxBullish ? 1 : 0,
+            "dEmaCross": Double(f.dEmaCross),
+            "dStackBull": f.dStackBull ? 1 : 0, "dStackBear": f.dStackBear ? 1 : 0,
+            "dStructBull": f.dStructBull ? 1 : 0, "dStructBear": f.dStructBear ? 1 : 0,
+            // Daily momentum
+            "dStochK": f.dStochK, "dStochCross": Double(f.dStochCross),
+            "dMacdCross": Double(f.dMacdCross), "dDivergence": Double(f.dDivergence),
+            "dEma20Rising": f.dEma20Rising ? 1 : 0,
+            // Daily vol/volume
+            "dBBPercentB": f.dBBPercentB, "dBBSqueeze": f.dBBSqueeze ? 1 : 0,
+            "dBBBandwidth": f.dBBBandwidth, "dVolumeRatio": f.dVolumeRatio,
+            "dAboveVwap": f.dAboveVwap ? 1 : 0,
+            // 4H core
+            "hRsi": f.hRsi, "hMacdHist": f.hMacdHist, "hAdx": f.hAdx,
+            "hAdxBullish": f.hAdxBullish ? 1 : 0,
+            "hEmaCross": Double(f.hEmaCross),
+            "hStackBull": f.hStackBull ? 1 : 0, "hStackBear": f.hStackBear ? 1 : 0,
+            "hStructBull": f.hStructBull ? 1 : 0, "hStructBear": f.hStructBear ? 1 : 0,
+            // 4H momentum
+            "hStochK": f.hStochK, "hStochCross": Double(f.hStochCross),
+            "hMacdCross": Double(f.hMacdCross), "hDivergence": Double(f.hDivergence),
+            "hEma20Rising": f.hEma20Rising ? 1 : 0,
+            // 4H vol/volume
+            "hBBPercentB": f.hBBPercentB, "hBBSqueeze": f.hBBSqueeze ? 1 : 0,
+            "hBBBandwidth": f.hBBBandwidth, "hVolumeRatio": f.hVolumeRatio,
+            "hAboveVwap": f.hAboveVwap ? 1 : 0,
+            // 1H entry
+            "eRsi": f.eRsi, "eEmaCross": Double(f.eEmaCross),
+            "eStochK": f.eStochK, "eMacdHist": f.eMacdHist,
+            // Derivatives
+            "fundingSignal": Double(f.fundingSignal), "oiSignal": Double(f.oiSignal),
+            "takerSignal": Double(f.takerSignal), "crowdingSignal": Double(f.crowdingSignal),
+            "derivativesCombined": Double(f.derivativesCombined),
+            // Macro
+            "vix": f.vix, "dxyAboveEma20": f.dxyAboveEma20 ? 1 : 0,
+            "volScalarML": f.volScalar,
+            // Candle patterns
+            "last3Green": f.last3Green ? 1 : 0, "last3Red": f.last3Red ? 1 : 0,
+            "last3VolIncreasing": f.last3VolIncreasing ? 1 : 0,
+            // Stock-only
+            "obvRising": f.obvRising ? 1 : 0,
+            "adLineAccumulation": f.adLineAccumulation ? 1 : 0,
+            // Context
+            "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
+            "dailyScore": Double(dailyScore), "fourHScore": Double(fourHScore)
         ]
 
         let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
@@ -75,7 +88,6 @@ enum MLScoring {
             return nil
         }
 
-        // classProbability keys are Int64 (from XGBoost class_labels [0, 1])
         if let probs = output.featureValue(for: "classProbability")?.dictionaryValue,
            let winProb = probs[Int64(1)] as? Double {
             return winProb
@@ -84,21 +96,5 @@ enum MLScoring {
         print("[MLScoring] Could not extract classProbability")
         #endif
         return nil
-    }
-
-    /// Convenience: predict from MLFeatures struct
-    static func predict(features f: MLFeatures, dailyScore: Int, fourHScore: Int,
-                        volScalar: Double, atrPercentile: Double) -> Double? {
-        predict(
-            dRsi: f.dRsi, dMacdHist: f.dMacdHist, dAdx: f.dAdx, dAdxBullish: f.dAdxBullish,
-            dEmaCross: f.dEmaCross, dStackBull: f.dStackBull, dStackBear: f.dStackBear,
-            dStructBull: f.dStructBull, dStructBear: f.dStructBear,
-            hRsi: f.hRsi, hMacdHist: f.hMacdHist, hAdx: f.hAdx, hAdxBullish: f.hAdxBullish,
-            hEmaCross: f.hEmaCross, hStackBull: f.hStackBull, hStackBear: f.hStackBear,
-            hStructBull: f.hStructBull, hStructBear: f.hStructBear,
-            atrPercent: f.atrPercent, volScalar: volScalar, atrPercentile: atrPercentile,
-            dailyScore: dailyScore, fourHScore: fourHScore,
-            isCrypto: f.isCrypto
-        )
     }
 }

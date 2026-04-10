@@ -372,53 +372,14 @@ class AnalysisService: ObservableObject {
 
             if needsEnrichment { lastEnrichmentFetch[symbol] = Date() }
 
-            // ML win probability — computed from Daily + 4H features
+            // ML win probability — computed from Daily + 4H + 1H features
             var tf1ML = tf1
+            let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
+                                                   isCrypto: market == .crypto, derivCtx: derivData.map {
+                DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
+            })
             tf1ML.mlWinProbability = MLScoring.predict(
-                dRsi: tf1.rsi ?? 50, dMacdHist: tf1.macd?.histogram ?? 0,
-                dAdx: tf1.adx?.adx ?? 0, dAdxBullish: tf1.adx?.direction == "Bullish",
-                dEmaCross: {
-                    var c = 0
-                    if let e = tf1.ema20 { c += tf1.price > e ? 1 : -1 }
-                    if let e = tf1.ema50 { c += tf1.price > e ? 1 : -1 }
-                    if let e = tf1.ema200 { c += tf1.price > e ? 1 : -1 }
-                    return c
-                }(),
-                dStackBull: {
-                    guard let e20 = tf1.ema20, let e50 = tf1.ema50, let e200 = tf1.ema200 else { return false }
-                    return e20 > e50 && e50 > e200
-                }(),
-                dStackBear: {
-                    guard let e20 = tf1.ema20, let e50 = tf1.ema50, let e200 = tf1.ema200 else { return false }
-                    return e20 < e50 && e50 < e200
-                }(),
-                dStructBull: tf1.marketStructure?.label.contains("bullish") ?? false,
-                dStructBear: tf1.marketStructure?.label.contains("bearish") ?? false,
-                hRsi: tf2.rsi ?? 50, hMacdHist: tf2.macd?.histogram ?? 0,
-                hAdx: tf2.adx?.adx ?? 0, hAdxBullish: tf2.adx?.direction == "Bullish",
-                hEmaCross: {
-                    var c = 0
-                    if let e = tf2.ema20 { c += tf2.price > e ? 1 : -1 }
-                    if let e = tf2.ema50 { c += tf2.price > e ? 1 : -1 }
-                    if let e = tf2.ema200 { c += tf2.price > e ? 1 : -1 }
-                    return c
-                }(),
-                hStackBull: {
-                    guard let e20 = tf2.ema20, let e50 = tf2.ema50, let e200 = tf2.ema200 else { return false }
-                    return e20 > e50 && e50 > e200
-                }(),
-                hStackBear: {
-                    guard let e20 = tf2.ema20, let e50 = tf2.ema50, let e200 = tf2.ema200 else { return false }
-                    return e20 < e50 && e50 < e200
-                }(),
-                hStructBull: tf2.marketStructure?.label.contains("bullish") ?? false,
-                hStructBear: tf2.marketStructure?.label.contains("bearish") ?? false,
-                atrPercent: tf2.atr?.atrPercent ?? 0,
-                volScalar: tf1.volScalar ?? 1.0,
-                atrPercentile: tf1.atrPercentile ?? 50,
-                dailyScore: tf1.biasScore, fourHScore: tf2.biasScore,
-                isCrypto: market == .crypto
-            )
+                features: mlFeatures, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
             let prevResult = resultsBySymbol[symbol]
             let result = AnalysisResult(
@@ -550,51 +511,12 @@ class AnalysisService: ObservableObject {
             var (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
 
             // ML win probability for the AI prompt
+            let mlFeatures2 = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
+                                                    isCrypto: market == .crypto, derivCtx: earlyDerivData.map {
+                DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
+            })
             tf1.mlWinProbability = MLScoring.predict(
-                dRsi: tf1.rsi ?? 50, dMacdHist: tf1.macd?.histogram ?? 0,
-                dAdx: tf1.adx?.adx ?? 0, dAdxBullish: tf1.adx?.direction == "Bullish",
-                dEmaCross: {
-                    var c = 0
-                    if let e = tf1.ema20 { c += tf1.price > e ? 1 : -1 }
-                    if let e = tf1.ema50 { c += tf1.price > e ? 1 : -1 }
-                    if let e = tf1.ema200 { c += tf1.price > e ? 1 : -1 }
-                    return c
-                }(),
-                dStackBull: {
-                    guard let e20 = tf1.ema20, let e50 = tf1.ema50, let e200 = tf1.ema200 else { return false }
-                    return e20 > e50 && e50 > e200
-                }(),
-                dStackBear: {
-                    guard let e20 = tf1.ema20, let e50 = tf1.ema50, let e200 = tf1.ema200 else { return false }
-                    return e20 < e50 && e50 < e200
-                }(),
-                dStructBull: tf1.marketStructure?.label.contains("bullish") ?? false,
-                dStructBear: tf1.marketStructure?.label.contains("bearish") ?? false,
-                hRsi: tf2.rsi ?? 50, hMacdHist: tf2.macd?.histogram ?? 0,
-                hAdx: tf2.adx?.adx ?? 0, hAdxBullish: tf2.adx?.direction == "Bullish",
-                hEmaCross: {
-                    var c = 0
-                    if let e = tf2.ema20 { c += tf2.price > e ? 1 : -1 }
-                    if let e = tf2.ema50 { c += tf2.price > e ? 1 : -1 }
-                    if let e = tf2.ema200 { c += tf2.price > e ? 1 : -1 }
-                    return c
-                }(),
-                hStackBull: {
-                    guard let e20 = tf2.ema20, let e50 = tf2.ema50, let e200 = tf2.ema200 else { return false }
-                    return e20 > e50 && e50 > e200
-                }(),
-                hStackBear: {
-                    guard let e20 = tf2.ema20, let e50 = tf2.ema50, let e200 = tf2.ema200 else { return false }
-                    return e20 < e50 && e50 < e200
-                }(),
-                hStructBull: tf2.marketStructure?.label.contains("bullish") ?? false,
-                hStructBear: tf2.marketStructure?.label.contains("bearish") ?? false,
-                atrPercent: tf2.atr?.atrPercent ?? 0,
-                volScalar: tf1.volScalar ?? 1.0,
-                atrPercentile: tf1.atrPercentile ?? 50,
-                dailyScore: tf1.biasScore, fourHScore: tf2.biasScore,
-                isCrypto: market == .crypto
-            )
+                features: mlFeatures2, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
@@ -883,6 +805,75 @@ class AnalysisService: ObservableObject {
         parts.append("— broad market \(trend)")
 
         return parts.joined(separator: " ")
+    }
+
+    // MARK: - ML Features
+
+    static func buildMLFeatures(tf1: IndicatorResult, tf2: IndicatorResult, tf3: IndicatorResult,
+                                 isCrypto: Bool, derivCtx: DerivativesContext?) -> MLFeatures {
+        func emaCross(_ r: IndicatorResult) -> Int {
+            var c = 0
+            if let e = r.ema20 { c += r.price > e ? 1 : -1 }
+            if let e = r.ema50 { c += r.price > e ? 1 : -1 }
+            if let e = r.ema200 { c += r.price > e ? 1 : -1 }
+            return c
+        }
+        func stackBull(_ r: IndicatorResult) -> Bool {
+            guard let e20 = r.ema20, let e50 = r.ema50, let e200 = r.ema200 else { return false }
+            return e20 > e50 && e50 > e200
+        }
+        func stackBear(_ r: IndicatorResult) -> Bool {
+            guard let e20 = r.ema20, let e50 = r.ema50, let e200 = r.ema200 else { return false }
+            return e20 < e50 && e50 < e200
+        }
+        func ema20Rising(_ r: IndicatorResult) -> Bool {
+            let s = r.ema20Series
+            return s.count >= 6 && s[s.count - 1] > s[s.count - 6]
+        }
+        let price = tf1.price
+        let candles = tf2.candles
+        let n = candles.count
+        return MLFeatures(
+            dRsi: tf1.rsi ?? 50, dMacdHist: tf1.macd?.histogram ?? 0,
+            dAdx: tf1.adx?.adx ?? 0, dAdxBullish: tf1.adx?.direction == "Bullish",
+            dEmaCross: emaCross(tf1), dStackBull: stackBull(tf1), dStackBear: stackBear(tf1),
+            dStructBull: tf1.marketStructure?.label.contains("bullish") ?? false,
+            dStructBear: tf1.marketStructure?.label.contains("bearish") ?? false,
+            dStochK: tf1.stochRSI?.k ?? 50,
+            dStochCross: tf1.stochRSI?.crossover == "bullish" ? 1 : tf1.stochRSI?.crossover == "bearish" ? -1 : 0,
+            dMacdCross: tf1.macd?.crossover == "bullish" ? 1 : tf1.macd?.crossover == "bearish" ? -1 : 0,
+            dDivergence: tf1.divergence?.contains("bullish") == true ? 1 : tf1.divergence?.contains("bearish") == true ? -1 : 0,
+            dEma20Rising: ema20Rising(tf1),
+            dBBPercentB: tf1.bollingerBands?.percentB ?? 0.5, dBBSqueeze: tf1.bollingerBands?.squeeze ?? false,
+            dBBBandwidth: tf1.bollingerBands?.bandwidth ?? 0, dVolumeRatio: tf1.volumeRatio ?? 1.0,
+            dAboveVwap: tf1.vwap.map { price > $0.vwap } ?? false,
+            hRsi: tf2.rsi ?? 50, hMacdHist: tf2.macd?.histogram ?? 0,
+            hAdx: tf2.adx?.adx ?? 0, hAdxBullish: tf2.adx?.direction == "Bullish",
+            hEmaCross: emaCross(tf2), hStackBull: stackBull(tf2), hStackBear: stackBear(tf2),
+            hStructBull: tf2.marketStructure?.label.contains("bullish") ?? false,
+            hStructBear: tf2.marketStructure?.label.contains("bearish") ?? false,
+            hStochK: tf2.stochRSI?.k ?? 50,
+            hStochCross: tf2.stochRSI?.crossover == "bullish" ? 1 : tf2.stochRSI?.crossover == "bearish" ? -1 : 0,
+            hMacdCross: tf2.macd?.crossover == "bullish" ? 1 : tf2.macd?.crossover == "bearish" ? -1 : 0,
+            hDivergence: tf2.divergence?.contains("bullish") == true ? 1 : tf2.divergence?.contains("bearish") == true ? -1 : 0,
+            hEma20Rising: ema20Rising(tf2),
+            hBBPercentB: tf2.bollingerBands?.percentB ?? 0.5, hBBSqueeze: tf2.bollingerBands?.squeeze ?? false,
+            hBBBandwidth: tf2.bollingerBands?.bandwidth ?? 0, hVolumeRatio: tf2.volumeRatio ?? 1.0,
+            hAboveVwap: tf2.vwap.map { price > $0.vwap } ?? false,
+            eRsi: tf3.rsi ?? 50, eEmaCross: emaCross(tf3),
+            eStochK: tf3.stochRSI?.k ?? 50, eMacdHist: tf3.macd?.histogram ?? 0,
+            fundingSignal: derivCtx?.fundingSignal ?? 0, oiSignal: derivCtx?.oiSignal ?? 0,
+            takerSignal: derivCtx?.takerSignal ?? 0, crowdingSignal: derivCtx?.crowdingSignal ?? 0,
+            derivativesCombined: derivCtx?.combinedSignal ?? 0,
+            vix: 20, dxyAboveEma20: false, volScalar: tf1.volScalar ?? 1.0,
+            last3Green: n >= 3 && candles[(n-3)...].allSatisfy { $0.close > $0.open },
+            last3Red: n >= 3 && candles[(n-3)...].allSatisfy { $0.close < $0.open },
+            last3VolIncreasing: n >= 3 && candles[n-2].volume > candles[n-3].volume && candles[n-1].volume > candles[n-2].volume,
+            obvRising: tf1.obv?.trend == "Rising",
+            adLineAccumulation: tf1.adLine?.trend == "Accumulation",
+            atrPercent: tf2.atr?.atrPercent ?? 0, atrPercentile: tf1.atrPercentile ?? 50,
+            isCrypto: isCrypto
+        )
     }
 
     // MARK: - Fetch + compute for any market

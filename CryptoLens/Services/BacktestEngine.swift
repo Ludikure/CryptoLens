@@ -61,6 +61,27 @@ class BacktestEngine: ObservableObject {
                 return
             }
 
+            // Fetch historical derivatives (crypto only, cached)
+            var derivativesHistory = [Date: HistoricalDerivativesService.DerivativesBar]()
+            if isCrypto {
+                statusMessage = "Fetching derivatives history..."
+                derivativesHistory = await DerivativesCache.loadOrFetch(
+                    symbol: symbol, startDate: fetchStart, endDate: endDate)
+            }
+
+            // Fetch macro candles (VIX + DXY) for ML features
+            statusMessage = "Fetching VIX/DXY..."
+            let vixCandles = (try? await CandleCache.loadOrFetch(
+                symbol: "^VIX", interval: "1d", startDate: fetchStart, endDate: endDate,
+                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+            let dxyCandles = (try? await CandleCache.loadOrFetch(
+                symbol: "DX-Y.NYB", interval: "1d", startDate: fetchStart, endDate: endDate,
+                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+            let dxyCloses = dxyCandles.map(\.close)
+            let dxyEma20List = MovingAverages.computeEMA(values: dxyCloses, period: 20)
+
             statusMessage = "Running walk-forward..."
 
             let evalStartIndex = fourHCandles.firstIndex { $0.time >= startDate } ?? 200
@@ -192,8 +213,29 @@ class BacktestEngine: ObservableObject {
                     atr: fourHResult.atr?.atr ?? (price * 0.015),
                     oneHStartIdx: oneHIdx)
 
+                // Match derivatives to this 4H bar (crypto only)
+                let derivCtx: DerivativesContext? = {
+                    guard isCrypto else { return nil }
+                    let barTime = HistoricalDerivativesService.round4H(evalTime)
+                    guard let db = derivativesHistory[barTime] else { return nil }
+                    let prevBarTime = barTime.addingTimeInterval(-4 * 3600)
+                    let prevOI = derivativesHistory[prevBarTime]?.openInterest
+                    let priceRising = i > 0 && fourHCandles[i].close > fourHCandles[i - 1].close
+                    return DerivativesContext.fromHistorical(bar: db, previousOI: prevOI, priceRising: priceRising)
+                }()
+
+                // Match VIX/DXY to this bar's date
+                let evalDate = Calendar.current.startOfDay(for: evalTime)
+                let vixValue = vixCandles.last(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate })?.close
+                let dxyAbove: Bool = {
+                    guard let idx = dxyCandles.lastIndex(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate }),
+                          idx < dxyEma20List.count else { return false }
+                    return dxyCandles[idx].close > dxyEma20List[idx]
+                }()
+
                 // Extract ML features from indicator results
                 let mlf = MLFeatures(
+                    // Daily core
                     dRsi: dailyResult.rsi ?? 50, dMacdHist: dailyResult.macd?.histogram ?? 0,
                     dAdx: dailyResult.adx?.adx ?? 0, dAdxBullish: dailyResult.adx?.direction == "Bullish",
                     dEmaCross: {
@@ -206,6 +248,25 @@ class BacktestEngine: ObservableObject {
                     dStackBull: maAlign == "bullish_stacked", dStackBear: maAlign == "bearish_stacked",
                     dStructBull: dailyResult.marketStructure?.label.contains("bullish") ?? false,
                     dStructBear: dailyResult.marketStructure?.label.contains("bearish") ?? false,
+                    // Daily momentum
+                    dStochK: dailyResult.stochRSI?.k ?? 50,
+                    dStochCross: dailyResult.stochRSI?.crossover == "bullish" ? 1 :
+                                 dailyResult.stochRSI?.crossover == "bearish" ? -1 : 0,
+                    dMacdCross: dailyResult.macd?.crossover == "bullish" ? 1 :
+                                dailyResult.macd?.crossover == "bearish" ? -1 : 0,
+                    dDivergence: dailyResult.divergence?.contains("bullish") == true ? 1 :
+                                 dailyResult.divergence?.contains("bearish") == true ? -1 : 0,
+                    dEma20Rising: {
+                        let series = dailyResult.ema20Series
+                        return series.count >= 6 && series[series.count - 1] > series[series.count - 6]
+                    }(),
+                    // Daily volatility/volume
+                    dBBPercentB: dailyResult.bollingerBands?.percentB ?? 0.5,
+                    dBBSqueeze: dailyResult.bollingerBands?.squeeze ?? false,
+                    dBBBandwidth: dailyResult.bollingerBands?.bandwidth ?? 0,
+                    dVolumeRatio: dailyResult.volumeRatio ?? 1.0,
+                    dAboveVwap: dailyResult.vwap.map { price > $0.vwap } ?? false,
+                    // 4H core
                     hRsi: fourHResult.rsi ?? 50, hMacdHist: fourHResult.macd?.histogram ?? 0,
                     hAdx: fourHResult.adx?.adx ?? 0, hAdxBullish: fourHResult.adx?.direction == "Bullish",
                     hEmaCross: {
@@ -227,7 +288,67 @@ class BacktestEngine: ObservableObject {
                     }(),
                     hStructBull: fourHResult.marketStructure?.label.contains("bullish") ?? false,
                     hStructBear: fourHResult.marketStructure?.label.contains("bearish") ?? false,
+                    // 4H momentum
+                    hStochK: fourHResult.stochRSI?.k ?? 50,
+                    hStochCross: fourHResult.stochRSI?.crossover == "bullish" ? 1 :
+                                 fourHResult.stochRSI?.crossover == "bearish" ? -1 : 0,
+                    hMacdCross: fourHResult.macd?.crossover == "bullish" ? 1 :
+                                fourHResult.macd?.crossover == "bearish" ? -1 : 0,
+                    hDivergence: fourHResult.divergence?.contains("bullish") == true ? 1 :
+                                 fourHResult.divergence?.contains("bearish") == true ? -1 : 0,
+                    hEma20Rising: {
+                        let series = fourHResult.ema20Series
+                        return series.count >= 6 && series[series.count - 1] > series[series.count - 6]
+                    }(),
+                    // 4H volatility/volume
+                    hBBPercentB: fourHResult.bollingerBands?.percentB ?? 0.5,
+                    hBBSqueeze: fourHResult.bollingerBands?.squeeze ?? false,
+                    hBBBandwidth: fourHResult.bollingerBands?.bandwidth ?? 0,
+                    hVolumeRatio: fourHResult.volumeRatio ?? 1.0,
+                    hAboveVwap: fourHResult.vwap.map { price > $0.vwap } ?? false,
+                    // 1H entry
+                    eRsi: oneHResult.rsi ?? 50,
+                    eEmaCross: {
+                        var c = 0
+                        if let e = oneHResult.ema20 { c += price > e ? 1 : -1 }
+                        if let e = oneHResult.ema50 { c += price > e ? 1 : -1 }
+                        if let e = oneHResult.ema200 { c += price > e ? 1 : -1 }
+                        return c
+                    }(),
+                    eStochK: oneHResult.stochRSI?.k ?? 50,
+                    eMacdHist: oneHResult.macd?.histogram ?? 0,
+                    // Derivatives (crypto only)
+                    fundingSignal: derivCtx?.fundingSignal ?? 0,
+                    oiSignal: derivCtx?.oiSignal ?? 0,
+                    takerSignal: derivCtx?.takerSignal ?? 0,
+                    crowdingSignal: derivCtx?.crowdingSignal ?? 0,
+                    derivativesCombined: derivCtx?.combinedSignal ?? 0,
+                    // Macro/cross-asset
+                    vix: vixValue ?? 20,
+                    dxyAboveEma20: dxyAbove,
+                    volScalar: dailyResult.volScalar ?? 1.0,
+                    // Candle patterns
+                    last3Green: {
+                        let recent = Array(fourHCandles[max(0, i - 2)...i])
+                        return recent.count == 3 && recent.allSatisfy { $0.close > $0.open }
+                    }(),
+                    last3Red: {
+                        let recent = Array(fourHCandles[max(0, i - 2)...i])
+                        return recent.count == 3 && recent.allSatisfy { $0.close < $0.open }
+                    }(),
+                    last3VolIncreasing: {
+                        guard i >= 2 else { return false }
+                        let v0 = fourHCandles[i - 2].volume
+                        let v1 = fourHCandles[i - 1].volume
+                        let v2 = fourHCandles[i].volume
+                        return v1 > v0 && v2 > v1
+                    }(),
+                    // Stock-only
+                    obvRising: dailyResult.obv?.trend == "Rising",
+                    adLineAccumulation: dailyResult.adLine?.trend == "Accumulation",
+                    // Context
                     atrPercent: fourHResult.atr?.atrPercent ?? 0,
+                    atrPercentile: dailyResult.atrPercentile ?? 50,
                     isCrypto: isCrypto
                 )
 
@@ -289,12 +410,31 @@ class BacktestEngine: ObservableObject {
             "dailyBias", "fourHBias", "oneHBias",
             "biasAlignment", "regime", "emaRegime",
             "volScalar", "atrPercentile",
-            // ML features — Daily
+            // ML features — Daily core
             "dRsi", "dMacdHist", "dAdx", "dAdxBullish",
             "dEmaCross", "dStackBull", "dStackBear", "dStructBull", "dStructBear",
-            // ML features — 4H
+            // ML features — Daily momentum
+            "dStochK", "dStochCross", "dMacdCross", "dDivergence", "dEma20Rising",
+            // ML features — Daily vol/volume
+            "dBBPercentB", "dBBSqueeze", "dBBBandwidth", "dVolumeRatio", "dAboveVwap",
+            // ML features — 4H core
             "hRsi", "hMacdHist", "hAdx", "hAdxBullish",
             "hEmaCross", "hStackBull", "hStackBear", "hStructBull", "hStructBear",
+            // ML features — 4H momentum
+            "hStochK", "hStochCross", "hMacdCross", "hDivergence", "hEma20Rising",
+            // ML features — 4H vol/volume
+            "hBBPercentB", "hBBSqueeze", "hBBBandwidth", "hVolumeRatio", "hAboveVwap",
+            // ML features — 1H entry
+            "eRsi", "eEmaCross", "eStochK", "eMacdHist",
+            // ML features — Derivatives
+            "fundingSignal", "oiSignal", "takerSignal", "crowdingSignal", "derivativesCombined",
+            // ML features — Macro
+            "vix", "dxyAboveEma20", "volScalarML",
+            // ML features — Candle patterns
+            "last3Green", "last3Red", "last3VolIncreasing",
+            // ML features — Stock-only
+            "obvRising", "adLineAccumulation",
+            // ML features — Context
             "atrPercent", "isCrypto",
             // Trade outcome (bar-by-bar resolved)
             "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
@@ -318,7 +458,7 @@ class BacktestEngine: ObservableObject {
                 pt.biasAlignment, pt.regime, pt.emaRegime,
                 String(format: "%.2f", pt.volScalar),
                 String(format: "%.0f", pt.atrPercentile),
-                // ML features — Daily
+                // Daily core
                 String(format: "%.1f", f?.dRsi ?? 50),
                 String(format: "%.6f", f?.dMacdHist ?? 0),
                 String(format: "%.1f", f?.dAdx ?? 0),
@@ -326,7 +466,17 @@ class BacktestEngine: ObservableObject {
                 "\(f?.dEmaCross ?? 0)",
                 "\(f?.dStackBull == true ? 1 : 0)", "\(f?.dStackBear == true ? 1 : 0)",
                 "\(f?.dStructBull == true ? 1 : 0)", "\(f?.dStructBear == true ? 1 : 0)",
-                // ML features — 4H
+                // Daily momentum
+                String(format: "%.1f", f?.dStochK ?? 50),
+                "\(f?.dStochCross ?? 0)", "\(f?.dMacdCross ?? 0)",
+                "\(f?.dDivergence ?? 0)", "\(f?.dEma20Rising == true ? 1 : 0)",
+                // Daily vol/volume
+                String(format: "%.4f", f?.dBBPercentB ?? 0.5),
+                "\(f?.dBBSqueeze == true ? 1 : 0)",
+                String(format: "%.4f", f?.dBBBandwidth ?? 0),
+                String(format: "%.2f", f?.dVolumeRatio ?? 1.0),
+                "\(f?.dAboveVwap == true ? 1 : 0)",
+                // 4H core
                 String(format: "%.1f", f?.hRsi ?? 50),
                 String(format: "%.6f", f?.hMacdHist ?? 0),
                 String(format: "%.1f", f?.hAdx ?? 0),
@@ -334,6 +484,37 @@ class BacktestEngine: ObservableObject {
                 "\(f?.hEmaCross ?? 0)",
                 "\(f?.hStackBull == true ? 1 : 0)", "\(f?.hStackBear == true ? 1 : 0)",
                 "\(f?.hStructBull == true ? 1 : 0)", "\(f?.hStructBear == true ? 1 : 0)",
+                // 4H momentum
+                String(format: "%.1f", f?.hStochK ?? 50),
+                "\(f?.hStochCross ?? 0)", "\(f?.hMacdCross ?? 0)",
+                "\(f?.hDivergence ?? 0)", "\(f?.hEma20Rising == true ? 1 : 0)",
+                // 4H vol/volume
+                String(format: "%.4f", f?.hBBPercentB ?? 0.5),
+                "\(f?.hBBSqueeze == true ? 1 : 0)",
+                String(format: "%.4f", f?.hBBBandwidth ?? 0),
+                String(format: "%.2f", f?.hVolumeRatio ?? 1.0),
+                "\(f?.hAboveVwap == true ? 1 : 0)",
+                // 1H entry
+                String(format: "%.1f", f?.eRsi ?? 50),
+                "\(f?.eEmaCross ?? 0)",
+                String(format: "%.1f", f?.eStochK ?? 50),
+                String(format: "%.6f", f?.eMacdHist ?? 0),
+                // Derivatives
+                "\(f?.fundingSignal ?? 0)", "\(f?.oiSignal ?? 0)",
+                "\(f?.takerSignal ?? 0)", "\(f?.crowdingSignal ?? 0)",
+                "\(f?.derivativesCombined ?? 0)",
+                // Macro
+                String(format: "%.1f", f?.vix ?? 20),
+                "\(f?.dxyAboveEma20 == true ? 1 : 0)",
+                String(format: "%.2f", f?.volScalar ?? 1.0),
+                // Candle patterns
+                "\(f?.last3Green == true ? 1 : 0)",
+                "\(f?.last3Red == true ? 1 : 0)",
+                "\(f?.last3VolIncreasing == true ? 1 : 0)",
+                // Stock-only
+                "\(f?.obvRising == true ? 1 : 0)",
+                "\(f?.adLineAccumulation == true ? 1 : 0)",
+                // Context
                 String(format: "%.4f", f?.atrPercent ?? 0),
                 "\(f?.isCrypto == true ? 1 : 0)",
                 // Trade outcome
