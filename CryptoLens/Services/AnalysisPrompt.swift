@@ -85,7 +85,7 @@ enum AnalysisPrompt {
         ML_WIN adjusts conviction AFTER the score gate passes:
         - ML_WIN >= 70%: Upgrade conviction by one level. MODERATE → HIGH, MODERATE-LOW → MODERATE. The model sees non-linear feature interactions the linear score misses.
         - ML_WIN 60-69%: Confirms the linear score. No adjustment needed.
-        - ML_WIN 50-59%: Weak ML signal. If linear conviction is MODERATE-LOW, downgrade to LOW → NO TRADE.
+        - ML_WIN 50-59%: Weak ML signal. If linear conviction is MODERATE-LOW, downgrade to LOW → NO TRADE. If linear conviction is MODERATE or HIGH, do NOT downgrade — note ML caution in Risk Factors but proceed with the setup.
         - ML_WIN < 50%: ML contradicts the setup — the model predicts the stop is more likely to hit first. Override to NO TRADE regardless of linear score or conviction.
 
         When ML_WIN and linear score disagree:
