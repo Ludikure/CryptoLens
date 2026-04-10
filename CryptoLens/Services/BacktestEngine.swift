@@ -237,6 +237,46 @@ class BacktestEngine: ObservableObject {
         isRunning = false
     }
 
+    // MARK: - ML CSV Export
+
+    /// Export backtest data points as CSV for ML training.
+    /// Each row has: scores, regime, alignment, trade outcome (resolved TP/SL from bar-by-bar sim).
+    func exportCSV() -> String? {
+        guard !dataPoints.isEmpty else { return nil }
+        let header = [
+            "timestamp", "price",
+            "dailyScore", "fourHScore", "oneHScore",
+            "dailyBias", "fourHBias", "oneHBias",
+            "biasAlignment", "regime", "emaRegime",
+            "volScalar", "atrPercentile",
+            "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
+            "tradeMaxFavorable", "tradeMaxAdverse"
+        ].joined(separator: ",")
+
+        var csv = header + "\n"
+        for pt in dataPoints {
+            let outcome = pt.tradeResult?.outcome ?? "NONE"
+            let pnl = pt.tradeResult?.pnlPercent ?? 0
+            let bars = pt.tradeResult?.barsToOutcome ?? 0
+            let maxFav = pt.tradeResult?.maxFavorable ?? 0
+            let maxAdv = pt.tradeResult?.maxAdverse ?? 0
+
+            let row = [
+                "\(Int(pt.timestamp.timeIntervalSince1970))",
+                "\(pt.price)",
+                "\(pt.dailyScore)", "\(pt.fourHScore)", "\(pt.oneHScore)",
+                pt.dailyBias, pt.fourHBias, pt.oneHBias,
+                pt.biasAlignment, pt.regime, pt.emaRegime,
+                String(format: "%.2f", pt.volScalar),
+                String(format: "%.0f", pt.atrPercentile),
+                outcome, String(format: "%.4f", pnl), "\(bars)",
+                String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv)
+            ].joined(separator: ",")
+            csv += row + "\n"
+        }
+        return csv
+    }
+
     private func computeSummary(points: [BacktestDataPoint], symbol: String,
                                  startDate: Date, endDate: Date) -> BacktestSummary {
         let directional = points.filter { $0.biasAlignment.contains("bearish") || $0.biasAlignment.contains("bullish") }

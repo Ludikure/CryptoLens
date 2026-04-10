@@ -184,6 +184,8 @@ struct OptimizerView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Button("Export Snapshots CSV") { exportSnapshots() }
+
                 Button("Clear All Caches", role: .destructive) {
                     CandleCache.clearAll()
                     SnapshotCache.clearAll()
@@ -259,6 +261,64 @@ struct OptimizerView: View {
                 }
             }
         }
+    }
+
+    private func exportSnapshots() {
+        let sym = symbols.first ?? "BTCUSDT"
+        if let csv = exportSnapshotCSV(symbol: sym) {
+            UIPasteboard.general.string = csv
+            engine.statusMessage = "CSV copied (\(csv.components(separatedBy: "\n").count - 1) rows)"
+        } else {
+            engine.statusMessage = "No snapshots cached for \(sym)"
+        }
+    }
+
+    private func exportSnapshotCSV(symbol: String) -> String? {
+        guard let snapshots = SnapshotCache.load(symbol: symbol, timeframe: "daily_4h"),
+              !snapshots.isEmpty else { return nil }
+
+        let header = [
+            "timestamp", "price", "timeframe", "isCrypto",
+            "rsi", "macdHist", "macdHistAboveDeadZone",
+            "adxValue", "adxBullish",
+            "emaCrossCount", "ema20Rising", "stackBullish", "stackBearish",
+            "structureBullish", "structureBearish", "aboveVwap",
+            "stochK", "divergenceBullish", "divergenceBearish",
+            "last3Green", "last3Red", "last3VolIncreasing",
+            "crossAssetSignal", "volScalar",
+            "derivativesCombined", "fundingSignal", "oiSignal", "takerSignal", "crowdingSignal",
+            "vix", "dxyAboveEma20",
+            "obvRising", "adLineAccumulation",
+            "atrPercent",
+            "priceAfter4H", "priceAfter24H", "forwardHigh24H", "forwardLow24H"
+        ].joined(separator: ",")
+
+        var csv = header + "\n"
+        for s in snapshots {
+            let row = [
+                "\(Int(s.timestamp.timeIntervalSince1970))",
+                "\(s.price)", s.timeframe, "\(s.isCrypto ? 1 : 0)",
+                "\(s.rsi ?? 50)", "\(s.macdHistogram)", "\(s.macdHistAboveDeadZone ? 1 : 0)",
+                "\(s.adxValue)", "\(s.adxBullish ? 1 : 0)",
+                "\(s.emaCrossCount)", "\(s.ema20Rising ? 1 : 0)",
+                "\(s.stackBullish ? 1 : 0)", "\(s.stackBearish ? 1 : 0)",
+                "\(s.structureBullish ? 1 : 0)", "\(s.structureBearish ? 1 : 0)",
+                "\(s.aboveVwap ? 1 : 0)",
+                "\(s.stochK ?? 50)",
+                "\(s.divergence == "bullish" ? 1 : 0)", "\(s.divergence == "bearish" ? 1 : 0)",
+                "\(s.last3Green ? 1 : 0)", "\(s.last3Red ? 1 : 0)", "\(s.last3VolIncreasing ? 1 : 0)",
+                "\(s.crossAssetSignal)", String(format: "%.2f", s.volScalar),
+                "\(s.derivativesCombinedSignal)", "\(s.fundingSignal)",
+                "\(s.oiSignal)", "\(s.takerSignal)", "\(s.crowdingSignal)",
+                "\(s.vix ?? 0)", "\(s.dxyAboveEma20 == true ? 1 : 0)",
+                "\(s.obvRising ? 1 : 0)", "\(s.adLineAccumulation ? 1 : 0)",
+                "\(s.atrPercent ?? 0)",
+                "\(s.priceAfter4H ?? 0)", "\(s.priceAfter24H ?? 0)",
+                "\(s.forwardHigh24H ?? 0)", "\(s.forwardLow24H ?? 0)"
+            ].joined(separator: ",")
+            csv += row + "\n"
+        }
+        return csv
     }
 
     private func shareText() -> String {

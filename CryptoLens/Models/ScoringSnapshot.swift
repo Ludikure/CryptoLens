@@ -64,6 +64,9 @@ struct ScoringSnapshot: Codable {
     let dxyPrice: Double?
     let dxyAboveEma20: Bool?
 
+    // ATR context
+    let atrPercent: Double?         // ATR as % of price — needed for resolved win target
+
     // Forward prices for evaluation
     let priceAfter4H: Double?
     let priceAfter24H: Double?

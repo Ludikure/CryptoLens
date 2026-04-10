@@ -480,6 +480,7 @@ class OptimizerEngine: ObservableObject {
             vix: vix,
             dxyPrice: dxyPrice,
             dxyAboveEma20: dxyAboveEma20,
+            atrPercent: result.atr?.atrPercent,
             priceAfter4H: priceAfter4H,
             priceAfter24H: priceAfter24H,
             forwardHigh24H: forwardHigh24H,

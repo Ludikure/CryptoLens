@@ -159,6 +159,11 @@ struct BacktestView: View {
         .toolbar {
             if let r = engine.result {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    if let csv = engine.exportCSV() {
+                        ShareLink(item: csv, preview: SharePreview("ML Training Data — \(r.symbol)")) {
+                            Image(systemName: "tablecells")
+                        }
+                    }
                     Button {
                         UIPasteboard.general.string = shareText(r)
                     } label: {
