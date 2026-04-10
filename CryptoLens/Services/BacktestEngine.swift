@@ -198,9 +198,9 @@ class BacktestEngine: ObservableObject {
                     dAdx: dailyResult.adx?.adx ?? 0, dAdxBullish: dailyResult.adx?.direction == "Bullish",
                     dEmaCross: {
                         var c = 0
-                        if let e = dailyResult.ema20, price > e { c += 1 }
-                        if let e = dailyResult.ema50, price > e { c += 1 }
-                        if let e = dailyResult.ema200, price > e { c += 1 }
+                        if let e = dailyResult.ema20 { c += price > e ? 1 : -1 }
+                        if let e = dailyResult.ema50 { c += price > e ? 1 : -1 }
+                        if let e = dailyResult.ema200 { c += price > e ? 1 : -1 }
                         return c
                     }(),
                     dStackBull: maAlign == "bullish_stacked", dStackBear: maAlign == "bearish_stacked",
@@ -210,9 +210,9 @@ class BacktestEngine: ObservableObject {
                     hAdx: fourHResult.adx?.adx ?? 0, hAdxBullish: fourHResult.adx?.direction == "Bullish",
                     hEmaCross: {
                         var c = 0
-                        if let e = fourHResult.ema20, price > e { c += 1 }
-                        if let e = fourHResult.ema50, price > e { c += 1 }
-                        if let e = fourHResult.ema200, price > e { c += 1 }
+                        if let e = fourHResult.ema20 { c += price > e ? 1 : -1 }
+                        if let e = fourHResult.ema50 { c += price > e ? 1 : -1 }
+                        if let e = fourHResult.ema200 { c += price > e ? 1 : -1 }
                         return c
                     }(),
                     hStackBull: {
