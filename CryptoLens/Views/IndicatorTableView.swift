@@ -74,6 +74,18 @@ struct IndicatorTableView: View {
                         .fontWeight(abs(score) >= 7 ? .bold : .regular)
                         .foregroundStyle(color)
                 }
+                row("ML Win", tooltip: "Machine learning win probability. Trained on 14k trades (BTC/ETH/SOL/XRP). ≥70% = high probability setup. ≥60% = confirmed. <50% = model predicts loss.") { r in
+                    if let ml = r.mlWinProbability {
+                        let pct = Int(ml * 100)
+                        let color: Color = pct >= 70 ? .green :
+                                           pct >= 60 ? Color.green.opacity(0.7) :
+                                           pct >= 50 ? .secondary :
+                                           .red
+                        Text("\(pct)%")
+                            .fontWeight(pct >= 70 ? .bold : .regular)
+                            .foregroundStyle(color)
+                    } else { dash }
+                }
                 row("RSI", tooltip: Tooltips.rsi) { r in
                     if let rsi = r.rsi {
                         Text(String(format: "%.1f", rsi))
