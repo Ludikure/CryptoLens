@@ -137,7 +137,7 @@ export default {
     }
 
     // All endpoints (except /register) require valid auth token
-    if (path !== '/register') {
+    if (path !== '/register' && path !== '/bls/actuals') {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       const storedToken = await env.ALERTS.get(`auth:${deviceId}`);
       if (!storedToken || !timingSafeEqual(storedToken, authToken)) return json({ error: 'Unauthorized' }, 401);
@@ -400,28 +400,58 @@ export default {
       }
     }
 
-    // Finnhub Economic Calendar (no symbol needed)
-    if (path === '/finnhub/economic-calendar') {
-      if (!env.FINNHUB_API_KEY) return json({ error: 'Finnhub not configured' }, 503);
-      const cacheKey = 'cache:fh:economic-calendar';
+    // === BLS Economic Actuals (no auth — public data, cached 1h) ===
+    if (path === '/bls/actuals') {
+      const cacheKey = 'cache:bls:actuals:v2';
       const cached = await env.ALERTS.get(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.timestamp < 900_000) return json(parsed.data); // 15min cache
+        if (Date.now() - parsed.timestamp < 3600_000) return json(parsed.data);
       }
+
+      // BLS v2 POST — all series in one request (no key needed, 25 req/day limit)
+      const seriesIds = ['CUSR0000SA0', 'CUSR0000SA0L1E', 'LNS14000000', 'CES0000000001'];
+      const actuals: Record<string, string> = {};
+
       try {
-        const from = new Date(Date.now() - 2 * 86400_000).toISOString().split('T')[0];
-        const to = new Date(Date.now() + 7 * 86400_000).toISOString().split('T')[0];
-        const resp = await fetch(`${FINNHUB_BASE}/calendar/economic?from=${from}&to=${to}`, {
-          headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY },
+        const resp = await fetch('https://api.bls.gov/publicAPI/v2/timeseries/data/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seriesid: seriesIds }),
         });
-        if (!resp.ok) return json({ error: `Finnhub ${resp.status}` }, 502);
-        const data = await resp.json();
-        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 900 });
-        return json(data);
-      } catch {
-        return json({ error: 'Finnhub economic calendar fetch failed' }, 502);
-      }
+        if (!resp.ok) return json({ error: `BLS ${resp.status}` }, 502);
+        const data = await resp.json() as any;
+        const allSeries = data?.Results?.series || [];
+
+        for (const s of allSeries) {
+          const id = s.seriesID;
+          const obs = s.data; // newest first
+          if (!obs || obs.length < 2) continue;
+
+          const latest = parseFloat(obs[0].value);
+          const prev = parseFloat(obs[1].value);
+          if (isNaN(latest) || isNaN(prev) || latest <= 0 || prev <= 0) continue;
+
+          if (id === 'CUSR0000SA0') {
+            actuals['CPI m/m'] = ((latest - prev) / prev * 100).toFixed(1) + '%';
+            if (obs.length >= 13) {
+              const yoy = parseFloat(obs[12].value);
+              if (!isNaN(yoy) && yoy > 0) actuals['CPI y/y'] = ((latest - yoy) / yoy * 100).toFixed(1) + '%';
+            }
+          } else if (id === 'CUSR0000SA0L1E') {
+            actuals['Core CPI m/m'] = ((latest - prev) / prev * 100).toFixed(1) + '%';
+          } else if (id === 'LNS14000000') {
+            actuals['Unemployment Rate'] = latest.toFixed(1) + '%';
+          } else if (id === 'CES0000000001') {
+            const diff = latest - prev;
+            actuals['Non-Farm Employment Change'] = (diff >= 0 ? '+' : '') + diff.toFixed(0) + 'K';
+          }
+        }
+      } catch { /* skip */ }
+
+      const result = { actuals, fetchedAt: new Date().toISOString(), count: Object.keys(actuals).length };
+      await env.ALERTS.put(cacheKey, JSON.stringify({ data: result, timestamp: Date.now() }), { expirationTtl: 3600 });
+      return json(result);
     }
 
     if (path.startsWith('/finnhub/')) {
