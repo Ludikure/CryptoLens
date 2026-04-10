@@ -1110,6 +1110,7 @@ enum AnalysisPrompt {
             var biasLine = "Price: \(Formatters.formatPrice(ind.price)) | Bias: \(ind.bias) (score: \(ind.biasScore))"
             if let vs = ind.volScalar { biasLine += " [vol_scalar: \(String(format: "%.2f", vs))]" }
             if let override = ind.momentumOverride { biasLine += " [MOMENTUM: \(override)]" }
+            if let ml = ind.mlWinProbability { biasLine += " [ML_WIN: \(Int(ml * 100))%]" }
             lines.append(biasLine)
 
             // Per-timeframe market structure

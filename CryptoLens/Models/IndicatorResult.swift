@@ -152,6 +152,7 @@ struct IndicatorResult: Identifiable, Codable {
     let biasScore: Int             // Signed score: positive=bullish, negative=bearish
     var marketStructure: MarketStructureResult?
     var volScalar: Double?
+    var mlWinProbability: Double?   // 0.0-1.0 from CoreML model
 
     init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil, momentumOverride: String? = nil, biasScore: Int = 0, marketStructure: MarketStructureResult? = nil, volScalar: Double? = nil) {
         self.id = UUID()
