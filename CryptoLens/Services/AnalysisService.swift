@@ -377,7 +377,7 @@ class AnalysisService: ObservableObject {
             let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                    isCrypto: market == .crypto, derivCtx: derivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            })
+            }, vixValue: macroSnapshot?.vix)
             tf1ML.mlWinProbability = MLScoring.predict(
                 features: mlFeatures, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -514,7 +514,7 @@ class AnalysisService: ObservableObject {
             let mlFeatures2 = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                     isCrypto: market == .crypto, derivCtx: earlyDerivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            })
+            }, vixValue: macroSnapshot?.vix, crossAsset: crossAsset)
             tf1.mlWinProbability = MLScoring.predict(
                 features: mlFeatures2, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -810,7 +810,8 @@ class AnalysisService: ObservableObject {
     // MARK: - ML Features
 
     static func buildMLFeatures(tf1: IndicatorResult, tf2: IndicatorResult, tf3: IndicatorResult,
-                                 isCrypto: Bool, derivCtx: DerivativesContext?) -> MLFeatures {
+                                 isCrypto: Bool, derivCtx: DerivativesContext?,
+                                 vixValue: Double? = nil, crossAsset: CrossAssetContext? = nil) -> MLFeatures {
         func emaCross(_ r: IndicatorResult) -> Int {
             var c = 0
             if let e = r.ema20 { c += r.price > e ? 1 : -1 }
@@ -865,7 +866,9 @@ class AnalysisService: ObservableObject {
             fundingSignal: derivCtx?.fundingSignal ?? 0, oiSignal: derivCtx?.oiSignal ?? 0,
             takerSignal: derivCtx?.takerSignal ?? 0, crowdingSignal: derivCtx?.crowdingSignal ?? 0,
             derivativesCombined: derivCtx?.combinedSignal ?? 0,
-            vix: 20, dxyAboveEma20: false, volScalar: tf1.volScalar ?? 1.0,
+            vix: vixValue ?? 20,
+            dxyAboveEma20: crossAsset.map { $0.dxyPrice > $0.dxyEma20 } ?? false,
+            volScalar: tf1.volScalar ?? 1.0,
             last3Green: n >= 3 && candles[(n-3)...].allSatisfy { $0.close > $0.open },
             last3Red: n >= 3 && candles[(n-3)...].allSatisfy { $0.close < $0.open },
             last3VolIncreasing: n >= 3 && candles[n-2].volume > candles[n-3].volume && candles[n-1].volume > candles[n-2].volume,
