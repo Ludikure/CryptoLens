@@ -2,6 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { computeScore, type Candle as ScoreCandle } from './scoring';
+import { mlPredict, buildMLInput } from './ml-predict';
 
 export interface Env {
   ALERTS: KVNamespace;
@@ -826,16 +827,16 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   if (!configRaw) return;
   const config = JSON.parse(configRaw);
 
-  // Load previous scores
-  const prevRaw = await env.ALERTS.get(`scores:${deviceId}`);
-  const prevScores: Record<string, number> = prevRaw ? JSON.parse(prevRaw) : {};
-  const newScores: Record<string, number> = {};
-  const triggered: { symbol: string; score: number; direction: string }[] = [];
+  // Load previous ML probabilities
+  const prevRaw = await env.ALERTS.get(`mlprobs:${deviceId}`);
+  const prevProbs: Record<string, number> = prevRaw ? JSON.parse(prevRaw) : {};
+  const newProbs: Record<string, number> = {};
+  const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
+  const ML_THRESHOLD = 0.60;
 
   for (const symbol of config.symbols) {
     try {
       const isCrypto = symbol.endsWith('USDT');
-      const threshold = isCrypto ? config.cryptoThreshold : config.stockThreshold;
 
       // Check candle cache first (5-min TTL)
       const cacheKey = `candles:${symbol}:1d`;
@@ -851,23 +852,34 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       }
       if (candles.length < 210) continue;
 
+      // Compute linear score (for features) and ML probability
       const result = computeScore(candles, isCrypto);
-      newScores[symbol] = result.score;
+      const mlInput = buildMLInput(
+        result.dRsi ?? 50, result.dMacdHist ?? 0, result.dAdx ?? 0, result.dAdxBullish ?? false,
+        result.dEmaCross ?? 0, result.dStackBull ?? false, result.dStackBear ?? false,
+        result.dStructBull ?? false, result.dStructBear ?? false,
+        result.hRsi ?? 50, result.hMacdHist ?? 0, result.hAdx ?? 0, result.hAdxBullish ?? false,
+        result.hEmaCross ?? 0, result.hStackBull ?? false, result.hStackBear ?? false,
+        result.hStructBull ?? false, result.hStructBear ?? false,
+        result.atrPercent ?? 0, result.volScalar ?? 1.0, result.atrPercentile ?? 50,
+        result.score, result.fourHScore ?? 0
+      );
+      const mlProb = mlPredict(mlInput);
+      newProbs[symbol] = mlProb;
 
-      const prevAbs = Math.abs(prevScores[symbol] || 0);
-      const newAbs = Math.abs(result.score);
+      const prevProb = prevProbs[symbol] || 0;
 
-      // Crossing detection — same logic as app
-      if (prevAbs < threshold && newAbs >= threshold) {
-        triggered.push({ symbol, score: result.score, direction: result.bias });
+      // ML probability crossing detection
+      if (prevProb < ML_THRESHOLD && mlProb >= ML_THRESHOLD) {
+        triggered.push({ symbol, score: result.score, mlProb, direction: result.bias });
       }
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);
     }
   }
 
-  // Save new scores
-  await env.ALERTS.put(`scores:${deviceId}`, JSON.stringify(newScores),
+  // Save new ML probabilities
+  await env.ALERTS.put(`mlprobs:${deviceId}`, JSON.stringify(newProbs),
     { expirationTtl: 86400 * 7 });
 
   // Send push notifications for crossings
@@ -882,8 +894,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   for (const t of triggered) {
     const ticker = t.symbol.replace('USDT', '');
     await sendAPNs(env, pushToken,
-      `${ticker} — High Conviction ${t.direction}`,
-      `Daily score: ${t.score > 0 ? '+' : ''}${t.score}. Tap to analyze.`
+      `${ticker} — High Conviction ${t.direction} (ML: ${Math.round(t.mlProb * 100)}%)`,
+      `Win probability crossed 60%. Score: ${t.score > 0 ? '+' : ''}${t.score}. Tap to analyze.`
     );
   }
 }

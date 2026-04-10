@@ -9,6 +9,15 @@ export interface Candle {
 export interface ScoreResult {
     score: number;
     bias: string;  // "Bullish" | "Bearish" | "Neutral"
+    fourHScore?: number;
+    // ML feature intermediates
+    dRsi?: number; dMacdHist?: number; dAdx?: number; dAdxBullish?: boolean;
+    dEmaCross?: number; dStackBull?: boolean; dStackBear?: boolean;
+    dStructBull?: boolean; dStructBear?: boolean;
+    hRsi?: number; hMacdHist?: number; hAdx?: number; hAdxBullish?: boolean;
+    hEmaCross?: number; hStackBull?: boolean; hStackBear?: boolean;
+    hStructBull?: boolean; hStructBear?: boolean;
+    atrPercent?: number; volScalar?: number; atrPercentile?: number;
 }
 
 function ema(closes: number[], period: number): number[] {
@@ -159,5 +168,25 @@ export function computeScore(candles: Candle[], isCrypto: boolean): ScoreResult 
     if (score >= dirThreshold) bias = 'Bullish';
     else if (score <= -dirThreshold) bias = 'Bearish';
 
-    return { score, bias };
+    // EMA cross count (signed: -3 to +3)
+    let emaCross = 0;
+    if (e20 !== undefined) emaCross += price > e20 ? 1 : -1;
+    if (e50 !== undefined) emaCross += price > e50 ? 1 : -1;
+    if (e200 !== undefined) emaCross += price > e200 ? 1 : -1;
+
+    const atrVal = atr(candles) || price * 0.01;
+    const atrPct = (atrVal / price) * 100;
+
+    return {
+        score, bias, fourHScore: 0,
+        dRsi: rsiVal ?? 50, dMacdHist: macdResult?.histogram ?? 0,
+        dAdx: adxResult?.adx ?? 0, dAdxBullish: adxResult ? adxResult.plusDI > adxResult.minusDI : false,
+        dEmaCross: emaCross, dStackBull: stackBull, dStackBear: stackBear,
+        dStructBull: stackBull, dStructBear: stackBear,  // approximated from stack
+        // Worker only computes daily — 4H features set to neutral defaults
+        hRsi: 50, hMacdHist: 0, hAdx: 0, hAdxBullish: false,
+        hEmaCross: 0, hStackBull: false, hStackBear: false,
+        hStructBull: false, hStructBear: false,
+        atrPercent: atrPct, volScalar: 1.0, atrPercentile: 50
+    };
 }
