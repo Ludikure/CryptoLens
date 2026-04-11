@@ -727,6 +727,70 @@ export default {
       return json({ ok: true, symbols: symbols.length });
     }
 
+    // === Derivatives Proxy (Binance fapi via Smart Placement) ===
+    if (path === '/derivatives') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+
+      const cacheKey = `cache:deriv:${symbol}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 300_000) return json(parsed.data); // 5min cache
+      }
+
+      const FAPI = 'https://fapi.binance.com';
+      try {
+        const [pi, fh, oi, oih, gls, ttls, tr] = await Promise.all([
+          fetch(`${FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&limit=10`).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${FAPI}/fapi/v1/openInterest?symbol=${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${FAPI}/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=6`).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=1`).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${FAPI}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=1`).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${FAPI}/futures/data/takerlongshortRatio?symbol=${symbol}&period=1h&limit=1`).then(r => r.ok ? r.json() : null).catch(() => null),
+        ]);
+
+        const data = { premiumIndex: pi, fundingHistory: fh, openInterest: oi, oiHistory: oih, globalLS: gls, topTraderLS: ttls, takerRatio: tr };
+
+        // Only cache if we got meaningful data (premiumIndex is required)
+        if (pi) {
+          await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 300 });
+        }
+        return json(data);
+      } catch {
+        return json({ error: 'Derivatives fetch failed' }, 502);
+      }
+    }
+
+    // === Spot Pressure Proxy (Binance order book + trades) ===
+    if (path === '/spot') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+
+      const cacheKey = `cache:spot:${symbol}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 60_000) return json(parsed.data); // 1min cache
+      }
+
+      try {
+        const [depth, trades] = await Promise.all([
+          fetch(`${BINANCE_SPOT}/depth?symbol=${symbol}&limit=20`).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(`${BINANCE_SPOT}/trades?symbol=${symbol}&limit=200`).then(r => r.ok ? r.json() : null).catch(() => null),
+        ]);
+
+        const data = { depth, trades };
+        if (depth) {
+          await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 60 });
+        }
+        return json(data);
+      } catch {
+        return json({ error: 'Spot fetch failed' }, 502);
+      }
+    }
+
     return json({ error: 'Not found' }, 404);
   },
 
