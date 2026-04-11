@@ -19,6 +19,11 @@ binding = "DB"
 database_name = "marketscope-db"
 database_id = "f67b9cbd-9264-4679-9161-1b4af2f9de9d"
 
+# R2 bucket — ML models + archives
+[[r2_buckets]]
+binding = "MODELS"
+bucket_name = "marketscope-models"
+
 # Cron trigger — check scores every minute
 [triggers]
 crons = ["* * * * *"]

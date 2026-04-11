@@ -7,6 +7,7 @@ import { mlPredict, buildMLInput } from './ml-predict';
 export interface Env {
   ALERTS: KVNamespace;       // Hot cache for market data
   DB: D1Database;            // Persistent state + candle archive
+  MODELS: R2Bucket;          // ML models + archives
   APNS_KEY_ID: string;
   APNS_TEAM_ID: string;
   APNS_PRIVATE_KEY: string;
@@ -725,6 +726,20 @@ export default {
         symbols, cryptoThreshold, stockThreshold, updatedAt: Date.now()
       }), { expirationTtl: 86400 * 30 });
       return json({ ok: true, symbols: symbols.length });
+    }
+
+    // === ML Model Version (R2) ===
+    if (path === '/ml-models/version') {
+      try {
+        const cryptoMeta = await env.MODELS.head('crypto/model-v3.json');
+        const stockMeta = await env.MODELS.head('stock/model-v3.json');
+        return json({
+          crypto: { version: 'v3', features: 51, trees: 150, uploaded: cryptoMeta?.uploaded?.toISOString() },
+          stock: { version: 'v3', features: 51, trees: 150, uploaded: stockMeta?.uploaded?.toISOString() }
+        });
+      } catch {
+        return json({ error: 'Model info unavailable' }, 502);
+      }
     }
 
     // === Derivatives Proxy (Binance fapi via Smart Placement) ===
