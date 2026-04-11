@@ -14,23 +14,16 @@ class DerivativesService {
     func fetchDerivativesData(symbol: String) async -> DerivativesData? {
         let sym = symbol.uppercased()
 
-        // Tier 1: Worker proxy (Smart Placement bypasses US geo-block)
-        if let proxyData = await fetchFromWorkerProxy(symbol: sym) {
+        // Tier 1: Direct Binance Futures (works with VPN or non-US)
+        let binanceData = await fetchFromBinance(symbol: sym)
+        if let data = binanceData {
             #if DEBUG
-            print("[MarketScope] Binance derivatives (via proxy): OK (L/S: \(proxyData.globalLongPercent)/\(proxyData.globalShortPercent))")
+            print("[MarketScope] Binance derivatives: OK (L/S: \(data.globalLongPercent)/\(data.globalShortPercent))")
             #endif
-            return proxyData
+            return data
         }
 
-        // Tier 2: Direct Binance Futures (works with VPN)
-        if let binanceData = await fetchFromBinance(symbol: sym) {
-            #if DEBUG
-            print("[MarketScope] Binance derivatives (direct): OK (L/S: \(binanceData.globalLongPercent)/\(binanceData.globalShortPercent))")
-            #endif
-            return binanceData
-        }
-
-        // Tier 3: Coinbase International (US-native, no VPN, funding + OI, no L/S)
+        // Tier 2: Coinbase International (US-native, funding + OI, no L/S)
         #if DEBUG
         print("[MarketScope] Binance blocked, trying Coinbase...")
         #endif
@@ -38,52 +31,11 @@ class DerivativesService {
             return cbData
         }
 
-        // Tier 4: CoinGecko aggregated (last resort)
+        // Tier 3: CoinGecko aggregated (last resort)
         #if DEBUG
         print("[MarketScope] Coinbase failed, trying CoinGecko...")
         #endif
         return await fetchFromCoinGecko(symbol: sym)
-    }
-
-    // MARK: - Worker Proxy (Smart Placement)
-
-    private func fetchFromWorkerProxy(symbol: String) async -> DerivativesData? {
-        await PushService.ensureAuth()
-        guard let url = URL(string: "\(PushService.workerURL)/derivatives?symbol=\(symbol)") else { return nil }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8
-        PushService.addAuthHeaders(&request)
-
-        guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return nil }
-
-        // Parse the pre-fetched Binance responses
-        guard let pi = json["premiumIndex"] as? [String: Any],
-              let frStr = pi["lastFundingRate"] as? String, let fr = Double(frStr),
-              let mpStr = pi["markPrice"] as? String, let mp = Double(mpStr),
-              let ipStr = pi["indexPrice"] as? String, let ip = Double(ipStr)
-        else { return nil }
-
-        guard let oi = json["openInterest"] as? [String: Any],
-              let oiStr = oi["openInterest"] as? String, let oiVal = Double(oiStr)
-        else { return nil }
-
-        let fh = json["fundingHistory"] as? [[String: Any]]
-        let oih = json["oiHistory"] as? [[String: Any]]
-        let gls = json["globalLS"] as? [[String: Any]]
-        let ttls = json["topTraderLS"] as? [[String: Any]]
-        let tr = json["takerRatio"] as? [[String: Any]]
-
-        return buildResult(
-            fundingRate: fr, markPrice: mp, indexPrice: ip, openInterest: oiVal,
-            fundingHistory: parseBinanceFundingHistory(fh),
-            oiHistory: parseBinanceOIHistory(oih),
-            globalLS: parseBinanceLS(gls),
-            topTraderLS: parseBinanceLS(ttls),
-            takerData: parseBinanceTaker(tr)
-        )
     }
 
     // MARK: - Binance Futures
