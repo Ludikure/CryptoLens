@@ -107,7 +107,7 @@ struct StockInfoView: View {
                             .font(.caption2)
                             .foregroundStyle(buys > sells ? .green : .red)
                     }
-                    ForEach(txs.prefix(3), id: \.date) { tx in
+                    ForEach(Array(txs.prefix(3).enumerated()), id: \.offset) { _, tx in
                         HStack(spacing: 4) {
                             Circle()
                                 .fill(tx.isBuy ? Color.green : Color.red)

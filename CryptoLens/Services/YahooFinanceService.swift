@@ -187,9 +187,11 @@ actor YahooFinanceService {
 
     private func fetchQuoteSummary(symbol: String) async -> [String: Any]? {
         let modules = "defaultKeyStatistics,price"
-        guard let url = URL(string: "\(Constants.yahooBaseURL)/v10/finance/quoteSummary/\(symbol)?modules=\(modules)") else { return nil }
+        guard let url = URL(string: "\(PushService.workerURL)/yahoo/summary?symbol=\(symbol)&modules=\(modules)") else { return nil }
         do {
-            let (data, _) = try await session.data(from: url)
+            var request = URLRequest(url: url)
+            PushService.addAuthHeaders(&request)
+            let (data, _) = try await session.data(for: request)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let qs = json["quoteSummary"] as? [String: Any],
                   let results = qs["result"] as? [[String: Any]],
@@ -217,9 +219,11 @@ actor YahooFinanceService {
     /// Compute put/call ratio from nearest-expiry options chain open interest.
     private func fetchPutCallRatio(symbol: String) async -> Double? {
         await throttle()
-        guard let url = URL(string: "\(Constants.yahooBaseURL)/v7/finance/options/\(symbol)") else { return nil }
+        guard let url = URL(string: "\(PushService.workerURL)/yahoo/options?symbol=\(symbol)") else { return nil }
         do {
-            let (data, response) = try await session.data(from: url)
+            var request = URLRequest(url: url)
+            PushService.addAuthHeaders(&request)
+            let (data, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) { return nil }
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let chain = json["optionChain"] as? [String: Any],

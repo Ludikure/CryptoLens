@@ -599,7 +599,9 @@ export default {
       }
 
       try {
-        const resp = await fetch(`${YAHOO_BASE}/v10/finance/quoteSummary/${symbol}?modules=${modules}`);
+        const resp = await fetch(`${YAHOO_BASE}/v10/finance/quoteSummary/${symbol}?modules=${modules}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+        });
         if (!resp.ok) return json({ error: 'Upstream error' }, 502);
         const data = await resp.json();
         await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
@@ -621,7 +623,9 @@ export default {
       }
 
       try {
-        const resp = await fetch(`${YAHOO_BASE}/v7/finance/options/${symbol}`);
+        const resp = await fetch(`${YAHOO_BASE}/v7/finance/options/${symbol}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' },
+        });
         if (!resp.ok) return json({ error: 'Upstream error' }, 502);
         const data = await resp.json();
         await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
