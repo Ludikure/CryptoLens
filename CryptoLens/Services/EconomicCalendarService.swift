@@ -49,13 +49,6 @@ class EconomicCalendarService {
             .filter { $0.isRecentlyReleased || $0.isUpcoming || $0.date.timeIntervalSinceNow > 0 }
             .sorted { $0.date < $1.date }
 
-        #if DEBUG
-        let highImpact = relevant.filter { $0.isHighImpact }
-        print("[MarketScope] Calendar: \(events.count) total → \(relevant.count) relevant (\(highImpact.count) high-impact)")
-        for e in highImpact.prefix(3) {
-            print("[MarketScope]   \(e.title): released=\(e.isRecentlyReleased) upcoming=\(e.isUpcoming) actual=\(e.actual ?? "nil")")
-        }
-        #endif
 
         // Only cache non-empty results to avoid poisoning from startup network failures
         if !relevant.isEmpty {
@@ -154,10 +147,6 @@ class EconomicCalendarService {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let actuals = json["actuals"] as? [String: String]
         else { return [:] }
-
-        #if DEBUG
-        print("[MarketScope] BLS actuals: \(actuals.count) series (\(actuals))")
-        #endif
 
         if !actuals.isEmpty {
             blsCache = (actuals, Date())
