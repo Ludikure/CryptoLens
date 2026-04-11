@@ -3,6 +3,7 @@
 
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
 import { mlPredict, buildMLInput } from './ml-predict';
+import { computeAllFeatures, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 
 export interface Env {
   ALERTS: KVNamespace;       // Hot cache for market data
@@ -1272,57 +1273,58 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       }
       if (candles.length < 210) continue;
 
-      // Fetch 4H candles for ML features (cached 5min)
-      let fourHCandles: ScoreCandle[] = [];
+      // Fetch 4H + 1H candles for full ML features
+      let fourHCandles: FullCandle[] = [];
+      let oneHCandles: FullCandle[] = [];
       if (isCrypto) {
+        // 4H candles
         const cacheKey4H = `candles:${symbol}:4h`;
         const cached4H = await env.ALERTS.get(cacheKey4H);
         if (cached4H) {
           fourHCandles = JSON.parse(cached4H);
         } else {
           try {
-            const resp = await fetch(
-              `${BINANCE_SPOT}/klines?symbol=${symbol}&interval=4h&limit=260`
-            );
+            const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=4h&limit=260`);
             if (resp.ok) {
               const data = await resp.json() as any[];
-              fourHCandles = data.map((k: any) => ({
-                time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
-              }));
+              fourHCandles = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
               await env.ALERTS.put(cacheKey4H, JSON.stringify(fourHCandles), { expirationTtl: 300 });
               archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
             }
-          } catch { /* 4H fetch failed — proceed with daily-only */ }
+          } catch {}
+        }
+        // 1H candles
+        const cacheKey1H = `candles:${symbol}:1h`;
+        const cached1H = await env.ALERTS.get(cacheKey1H);
+        if (cached1H) {
+          oneHCandles = JSON.parse(cached1H);
+        } else {
+          try {
+            const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=1h&limit=100`);
+            if (resp.ok) {
+              const data = await resp.json() as any[];
+              oneHCandles = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
+              await env.ALERTS.put(cacheKey1H, JSON.stringify(oneHCandles), { expirationTtl: 300 });
+            }
+          } catch {}
         }
       }
 
-      // Compute daily score + features
-      const result = computeScore(candles, isCrypto);
+      // Compute all 51 features
+      const zeroDeriv = { fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0 };
+      const defaultMacro = { vix: 20, dxyAboveEma20: 0 };
+      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, zeroDeriv, defaultMacro);
 
-      // Compute 4H features if available
-      let h4Result: ScoreResult | null = null;
-      if (fourHCandles.length >= 210) {
-        h4Result = computeScore(fourHCandles, isCrypto);
-      }
-
-      const mlInput = buildMLInput(
-        result.dRsi ?? 50, result.dMacdHist ?? 0, result.dAdx ?? 0, result.dAdxBullish ?? false,
-        result.dEmaCross ?? 0, result.dStackBull ?? false, result.dStackBear ?? false,
-        result.dStructBull ?? false, result.dStructBear ?? false,
-        h4Result?.dRsi ?? 50, h4Result?.dMacdHist ?? 0, h4Result?.dAdx ?? 0, h4Result?.dAdxBullish ?? false,
-        h4Result?.dEmaCross ?? 0, h4Result?.dStackBull ?? false, h4Result?.dStackBear ?? false,
-        h4Result?.dStructBull ?? false, h4Result?.dStructBear ?? false,
-        result.atrPercent ?? 0, result.volScalar ?? 1.0, result.atrPercentile ?? 50,
-        result.score, h4Result?.score ?? 0
-      );
-      const mlProb = mlPredict(mlInput, isCrypto);
+      // ML predict using full features
+      const mlProb = mlPredict(features as Record<string, number>, isCrypto);
       newProbs[symbol] = mlProb;
 
       const prevProb = prevProbs[symbol] || 0;
 
       // ML probability crossing detection
       if (prevProb < ML_THRESHOLD && mlProb >= ML_THRESHOLD) {
-        triggered.push({ symbol, score: result.score, mlProb, direction: result.bias });
+        const bias = features.dailyScore < 0 ? 'Bearish' : features.dailyScore > 0 ? 'Bullish' : 'Neutral';
+        triggered.push({ symbol, score: features.dailyScore, mlProb, direction: bias });
       }
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);
