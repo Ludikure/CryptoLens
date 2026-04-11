@@ -14,6 +14,34 @@ class BacktestEngine: ObservableObject {
     private let twelveData = TwelveDataProvider()
     private let alphaVantage = AlphaVantageProvider()
 
+    /// Fetch candles from worker D1 archive. Returns nil if insufficient data.
+    private func fetchFromArchive(symbol: String, interval: String, startDate: Date, endDate: Date) async -> [Candle]? {
+        let startMs = Int(startDate.timeIntervalSince1970 * 1000)
+        let endMs = Int(endDate.timeIntervalSince1970 * 1000)
+        guard let url = URL(string: "\(PushService.workerURL)/history?symbol=\(symbol)&interval=\(interval)&start=\(startMs)&end=\(endMs)") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        PushService.addAuthHeaders(&request)
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = json["candles"] as? [[String: Any]]
+        else { return nil }
+
+        let candles = rows.compactMap { row -> Candle? in
+            guard let ts = row["timestamp"] as? Int,
+                  let o = row["open"] as? Double,
+                  let h = row["high"] as? Double,
+                  let l = row["low"] as? Double,
+                  let c = row["close"] as? Double,
+                  let v = row["volume"] as? Double
+            else { return nil }
+            return Candle(time: Date(timeIntervalSince1970: Double(ts) / 1000), open: o, high: h, low: l, close: c, volume: v)
+        }
+        return candles.isEmpty ? nil : candles
+    }
+
     func run(symbol: String, startDate: Date, endDate: Date) async {
         isRunning = true
         progress = 0
@@ -27,11 +55,28 @@ class BacktestEngine: ObservableObject {
             let warmupDays: TimeInterval = 220 * 86400
             let fetchStart = startDate.addingTimeInterval(-warmupDays)
 
-            let dailyCandles: [Candle]
-            let fourHCandles: [Candle]
-            let oneHCandles: [Candle]
+            var dailyCandles: [Candle]
+            var fourHCandles: [Candle]
+            var oneHCandles: [Candle]
 
-            if isCrypto {
+            // Try D1 archive first (instant, no rate limits)
+            statusMessage = "Checking server archive..."
+            async let archiveDaily = fetchFromArchive(symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
+            async let archive4H = fetchFromArchive(symbol: symbol, interval: "4h", startDate: fetchStart, endDate: endDate)
+            async let archive1H = fetchFromArchive(symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
+
+            let (ad, a4, a1) = await (archiveDaily, archive4H, archive1H)
+            let archiveHit = (ad?.count ?? 0) >= 250 && (a4?.count ?? 0) >= 250
+
+            if archiveHit, let ad = ad, let a4 = a4 {
+                dailyCandles = ad
+                fourHCandles = a4
+                oneHCandles = a1 ?? []
+                statusMessage = "Archive: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)"
+                #if DEBUG
+                print("[Backtest] Using D1 archive: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
+                #endif
+            } else if isCrypto {
                 statusMessage = "Fetching daily candles (Binance)..."
                 dailyCandles = try await binance.fetchHistoricalCandles(
                     symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
@@ -45,7 +90,6 @@ class BacktestEngine: ObservableObject {
                 statusMessage = "Fetching daily candles (Yahoo)..."
                 dailyCandles = try await yahoo.fetchHistoricalCandles(
                     symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
-                // Stitch Yahoo (2yr) + Alpha Vantage (older) for max history
                 statusMessage = "Fetching 1H candles (stitched)..."
                 let hourly = try await CandleCache.loadOrFetchStitched(
                     symbol: symbol, startDate: fetchStart, endDate: endDate,
