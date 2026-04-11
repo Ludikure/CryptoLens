@@ -355,7 +355,7 @@ enum AnalysisPrompt {
             - EARNINGS HISTORY: Consecutive beats raise the bar. Approaching earnings within 2 weeks = flag risk.
             - GROWTH: Accelerating revenue + pullback = high conviction dip buy. Declining growth + breakdown = confirms weakness.
             - SECTOR: Outperforming sector = relative strength, dips get bought. Underperforming = something wrong, rallies get sold.
-            - INSIDER BUYING: Cluster buying is the strongest fundamental buy signal. Weight heavily if at technical support.
+            - INSIDER BUYING: Cluster buying is the strongest fundamental buy signal. Weight heavily if at technical support. Individual transactions with names and dollar values are shown — a CEO buying $5M is more significant than a director buying $50K. Sells are noisier (tax/diversification) but cluster sells from multiple officers are bearish.
             - EX-DIVIDEND: If within 5 trading days, flag it. Stock gaps down by dividend amount on ex-date — don't mistake for breakdown.
             - ESTIMATE REVISIONS: Analysts revising up over 90 days = improving outlook. Revising down = deteriorating. Revision momentum leads price.
             Fundamentals don't override technicals — they add conviction or caution.
@@ -733,7 +733,22 @@ enum AnalysisPrompt {
                 lines.append(growthLine)
             }
             // Insider activity
-            if let buys = si.insiderBuyCount6m, let sells = si.insiderSellCount6m {
+            if let txs = si.insiderTransactions, !txs.isEmpty {
+                let buys = txs.filter(\.isBuy)
+                let sells = txs.filter { !$0.isBuy }
+                let buyValue = buys.reduce(0.0) { $0 + $1.value }
+                let sellValue = sells.reduce(0.0) { $0 + $1.value }
+                var insiderLine = "Insider Transactions (3mo): \(buys.count) buys ($\(Formatters.compactNumber(buyValue))) / \(sells.count) sells ($\(Formatters.compactNumber(sellValue)))"
+                insiderLine += buys.count > sells.count ? " — Net buying" : sells.count > buys.count ? " — Net selling" : ""
+                lines.append(insiderLine)
+                // Show top 3 most recent transactions with names
+                for tx in txs.prefix(3) {
+                    let df = DateFormatter()
+                    df.dateFormat = "MMM d"
+                    let action = tx.isBuy ? "BOUGHT" : "SOLD"
+                    lines.append("  \(tx.name) \(action) \(abs(tx.shares).formatted()) shares ($\(Formatters.compactNumber(tx.value))) on \(df.string(from: tx.date))")
+                }
+            } else if let buys = si.insiderBuyCount6m, let sells = si.insiderSellCount6m {
                 lines.append("Insiders (6mo): \(buys) buys / \(sells) sells — \(si.insiderNetBuying == true ? "Net buying" : "Net selling")")
             }
             // Estimate revisions

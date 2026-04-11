@@ -38,4 +38,12 @@ enum Formatters {
     static func formatNumber(_ value: Double, decimals: Int = 2) -> String {
         String(format: "%.\(decimals)f", value)
     }
+
+    static func compactNumber(_ value: Double) -> String {
+        let abs = abs(value)
+        if abs >= 1_000_000_000 { return String(format: "%.1fB", value / 1_000_000_000) }
+        if abs >= 1_000_000 { return String(format: "%.1fM", value / 1_000_000) }
+        if abs >= 1_000 { return String(format: "%.0fK", value / 1_000) }
+        return String(format: "%.0f", value)
+    }
 }

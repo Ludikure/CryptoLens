@@ -322,6 +322,7 @@ class AnalysisService: ObservableObject {
                 async let fhMetrics = finnhub.fetchMetrics(symbol: symbol)
                 async let fhEarnings = finnhub.fetchEarnings(symbol: symbol)
                 async let fhNews = finnhub.fetchNews(symbol: symbol)
+                async let fhInsider = finnhub.fetchInsiderTransactions(symbol: symbol)
 
                 if let rec = await fhRec {
                     si.finnhubBuy = rec.buy + rec.strongBuy
@@ -343,6 +344,17 @@ class AnalysisService: ObservableObject {
                 }
                 let news = await fhNews
                 if !news.isEmpty { si.newsHeadlines = news }
+                let insider = await fhInsider
+                if !insider.isEmpty {
+                    si.insiderTransactions = insider.prefix(10).map {
+                        StockInfo.InsiderTx(name: $0.name, date: $0.date, shares: $0.shares, value: $0.value, isBuy: $0.isBuy)
+                    }
+                    let buys = insider.filter(\.isBuy).count
+                    let sells = insider.filter { !$0.isBuy }.count
+                    si.insiderBuyCount6m = buys
+                    si.insiderSellCount6m = sells
+                    si.insiderNetBuying = buys > sells
+                }
                 stockInfo = si
             }
 
@@ -561,6 +573,7 @@ class AnalysisService: ObservableObject {
                 async let fhMetrics = finnhub.fetchMetrics(symbol: symbol)
                 async let fhEarnings = finnhub.fetchEarnings(symbol: symbol)
                 async let fhNews = finnhub.fetchNews(symbol: symbol)
+                async let fhInsider = finnhub.fetchInsiderTransactions(symbol: symbol)
 
                 if let rec = await fhRec {
                     si.finnhubBuy = rec.buy + rec.strongBuy
@@ -582,6 +595,17 @@ class AnalysisService: ObservableObject {
                 }
                 let news = await fhNews
                 if !news.isEmpty { si.newsHeadlines = news }
+                let insider = await fhInsider
+                if !insider.isEmpty {
+                    si.insiderTransactions = insider.prefix(10).map {
+                        StockInfo.InsiderTx(name: $0.name, date: $0.date, shares: $0.shares, value: $0.value, isBuy: $0.isBuy)
+                    }
+                    let buys = insider.filter(\.isBuy).count
+                    let sells = insider.filter { !$0.isBuy }.count
+                    si.insiderBuyCount6m = buys
+                    si.insiderSellCount6m = sells
+                    si.insiderNetBuying = buys > sells
+                }
                 stockInfo = si
             }
 

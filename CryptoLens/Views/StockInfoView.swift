@@ -91,7 +91,39 @@ struct StockInfoView: View {
             }
 
             // Insider activity
-            if let buys = stockInfo.insiderBuyCount6m, let sells = stockInfo.insiderSellCount6m {
+            if let txs = stockInfo.insiderTransactions, !txs.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        HStack(spacing: 3) {
+                            Text("Insider Transactions").font(.caption).foregroundStyle(.secondary)
+                            InfoTooltip(title: "Insider Transactions", explanation: Tooltips.insiderTransactions)
+                        }
+                        Spacer()
+                        let buys = txs.filter(\.isBuy).count
+                        let sells = txs.filter { !$0.isBuy }.count
+                        Text("\(buys)B / \(sells)S")
+                            .font(.caption).fontWeight(.semibold)
+                        Text(buys > sells ? "Net buying" : "Net selling")
+                            .font(.caption2)
+                            .foregroundStyle(buys > sells ? .green : .red)
+                    }
+                    ForEach(txs.prefix(3), id: \.date) { tx in
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(tx.isBuy ? Color.green : Color.red)
+                                .frame(width: 5, height: 5)
+                            Text(tx.name)
+                                .font(.caption2).lineLimit(1)
+                            Spacer()
+                            Text(tx.isBuy ? "Bought" : "Sold")
+                                .font(.caption2).foregroundStyle(.secondary)
+                            Text("$\(Formatters.compactNumber(tx.value))")
+                                .font(.caption2).fontWeight(.semibold)
+                                .foregroundStyle(tx.isBuy ? .green : .red)
+                        }
+                    }
+                }
+            } else if let buys = stockInfo.insiderBuyCount6m, let sells = stockInfo.insiderSellCount6m {
                 HStack {
                     HStack(spacing: 3) {
                         Text("Insiders").font(.caption).foregroundStyle(.secondary)

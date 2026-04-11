@@ -96,6 +96,60 @@ class FinnhubProvider {
         )
     }
 
+    // MARK: - Insider Transactions
+
+    struct InsiderTransaction {
+        let name: String
+        let title: String       // "CEO", "CFO", "Director", etc.
+        let date: Date
+        let shares: Int         // positive = buy, negative = sell
+        let value: Double       // USD value of transaction
+        let isBuy: Bool
+    }
+
+    func fetchInsiderTransactions(symbol: String) async -> [InsiderTransaction] {
+        guard let data = await fetchEndpoint("insider", symbol: symbol) else { return [] }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let txArray = json["data"] as? [[String: Any]]
+        else { return [] }
+
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        df.locale = Locale(identifier: "en_US_POSIX")
+
+        let threeMonthsAgo = Date().addingTimeInterval(-90 * 86400)
+        var results = [InsiderTransaction]()
+
+        for tx in txArray {
+            guard let name = tx["name"] as? String,
+                  let dateStr = tx["transactionDate"] as? String,
+                  let date = df.date(from: dateStr),
+                  date >= threeMonthsAgo
+            else { continue }
+
+            let shares = tx["share"] as? Int ?? 0
+            let price = tx["transactionPrice"] as? Double ?? 0
+            let code = tx["transactionCode"] as? String ?? ""
+
+            // P = purchase, S = sale, A = grant/award (skip)
+            guard code == "P" || code == "S" else { continue }
+
+            let isBuy = code == "P"
+            let title = (tx["filingType"] as? String) ?? ""
+
+            results.append(InsiderTransaction(
+                name: name,
+                title: title,
+                date: date,
+                shares: isBuy ? abs(shares) : -abs(shares),
+                value: Double(abs(shares)) * price,
+                isBuy: isBuy
+            ))
+        }
+
+        return results.sorted { $0.date > $1.date } // newest first
+    }
+
     // MARK: - Company News (top headlines)
 
     func fetchNews(symbol: String, limit: Int = 5) async -> [String] {

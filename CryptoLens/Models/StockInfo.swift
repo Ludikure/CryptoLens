@@ -31,10 +31,20 @@ struct StockInfo: Codable {
     var earningsGrowthYoY: Double?
     var growthTrend: String?            // "accelerating", "stable", "decelerating", "declining"
 
-    // Insider
+    // Insider (Yahoo counts)
     var insiderBuyCount6m: Int?
     var insiderSellCount6m: Int?
     var insiderNetBuying: Bool?
+    // Insider transactions (Finnhub — detailed, last 3 months)
+    var insiderTransactions: [InsiderTx]?
+
+    struct InsiderTx: Codable {
+        let name: String
+        let date: Date
+        let shares: Int
+        let value: Double
+        let isBuy: Bool
+    }
 
     // Sector relative strength
     var sectorETF: String?

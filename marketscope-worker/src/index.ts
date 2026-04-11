@@ -469,6 +469,7 @@ export default {
         'news': { path: '/company-news', ttl: 3600_000, params: `&from=${new Date(Date.now() - 7*86400_000).toISOString().split('T')[0]}&to=${new Date().toISOString().split('T')[0]}` },
         'peers': { path: '/stock/peers', ttl: 86400_000 },
         'profile': { path: '/stock/profile2', ttl: 86400_000 },
+        'insider': { path: '/stock/insider-transactions', ttl: 43200_000, params: '' },
       };
 
       const config = endpointMap[endpoint];
