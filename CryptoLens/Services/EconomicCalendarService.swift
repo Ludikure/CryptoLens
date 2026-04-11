@@ -26,15 +26,16 @@ class EconomicCalendarService {
         // Merge BLS actuals into released events that are missing actuals
         if !actuals.isEmpty {
             let today = Calendar.current.startOfDay(for: Date())
+            // Sort keys longest first so "Core CPI m/m" matches before "CPI m/m"
+            let sortedKeys = actuals.keys.sorted { $0.count > $1.count }
             events = events.map { event in
                 guard !event.hasActual, event.country == "USD",
                       event.date < Date(),  // already released
                       event.date >= today    // released today
                 else { return event }
-                let match = actuals.first { key, _ in
-                    event.title.localizedCaseInsensitiveContains(key)
-                }
-                guard let (_, actual) = match else { return event }
+                guard let key = sortedKeys.first(where: { event.title.localizedCaseInsensitiveContains($0) }),
+                      let actual = actuals[key]
+                else { return event }
                 return EconomicEvent(
                     title: event.title, date: event.date, impact: event.impact,
                     country: event.country, forecast: event.forecast,
