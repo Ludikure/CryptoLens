@@ -103,9 +103,9 @@ struct StockInfoView: View {
                         let sells = txs.filter { !$0.isBuy }.count
                         Text("\(buys)B / \(sells)S")
                             .font(.caption).fontWeight(.semibold)
-                        Text(buys > sells ? "Net buying" : "Net selling")
+                        Text(buys > sells ? "Net buying" : buys < sells ? "Net selling" : "Neutral")
                             .font(.caption2)
-                            .foregroundStyle(buys > sells ? .green : .red)
+                            .foregroundStyle(buys > sells ? .green : buys < sells ? .red : .secondary)
                     }
                     ForEach(Array(txs.prefix(3).enumerated()), id: \.offset) { _, tx in
                         HStack(spacing: 4) {

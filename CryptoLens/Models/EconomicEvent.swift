@@ -24,9 +24,11 @@ struct EconomicEvent: Codable, Identifiable {
     var isHighImpact: Bool { impact == "High" }
     /// Event is upcoming (within next 48h)
     var isUpcoming: Bool { date.timeIntervalSinceNow > 0 && date.timeIntervalSinceNow < 48 * 3600 }
-    /// Event was released today (still market-relevant)
+    /// Event was released today in ET (still market-relevant)
     var isRecentlyReleased: Bool {
-        date.timeIntervalSinceNow <= 0 && date >= Calendar.current.startOfDay(for: Date())
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/New_York")!
+        return date.timeIntervalSinceNow <= 0 && date >= cal.startOfDay(for: Date())
     }
     /// Has actual data been published
     var hasActual: Bool { actual != nil && actual != "" }

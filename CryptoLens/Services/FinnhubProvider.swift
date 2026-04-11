@@ -129,13 +129,13 @@ class FinnhubProvider {
 
             // `change` = shares traded (positive=buy, negative=sell)
             // `share` = total shares held AFTER transaction (not what we want)
-            let change = tx["change"] as? Int ?? 0
+            let change = (tx["change"] as? NSNumber)?.intValue ?? 0
             let price = tx["transactionPrice"] as? Double ?? 0
             let code = tx["transactionCode"] as? String ?? ""
 
             // P = purchase, S = sale. Skip A (grant/award), M (exercise), etc.
             guard code == "P" || code == "S" else { continue }
-            guard change != 0 else { continue }
+            guard change != 0, price > 0 else { continue }
 
             let isBuy = code == "P"
             let shareCount = abs(change)

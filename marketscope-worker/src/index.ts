@@ -1,7 +1,7 @@
 // MarketScope Worker — Secure proxy with per-device isolation
 // All API keys stay server-side. Device auth via signed tokens.
 
-import { computeScore, type Candle as ScoreCandle } from './scoring';
+import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
 import { mlPredict, buildMLInput } from './ml-predict';
 
 export interface Env {
@@ -450,7 +450,9 @@ export default {
       } catch { /* skip */ }
 
       const result = { actuals, fetchedAt: new Date().toISOString(), count: Object.keys(actuals).length };
-      await env.ALERTS.put(cacheKey, JSON.stringify({ data: result, timestamp: Date.now() }), { expirationTtl: 3600 });
+      if (Object.keys(actuals).length > 0) {
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data: result, timestamp: Date.now() }), { expirationTtl: 3600 });
+      }
       return json(result);
     }
 
@@ -626,11 +628,21 @@ export default {
       }
 
       try {
-        const auth = await getYahooCrumb(env);
-        const crumbParam = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
-        const headers: Record<string, string> = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' };
+        let auth = await getYahooCrumb(env);
+        const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+        let crumbParam = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
+        let headers: Record<string, string> = { 'User-Agent': ua };
         if (auth) headers['Cookie'] = auth.cookie;
-        const resp = await fetch(`${YAHOO_BASE}/v10/finance/quoteSummary/${symbol}?modules=${modules}${crumbParam}`, { headers });
+        let resp = await fetch(`${YAHOO_BASE}/v10/finance/quoteSummary/${symbol}?modules=${modules}${crumbParam}`, { headers });
+        // Retry with fresh crumb on 401
+        if (resp.status === 401 && auth) {
+          await env.ALERTS.delete('cache:yahoo-crumb');
+          auth = await getYahooCrumb(env);
+          crumbParam = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
+          headers = { 'User-Agent': ua };
+          if (auth) headers['Cookie'] = auth.cookie;
+          resp = await fetch(`${YAHOO_BASE}/v10/finance/quoteSummary/${symbol}?modules=${modules}${crumbParam}`, { headers });
+        }
         if (!resp.ok) return json({ error: 'Upstream error' }, 502);
         const data = await resp.json();
         await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
@@ -652,11 +664,20 @@ export default {
       }
 
       try {
-        const auth = await getYahooCrumb(env);
-        const crumbParam = auth ? `?crumb=${encodeURIComponent(auth.crumb)}` : '';
-        const headers: Record<string, string> = { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' };
+        let auth = await getYahooCrumb(env);
+        const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+        let crumbParam = auth ? `?crumb=${encodeURIComponent(auth.crumb)}` : '';
+        let headers: Record<string, string> = { 'User-Agent': ua };
         if (auth) headers['Cookie'] = auth.cookie;
-        const resp = await fetch(`${YAHOO_BASE}/v7/finance/options/${symbol}${crumbParam}`, { headers });
+        let resp = await fetch(`${YAHOO_BASE}/v7/finance/options/${symbol}${crumbParam}`, { headers });
+        if (resp.status === 401 && auth) {
+          await env.ALERTS.delete('cache:yahoo-crumb');
+          auth = await getYahooCrumb(env);
+          crumbParam = auth ? `?crumb=${encodeURIComponent(auth.crumb)}` : '';
+          headers = { 'User-Agent': ua };
+          if (auth) headers['Cookie'] = auth.cookie;
+          resp = await fetch(`${YAHOO_BASE}/v7/finance/options/${symbol}${crumbParam}`, { headers });
+        }
         if (!resp.ok) return json({ error: 'Upstream error' }, 502);
         const data = await resp.json();
         await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });

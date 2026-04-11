@@ -742,11 +742,11 @@ enum AnalysisPrompt {
                 insiderLine += buys.count > sells.count ? " — Net buying" : sells.count > buys.count ? " — Net selling" : ""
                 lines.append(insiderLine)
                 // Show top 3 most recent transactions with names
+                let txDF = DateFormatter()
+                txDF.dateFormat = "MMM d"
                 for tx in txs.prefix(3) {
-                    let df = DateFormatter()
-                    df.dateFormat = "MMM d"
                     let action = tx.isBuy ? "BOUGHT" : "SOLD"
-                    lines.append("  \(tx.name) \(action) \(abs(tx.shares).formatted()) shares ($\(Formatters.compactNumber(tx.value))) on \(df.string(from: tx.date))")
+                    lines.append("  \(tx.name) \(action) \(abs(tx.shares).formatted()) shares ($\(Formatters.compactNumber(tx.value))) on \(txDF.string(from: tx.date))")
                 }
             } else if let buys = si.insiderBuyCount6m, let sells = si.insiderSellCount6m {
                 lines.append("Insiders (6mo): \(buys) buys / \(sells) sells — \(si.insiderNetBuying == true ? "Net buying" : "Net selling")")

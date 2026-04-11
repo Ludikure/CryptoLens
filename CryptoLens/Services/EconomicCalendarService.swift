@@ -25,7 +25,9 @@ class EconomicCalendarService {
 
         // Merge BLS actuals into released events that are missing actuals
         if !actuals.isEmpty {
-            let today = Calendar.current.startOfDay(for: Date())
+            var etCal = Calendar(identifier: .gregorian)
+            etCal.timeZone = TimeZone(identifier: "America/New_York")!
+            let today = etCal.startOfDay(for: Date())
             // Sort keys longest first so "Core CPI m/m" matches before "CPI m/m"
             let sortedKeys = actuals.keys.sorted { $0.count > $1.count }
             events = events.map { event in

@@ -82,8 +82,8 @@ enum MarketHours {
         var daysToAdd = 0
         if session == .preMarket {
             daysToAdd = 0
-        } else if weekday == 6 {
-            daysToAdd = 2
+        } else if weekday == 6 { // Friday after close → Monday
+            daysToAdd = 3
         } else if weekday == 7 {
             daysToAdd = 2
         } else if weekday == 1 {
