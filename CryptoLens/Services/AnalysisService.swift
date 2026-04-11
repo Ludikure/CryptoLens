@@ -313,6 +313,10 @@ class AnalysisService: ObservableObject {
                 si.sectorETF = si.sectorETF ?? prev.sectorETF
                 si.relativeStrength1d = si.relativeStrength1d ?? prev.relativeStrength1d
                 si.outperformingSector = si.outperformingSector ?? prev.outperformingSector
+                si.insiderTransactions = si.insiderTransactions ?? prev.insiderTransactions
+                si.insiderBuyCount6m = si.insiderBuyCount6m ?? prev.insiderBuyCount6m
+                si.insiderSellCount6m = si.insiderSellCount6m ?? prev.insiderSellCount6m
+                si.insiderNetBuying = si.insiderNetBuying ?? prev.insiderNetBuying
                 stockInfo = si
             }
 
