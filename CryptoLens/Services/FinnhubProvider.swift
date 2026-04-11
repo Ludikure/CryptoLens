@@ -127,22 +127,26 @@ class FinnhubProvider {
                   date >= threeMonthsAgo
             else { continue }
 
-            let shares = tx["share"] as? Int ?? 0
+            // `change` = shares traded (positive=buy, negative=sell)
+            // `share` = total shares held AFTER transaction (not what we want)
+            let change = tx["change"] as? Int ?? 0
             let price = tx["transactionPrice"] as? Double ?? 0
             let code = tx["transactionCode"] as? String ?? ""
 
-            // P = purchase, S = sale, A = grant/award (skip)
+            // P = purchase, S = sale. Skip A (grant/award), M (exercise), etc.
             guard code == "P" || code == "S" else { continue }
+            guard change != 0 else { continue }
 
             let isBuy = code == "P"
+            let shareCount = abs(change)
             let title = (tx["filingType"] as? String) ?? ""
 
             results.append(InsiderTransaction(
                 name: name,
                 title: title,
                 date: date,
-                shares: isBuy ? abs(shares) : -abs(shares),
-                value: Double(abs(shares)) * price,
+                shares: isBuy ? shareCount : -shareCount,
+                value: Double(shareCount) * price,
                 isBuy: isBuy
             ))
         }
