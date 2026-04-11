@@ -5,7 +5,8 @@ import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './sc
 import { mlPredict, buildMLInput } from './ml-predict';
 
 export interface Env {
-  ALERTS: KVNamespace;
+  ALERTS: KVNamespace;       // Hot cache for market data
+  DB: D1Database;            // Persistent state + candle archive
   APNS_KEY_ID: string;
   APNS_TEAM_ID: string;
   APNS_PRIVATE_KEY: string;
@@ -95,24 +96,24 @@ export default {
       return json({ error: 'Invalid device ID format' }, 400);
     }
 
-    // === Device registration — issues an auth token ===
+    // === Device registration — issues an auth token (D1) ===
     if (path === '/register' && request.method === 'POST') {
       try {
         const body = await request.json() as { deviceToken?: string };
         if (!deviceId) return json({ error: 'Missing device ID' }, 400);
 
-        const existing = await env.ALERTS.get(`auth:${deviceId}`);
+        // Check D1 first, then KV fallback for legacy devices
+        const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();
+        const existing = (device?.auth_token as string) || await env.ALERTS.get(`auth:${deviceId}`);
 
         if (existing) {
-          // Existing device — must prove ownership by sending current token
           const providedToken = request.headers.get('X-Auth-Token') || '';
           if (!timingSafeEqual(providedToken, existing)) return json({ error: 'Unauthorized' }, 401);
 
-          // Authenticated — update push token if provided
-          if (body.deviceToken) {
-            const reg: DeviceRegistration = { token: body.deviceToken, updatedAt: Date.now() };
-            await env.ALERTS.put(`device:${deviceId}`, JSON.stringify(reg), { expirationTtl: 86400 * 30 });
-          }
+          // Update push token + last_seen in D1
+          await env.DB.prepare(
+            'INSERT OR REPLACE INTO devices (device_id, push_token, auth_token, last_seen) VALUES (?, ?, ?, ?)'
+          ).bind(deviceId, body.deviceToken || null, existing, new Date().toISOString()).run();
           return json({ ok: true });
         }
 
@@ -122,39 +123,52 @@ export default {
         if (ipLimited) return json({ error: 'Too many registrations. Try again tomorrow.' }, 429);
 
         const token = crypto.randomUUID() + '-' + crypto.randomUUID();
+        // Write to D1 (primary) + KV (backward compat during migration)
+        await env.DB.prepare(
+          'INSERT INTO devices (device_id, push_token, auth_token) VALUES (?, ?, ?)'
+        ).bind(deviceId, body.deviceToken || null, token).run();
         await env.ALERTS.put(`auth:${deviceId}`, token, { expirationTtl: 86400 * 90 });
 
-        if (body.deviceToken) {
-          const reg: DeviceRegistration = { token: body.deviceToken, updatedAt: Date.now() };
-          await env.ALERTS.put(`device:${deviceId}`, JSON.stringify(reg), { expirationTtl: 86400 * 30 });
-        }
-
-        // Only return token on first creation
         return json({ ok: true, authToken: token });
       } catch {
         return json({ error: 'Invalid request' }, 400);
       }
     }
 
-    // All endpoints (except /register) require valid auth token
+    // All endpoints (except /register, /bls/actuals) require valid auth token
     if (path !== '/register' && path !== '/bls/actuals') {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
-      const storedToken = await env.ALERTS.get(`auth:${deviceId}`);
+      // Check D1 first, then KV fallback
+      const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();
+      const storedToken = (device?.auth_token as string) || await env.ALERTS.get(`auth:${deviceId}`);
       if (!storedToken || !timingSafeEqual(storedToken, authToken)) return json({ error: 'Unauthorized' }, 401);
 
-      // Per-device request rate limit: 60 requests per minute
+      // Migrate legacy KV device to D1 on successful auth
+      if (!device && storedToken) {
+        await env.DB.prepare(
+          'INSERT OR IGNORE INTO devices (device_id, auth_token) VALUES (?, ?)'
+        ).bind(deviceId, storedToken).run();
+      }
+
       const globalLimited = await checkRateLimit(env, `global:${deviceId}`, 60, 60);
       if (globalLimited) return json({ error: 'Rate limited. Try again in a minute.' }, 429);
     }
 
-    // === Alert sync (per-device isolation) ===
+    // === Alert sync (D1) ===
     if (path === '/alerts' && request.method === 'POST') {
       if (!deviceId) return json({ error: 'Missing device ID' }, 400);
       try {
         const body = await request.json() as { alerts: any[] };
         if (!body.alerts || !Array.isArray(body.alerts)) return json({ error: 'Missing alerts' }, 400);
         const validated = body.alerts.slice(0, MAX_ALERTS).map(validateAlert).filter((a): a is Alert => a !== null);
-        await env.ALERTS.put(`alerts:${deviceId}`, JSON.stringify(validated), { expirationTtl: 86400 * 7 });
+        // Write to D1
+        const stmts = [env.DB.prepare('DELETE FROM alerts WHERE device_id = ?').bind(deviceId)];
+        for (const a of validated) {
+          stmts.push(env.DB.prepare(
+            'INSERT INTO alerts (id, device_id, symbol, target_price, condition, note, triggered) VALUES (?, ?, ?, ?, ?, ?, ?)'
+          ).bind(a.id, deviceId, a.symbol, a.targetPrice, a.condition, a.note || '', a.triggered ? 1 : 0));
+        }
+        await env.DB.batch(stmts);
         return json({ ok: true, count: validated.length });
       } catch {
         return json({ error: 'Invalid request' }, 400);
@@ -162,12 +176,14 @@ export default {
     }
     if (path === '/alerts' && request.method === 'GET') {
       if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      const data = await env.ALERTS.get(`alerts:${deviceId}`);
-      return json(data ? JSON.parse(data) : []);
+      const rows = await env.DB.prepare(
+        'SELECT id, symbol, target_price as targetPrice, condition, note, triggered FROM alerts WHERE device_id = ? AND triggered = 0'
+      ).bind(deviceId).all();
+      return json(rows.results);
     }
     if (path === '/alerts' && request.method === 'DELETE') {
       if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      await env.ALERTS.delete(`alerts:${deviceId}`);
+      await env.DB.prepare('DELETE FROM alerts WHERE device_id = ?').bind(deviceId).run();
       return json({ ok: true });
     }
 
@@ -687,23 +703,27 @@ export default {
       }
     }
 
-    // === Watchlist Sync (for server-side score notifications) ===
+    // === Watchlist Sync (D1) ===
     if (path === '/watchlist' && request.method === 'POST') {
-      const auth = await authenticate(request, env);
-      if (!auth) return json({ error: 'Unauthorized' }, 401);
-
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
       const body = await request.json() as any;
       const symbols = (body.symbols || []).slice(0, 20).filter(
         (s: any) => typeof s === 'string' && s.length <= 20
       );
-      const config = {
-        symbols,
-        cryptoThreshold: body.cryptoThreshold || 5,
-        stockThreshold: body.stockThreshold || 3,
-        updatedAt: Date.now()
-      };
-      await env.ALERTS.put(`watchlist:${auth.deviceId}`, JSON.stringify(config),
-        { expirationTtl: 86400 * 30 });
+      const cryptoThreshold = body.cryptoThreshold || 5;
+      const stockThreshold = body.stockThreshold || 3;
+      // Write to D1
+      const stmts = [env.DB.prepare('DELETE FROM watchlist WHERE device_id = ?').bind(deviceId)];
+      for (const s of symbols) {
+        stmts.push(env.DB.prepare(
+          'INSERT INTO watchlist (device_id, symbol, crypto_threshold, stock_threshold) VALUES (?, ?, ?, ?)'
+        ).bind(deviceId, s, cryptoThreshold, stockThreshold));
+      }
+      await env.DB.batch(stmts);
+      // Also keep KV during migration (cron reads from KV)
+      await env.ALERTS.put(`watchlist:${deviceId}`, JSON.stringify({
+        symbols, cryptoThreshold, stockThreshold, updatedAt: Date.now()
+      }), { expirationTtl: 86400 * 30 });
       return json({ ok: true, symbols: symbols.length });
     }
 
@@ -759,24 +779,21 @@ async function checkRateLimit(env: Env, key: string, limit: number, windowSec: n
 
 // === Alert Checking (Cron — iterates all devices) ===
 async function checkAllDeviceAlerts(env: Env) {
-  // Paginate through all alert keys (KV list returns max 1000 per call)
-  let cursor: string | undefined = undefined;
-  do {
-    const listResult = await env.ALERTS.list({ prefix: 'alerts:', cursor });
-    for (const key of listResult.keys) {
-      const deviceId = key.name.replace('alerts:', '');
-      await checkDeviceAlerts(env, deviceId);
-    }
-    cursor = listResult.list_complete ? undefined : (listResult as any).cursor;
-  } while (cursor);
+  // Get all devices with active alerts from D1
+  const devices = await env.DB.prepare(
+    'SELECT DISTINCT device_id FROM alerts WHERE triggered = 0'
+  ).all();
+  for (const row of devices.results) {
+    const deviceId = row.device_id as string;
+    await checkDeviceAlerts(env, deviceId);
+  }
 }
 
 async function checkDeviceAlerts(env: Env, deviceId: string) {
-  const alertsData = await env.ALERTS.get(`alerts:${deviceId}`);
-  if (!alertsData) return;
-  let alerts: Alert[] = JSON.parse(alertsData);
-  const activeAlerts = alerts.filter(a => !a.triggered);
-  console.log(`[cron] device=${deviceId.substring(0,8)} total=${alerts.length} active=${activeAlerts.length}`);
+  const rows = await env.DB.prepare(
+    'SELECT id, symbol, target_price as targetPrice, condition, note, triggered FROM alerts WHERE device_id = ? AND triggered = 0'
+  ).bind(deviceId).all();
+  const activeAlerts = rows.results as unknown as Alert[];
   if (activeAlerts.length === 0) return;
 
   const symbols = [...new Set(activeAlerts.map(a => a.symbol))];
@@ -835,19 +852,31 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
   }
 
   if (triggered.length === 0) return;
-  await env.ALERTS.put(`alerts:${deviceId}`, JSON.stringify(alerts), { expirationTtl: 86400 * 7 });
 
-  // Send push notifications
-  const deviceData = await env.ALERTS.get(`device:${deviceId}`);
-  if (!deviceData) return;
-  const device: DeviceRegistration = JSON.parse(deviceData);
+  // Mark triggered alerts in D1
+  for (const alert of triggered) {
+    await env.DB.prepare(
+      'UPDATE alerts SET triggered = 1, triggered_at = ? WHERE id = ?'
+    ).bind(new Date().toISOString(), alert.id).run();
+  }
+
+  // Get push token from D1
+  const deviceRow = await env.DB.prepare('SELECT push_token FROM devices WHERE device_id = ?').bind(deviceId).first();
+  let pushToken = deviceRow?.push_token as string | null;
+  if (!pushToken) {
+    const deviceData = await env.ALERTS.get(`device:${deviceId}`);
+    if (!deviceData) return;
+    const device = JSON.parse(deviceData);
+    pushToken = device.pushToken || device.token;
+  }
+  if (!pushToken) return;
 
   for (const alert of triggered) {
     const price = prices[alert.symbol];
     const name = alert.symbol.replace('USDT', '');
     const title = `${name} Alert`;
     const body = `${name} hit $${price?.toLocaleString('en-US', { maximumFractionDigits: 2 })} (${alert.condition} $${alert.targetPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })})`;
-    await sendAPNs(env, device.token, title, body);
+    await sendAPNs(env, pushToken, title, body);
   }
 }
 
@@ -923,29 +952,45 @@ async function buildAPNsJWT(env: Env): Promise<string | null> {
 // === Server-Side Score Notifications ===
 
 async function checkAllDeviceScores(env: Env) {
-  let cursor: string | undefined = undefined;
-  do {
-    const listResult = await env.ALERTS.list({ prefix: 'watchlist:', cursor });
-    for (const key of listResult.keys) {
-      const deviceId = key.name.replace('watchlist:', '');
-      try {
-        await checkDeviceScores(env, deviceId);
-      } catch (e) {
-        console.log(`[score] device ${deviceId} error: ${e}`);
-      }
+  // Read all devices with watchlists from D1
+  const devices = await env.DB.prepare(
+    'SELECT DISTINCT device_id FROM watchlist'
+  ).all();
+  for (const row of devices.results) {
+    const deviceId = row.device_id as string;
+    try {
+      await checkDeviceScores(env, deviceId);
+    } catch (e) {
+      console.log(`[score] device ${deviceId} error: ${e}`);
     }
-    cursor = listResult.list_complete ? undefined : (listResult as any).cursor;
-  } while (cursor);
+  }
 }
 
 async function checkDeviceScores(env: Env, deviceId: string) {
-  const configRaw = await env.ALERTS.get(`watchlist:${deviceId}`);
-  if (!configRaw) return;
-  const config = JSON.parse(configRaw);
+  // Read watchlist from D1
+  const watchlistRows = await env.DB.prepare(
+    'SELECT symbol, crypto_threshold, stock_threshold FROM watchlist WHERE device_id = ?'
+  ).bind(deviceId).all();
+  if (!watchlistRows.results.length) return;
+  const config = {
+    symbols: watchlistRows.results.map(r => r.symbol as string),
+    cryptoThreshold: (watchlistRows.results[0].crypto_threshold as number) || 5,
+    stockThreshold: (watchlistRows.results[0].stock_threshold as number) || 3,
+  };
 
-  // Load previous ML probabilities
-  const prevRaw = await env.ALERTS.get(`mlprobs:${deviceId}`);
-  const prevProbs: Record<string, number> = prevRaw ? JSON.parse(prevRaw) : {};
+  // Load previous ML probabilities (D1 with KV fallback)
+  const prevScores = await env.DB.prepare(
+    'SELECT symbol, ml_probability FROM score_history WHERE device_id = ? AND id IN (SELECT MAX(id) FROM score_history WHERE device_id = ? GROUP BY symbol)'
+  ).bind(deviceId, deviceId).all();
+  const prevProbs: Record<string, number> = {};
+  for (const row of prevScores.results) {
+    prevProbs[row.symbol as string] = row.ml_probability as number;
+  }
+  // KV fallback for first run after migration
+  if (Object.keys(prevProbs).length === 0) {
+    const prevRaw = await env.ALERTS.get(`mlprobs:${deviceId}`);
+    if (prevRaw) Object.assign(prevProbs, JSON.parse(prevRaw));
+  }
   const newProbs: Record<string, number> = {};
   const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
   const ML_THRESHOLD = 0.60;
@@ -1024,18 +1069,30 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     }
   }
 
-  // Save new ML probabilities
+  // Save new ML probabilities to KV (fast) + D1 (persistent)
   await env.ALERTS.put(`mlprobs:${deviceId}`, JSON.stringify(newProbs),
     { expirationTtl: 86400 * 7 });
+  // Log score history to D1
+  for (const [sym, prob] of Object.entries(newProbs)) {
+    const t = triggered.find(t => t.symbol === sym);
+    await env.DB.prepare(
+      'INSERT INTO score_history (device_id, symbol, daily_score, four_h_score, ml_probability, bias, notification_sent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(deviceId, sym, 0, 0, prob, prob > 0.5 ? 'Bullish' : 'Bearish', t ? 1 : 0).run();
+  }
 
   // Send push notifications for crossings
   if (triggered.length === 0) return;
 
-  const deviceData = await env.ALERTS.get(`device:${deviceId}`);
-  if (!deviceData) return;
-  const device = JSON.parse(deviceData);
-  if (!device.pushToken && !device.token) return;
-  const pushToken = device.pushToken || device.token;
+  // Get push token from D1 first, then KV fallback
+  const deviceRow = await env.DB.prepare('SELECT push_token FROM devices WHERE device_id = ?').bind(deviceId).first();
+  let pushToken = deviceRow?.push_token as string | null;
+  if (!pushToken) {
+    const deviceData = await env.ALERTS.get(`device:${deviceId}`);
+    if (!deviceData) return;
+    const device = JSON.parse(deviceData);
+    pushToken = device.pushToken || device.token;
+  }
+  if (!pushToken) return;
 
   for (const t of triggered) {
     const ticker = t.symbol.replace('USDT', '');
@@ -1043,6 +1100,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       `${ticker} — High Conviction ${t.direction} (ML: ${Math.round(t.mlProb * 100)}%)`,
       `Win probability crossed 60%. Score: ${t.score > 0 ? '+' : ''}${t.score}. Tap to analyze.`
     );
+    // Log notification to D1
+    await env.DB.prepare(
+      'INSERT INTO notifications (device_id, symbol, type, ml_probability, score, direction) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(deviceId, t.symbol, 'ml_crossing', t.mlProb, t.score, t.direction).run();
   }
 }
 

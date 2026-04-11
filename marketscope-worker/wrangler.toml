@@ -2,14 +2,23 @@ name = "marketscope-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
+[placement]
+mode = "smart"
+
 [observability]
 enabled = false  # Disabled to prevent logging outbound URLs containing API keys
 
-# KV namespace for storing alerts and device tokens
+# KV namespace — hot cache for market data
 [[kv_namespaces]]
 binding = "ALERTS"
 id = "47bf1cd0e1504e89a52b413b3ed67d76"
 
-# Cron trigger — check alerts every minute
+# D1 database — persistent state + candle archive
+[[d1_databases]]
+binding = "DB"
+database_name = "marketscope-db"
+database_id = "f67b9cbd-9264-4679-9161-1b4af2f9de9d"
+
+# Cron trigger — check scores every minute
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["* * * * *"]
