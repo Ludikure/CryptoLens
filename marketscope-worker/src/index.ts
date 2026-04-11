@@ -137,7 +137,7 @@ export default {
     }
 
     // All endpoints (except /register, /bls/actuals) require valid auth token
-    if (path !== '/register' && path !== '/bls/actuals') {
+    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment') {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       // Check D1 first, then KV fallback
       const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();
@@ -881,6 +881,107 @@ export default {
 
       const rows = await env.DB.prepare(query).bind(...params).all();
       return json({ count: rows.results.length, candles: rows.results });
+    }
+
+    // === Trade Outcomes (D1) ===
+    if (path === '/outcomes' && request.method === 'POST') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        const body = await request.json() as any;
+        if (!body.symbol || !body.direction || !body.entry) return json({ error: 'Missing required fields' }, 400);
+        await env.DB.prepare(
+          `INSERT INTO trade_outcomes
+           (device_id, symbol, direction, entry_price, stop_loss, tp1, tp2,
+            ml_probability, daily_score, four_h_score, conviction, outcome, pnl_percent, notes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          deviceId, body.symbol, body.direction, body.entry, body.stopLoss || 0,
+          body.tp1 || 0, body.tp2 || null, body.mlProb || null,
+          body.dailyScore || null, body.fourHScore || null,
+          body.conviction || null, body.outcome || null,
+          body.pnlPercent || null, body.notes || null
+        ).run();
+        return json({ ok: true });
+      } catch {
+        return json({ error: 'Invalid request' }, 400);
+      }
+    }
+    if (path === '/outcomes' && request.method === 'PUT') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        const body = await request.json() as any;
+        if (!body.id) return json({ error: 'Missing outcome ID' }, 400);
+        await env.DB.prepare(
+          'UPDATE trade_outcomes SET outcome = ?, pnl_percent = ?, closed_at = ?, notes = ? WHERE id = ? AND device_id = ?'
+        ).bind(body.outcome, body.pnlPercent || null, new Date().toISOString(), body.notes || null, body.id, deviceId).run();
+        return json({ ok: true });
+      } catch {
+        return json({ error: 'Invalid request' }, 400);
+      }
+    }
+    if (path === '/outcomes' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const symbol = url.searchParams.get('symbol');
+      let query = 'SELECT * FROM trade_outcomes WHERE device_id = ?';
+      const params: any[] = [deviceId];
+      if (symbol) { query += ' AND symbol = ?'; params.push(symbol); }
+      query += ' ORDER BY opened_at DESC LIMIT 100';
+      const rows = await env.DB.prepare(query).bind(...params).all();
+      return json(rows.results);
+    }
+
+    // === Score History (D1) ===
+    if (path === '/scores' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 500);
+      let query = 'SELECT symbol, daily_score, four_h_score, ml_probability, bias, notification_sent, timestamp FROM score_history WHERE device_id = ?';
+      const params: any[] = [deviceId];
+      if (symbol) { query += ' AND symbol = ?'; params.push(symbol); }
+      query += ' ORDER BY timestamp DESC LIMIT ?';
+      params.push(limit);
+      const rows = await env.DB.prepare(query).bind(...params).all();
+      return json(rows.results);
+    }
+
+    // === Notification History (D1) ===
+    if (path === '/notifications' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 200);
+      const rows = await env.DB.prepare(
+        'SELECT * FROM notifications WHERE device_id = ? ORDER BY sent_at DESC LIMIT ?'
+      ).bind(deviceId, limit).all();
+      return json(rows.results);
+    }
+
+    // === Performance Dashboard (D1) ===
+    if (path === '/performance') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const summary = await env.DB.prepare(`
+        SELECT
+          symbol,
+          COUNT(*) as total_trades,
+          SUM(CASE WHEN outcome IN ('TP1', 'TP2') THEN 1 ELSE 0 END) as wins,
+          SUM(CASE WHEN outcome = 'STOPPED' THEN 1 ELSE 0 END) as losses,
+          AVG(CASE WHEN outcome IN ('TP1', 'TP2') THEN 1.0 ELSE 0.0 END) * 100 as win_rate,
+          AVG(pnl_percent) as avg_pnl,
+          AVG(ml_probability) as avg_ml_prob,
+          SUM(CASE WHEN outcome IS NULL THEN 1 ELSE 0 END) as open_trades
+        FROM trade_outcomes
+        WHERE device_id = ?
+        GROUP BY symbol
+      `).bind(deviceId).all();
+
+      const overall = await env.DB.prepare(`
+        SELECT
+          COUNT(*) as total_trades,
+          AVG(CASE WHEN outcome IN ('TP1', 'TP2') THEN 1.0 ELSE 0.0 END) * 100 as win_rate,
+          AVG(pnl_percent) as avg_pnl
+        FROM trade_outcomes
+        WHERE device_id = ? AND outcome IS NOT NULL
+      `).bind(deviceId).first();
+
+      return json({ bySymbol: summary.results, overall });
     }
 
     return json({ error: 'Not found' }, 404);

@@ -429,6 +429,7 @@ class AnalysisService: ObservableObject {
             }
             OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles)
             OutcomeTracker.trackFlatOutcomes(symbol: symbol, currentPrice: result.daily.price)
+            OutcomeTracker.syncResolvedOutcomes(symbol: symbol)
             saveCache(result)
 
             // Widget shared data disabled until App Group is provisioned

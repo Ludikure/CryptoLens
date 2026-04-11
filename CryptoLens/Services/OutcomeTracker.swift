@@ -116,6 +116,50 @@ enum OutcomeTracker {
         }
     }
 
+    /// Sync resolved outcomes to the worker (D1) for cross-device tracking.
+    static func syncResolvedOutcomes(symbol: String) {
+        ioQueue.async {
+            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
+            let tracked = loadTrackedSetups(url: url)
+            let resolved = tracked.filter { $0.outcome.resolved && !$0.synced }
+
+            guard !resolved.isEmpty else { return }
+
+            Task {
+                await PushService.ensureAuth()
+                for t in resolved {
+                    guard let endpoint = URL(string: "\(PushService.workerURL)/outcomes") else { continue }
+                    var request = URLRequest(url: endpoint)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    PushService.addAuthHeaders(&request)
+
+                    let payload: [String: Any] = [
+                        "symbol": t.symbol,
+                        "direction": t.setup.direction,
+                        "entry": t.setup.entry,
+                        "stopLoss": t.setup.stopLoss,
+                        "tp1": t.setup.tp1,
+                        "tp2": t.setup.tp2 as Any,
+                        "outcome": t.outcome.result,
+                        "pnlPercent": 0,
+                    ]
+                    request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+                    _ = try? await URLSession.shared.data(for: request)
+                }
+
+                // Mark as synced
+                ioQueue.async {
+                    var all = loadTrackedSetups(url: url)
+                    for i in all.indices where resolved.contains(where: { $0.setup.id == all[i].setup.id }) {
+                        all[i].synced = true
+                    }
+                    save(all, to: url)
+                }
+            }
+        }
+    }
+
     // MARK: - FLAT/Kill Outcomes (#1c)
 
     /// Register a FLAT or kill-blocked outcome for tracking.
@@ -249,6 +293,7 @@ struct TrackedSetup: Codable, Identifiable {
     let timestamp: Date
     var outcome: TradeOutcome
     let killsAtGeneration: KillSnapshot?
+    var synced: Bool
 
     var id: UUID { setup.id }
 
@@ -259,6 +304,18 @@ struct TrackedSetup: Codable, Identifiable {
         self.timestamp = Date()
         self.outcome = TradeOutcome()
         self.killsAtGeneration = killSnapshot
+        self.synced = false
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        setup = try c.decode(TradeSetup.self, forKey: .setup)
+        symbol = try c.decode(String.self, forKey: .symbol)
+        analysisId = try c.decode(UUID.self, forKey: .analysisId)
+        timestamp = try c.decode(Date.self, forKey: .timestamp)
+        outcome = try c.decode(TradeOutcome.self, forKey: .outcome)
+        killsAtGeneration = try c.decodeIfPresent(KillSnapshot.self, forKey: .killsAtGeneration)
+        synced = (try? c.decode(Bool.self, forKey: .synced)) ?? false
     }
 }
 
