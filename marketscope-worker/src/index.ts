@@ -806,6 +806,83 @@ export default {
       }
     }
 
+    // === Crypto Candles Proxy (Binance via Smart Placement + D1 archive) ===
+    if (path === '/candles/crypto') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      const interval = url.searchParams.get('interval') || '1d';
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '300'), 1000);
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+
+      const cacheKey = `cache:candles:${symbol}:${interval}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < (interval === '1d' ? 3600_000 : interval === '4h' ? 900_000 : 300_000)) {
+          return json(parsed.data);
+        }
+      }
+
+      try {
+        const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+        if (!resp.ok) return json({ error: 'Upstream error' }, 502);
+        const raw = await resp.json() as any[];
+        const candles = raw.map((k: any) => ({
+          time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
+        }));
+        const ttl = interval === '1d' ? 3600 : interval === '4h' ? 900 : 300;
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data: candles, timestamp: Date.now() }), { expirationTtl: ttl });
+        // Archive to D1
+        archiveCandlesToD1(env, symbol, interval, candles).catch(() => {});
+        return json(candles);
+      } catch {
+        return json({ error: 'Candle fetch failed' }, 502);
+      }
+    }
+
+    // === Sentiment Proxy (CoinGecko) ===
+    if (path === '/sentiment') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+
+      const cacheKey = `cache:sentiment:${symbol}`;
+      const cached = await env.ALERTS.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.timestamp < 600_000) return json(parsed.data); // 10min
+      }
+
+      try {
+        const coinId = symbol.replace('USDT', '').toLowerCase();
+        const ids: Record<string, string> = { btc: 'bitcoin', eth: 'ethereum', sol: 'solana', xrp: 'ripple', bnb: 'binancecoin', ada: 'cardano', doge: 'dogecoin', avax: 'avalanche-2', dot: 'polkadot', link: 'chainlink' };
+        const geckoId = ids[coinId] || coinId;
+        const resp = await fetch(`https://api.coingecko.com/api/v3/coins/${geckoId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false`);
+        if (!resp.ok) return json({ error: 'Upstream error' }, 502);
+        const data = await resp.json();
+        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 });
+        return json(data);
+      } catch {
+        return json({ error: 'Sentiment fetch failed' }, 502);
+      }
+    }
+
+    // === D1 Candle History (permanent archive — for backtest/optimizer) ===
+    if (path === '/history') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      const interval = url.searchParams.get('interval') || '1d';
+      const start = url.searchParams.get('start'); // Unix ms
+      const end = url.searchParams.get('end');     // Unix ms
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+
+      let query = 'SELECT timestamp, open, high, low, close, volume FROM candles WHERE symbol = ? AND interval = ?';
+      const params: any[] = [symbol, interval];
+      if (start) { query += ' AND timestamp >= ?'; params.push(parseInt(start)); }
+      if (end) { query += ' AND timestamp <= ?'; params.push(parseInt(end)); }
+      query += ' ORDER BY timestamp ASC LIMIT 10000';
+
+      const rows = await env.DB.prepare(query).bind(...params).all();
+      return json({ count: rows.results.length, candles: rows.results });
+    }
+
     return json({ error: 'Not found' }, 404);
   },
 
@@ -1088,6 +1165,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         candles = await fetchScoreCandles(symbol, isCrypto);
         if (candles.length > 0) {
           await env.ALERTS.put(cacheKey, JSON.stringify(candles), { expirationTtl: 300 });
+          // Archive to D1 (non-blocking)
+          archiveCandlesToD1(env, symbol, '1d', candles).catch(() => {});
         }
       }
       if (candles.length < 210) continue;
@@ -1110,6 +1189,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
                 time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
               }));
               await env.ALERTS.put(cacheKey4H, JSON.stringify(fourHCandles), { expirationTtl: 300 });
+              archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
             }
           } catch { /* 4H fetch failed — proceed with daily-only */ }
         }
@@ -1213,6 +1293,25 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
       low: q.low[i] || 0, close: q.close[i] || 0,
       volume: q.volume[i] || 0
     })).filter((c: ScoreCandle) => c.close > 0);
+  }
+}
+
+// === D1 Candle Archive ===
+async function archiveCandlesToD1(env: Env, symbol: string, interval: string, candles: ScoreCandle[]) {
+  if (candles.length === 0) return;
+  // Batch insert, 50 at a time (D1 batch limit)
+  const recent = candles.slice(-100); // Only archive the most recent 100 candles per fetch
+  for (let i = 0; i < recent.length; i += 50) {
+    const batch = recent.slice(i, i + 50);
+    try {
+      await env.DB.batch(
+        batch.map(c =>
+          env.DB.prepare(
+            'INSERT OR IGNORE INTO candles (symbol, interval, timestamp, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(symbol, interval, c.time, c.open, c.high, c.low, c.close, c.volume)
+        )
+      );
+    } catch { /* D1 write failed — non-critical */ }
   }
 }
 
