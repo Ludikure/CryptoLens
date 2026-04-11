@@ -44,13 +44,23 @@ class EconomicCalendarService {
             }
         }
 
-        // Keep events released today or upcoming within 48h
-        let today = Calendar.current.startOfDay(for: Date())
+        // Keep events released today or upcoming
         let relevant = events
-            .filter { $0.date >= today || $0.date.timeIntervalSinceNow > -1 }
+            .filter { $0.isRecentlyReleased || $0.isUpcoming || $0.date.timeIntervalSinceNow > 0 }
             .sorted { $0.date < $1.date }
 
-        cache = (relevant, Date())
+        #if DEBUG
+        let highImpact = relevant.filter { $0.isHighImpact }
+        print("[MarketScope] Calendar: \(events.count) total → \(relevant.count) relevant (\(highImpact.count) high-impact)")
+        for e in highImpact.prefix(3) {
+            print("[MarketScope]   \(e.title): released=\(e.isRecentlyReleased) upcoming=\(e.isUpcoming) actual=\(e.actual ?? "nil")")
+        }
+        #endif
+
+        // Only cache non-empty results to avoid poisoning from startup network failures
+        if !relevant.isEmpty {
+            cache = (relevant, Date())
+        }
         return relevant
     }
 
@@ -149,7 +159,9 @@ class EconomicCalendarService {
         print("[MarketScope] BLS actuals: \(actuals.count) series (\(actuals))")
         #endif
 
-        blsCache = (actuals, Date())
+        if !actuals.isEmpty {
+            blsCache = (actuals, Date())
+        }
         return actuals
     }
 }
