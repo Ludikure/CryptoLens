@@ -200,6 +200,7 @@ enum AnalysisPrompt {
         7. If your conviction is below MODERATE — there is no setup. A LOW conviction idea is not a trade. If ML_WIN < 50%, there is no setup regardless of linear conviction — the model predicts a losing pattern.
         8. If you identify a trap (bull trap, bear trap, false breakout) — there is no setup. Do not hedge it with a conditional entry.
         9. The setup MUST agree with your regime read and your bias. TRANSITIONING regime + FLAT bias = no setup. A long setup in a regime you just called bearish = contradiction = no setup.
+        10. AFTER-HOURS / MARKET CLOSED (stocks only): When the market is closed, do NOT propose an entry at a price that already traded during today's session. Today's candle OHLC shows the range that already occurred — the entry must be ABOVE today's high (for longs in a breakout) or BELOW today's low (for shorts in a breakdown), or present it as a conditional: "Enter at $X on next session open if [condition]." Never use today's open or a mid-session price as the entry — it already happened and cannot be filled.
 
         PRICE ACTION SUMMARY:
         You receive a "Price Action Summary" section computed from raw candle data. It tells you the current regime (trending/consolidating/choppy), the shape of any consolidation, momentum direction for RSI/Stoch RSI/MACD, Stoch RSI cross recency, volume trend, and candle patterns with their position context.
