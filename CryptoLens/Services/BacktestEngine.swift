@@ -21,7 +21,7 @@ class BacktestEngine: ObservableObject {
         guard let url = URL(string: "\(PushService.workerURL)/history?symbol=\(symbol)&interval=\(interval)&start=\(startMs)&end=\(endMs)") else { return nil }
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        PushService.addAuthHeaders(&request)
+        request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
@@ -471,8 +471,8 @@ class BacktestEngine: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
         request.timeoutInterval = 30
-        PushService.addAuthHeaders(&request)
 
         let payload: [[String: Any]] = candles.map { c in
             ["time": Int(c.time.timeIntervalSince1970 * 1000), "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume]
