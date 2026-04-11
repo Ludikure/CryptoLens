@@ -81,8 +81,8 @@ export default {
       return json({ error: 'Forbidden' }, 403);
     }
 
-    // Enforce body size limit on POST requests
-    if (request.method === 'POST') {
+    // Enforce body size limit on POST requests (except candle uploads)
+    if (request.method === 'POST' && path !== '/history') {
       const contentLength = parseInt(request.headers.get('Content-Length') || '0');
       if (contentLength > MAX_BODY_BYTES) {
         return json({ error: 'Request body too large' }, 413);

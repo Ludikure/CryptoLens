@@ -108,14 +108,19 @@ class BacktestEngine: ObservableObject {
             // Upload candles to D1 archive (fire-and-forget, non-blocking)
             if !archiveHit {
                 Task.detached {
-                    await Self.uploadCandlesToArchive(symbol: symbol, interval: "1d", candles: dailyCandles)
-                    await Self.uploadCandlesToArchive(symbol: symbol, interval: "4h", candles: fourHCandles)
-                    if oneHCandles.count > 100 {
-                        // Upload 1H in chunks of 5000
-                        for i in stride(from: 0, to: oneHCandles.count, by: 5000) {
-                            let chunk = Array(oneHCandles[i..<min(i + 5000, oneHCandles.count)])
-                            await Self.uploadCandlesToArchive(symbol: symbol, interval: "1h", candles: chunk)
-                        }
+                    // Upload in chunks of 2000 (keeps each request under ~200KB)
+                    let chunkSize = 2000
+                    for i in stride(from: 0, to: dailyCandles.count, by: chunkSize) {
+                        let chunk = Array(dailyCandles[i..<min(i + chunkSize, dailyCandles.count)])
+                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "1d", candles: chunk)
+                    }
+                    for i in stride(from: 0, to: fourHCandles.count, by: chunkSize) {
+                        let chunk = Array(fourHCandles[i..<min(i + chunkSize, fourHCandles.count)])
+                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "4h", candles: chunk)
+                    }
+                    for i in stride(from: 0, to: oneHCandles.count, by: chunkSize) {
+                        let chunk = Array(oneHCandles[i..<min(i + chunkSize, oneHCandles.count)])
+                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "1h", candles: chunk)
                     }
                     #if DEBUG
                     await MainActor.run {
