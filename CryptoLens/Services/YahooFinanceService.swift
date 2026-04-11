@@ -20,40 +20,15 @@ actor YahooFinanceService {
     private let session: URLSession
     private var lastRequestTime: Date?
 
-    /// Fetch market status from Finnhub (definitive, includes holidays).
-    /// Cached in-memory for 5 minutes. Protected by @MainActor to avoid races.
-    @MainActor private static var cachedMarketState: (state: String, fetched: Date)?
-
+    /// Market state from MarketHours (Finnhub-backed with local fallback).
     @MainActor static func computeMarketState() -> String {
-        // Return cache if fresh
-        if let cached = cachedMarketState, Date().timeIntervalSince(cached.fetched) < 300 {
-            return cached.state
+        Task { await MarketHours.fetchFromFinnhub() }
+        switch MarketHours.currentSession() {
+        case .regular: return "REGULAR"
+        case .preMarket: return "PRE"
+        case .postMarket: return "POST"
+        case .closed: return "CLOSED"
         }
-        // Trigger async fetch, return best guess synchronously
-        Task { await fetchMarketStatus() }
-        return cachedMarketState?.state ?? "REGULAR"
-    }
-
-    static func fetchMarketStatus() async {
-        await PushService.ensureAuth()
-        guard let url = URL(string: "\(PushService.workerURL)/finnhub/market-status?symbol=US") else { return }
-        var request = URLRequest(url: url)
-        PushService.addAuthHeaders(&request)
-
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
-
-        let session = json["session"] as? String ?? "closed"
-        let state: String
-        switch session.lowercased() {
-        case "regular": state = "REGULAR"
-        case "pre", "pre-market": state = "PRE"
-        case "post", "post-market", "after-hours": state = "POST"
-        default: state = "CLOSED"
-        }
-        await MainActor.run { cachedMarketState = (state, Date()) }
     }
 
     private func throttle(minInterval: TimeInterval = 1.0) async {

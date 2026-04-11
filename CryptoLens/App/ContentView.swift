@@ -177,6 +177,7 @@ struct ChartTabContent: View {
             HapticManager.notification(.success)
         }
         .task {
+            await MarketHours.fetchFromFinnhub()
             if service.currentSymbol == nil {
                 await service.selectSymbol(Constants.allCoins[0].id)
             }
