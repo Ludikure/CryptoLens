@@ -105,6 +105,26 @@ class BacktestEngine: ObservableObject {
                 return
             }
 
+            // Upload candles to D1 archive (fire-and-forget, non-blocking)
+            if !archiveHit {
+                Task.detached {
+                    await Self.uploadCandlesToArchive(symbol: symbol, interval: "1d", candles: dailyCandles)
+                    await Self.uploadCandlesToArchive(symbol: symbol, interval: "4h", candles: fourHCandles)
+                    if oneHCandles.count > 100 {
+                        // Upload 1H in chunks of 5000
+                        for i in stride(from: 0, to: oneHCandles.count, by: 5000) {
+                            let chunk = Array(oneHCandles[i..<min(i + 5000, oneHCandles.count)])
+                            await Self.uploadCandlesToArchive(symbol: symbol, interval: "1h", candles: chunk)
+                        }
+                    }
+                    #if DEBUG
+                    await MainActor.run {
+                        print("[Backtest] Uploaded to D1 archive: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
+                    }
+                    #endif
+                }
+            }
+
             // Fetch historical derivatives (crypto only, cached)
             var derivativesHistory = [Date: HistoricalDerivativesService.DerivativesBar]()
             if isCrypto {
@@ -443,6 +463,24 @@ class BacktestEngine: ObservableObject {
     }
 
     // MARK: - ML CSV Export
+
+    /// Upload candles to worker D1 archive for future backtests.
+    static func uploadCandlesToArchive(symbol: String, interval: String, candles: [Candle]) async {
+        guard !candles.isEmpty else { return }
+        guard let url = URL(string: "\(PushService.workerURL)/history") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        PushService.addAuthHeaders(&request)
+
+        let payload: [[String: Any]] = candles.map { c in
+            ["time": Int(c.time.timeIntervalSince1970 * 1000), "open": c.open, "high": c.high, "low": c.low, "close": c.close, "volume": c.volume]
+        }
+        let body: [String: Any] = ["symbol": symbol, "interval": interval, "candles": payload]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: request)
+    }
 
     /// Export backtest data points as CSV for ML training.
     /// Each row has: scores, regime, alignment, trade outcome (resolved TP/SL from bar-by-bar sim).

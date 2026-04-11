@@ -867,7 +867,7 @@ export default {
     }
 
     // === D1 Candle History (permanent archive — for backtest/optimizer) ===
-    if (path === '/history') {
+    if (path === '/history' && request.method === 'GET') {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       const interval = url.searchParams.get('interval') || '1d';
       const start = url.searchParams.get('start'); // Unix ms
@@ -882,6 +882,36 @@ export default {
 
       const rows = await env.DB.prepare(query).bind(...params).all();
       return json({ count: rows.results.length, candles: rows.results });
+    }
+
+    // Upload candles to D1 archive (from app backtest/stitching)
+    if (path === '/history' && request.method === 'POST') {
+      try {
+        const body = await request.json() as { symbol: string; interval: string; candles: any[] };
+        if (!body.symbol || !body.interval || !body.candles?.length) return json({ error: 'Missing fields' }, 400);
+        const symbol = body.symbol.replace(/[^a-zA-Z0-9.^-]/g, '').substring(0, 20);
+        const interval = body.interval;
+        const candles = body.candles.slice(0, 5000); // Cap at 5000 per upload
+
+        // Batch insert (50 at a time, D1 limit)
+        let inserted = 0;
+        for (let i = 0; i < candles.length; i += 50) {
+          const batch = candles.slice(i, i + 50);
+          try {
+            await env.DB.batch(
+              batch.map((c: any) =>
+                env.DB.prepare(
+                  'INSERT OR IGNORE INTO candles (symbol, interval, timestamp, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+                ).bind(symbol, interval, c.time || c.timestamp, c.open, c.high, c.low, c.close, c.volume)
+              )
+            );
+            inserted += batch.length;
+          } catch { /* skip batch on error */ }
+        }
+        return json({ ok: true, inserted, total: candles.length });
+      } catch {
+        return json({ error: 'Invalid request' }, 400);
+      }
     }
 
     // === Trade Outcomes (D1) ===
