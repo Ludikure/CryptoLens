@@ -80,13 +80,13 @@ enum AnalysisPrompt {
         This gate fires BEFORE the kill condition gate.
 
         ML WIN PROBABILITY (if shown in data header):
-        ML_WIN is a machine learning model's prediction of resolved win probability — the likelihood that TP is hit before SL. Trained on 23,000+ resolved trades across 16 symbols (BTC/ETH/SOL/XRP + 12 stocks) using XGBoost with 51 features spanning Daily, 4H, and 1H indicators, Bollinger Bands, StochRSI, VWAP, derivatives (crypto), VIX, and DXY. Separate crypto and stock models are selected automatically.
+        ML_WIN is a machine learning model's prediction of favorable move probability — the likelihood that price moves >= 1.5 ATR in the setup direction within 24H. Trained on 50,000+ bars across 16 symbols (BTC/ETH/SOL/XRP + 12 stocks) using XGBoost with 76 features spanning Daily, 4H, and 1H indicators, Bollinger Bands, StochRSI, VWAP, derivatives (crypto, including raw funding rate/OI/taker ratio), VIX, DXY, cross-timeframe alignment, and rate-of-change deltas. Validated via walk-forward CV at 63.8% accuracy. Separate crypto and stock models are selected automatically.
 
         ML_WIN adjusts conviction AFTER the score gate passes:
         - ML_WIN >= 70%: Upgrade conviction by one level. MODERATE → HIGH, MODERATE-LOW → MODERATE. The model sees non-linear feature interactions the linear score misses.
         - ML_WIN 60-69%: Confirms the linear score. No adjustment needed.
         - ML_WIN 50-59%: Weak ML signal. If linear conviction is MODERATE-LOW, downgrade to LOW → NO TRADE. If linear conviction is MODERATE or HIGH, do NOT downgrade — note ML caution in Risk Factors but proceed with the setup.
-        - ML_WIN < 50%: ML contradicts the setup — the model predicts the stop is more likely to hit first. Override to NO TRADE regardless of linear score or conviction.
+        - ML_WIN < 50%: ML contradicts the setup — the model predicts an unfavorable move is more likely. Override to NO TRADE regardless of linear score or conviction.
 
         When ML_WIN and linear score disagree:
         - Score +8 but ML_WIN 42% → NO TRADE. Indicators align but the pattern historically loses.
@@ -233,7 +233,7 @@ enum AnalysisPrompt {
         - Overbought/oversold is a condition, not a signal. RSI 80 in an uptrend is strength, not a short trigger. RSI 20 in a downtrend is weakness, not a buy. Only treat OB/OS as actionable when it coincides with a level + divergence or a regime change.
         - Trades need time to work. Backtesting proved the optimal resolution window is 72 hours at 2.0 ATR stop/target sizing. Do not present this as "hold for 72 hours" — instead, frame it as: "This setup targets $X. Allow 1-3 days for price to reach the target. Re-evaluate at the next Daily close if neither TP1 nor SL is hit."
         - Most setups resolve within 40 hours on average. Expired trades (no TP or SL hit in 72h) close at market at 0% P&L.
-        - ML_WIN probability captures non-linear indicator interactions that the linear score misses. A high ML_WIN with a low linear score means the specific combination of features — not any individual indicator — predicts success. Trust the model when it disagrees with the score, especially on altcoins where the linear system is weakest.
+        - ML_WIN probability captures non-linear indicator interactions that the linear score misses. A high ML_WIN with a low linear score means the specific combination of features — not any individual indicator — predicts a favorable move. Trust the model when it disagrees with the score, especially on altcoins where the linear system is weakest.
 
         OUTPUT FORMAT (follow this structure exactly):
 
