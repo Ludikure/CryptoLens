@@ -651,9 +651,9 @@ class BacktestEngine: ObservableObject {
     @Published var batchComplete = false
 
     static let allSymbols = [
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT",
         "AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META",
-        "AMZN", "JPM", "UNH", "HD", "MA", "ABBV"
+        "AMZN", "JPM", "UNH", "HD", "MA", "ABBV",
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"
     ]
 
     /// Crypto start date: Jan 1 2020 (derivatives data begins ~2020 on Binance).
