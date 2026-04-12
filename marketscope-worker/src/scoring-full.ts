@@ -461,6 +461,7 @@ export interface SentimentSignals {
 
 export interface PreviousSnapshot {
     dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number;
+    hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number;
 }
 
 export interface MacroSignals {
@@ -585,7 +586,9 @@ export function computeAllFeatures(
         hRsiDelta1: prevSnapshot ? (fourH?.rsi ?? 50) - prevSnapshot.hRsi : 0,
         hMacdHistDelta1: prevSnapshot ? (fourH?.macdHist ?? 0) - prevSnapshot.hMacdHist : 0,
         dRsiDelta1: prevSnapshot ? daily.rsi - prevSnapshot.dRsi : 0,
-        hRsiAccel: 0, hMacdAccel: 0, dAdxAccel: 0, // would need previous delta tracking
+        hRsiAccel: prevSnapshot?.hRsiD1 !== undefined ? ((fourH?.rsi ?? 50) - prevSnapshot.hRsi) - prevSnapshot.hRsiD1 : 0,
+        hMacdAccel: prevSnapshot?.hMacdD1 !== undefined ? ((fourH?.macdHist ?? 0) - prevSnapshot.hMacdHist) - prevSnapshot.hMacdD1 : 0,
+        dAdxAccel: prevSnapshot?.dAdxD1 !== undefined ? (daily.adx - prevSnapshot.dAdx) - prevSnapshot.dAdxD1 : 0,
         // Time-of-day
         hourBucket: (() => { const h = new Date().getUTCHours(); return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3; })(),
         isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,

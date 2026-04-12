@@ -1311,9 +1311,34 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     }
   } catch {}
 
-  // Load previous ML snapshots for rate-of-change deltas
+  // Fetch VIX + DXY (once per cron run, cached)
+  let vixValue = 20, dxyAboveEma20 = 0;
+  try {
+    const vixResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/%5EVIX?interval=1d&range=5d`);
+    if (vixResp.ok) {
+      const vixData = await vixResp.json() as any;
+      const closes = vixData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+      if (closes?.length) vixValue = closes[closes.length - 1] ?? 20;
+    }
+  } catch {}
+  try {
+    const dxyResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/DX-Y.NYB?interval=1d&range=30d`);
+    if (dxyResp.ok) {
+      const dxyData = await dxyResp.json() as any;
+      const closes = dxyData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter((v: any) => v != null) || [];
+      if (closes.length >= 20) {
+        const ema20k = 2 / 21;
+        let ema = closes[0];
+        for (let i = 1; i < closes.length; i++) ema = closes[i] * ema20k + ema * (1 - ema20k);
+        dxyAboveEma20 = closes[closes.length - 1] > ema ? 1 : 0;
+      }
+    }
+  } catch {}
+
+  // Load previous ML snapshots for rate-of-change deltas + acceleration
   const prevSnapshotsRaw = await env.ALERTS.get('ml_snapshots');
-  const prevSnapshots: Record<string, { dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number }> =
+  const prevSnapshots: Record<string, { dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number;
+    hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number }> =
     prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
   const newSnapshots: typeof prevSnapshots = {};
 
@@ -1393,16 +1418,21 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           }
         } catch {}
       }
-      const defaultMacro = { vix: 20, dxyAboveEma20: 0 };
+      const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
       // Compute all 80 features
       const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6 } : undefined;
       const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol]);
 
-      // Save snapshot for next cron's rate-of-change deltas
+      // Save snapshot for next cron's rate-of-change deltas + acceleration
+      const ps = prevSnapshots[symbol];
       newSnapshots[symbol] = {
         dRsi: features.dRsi, dAdx: features.dAdx,
-        hRsi: features.hRsi, hAdx: features.hAdx, hMacdHist: features.hMacdHist
+        hRsi: features.hRsi, hAdx: features.hAdx, hMacdHist: features.hMacdHist,
+        hRsiD1: ps ? features.hRsi - ps.hRsi : 0,
+        hMacdD1: ps ? features.hMacdHist - ps.hMacdHist : 0,
+        dRsiD1: ps ? features.dRsi - ps.dRsi : 0,
+        dAdxD1: ps ? features.dAdx - ps.dAdx : 0,
       };
 
       // ML predict using full features
