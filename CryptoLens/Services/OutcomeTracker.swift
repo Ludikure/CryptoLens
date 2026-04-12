@@ -34,10 +34,12 @@ enum OutcomeTracker {
 
                 let setup = tracked[i].setup
                 let isLong = setup.direction == "LONG"
+                let setupTime = tracked[i].timestamp
 
-                // Scan candles for entry, SL, and TP hits
-                // Only check candles at or after entry time (not historical candles before entry)
-                for point in checkPoints {
+                // Only check candles AFTER setup was registered
+                let relevantPoints = checkPoints.filter { $0.time >= setupTime }
+
+                for point in relevantPoints {
                     // Check entry hit
                     if !tracked[i].outcome.entryHit {
                         let entryHit = isLong ? point.low <= setup.entry : point.high >= setup.entry

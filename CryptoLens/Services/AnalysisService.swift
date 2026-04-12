@@ -800,9 +800,12 @@ class AnalysisService: ObservableObject {
             HapticManager.notification(.success)
             AnalysisHistoryStore.save(result)
 
-            // Outcome tracking: register new setups
-            for setup in tradeSetups {
-                OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id)
+            // Outcome tracking: register new setups (skip stocks outside market hours)
+            let shouldTrack = market == .crypto || MarketHours.isMarketOpen()
+            if shouldTrack {
+                for setup in tradeSetups {
+                    OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id)
+                }
             }
             // Track FLAT/kill outcomes
             if tradeSetups.isEmpty && !result.claudeAnalysis.isEmpty {
