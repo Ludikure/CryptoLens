@@ -566,6 +566,12 @@ class BacktestEngine: ObservableObject {
         "AMZN", "JPM", "UNH", "HD", "MA", "ABBV"
     ]
 
+    /// Crypto start date: Jan 1 2020 (derivatives data begins ~2020 on Binance).
+    private static let cryptoStartDate: Date = {
+        var c = DateComponents(); c.year = 2020; c.month = 1; c.day = 1
+        return Calendar.current.date(from: c)!
+    }()
+
     /// Run backtests on all symbols sequentially, auto-export CSVs to Documents.
     func runAllAndExport(startDate: Date, endDate: Date) async {
         batchComplete = false
@@ -579,7 +585,9 @@ class BacktestEngine: ObservableObject {
         var exported = 0
         for (idx, sym) in Self.allSymbols.enumerated() {
             batchProgress = "[\(idx + 1)/\(Self.allSymbols.count)] \(sym)..."
-            await run(symbol: sym, startDate: startDate, endDate: endDate)
+            let isCrypto = sym.hasSuffix("USDT")
+            let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : startDate
+            await run(symbol: sym, startDate: symStart, endDate: endDate)
 
             if let csv = exportCSV() {
                 let fileURL = exportDir.appendingPathComponent("\(sym).csv")
