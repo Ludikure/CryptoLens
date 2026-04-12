@@ -113,5 +113,14 @@ export function buildMLInput(
         dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0,
         // Sentiment + cross-asset (defaults — not tracked on worker)
         fearGreedIndex: 50, fearGreedZone: 0, ethBtcRatio: 0, ethBtcDelta6: 0,
+        // Volume profile (defaults — not computed on worker via buildMLInput)
+        vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1,
+        vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0,
+        // 1-bar deltas + acceleration (defaults)
+        hRsiDelta1: 0, hMacdHistDelta1: 0, dRsiDelta1: 0,
+        hRsiAccel: 0, hMacdAccel: 0, dAdxAccel: 0,
+        // Time-of-day
+        hourBucket: (() => { const h = new Date().getUTCHours(); return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3; })(),
+        isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,
     };
 }

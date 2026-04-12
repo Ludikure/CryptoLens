@@ -18,7 +18,7 @@ import json
 import os
 import glob
 
-# 80 ML features (v6b: +4 sentiment/cross-asset)
+# 94 ML features (v7: +6 volume profile, +6 RoC windows/accel, +2 time-of-day)
 features = [
     # Daily core (9)
     'dRsi', 'dMacdHist', 'dAdx', 'dAdxBullish',
@@ -60,6 +60,15 @@ features = [
     'fearGreedIndex', 'fearGreedZone',
     # Cross-asset crypto (2)
     'ethBtcRatio', 'ethBtcDelta6',
+    # Volume profile (6)
+    'vpDistToPocATR', 'vpAbovePoc', 'vpVAWidth', 'vpInValueArea',
+    'vpDistToVAH_ATR', 'vpDistToVAL_ATR',
+    # 1-bar deltas (3)
+    'hRsiDelta1', 'hMacdHistDelta1', 'dRsiDelta1',
+    # Acceleration (3)
+    'hRsiAccel', 'hMacdAccel', 'dAdxAccel',
+    # Time-of-day (2)
+    'hourBucket', 'isWeekend',
 ]
 
 DOWNLOADS = '/Users/bojanmihovilovic/Downloads'
@@ -285,7 +294,7 @@ def export_model(model, name, market, trained_on, n_samples):
     model_json = {
         "features": features,
         "trees": trees,
-        "version": 6,
+        "version": 7,
         "market": market,
         "trained_on": trained_on,
         "n_samples": n_samples,
@@ -293,7 +302,7 @@ def export_model(model, name, market, trained_on, n_samples):
         "n_features": len(features),
         "model_type": "classifier",
         "target": "goodR",
-        "description": "v6b: +fear/greed, ETH/BTC, sample weighting, purged CV, daily downsample"
+        "description": "v7: +volume profile, 1-bar deltas, acceleration, time-of-day, fear/greed, ETH/BTC"
     }
     json_path = f'/Users/bojanmihovilovic/CryptoLens/ml-training/{name}.json'
     with open(json_path, 'w') as f:

@@ -98,6 +98,18 @@ enum MLScoring {
         ]
         input.merge(context) { _, new in new }
 
+        // Volume profile + 1-bar deltas + acceleration + time-of-day (14)
+        let phaseA: [String: Double] = [
+            "vpDistToPocATR": f.vpDistToPocATR, "vpAbovePoc": f.vpAbovePoc ? 1 : 0,
+            "vpVAWidth": f.vpVAWidth, "vpInValueArea": f.vpInValueArea ? 1 : 0,
+            "vpDistToVAH_ATR": f.vpDistToVAH_ATR, "vpDistToVAL_ATR": f.vpDistToVAL_ATR,
+            "hRsiDelta1": f.hRsiDelta1, "hMacdHistDelta1": f.hMacdHistDelta1,
+            "dRsiDelta1": f.dRsiDelta1,
+            "hRsiAccel": f.hRsiAccel, "hMacdAccel": f.hMacdAccel, "dAdxAccel": f.dAdxAccel,
+            "hourBucket": Double(f.hourBucket), "isWeekend": f.isWeekend ? 1 : 0,
+        ]
+        input.merge(phaseA) { _, new in new }
+
         let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: nsInput),
               let output = try? model.prediction(from: provider) else {

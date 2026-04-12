@@ -1003,7 +1003,38 @@ class AnalysisService: ObservableObject {
             fearGreedIndex: Double(fearGreedValue ?? 50),
             fearGreedZone: FearGreedService.zone(for: fearGreedValue ?? 50),
             // Cross-asset crypto
-            ethBtcRatio: ethBtcRatio, ethBtcDelta6: ethBtcDelta
+            ethBtcRatio: ethBtcRatio, ethBtcDelta6: ethBtcDelta,
+            // Volume profile (from daily indicators)
+            vpDistToPocATR: {
+                guard let vp = tf1.volumeProfile, let atr = tf2.atr?.atr, atr > 0 else { return 0.0 }
+                return (tf1.price - vp.poc) / atr
+            }(),
+            vpAbovePoc: tf1.volumeProfile.map { tf1.price > $0.poc } ?? true,
+            vpVAWidth: {
+                guard let vp = tf1.volumeProfile, tf1.price > 0 else { return 0.0 }
+                return (vp.valueAreaHigh - vp.valueAreaLow) / tf1.price * 100
+            }(),
+            vpInValueArea: tf1.volumeProfile.map { tf1.price >= $0.valueAreaLow && tf1.price <= $0.valueAreaHigh } ?? true,
+            vpDistToVAH_ATR: {
+                guard let vp = tf1.volumeProfile, let atr = tf2.atr?.atr, atr > 0 else { return 0.0 }
+                return (vp.valueAreaHigh - tf1.price) / atr
+            }(),
+            vpDistToVAL_ATR: {
+                guard let vp = tf1.volumeProfile, let atr = tf2.atr?.atr, atr > 0 else { return 0.0 }
+                return (tf1.price - vp.valueAreaLow) / atr
+            }(),
+            // 1-bar deltas + acceleration — defaults (would need previous bar tracking)
+            hRsiDelta1: 0, hMacdHistDelta1: 0, dRsiDelta1: 0,
+            hRsiAccel: 0, hMacdAccel: 0, dAdxAccel: 0,
+            // Time-of-day
+            hourBucket: {
+                let h = Calendar.current.component(.hour, from: Date())
+                return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3
+            }(),
+            isWeekend: {
+                let wd = Calendar.current.component(.weekday, from: Date())
+                return wd == 1 || wd == 7
+            }()
         )
     }
 

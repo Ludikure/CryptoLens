@@ -186,6 +186,10 @@ class BacktestEngine: ObservableObject {
             var hRsiHistory = [Double]()
             var hAdxHistory = [Double]()
             var hMacdHistHistory = [Double]()
+            // 1-bar delta tracking for acceleration
+            var prevHRsiDelta1 = 0.0
+            var prevHMacdHistDelta1 = 0.0
+            var prevDAdxDelta1 = 0.0
 
             for i in evalStartIndex..<(fourHCandles.count - 6) {
                 let evalTime = fourHCandles[i].time
@@ -509,8 +513,64 @@ class BacktestEngine: ObservableObject {
                         let prev = ethBtcCandles[ethBtcIdx - 7].close
                         guard prev > 0 else { return 0.0 }
                         return (cur - prev) / prev * 100
+                    }(),
+                    // Volume profile
+                    vpDistToPocATR: {
+                        guard let vp = dailyResult.volumeProfile, let atr = fourHResult.atr?.atr, atr > 0 else { return 0.0 }
+                        return (price - vp.poc) / atr
+                    }(),
+                    vpAbovePoc: dailyResult.volumeProfile.map { price > $0.poc } ?? true,
+                    vpVAWidth: {
+                        guard let vp = dailyResult.volumeProfile, price > 0 else { return 0.0 }
+                        return (vp.valueAreaHigh - vp.valueAreaLow) / price * 100
+                    }(),
+                    vpInValueArea: dailyResult.volumeProfile.map { price >= $0.valueAreaLow && price <= $0.valueAreaHigh } ?? true,
+                    vpDistToVAH_ATR: {
+                        guard let vp = dailyResult.volumeProfile, let atr = fourHResult.atr?.atr, atr > 0 else { return 0.0 }
+                        return (vp.valueAreaHigh - price) / atr
+                    }(),
+                    vpDistToVAL_ATR: {
+                        guard let vp = dailyResult.volumeProfile, let atr = fourHResult.atr?.atr, atr > 0 else { return 0.0 }
+                        return (price - vp.valueAreaLow) / atr
+                    }(),
+                    // 1-bar deltas
+                    hRsiDelta1: hRsiHistory.count >= 1 ? (fourHResult.rsi ?? 50) - hRsiHistory.last! : 0,
+                    hMacdHistDelta1: hMacdHistHistory.count >= 1 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory.last! : 0,
+                    dRsiDelta1: dRsiHistory.count >= 1 ? (dailyResult.rsi ?? 50) - dRsiHistory.last! : 0,
+                    // Acceleration
+                    hRsiAccel: {
+                        let cur = hRsiHistory.count >= 1 ? (fourHResult.rsi ?? 50) - hRsiHistory.last! : 0
+                        let accel = cur - prevHRsiDelta1
+                        return accel
+                    }(),
+                    hMacdAccel: {
+                        let cur = hMacdHistHistory.count >= 1 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory.last! : 0
+                        let accel = cur - prevHMacdHistDelta1
+                        return accel
+                    }(),
+                    dAdxAccel: {
+                        let cur = dAdxHistory.count >= 1 ? (dailyResult.adx?.adx ?? 0) - dAdxHistory.last! : 0
+                        let accel = cur - prevDAdxDelta1
+                        return accel
+                    }(),
+                    // Time-of-day
+                    hourBucket: {
+                        let h = Calendar.current.component(.hour, from: evalTime)
+                        return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3
+                    }(),
+                    isWeekend: {
+                        let wd = Calendar.current.component(.weekday, from: evalTime)
+                        return wd == 1 || wd == 7
                     }()
                 )
+
+                // Update 1-bar delta tracking for acceleration
+                let curHRsiDelta1 = hRsiHistory.count >= 1 ? (fourHResult.rsi ?? 50) - hRsiHistory.last! : 0
+                let curHMacdDelta1 = hMacdHistHistory.count >= 1 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory.last! : 0
+                let curDAdxDelta1 = dAdxHistory.count >= 1 ? (dailyResult.adx?.adx ?? 0) - dAdxHistory.last! : 0
+                prevHRsiDelta1 = curHRsiDelta1
+                prevHMacdHistDelta1 = curHMacdDelta1
+                prevDAdxDelta1 = curDAdxDelta1
 
                 // Update rate-of-change history
                 dRsiHistory.append(dailyResult.rsi ?? 50)
@@ -717,6 +777,14 @@ class BacktestEngine: ObservableObject {
             "dRsiDelta", "dAdxDelta", "hRsiDelta", "hAdxDelta", "hMacdHistDelta",
             // ML features — Sentiment + Cross-asset
             "fearGreedIndex", "fearGreedZone", "ethBtcRatio", "ethBtcDelta6",
+            // ML features — Volume profile
+            "vpDistToPocATR", "vpAbovePoc", "vpVAWidth", "vpInValueArea",
+            "vpDistToVAH_ATR", "vpDistToVAL_ATR",
+            // ML features — 1-bar deltas + acceleration
+            "hRsiDelta1", "hMacdHistDelta1", "dRsiDelta1",
+            "hRsiAccel", "hMacdAccel", "dAdxAccel",
+            // ML features — Time-of-day
+            "hourBucket", "isWeekend",
             // Trade outcome (bar-by-bar resolved)
             "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
             "tradeMaxFavorable", "tradeMaxAdverse",
@@ -828,6 +896,23 @@ class BacktestEngine: ObservableObject {
                 "\(f?.fearGreedZone ?? 0)",
                 String(format: "%.6f", f?.ethBtcRatio ?? 0),
                 String(format: "%.4f", f?.ethBtcDelta6 ?? 0),
+                // Volume profile
+                String(format: "%.4f", f?.vpDistToPocATR ?? 0),
+                "\(f?.vpAbovePoc == true ? 1 : 0)",
+                String(format: "%.4f", f?.vpVAWidth ?? 0),
+                "\(f?.vpInValueArea == true ? 1 : 0)",
+                String(format: "%.4f", f?.vpDistToVAH_ATR ?? 0),
+                String(format: "%.4f", f?.vpDistToVAL_ATR ?? 0),
+                // 1-bar deltas + acceleration
+                String(format: "%.4f", f?.hRsiDelta1 ?? 0),
+                String(format: "%.6f", f?.hMacdHistDelta1 ?? 0),
+                String(format: "%.4f", f?.dRsiDelta1 ?? 0),
+                String(format: "%.4f", f?.hRsiAccel ?? 0),
+                String(format: "%.6f", f?.hMacdAccel ?? 0),
+                String(format: "%.4f", f?.dAdxAccel ?? 0),
+                // Time-of-day
+                "\(f?.hourBucket ?? 0)",
+                "\(f?.isWeekend == true ? 1 : 0)",
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv),

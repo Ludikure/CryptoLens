@@ -55,6 +55,14 @@ export interface FullFeatures {
     fearGreedIndex: number; fearGreedZone: number;
     // Cross-asset crypto (2)
     ethBtcRatio: number; ethBtcDelta6: number;
+    // Volume profile (6)
+    vpDistToPocATR: number; vpAbovePoc: number; vpVAWidth: number;
+    vpInValueArea: number; vpDistToVAH_ATR: number; vpDistToVAL_ATR: number;
+    // 1-bar deltas + acceleration (6)
+    hRsiDelta1: number; hMacdHistDelta1: number; dRsiDelta1: number;
+    hRsiAccel: number; hMacdAccel: number; dAdxAccel: number;
+    // Time-of-day (2)
+    hourBucket: number; isWeekend: number;
 }
 
 // ============================================================
@@ -570,5 +578,16 @@ export function computeAllFeatures(
         // Cross-asset crypto
         ethBtcRatio: sentiment?.ethBtcRatio ?? 0,
         ethBtcDelta6: sentiment?.ethBtcDelta6 ?? 0,
+        // Volume profile (defaults — would need VP computation ported to TS)
+        vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1,
+        vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0,
+        // 1-bar deltas + acceleration
+        hRsiDelta1: prevSnapshot ? (fourH?.rsi ?? 50) - prevSnapshot.hRsi : 0,
+        hMacdHistDelta1: prevSnapshot ? (fourH?.macdHist ?? 0) - prevSnapshot.hMacdHist : 0,
+        dRsiDelta1: prevSnapshot ? daily.rsi - prevSnapshot.dRsi : 0,
+        hRsiAccel: 0, hMacdAccel: 0, dAdxAccel: 0, // would need previous delta tracking
+        // Time-of-day
+        hourBucket: (() => { const h = new Date().getUTCHours(); return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3; })(),
+        isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,
     };
 }

@@ -104,6 +104,24 @@ struct MLFeatures: Codable {
     // Cross-asset crypto
     let ethBtcRatio: Double       // ETH/BTC price ratio
     let ethBtcDelta6: Double      // ETH/BTC change over 6 bars
+    // Volume profile (from daily candles)
+    let vpDistToPocATR: Double    // distance from price to POC in ATR units (signed)
+    let vpAbovePoc: Bool          // price above POC
+    let vpVAWidth: Double         // value area width as % of price
+    let vpInValueArea: Bool       // price between VAL and VAH
+    let vpDistToVAH_ATR: Double   // distance to VAH in ATR
+    let vpDistToVAL_ATR: Double   // distance to VAL in ATR
+    // Rate-of-change 1-bar (momentum spikes)
+    let hRsiDelta1: Double        // 4H RSI change from previous bar
+    let hMacdHistDelta1: Double   // 4H MACD hist change from previous bar
+    let dRsiDelta1: Double        // daily RSI change from previous bar
+    // Acceleration (delta of deltas)
+    let hRsiAccel: Double         // hRsiDelta1 change (is momentum accelerating?)
+    let hMacdAccel: Double        // hMacdHistDelta1 change
+    let dAdxAccel: Double         // dAdxDelta1 change (is trend strengthening?)
+    // Time-of-day (crypto sessions)
+    let hourBucket: Int           // 0=Asia, 1=Europe, 2=US, 3=Overlap
+    let isWeekend: Bool           // Saturday/Sunday
 }
 
 struct BacktestDataPoint: Codable {
