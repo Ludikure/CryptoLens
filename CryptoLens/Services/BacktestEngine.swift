@@ -169,6 +169,12 @@ class BacktestEngine: ObservableObject {
             // Temporal tracking
             var prevRegime = ""
             var barsSinceRegimeChange = 0
+            // Rate-of-change history (ring buffer of last 6 bars)
+            var dRsiHistory = [Double]()
+            var dAdxHistory = [Double]()
+            var hRsiHistory = [Double]()
+            var hAdxHistory = [Double]()
+            var hMacdHistHistory = [Double]()
 
             for i in evalStartIndex..<(fourHCandles.count - 6) {
                 let evalTime = fourHCandles[i].time
@@ -406,6 +412,10 @@ class BacktestEngine: ObservableObject {
                     takerSignal: derivCtx?.takerSignal ?? 0,
                     crowdingSignal: derivCtx?.crowdingSignal ?? 0,
                     derivativesCombined: derivCtx?.combinedSignal ?? 0,
+                    fundingRateRaw: derivCtx?.fundingRateRaw ?? 0,
+                    oiChangePct: derivCtx?.oiChangePct ?? 0,
+                    takerRatioRaw: derivCtx?.takerRatioRaw ?? 1.0,
+                    longPctRaw: derivCtx?.longPctRaw ?? 50,
                     // Macro/cross-asset
                     vix: vixValue ?? 20,
                     dxyAboveEma20: dxyAbove,
@@ -463,8 +473,21 @@ class BacktestEngine: ObservableObject {
                     // Temporal
                     dayOfWeek: Calendar.current.component(.weekday, from: evalTime) - 1, // 0=Sun..6=Sat
                     barsSinceRegimeChange: min(barsSinceRegimeChange, 100), // cap at 100
-                    regimeCode: regime == "TRENDING" ? 2 : regime == "TRANSITIONING" ? 1 : 0
+                    regimeCode: regime == "TRENDING" ? 2 : regime == "TRANSITIONING" ? 1 : 0,
+                    // Rate-of-change (delta over 6 bars)
+                    dRsiDelta: dRsiHistory.count >= 7 ? (dailyResult.rsi ?? 50) - dRsiHistory[dRsiHistory.count - 7] : 0,
+                    dAdxDelta: dAdxHistory.count >= 7 ? (dailyResult.adx?.adx ?? 0) - dAdxHistory[dAdxHistory.count - 7] : 0,
+                    hRsiDelta: hRsiHistory.count >= 7 ? (fourHResult.rsi ?? 50) - hRsiHistory[hRsiHistory.count - 7] : 0,
+                    hAdxDelta: hAdxHistory.count >= 7 ? (fourHResult.adx?.adx ?? 0) - hAdxHistory[hAdxHistory.count - 7] : 0,
+                    hMacdHistDelta: hMacdHistHistory.count >= 7 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory[hMacdHistHistory.count - 7] : 0
                 )
+
+                // Update rate-of-change history
+                dRsiHistory.append(dailyResult.rsi ?? 50)
+                dAdxHistory.append(dailyResult.adx?.adx ?? 0)
+                hRsiHistory.append(fourHResult.rsi ?? 50)
+                hAdxHistory.append(fourHResult.adx?.adx ?? 0)
+                hMacdHistHistory.append(fourHResult.macd?.histogram ?? 0)
 
                 // Continuous forward returns (direction-independent)
                 let p1 = fourHCandles[i + 1].close
@@ -638,6 +661,7 @@ class BacktestEngine: ObservableObject {
             "eRsi", "eEmaCross", "eStochK", "eMacdHist",
             // ML features — Derivatives
             "fundingSignal", "oiSignal", "takerSignal", "crowdingSignal", "derivativesCombined",
+            "fundingRateRaw", "oiChangePct", "takerRatioRaw", "longPctRaw",
             // ML features — Macro
             "vix", "dxyAboveEma20", "volScalarML",
             // ML features — Candle patterns
@@ -651,6 +675,8 @@ class BacktestEngine: ObservableObject {
             "scoreSum", "scoreDivergence",
             // ML features — Temporal
             "dayOfWeek", "barsSinceRegimeChange", "regimeCode",
+            // ML features — Rate-of-change
+            "dRsiDelta", "dAdxDelta", "hRsiDelta", "hAdxDelta", "hMacdHistDelta",
             // Trade outcome (bar-by-bar resolved)
             "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
             "tradeMaxFavorable", "tradeMaxAdverse",
@@ -723,6 +749,10 @@ class BacktestEngine: ObservableObject {
                 "\(f?.fundingSignal ?? 0)", "\(f?.oiSignal ?? 0)",
                 "\(f?.takerSignal ?? 0)", "\(f?.crowdingSignal ?? 0)",
                 "\(f?.derivativesCombined ?? 0)",
+                String(format: "%.6f", f?.fundingRateRaw ?? 0),
+                String(format: "%.4f", f?.oiChangePct ?? 0),
+                String(format: "%.4f", f?.takerRatioRaw ?? 1.0),
+                String(format: "%.2f", f?.longPctRaw ?? 50),
                 // Macro
                 String(format: "%.1f", f?.vix ?? 20),
                 "\(f?.dxyAboveEma20 == true ? 1 : 0)",
@@ -747,6 +777,12 @@ class BacktestEngine: ObservableObject {
                 "\(f?.dayOfWeek ?? 0)",
                 "\(f?.barsSinceRegimeChange ?? 0)",
                 "\(f?.regimeCode ?? 0)",
+                // Rate-of-change
+                String(format: "%.4f", f?.dRsiDelta ?? 0),
+                String(format: "%.4f", f?.dAdxDelta ?? 0),
+                String(format: "%.4f", f?.hRsiDelta ?? 0),
+                String(format: "%.4f", f?.hAdxDelta ?? 0),
+                String(format: "%.6f", f?.hMacdHistDelta ?? 0),
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv),

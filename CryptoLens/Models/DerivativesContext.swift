@@ -8,6 +8,11 @@ struct DerivativesContext {
     let oiSignal: Int           // -1, 0, +1
     let takerSignal: Int        // -1, 0, +1
     let crowdingSignal: Int     // -1, 0, +1
+    // Raw continuous values for ML
+    let fundingRateRaw: Double  // actual funding rate %
+    let oiChangePct: Double     // OI change % vs previous bar
+    let takerRatioRaw: Double   // raw taker buy/sell ratio
+    let longPctRaw: Double      // raw long account %
 
     var combinedSignal: Int {
         max(-3, min(3, fundingSignal + oiSignal + takerSignal + crowdingSignal))
@@ -54,9 +59,16 @@ struct DerivativesContext {
         else if longPct < 40 { crowdingSignal = 1 }
         else { crowdingSignal = 0 }
 
+        // OI change for raw value
+        let oiChangePctRaw: Double = data.oiChange24h ?? 0
+
         return DerivativesContext(
             fundingSignal: fundingSignal, fundingExtreme: fundingExtreme,
-            oiSignal: oiSignal, takerSignal: takerSignal, crowdingSignal: crowdingSignal
+            oiSignal: oiSignal, takerSignal: takerSignal, crowdingSignal: crowdingSignal,
+            fundingRateRaw: data.fundingRatePercent,
+            oiChangePct: oiChangePctRaw,
+            takerRatioRaw: data.takerBuySellRatio,
+            longPctRaw: data.globalLongPercent
         )
     }
 
@@ -103,9 +115,21 @@ struct DerivativesContext {
         else if longPct < 40 { crowdingSignal = 1 }
         else { crowdingSignal = 0 }
 
+        // OI change for raw value
+        let oiChangePctRaw: Double
+        if let prevOI = previousOI, let currentOI = bar.openInterest, prevOI > 0 {
+            oiChangePctRaw = (currentOI - prevOI) / prevOI * 100
+        } else {
+            oiChangePctRaw = 0
+        }
+
         return DerivativesContext(
             fundingSignal: fundingSignal, fundingExtreme: fundingExtreme,
-            oiSignal: oiSignal, takerSignal: takerSignal, crowdingSignal: crowdingSignal
+            oiSignal: oiSignal, takerSignal: takerSignal, crowdingSignal: crowdingSignal,
+            fundingRateRaw: bar.fundingRate ?? 0,
+            oiChangePct: oiChangePctRaw,
+            takerRatioRaw: bar.takerBuySellRatio ?? 1.0,
+            longPctRaw: bar.longPercent ?? 50
         )
     }
 }

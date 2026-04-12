@@ -68,6 +68,11 @@ struct MLFeatures: Codable {
     // Derivatives (crypto only, 0 for stocks)
     let fundingSignal: Int; let oiSignal: Int; let takerSignal: Int
     let crowdingSignal: Int; let derivativesCombined: Int
+    // Derivatives raw continuous values (crypto only, 0 for stocks)
+    let fundingRateRaw: Double    // actual funding rate %
+    let oiChangePct: Double       // OI change % vs previous 4H bar
+    let takerRatioRaw: Double     // raw taker buy/sell ratio
+    let longPctRaw: Double        // raw long account %
     // Macro/cross-asset
     let vix: Double; let dxyAboveEma20: Bool; let volScalar: Double
     // Candle patterns
@@ -87,6 +92,12 @@ struct MLFeatures: Codable {
     let dayOfWeek: Int            // 1=Mon ... 5=Fri (0=weekend for crypto)
     let barsSinceRegimeChange: Int // how many 4H bars in current regime
     let regimeCode: Int           // TRENDING=2, TRANSITIONING=1, RANGING=0
+    // Rate-of-change (delta over 6 bars)
+    let dRsiDelta: Double         // daily RSI change over ~6 4H bars (1 day)
+    let dAdxDelta: Double         // daily ADX change
+    let hRsiDelta: Double         // 4H RSI change over 6 bars
+    let hAdxDelta: Double         // 4H ADX change
+    let hMacdHistDelta: Double    // 4H MACD histogram change
 }
 
 struct BacktestDataPoint: Codable {

@@ -923,6 +923,10 @@ class AnalysisService: ObservableObject {
             fundingSignal: derivCtx?.fundingSignal ?? 0, oiSignal: derivCtx?.oiSignal ?? 0,
             takerSignal: derivCtx?.takerSignal ?? 0, crowdingSignal: derivCtx?.crowdingSignal ?? 0,
             derivativesCombined: derivCtx?.combinedSignal ?? 0,
+            fundingRateRaw: derivCtx?.fundingRateRaw ?? 0,
+            oiChangePct: derivCtx?.oiChangePct ?? 0,
+            takerRatioRaw: derivCtx?.takerRatioRaw ?? 1.0,
+            longPctRaw: derivCtx?.longPctRaw ?? 50,
             vix: vixValue ?? 20, dxyAboveEma20: _dxyAbove, volScalar: tf1.volScalar ?? 1.0,
             last3Green: _l3Green, last3Red: _l3Red, last3VolIncreasing: _l3Vol,
             obvRising: tf1.obv?.trend == "Rising",
@@ -934,7 +938,9 @@ class AnalysisService: ObservableObject {
             scoreDivergence: abs(tf1.biasScore - tf2.biasScore),
             dayOfWeek: Calendar.current.component(.weekday, from: Date()) - 1,
             barsSinceRegimeChange: 0, // not tracked in live analysis
-            regimeCode: _regimeCode
+            regimeCode: _regimeCode,
+            // Rate-of-change — not tracked in live (would need previous refresh state)
+            dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0
         )
     }
 

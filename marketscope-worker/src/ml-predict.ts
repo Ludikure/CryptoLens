@@ -89,6 +89,7 @@ export function buildMLInput(
         eRsi: 50, eEmaCross: 0, eStochK: 50, eMacdHist: 0,
         // Derivatives (defaults — could add Binance API calls later)
         fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0,
+        fundingRateRaw: 0, oiChangePct: 0, takerRatioRaw: 1.0, longPctRaw: 50,
         // Macro (defaults)
         vix: 20, dxyAboveEma20: 0, volScalarML: volScalar,
         // Candle patterns (defaults)
@@ -108,5 +109,7 @@ export function buildMLInput(
         dayOfWeek: new Date().getDay(), // 0=Sun..6=Sat
         barsSinceRegimeChange: 0, // not tracked on worker — default
         regimeCode: (dAdx > 25 && (dStackBull || dStackBear)) ? 2 : dAdx < 20 ? 0 : 1,
+        // Rate-of-change (defaults — not tracked on worker)
+        dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0,
     };
 }

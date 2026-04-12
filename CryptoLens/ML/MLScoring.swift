@@ -62,17 +62,24 @@ enum MLScoring {
         ]
         input.merge(fourH) { _, new in new }
 
-        // 1H entry + derivatives + macro + patterns + stock + context + cross-TF + temporal (29)
-        let rest: [String: Double] = [
+        // 1H entry + derivatives + macro + patterns + stock + context (21)
+        let entry: [String: Double] = [
             "eRsi": f.eRsi, "eEmaCross": Double(f.eEmaCross),
             "eStochK": f.eStochK, "eMacdHist": f.eMacdHist,
             "fundingSignal": Double(f.fundingSignal), "oiSignal": Double(f.oiSignal),
             "takerSignal": Double(f.takerSignal), "crowdingSignal": Double(f.crowdingSignal),
             "derivativesCombined": Double(f.derivativesCombined),
+            "fundingRateRaw": f.fundingRateRaw, "oiChangePct": f.oiChangePct,
+            "takerRatioRaw": f.takerRatioRaw, "longPctRaw": f.longPctRaw,
             "vix": f.vix, "dxyAboveEma20": f.dxyAboveEma20 ? 1 : 0, "volScalarML": f.volScalar,
             "last3Green": f.last3Green ? 1 : 0, "last3Red": f.last3Red ? 1 : 0,
             "last3VolIncreasing": f.last3VolIncreasing ? 1 : 0,
             "obvRising": f.obvRising ? 1 : 0, "adLineAccumulation": f.adLineAccumulation ? 1 : 0,
+        ]
+        input.merge(entry) { _, new in new }
+
+        // Context + cross-TF + temporal + rate-of-change (18)
+        let context: [String: Double] = [
             "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
             "dailyScore": Double(dailyScore), "fourHScore": Double(fourHScore),
             "tfAlignment": Double(f.tfAlignment), "momentumAlignment": Double(f.momentumAlignment),
@@ -81,8 +88,11 @@ enum MLScoring {
             "dayOfWeek": Double(f.dayOfWeek),
             "barsSinceRegimeChange": Double(f.barsSinceRegimeChange),
             "regimeCode": Double(f.regimeCode),
+            "dRsiDelta": f.dRsiDelta, "dAdxDelta": f.dAdxDelta,
+            "hRsiDelta": f.hRsiDelta, "hAdxDelta": f.hAdxDelta,
+            "hMacdHistDelta": f.hMacdHistDelta,
         ]
-        input.merge(rest) { _, new in new }
+        input.merge(context) { _, new in new }
 
         let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: nsInput),
