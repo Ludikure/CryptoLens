@@ -1,5 +1,5 @@
 // XGBoost inference in TypeScript — evaluates exported tree JSON.
-// v3: Dual models with 51 features each. Crypto (150 trees), Stock (150 trees).
+// v5: Dual models with 67 features each. Crypto (150 trees), Stock (150 trees).
 
 import cryptoModelData from './ml-model-crypto.json';
 import stockModelData from './ml-model-stock.json';
