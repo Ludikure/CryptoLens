@@ -591,14 +591,26 @@ class AnalysisService: ObservableObject {
 
             var (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
 
-            // ML win probability for the AI prompt
+            // ML win probability for the AI prompt — use same snapshot as refresh path
             let prevFG = resultsBySymbol[symbol]?.fearGreed?.value
+            let snap2 = prevMLSnapshots[symbol]
             let mlFeatures2 = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                     isCrypto: market == .crypto, derivCtx: earlyDerivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
             }, vixValue: macroSnapshot?.vix, crossAsset: crossAsset,
                fearGreedValue: prevFG,
-               ethBtcRatio: ethBtcPrice, ethBtcDelta: ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0)
+               ethBtcRatio: ethBtcPrice, ethBtcDelta: ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0,
+               dRsiDelta: snap2.map { (tf1.rsi ?? 50) - $0.dRsi } ?? 0,
+               dAdxDelta: snap2.map { (tf1.adx?.adx ?? 0) - $0.dAdx } ?? 0,
+               hRsiDelta: snap2.map { (tf2.rsi ?? 50) - $0.hRsi } ?? 0,
+               hAdxDelta: snap2.map { (tf2.adx?.adx ?? 0) - $0.hAdx } ?? 0,
+               hMacdHistDelta: snap2.map { (tf2.macd?.histogram ?? 0) - $0.hMacdHist } ?? 0,
+               hRsiDelta1: snap2.map { (tf2.rsi ?? 50) - $0.hRsi } ?? 0,
+               hMacdHistDelta1: snap2.map { (tf2.macd?.histogram ?? 0) - $0.hMacdHist } ?? 0,
+               dRsiDelta1: snap2.map { (tf1.rsi ?? 50) - $0.dRsi } ?? 0,
+               hRsiAccel: snap2.map { ((tf2.rsi ?? 50) - $0.hRsi) - $0.hRsiD1 } ?? 0,
+               hMacdAccel: snap2.map { ((tf2.macd?.histogram ?? 0) - $0.hMacdHist) - $0.hMacdD1 } ?? 0,
+               dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0)
             tf1.mlWinProbability = MLScoring.predict(
                 features: mlFeatures2, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
