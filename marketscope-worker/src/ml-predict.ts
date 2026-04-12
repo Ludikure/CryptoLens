@@ -57,8 +57,17 @@ export function buildMLInput(
     hEmaCross: number, hStackBull: boolean, hStackBear: boolean,
     hStructBull: boolean, hStructBear: boolean,
     atrPercent: number, volScalar: number, atrPercentile: number,
-    dailyScore: number, fourHScore: number
+    dailyScore: number, fourHScore: number,
+    oneHScore?: number
 ): Record<string, number> {
+    const _oneHScore = oneHScore ?? 0;
+    // Cross-timeframe interactions
+    const dBull = dailyScore > 3, dBear = dailyScore < -3;
+    const hBull = fourHScore > 3, hBear = fourHScore < -3;
+    let tfAlign = 0;
+    if (dBull) tfAlign += 1; else if (dBear) tfAlign -= 1;
+    if (hBull) tfAlign += 1; else if (hBear) tfAlign -= 1;
+
     return {
         // Daily core
         dRsi, dMacdHist, dAdx, dAdxBullish: dAdxBullish ? 1 : 0,
@@ -88,6 +97,16 @@ export function buildMLInput(
         obvRising: 0, adLineAccumulation: 0,
         // Context
         atrPercent, atrPercentile,
-        dailyScore, fourHScore
+        dailyScore, fourHScore,
+        // Cross-timeframe interactions
+        tfAlignment: tfAlign,
+        momentumAlignment: (dMacdHist > 0 && hMacdHist > 0) ? 1 : (dMacdHist < 0 && hMacdHist < 0) ? -1 : 0,
+        structureAlignment: (dStructBull && hStructBull) ? 1 : (dStructBear && hStructBear) ? -1 : 0,
+        scoreSum: dailyScore + fourHScore + _oneHScore,
+        scoreDivergence: Math.abs(dailyScore - fourHScore),
+        // Temporal
+        dayOfWeek: new Date().getDay(), // 0=Sun..6=Sat
+        barsSinceRegimeChange: 0, // not tracked on worker — default
+        regimeCode: (dAdx > 25 && (dStackBull || dStackBear)) ? 2 : dAdx < 20 ? 0 : 1,
     };
 }

@@ -77,6 +77,16 @@ struct MLFeatures: Codable {
     // Context
     let atrPercent: Double; let atrPercentile: Double
     let isCrypto: Bool
+    // Cross-timeframe interactions
+    let tfAlignment: Int          // +2 all bull, -2 all bear, 0 mixed
+    let momentumAlignment: Int    // D+4H MACD same sign: +1 bull, -1 bear, 0 mixed
+    let structureAlignment: Int   // D+4H struct same: +1 bull, -1 bear, 0 mixed
+    let scoreSum: Int             // dailyScore + fourHScore + oneHScore
+    let scoreDivergence: Int      // abs(dailyScore - fourHScore)
+    // Temporal features
+    let dayOfWeek: Int            // 1=Mon ... 5=Fri (0=weekend for crypto)
+    let barsSinceRegimeChange: Int // how many 4H bars in current regime
+    let regimeCode: Int           // TRENDING=2, TRANSITIONING=1, RANGING=0
 }
 
 struct BacktestDataPoint: Codable {
@@ -101,6 +111,13 @@ struct BacktestDataPoint: Codable {
     var tradeResult: TradeSimOutcome?
     var entryContext: TradeEntryContext?
     var mlFeatures: MLFeatures?
+    // Continuous forward returns (direction-independent, for every bar)
+    var fwdReturn4H: Double?      // % return after 1x4H bar
+    var fwdReturn12H: Double?     // % return after 3x4H bars
+    var fwdReturn24H: Double?     // % return after 6x4H bars
+    var fwdMaxUp24H: Double?      // max upward move in 24H as % of price
+    var fwdMaxDown24H: Double?    // max downward move in 24H as % of price
+    var fwdMaxFavR: Double?       // max favorable excursion in ATR multiples
 
     var directionCorrect4H: Bool? {
         guard let future = priceAfter4H else { return nil }

@@ -863,48 +863,78 @@ class AnalysisService: ObservableObject {
         let price = tf1.price
         let candles = tf2.candles
         let n = candles.count
+
+        // Pre-compute to help Swift type-checker
+        let _dStochCross: Int = tf1.stochRSI?.crossover == "bullish" ? 1 : tf1.stochRSI?.crossover == "bearish" ? -1 : 0
+        let _dMacdCross: Int = tf1.macd?.crossover == "bullish" ? 1 : tf1.macd?.crossover == "bearish" ? -1 : 0
+        let _dDivergence: Int = tf1.divergence?.contains("bullish") == true ? 1 : tf1.divergence?.contains("bearish") == true ? -1 : 0
+        let _hStochCross: Int = tf2.stochRSI?.crossover == "bullish" ? 1 : tf2.stochRSI?.crossover == "bearish" ? -1 : 0
+        let _hMacdCross: Int = tf2.macd?.crossover == "bullish" ? 1 : tf2.macd?.crossover == "bearish" ? -1 : 0
+        let _hDivergence: Int = tf2.divergence?.contains("bullish") == true ? 1 : tf2.divergence?.contains("bearish") == true ? -1 : 0
+        let _dAboveVwap: Bool = tf1.vwap.map { price > $0.vwap } ?? false
+        let _hAboveVwap: Bool = tf2.vwap.map { price > $0.vwap } ?? false
+        let _dxyAbove: Bool = crossAsset.map { $0.dxyPrice > $0.dxyEma20 } ?? false
+        let _l3Green: Bool = n >= 3 && candles[(n-3)...].allSatisfy { $0.close > $0.open }
+        let _l3Red: Bool = n >= 3 && candles[(n-3)...].allSatisfy { $0.close < $0.open }
+        let _l3Vol: Bool = n >= 3 && candles[n-2].volume > candles[n-3].volume && candles[n-1].volume > candles[n-2].volume
+        let _dStructBull = tf1.marketStructure?.label.contains("bullish") ?? false
+        let _dStructBear = tf1.marketStructure?.label.contains("bearish") ?? false
+        let _hStructBull = tf2.marketStructure?.label.contains("bullish") ?? false
+        let _hStructBear = tf2.marketStructure?.label.contains("bearish") ?? false
+        let _dBull = tf1.biasScore > 3
+        let _dBear = tf1.biasScore < -3
+        let _hBull = tf2.biasScore > 3
+        let _hBear = tf2.biasScore < -3
+        let _dMacdHist = tf1.macd?.histogram ?? 0.0
+        let _hMacdHist = tf2.macd?.histogram ?? 0.0
+
+        // Cross-timeframe interactions
+        var _tfAlign = 0
+        if _dBull { _tfAlign += 1 } else if _dBear { _tfAlign -= 1 }
+        if _hBull { _tfAlign += 1 } else if _hBear { _tfAlign -= 1 }
+        let _momAlign: Int = (_dMacdHist > 0 && _hMacdHist > 0) ? 1 : (_dMacdHist < 0 && _hMacdHist < 0) ? -1 : 0
+        let _structAlign: Int = (_dStructBull && _hStructBull) ? 1 : (_dStructBear && _hStructBear) ? -1 : 0
+
+        // Regime code
+        let _adx = tf1.adx?.adx ?? 0.0
+        let _regimeCode: Int = (_adx > 25 && (stackBull(tf1) || stackBear(tf1))) ? 2 : _adx < 20 ? 0 : 1
+
         return MLFeatures(
-            dRsi: tf1.rsi ?? 50, dMacdHist: tf1.macd?.histogram ?? 0,
-            dAdx: tf1.adx?.adx ?? 0, dAdxBullish: tf1.adx?.direction == "Bullish",
+            dRsi: tf1.rsi ?? 50, dMacdHist: _dMacdHist,
+            dAdx: _adx, dAdxBullish: tf1.adx?.direction == "Bullish",
             dEmaCross: emaCross(tf1), dStackBull: stackBull(tf1), dStackBear: stackBear(tf1),
-            dStructBull: tf1.marketStructure?.label.contains("bullish") ?? false,
-            dStructBear: tf1.marketStructure?.label.contains("bearish") ?? false,
-            dStochK: tf1.stochRSI?.k ?? 50,
-            dStochCross: tf1.stochRSI?.crossover == "bullish" ? 1 : tf1.stochRSI?.crossover == "bearish" ? -1 : 0,
-            dMacdCross: tf1.macd?.crossover == "bullish" ? 1 : tf1.macd?.crossover == "bearish" ? -1 : 0,
-            dDivergence: tf1.divergence?.contains("bullish") == true ? 1 : tf1.divergence?.contains("bearish") == true ? -1 : 0,
-            dEma20Rising: ema20Rising(tf1),
+            dStructBull: _dStructBull, dStructBear: _dStructBear,
+            dStochK: tf1.stochRSI?.k ?? 50, dStochCross: _dStochCross,
+            dMacdCross: _dMacdCross, dDivergence: _dDivergence, dEma20Rising: ema20Rising(tf1),
             dBBPercentB: tf1.bollingerBands?.percentB ?? 0.5, dBBSqueeze: tf1.bollingerBands?.squeeze ?? false,
             dBBBandwidth: tf1.bollingerBands?.bandwidth ?? 0, dVolumeRatio: tf1.volumeRatio ?? 1.0,
-            dAboveVwap: tf1.vwap.map { price > $0.vwap } ?? false,
-            hRsi: tf2.rsi ?? 50, hMacdHist: tf2.macd?.histogram ?? 0,
+            dAboveVwap: _dAboveVwap,
+            hRsi: tf2.rsi ?? 50, hMacdHist: _hMacdHist,
             hAdx: tf2.adx?.adx ?? 0, hAdxBullish: tf2.adx?.direction == "Bullish",
             hEmaCross: emaCross(tf2), hStackBull: stackBull(tf2), hStackBear: stackBear(tf2),
-            hStructBull: tf2.marketStructure?.label.contains("bullish") ?? false,
-            hStructBear: tf2.marketStructure?.label.contains("bearish") ?? false,
-            hStochK: tf2.stochRSI?.k ?? 50,
-            hStochCross: tf2.stochRSI?.crossover == "bullish" ? 1 : tf2.stochRSI?.crossover == "bearish" ? -1 : 0,
-            hMacdCross: tf2.macd?.crossover == "bullish" ? 1 : tf2.macd?.crossover == "bearish" ? -1 : 0,
-            hDivergence: tf2.divergence?.contains("bullish") == true ? 1 : tf2.divergence?.contains("bearish") == true ? -1 : 0,
-            hEma20Rising: ema20Rising(tf2),
+            hStructBull: _hStructBull, hStructBear: _hStructBear,
+            hStochK: tf2.stochRSI?.k ?? 50, hStochCross: _hStochCross,
+            hMacdCross: _hMacdCross, hDivergence: _hDivergence, hEma20Rising: ema20Rising(tf2),
             hBBPercentB: tf2.bollingerBands?.percentB ?? 0.5, hBBSqueeze: tf2.bollingerBands?.squeeze ?? false,
             hBBBandwidth: tf2.bollingerBands?.bandwidth ?? 0, hVolumeRatio: tf2.volumeRatio ?? 1.0,
-            hAboveVwap: tf2.vwap.map { price > $0.vwap } ?? false,
+            hAboveVwap: _hAboveVwap,
             eRsi: tf3.rsi ?? 50, eEmaCross: emaCross(tf3),
             eStochK: tf3.stochRSI?.k ?? 50, eMacdHist: tf3.macd?.histogram ?? 0,
             fundingSignal: derivCtx?.fundingSignal ?? 0, oiSignal: derivCtx?.oiSignal ?? 0,
             takerSignal: derivCtx?.takerSignal ?? 0, crowdingSignal: derivCtx?.crowdingSignal ?? 0,
             derivativesCombined: derivCtx?.combinedSignal ?? 0,
-            vix: vixValue ?? 20,
-            dxyAboveEma20: crossAsset.map { $0.dxyPrice > $0.dxyEma20 } ?? false,
-            volScalar: tf1.volScalar ?? 1.0,
-            last3Green: n >= 3 && candles[(n-3)...].allSatisfy { $0.close > $0.open },
-            last3Red: n >= 3 && candles[(n-3)...].allSatisfy { $0.close < $0.open },
-            last3VolIncreasing: n >= 3 && candles[n-2].volume > candles[n-3].volume && candles[n-1].volume > candles[n-2].volume,
+            vix: vixValue ?? 20, dxyAboveEma20: _dxyAbove, volScalar: tf1.volScalar ?? 1.0,
+            last3Green: _l3Green, last3Red: _l3Red, last3VolIncreasing: _l3Vol,
             obvRising: tf1.obv?.trend == "Rising",
             adLineAccumulation: tf1.adLine?.trend == "Accumulation",
             atrPercent: tf2.atr?.atrPercent ?? 0, atrPercentile: tf1.atrPercentile ?? 50,
-            isCrypto: isCrypto
+            isCrypto: isCrypto,
+            tfAlignment: _tfAlign, momentumAlignment: _momAlign, structureAlignment: _structAlign,
+            scoreSum: tf1.biasScore + tf2.biasScore + tf3.biasScore,
+            scoreDivergence: abs(tf1.biasScore - tf2.biasScore),
+            dayOfWeek: Calendar.current.component(.weekday, from: Date()) - 1,
+            barsSinceRegimeChange: 0, // not tracked in live analysis
+            regimeCode: _regimeCode
         )
     }
 

@@ -66,7 +66,9 @@ class BacktestEngine: ObservableObject {
             async let archive1H = fetchFromArchive(symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
 
             let (ad, a4, a1) = await (archiveDaily, archive4H, archive1H)
-            let archiveHit = (ad?.count ?? 0) >= 250 && (a4?.count ?? 0) >= 250
+            // Expect ~6 4H bars per daily bar; archive is only valid if 4H isn't severely truncated
+            let expectedMin4H = ((ad?.count ?? 0) * 4)
+            let archiveHit = (ad?.count ?? 0) >= 250 && (a4?.count ?? 0) >= max(250, expectedMin4H)
 
             if archiveHit, let ad = ad, let a4 = a4 {
                 dailyCandles = ad
@@ -87,6 +89,8 @@ class BacktestEngine: ObservableObject {
                 oneHCandles = try await binance.fetchHistoricalCandles(
                     symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
             } else {
+                // Clear stale local stitched cache so we re-fetch full range
+                CandleCache.clearStitched(symbol: symbol)
                 statusMessage = "Fetching daily candles (Yahoo)..."
                 dailyCandles = try await yahoo.fetchHistoricalCandles(
                     symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
@@ -105,29 +109,28 @@ class BacktestEngine: ObservableObject {
                 return
             }
 
-            // Upload candles to D1 archive (fire-and-forget, non-blocking)
+            // Upload candles to D1 archive (awaited so all chunks complete)
+            #if DEBUG
+            print("[Backtest] archiveHit=\(archiveHit), D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
+            #endif
             if !archiveHit {
-                Task.detached {
-                    // Upload in chunks of 2000 (keeps each request under ~200KB)
-                    let chunkSize = 2000
-                    for i in stride(from: 0, to: dailyCandles.count, by: chunkSize) {
-                        let chunk = Array(dailyCandles[i..<min(i + chunkSize, dailyCandles.count)])
-                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "1d", candles: chunk)
-                    }
-                    for i in stride(from: 0, to: fourHCandles.count, by: chunkSize) {
-                        let chunk = Array(fourHCandles[i..<min(i + chunkSize, fourHCandles.count)])
-                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "4h", candles: chunk)
-                    }
-                    for i in stride(from: 0, to: oneHCandles.count, by: chunkSize) {
-                        let chunk = Array(oneHCandles[i..<min(i + chunkSize, oneHCandles.count)])
-                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "1h", candles: chunk)
-                    }
-                    #if DEBUG
-                    await MainActor.run {
-                        print("[Backtest] Uploaded to D1 archive: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
-                    }
-                    #endif
+                statusMessage = "Uploading to archive..."
+                let chunkSize = 2000
+                for i in stride(from: 0, to: dailyCandles.count, by: chunkSize) {
+                    let chunk = Array(dailyCandles[i..<min(i + chunkSize, dailyCandles.count)])
+                    await Self.uploadCandlesToArchive(symbol: symbol, interval: "1d", candles: chunk)
                 }
+                for i in stride(from: 0, to: fourHCandles.count, by: chunkSize) {
+                    let chunk = Array(fourHCandles[i..<min(i + chunkSize, fourHCandles.count)])
+                    await Self.uploadCandlesToArchive(symbol: symbol, interval: "4h", candles: chunk)
+                }
+                for i in stride(from: 0, to: oneHCandles.count, by: chunkSize) {
+                    let chunk = Array(oneHCandles[i..<min(i + chunkSize, oneHCandles.count)])
+                    await Self.uploadCandlesToArchive(symbol: symbol, interval: "1h", candles: chunk)
+                }
+                #if DEBUG
+                print("[Backtest] Uploaded to D1 archive: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
+                #endif
             }
 
             // Fetch historical derivatives (crypto only, cached)
@@ -163,6 +166,9 @@ class BacktestEngine: ObservableObject {
 
             // Precompute index boundaries — O(n) total instead of O(n×m) filter per iteration
             var dailyIdx = 0, oneHIdx = 0
+            // Temporal tracking
+            var prevRegime = ""
+            var barsSinceRegimeChange = 0
 
             for i in evalStartIndex..<(fourHCandles.count - 6) {
                 let evalTime = fourHCandles[i].time
@@ -204,6 +210,14 @@ class BacktestEngine: ObservableObject {
                 if adxDaily > 25 && maAlign != "tangled" { regime = "TRENDING" }
                 else if adxDaily < 20 { regime = "RANGING" }
                 else { regime = "TRANSITIONING" }
+
+                // Track regime duration
+                if regime != prevRegime {
+                    barsSinceRegimeChange = 0
+                    prevRegime = regime
+                } else {
+                    barsSinceRegimeChange += 1
+                }
 
                 let price = fourHCandles[i].close
                 let forward6 = Array(fourHCandles[(i+1)...(i+6)])
@@ -418,8 +432,53 @@ class BacktestEngine: ObservableObject {
                     // Context
                     atrPercent: fourHResult.atr?.atrPercent ?? 0,
                     atrPercentile: dailyResult.atrPercentile ?? 50,
-                    isCrypto: isCrypto
+                    isCrypto: isCrypto,
+                    // Cross-timeframe interactions
+                    tfAlignment: {
+                        var a = 0
+                        if dBullish { a += 1 } else if dBearish { a -= 1 }
+                        if hBullish { a += 1 } else if hBearish { a -= 1 }
+                        return a
+                    }(),
+                    momentumAlignment: {
+                        let dPos = (dailyResult.macd?.histogram ?? 0) > 0
+                        let hPos = (fourHResult.macd?.histogram ?? 0) > 0
+                        let dNeg = (dailyResult.macd?.histogram ?? 0) < 0
+                        let hNeg = (fourHResult.macd?.histogram ?? 0) < 0
+                        if dPos && hPos { return 1 }
+                        if dNeg && hNeg { return -1 }
+                        return 0
+                    }(),
+                    structureAlignment: {
+                        let dSB = dailyResult.marketStructure?.label.contains("bullish") ?? false
+                        let dSBr = dailyResult.marketStructure?.label.contains("bearish") ?? false
+                        let hSB = fourHResult.marketStructure?.label.contains("bullish") ?? false
+                        let hSBr = fourHResult.marketStructure?.label.contains("bearish") ?? false
+                        if dSB && hSB { return 1 }
+                        if dSBr && hSBr { return -1 }
+                        return 0
+                    }(),
+                    scoreSum: dailyResult.biasScore + fourHResult.biasScore + oneHResult.biasScore,
+                    scoreDivergence: abs(dailyResult.biasScore - fourHResult.biasScore),
+                    // Temporal
+                    dayOfWeek: Calendar.current.component(.weekday, from: evalTime) - 1, // 0=Sun..6=Sat
+                    barsSinceRegimeChange: min(barsSinceRegimeChange, 100), // cap at 100
+                    regimeCode: regime == "TRENDING" ? 2 : regime == "TRANSITIONING" ? 1 : 0
                 )
+
+                // Continuous forward returns (direction-independent)
+                let p1 = fourHCandles[i + 1].close
+                let p3 = fourHCandles[i + 3].close
+                let p6 = fourHCandles[i + 6].close
+                let fwdUp = (maxHigh - price) / price * 100
+                let fwdDown = (price - maxLow) / price * 100
+                let simATRForR = fourHResult.atr?.atr ?? (price * 0.015)
+                // Max favorable R: best directional move normalized by ATR
+                let fwdFavR: Double = {
+                    if alignment.contains("bearish") { return (price - maxLow) / simATRForR }
+                    if alignment.contains("bullish") { return (maxHigh - price) / simATRForR }
+                    return max(maxHigh - price, price - maxLow) / simATRForR
+                }()
 
                 let point = BacktestDataPoint(
                     timestamp: evalTime, price: price,
@@ -435,13 +494,19 @@ class BacktestEngine: ObservableObject {
                     }(),
                     volScalar: dailyResult.volScalar ?? 1.0,
                     atrPercentile: dailyResult.atrPercentile ?? 50,
-                    priceAfter4H: fourHCandles[i + 1].close,
-                    priceAfter3x4H: fourHCandles[i + 3].close,
-                    priceAfter6x4H: fourHCandles[i + 6].close,
+                    priceAfter4H: p1,
+                    priceAfter3x4H: p3,
+                    priceAfter6x4H: p6,
                     maxFavorable24H: maxFav, maxAdverse24H: maxAdv,
                     tradeResult: tradeResult,
                     entryContext: entryContext,
-                    mlFeatures: mlf
+                    mlFeatures: mlf,
+                    fwdReturn4H: (p1 - price) / price * 100,
+                    fwdReturn12H: (p3 - price) / price * 100,
+                    fwdReturn24H: (p6 - price) / price * 100,
+                    fwdMaxUp24H: fwdUp,
+                    fwdMaxDown24H: fwdDown,
+                    fwdMaxFavR: fwdFavR
                 )
                 points.append(point)
 
@@ -467,6 +532,49 @@ class BacktestEngine: ObservableObject {
         isRunning = false
     }
 
+    // MARK: - Batch Run All Symbols
+
+    @Published var batchProgress: String = ""
+    @Published var batchComplete = false
+
+    static let allSymbols = [
+        "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT",
+        "AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META",
+        "AMZN", "JPM", "UNH", "HD", "MA", "ABBV"
+    ]
+
+    /// Run backtests on all symbols sequentially, auto-export CSVs to Documents.
+    func runAllAndExport(startDate: Date, endDate: Date) async {
+        batchComplete = false
+        let exportDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("ml_exports", isDirectory: true)
+        try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
+        #if DEBUG
+        print("[Batch] Export directory: \(exportDir.path)")
+        #endif
+        var exported = 0
+        for (idx, sym) in Self.allSymbols.enumerated() {
+            batchProgress = "[\(idx + 1)/\(Self.allSymbols.count)] \(sym)..."
+            await run(symbol: sym, startDate: startDate, endDate: endDate)
+
+            if let csv = exportCSV() {
+                let fileURL = exportDir.appendingPathComponent("\(sym).csv")
+                try? csv.write(to: fileURL, atomically: true, encoding: .utf8)
+                exported += 1
+                #if DEBUG
+                print("[Batch] Exported \(sym): \(dataPoints.count) rows → \(fileURL.lastPathComponent)")
+                #endif
+            } else {
+                #if DEBUG
+                print("[Batch] \(sym): no data to export")
+                #endif
+            }
+        }
+        batchProgress = "Done: \(exported)/\(Self.allSymbols.count) exported to Documents/ml_exports/"
+        batchComplete = true
+    }
+
     // MARK: - ML CSV Export
 
     /// Upload candles to worker D1 archive for future backtests.
@@ -484,15 +592,30 @@ class BacktestEngine: ObservableObject {
         }
         let body: [String: Any] = ["symbol": symbol, "interval": interval, "candles": payload]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        _ = try? await URLSession.shared.data(for: request)
+        #if DEBUG
+        print("[Backtest] Uploading \(candles.count) \(interval) candles for \(symbol), body size: \(request.httpBody?.count ?? 0) bytes")
+        #endif
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            #if DEBUG
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            let responseStr = String(data: data, encoding: .utf8) ?? "nil"
+            print("[Backtest] Upload response: HTTP \(status) — \(responseStr)")
+            #endif
+        } catch {
+            #if DEBUG
+            print("[Backtest] Upload failed: \(error.localizedDescription)")
+            #endif
+        }
     }
 
     /// Export backtest data points as CSV for ML training.
     /// Each row has: scores, regime, alignment, trade outcome (resolved TP/SL from bar-by-bar sim).
     func exportCSV() -> String? {
         guard !dataPoints.isEmpty else { return nil }
+        let sym = result?.symbol ?? "UNKNOWN"
         let header = [
-            "timestamp", "price",
+            "symbol", "timestamp", "price",
             "dailyScore", "fourHScore", "oneHScore",
             "dailyBias", "fourHBias", "oneHBias",
             "biasAlignment", "regime", "emaRegime",
@@ -523,9 +646,18 @@ class BacktestEngine: ObservableObject {
             "obvRising", "adLineAccumulation",
             // ML features — Context
             "atrPercent", "isCrypto",
+            // ML features — Cross-timeframe interactions
+            "tfAlignment", "momentumAlignment", "structureAlignment",
+            "scoreSum", "scoreDivergence",
+            // ML features — Temporal
+            "dayOfWeek", "barsSinceRegimeChange", "regimeCode",
             // Trade outcome (bar-by-bar resolved)
             "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
-            "tradeMaxFavorable", "tradeMaxAdverse"
+            "tradeMaxFavorable", "tradeMaxAdverse",
+            // Continuous forward returns (direction-independent targets)
+            "fwdReturn4H", "fwdReturn12H", "fwdReturn24H",
+            "fwdMaxUp24H", "fwdMaxDown24H", "fwdMaxFavR",
+            "fwdDirection24H"
         ].joined(separator: ",")
 
         var csv = header + "\n"
@@ -538,6 +670,7 @@ class BacktestEngine: ObservableObject {
             let f = pt.mlFeatures
 
             let row = [
+                sym,
                 "\(Int(pt.timestamp.timeIntervalSince1970))",
                 "\(pt.price)",
                 "\(pt.dailyScore)", "\(pt.fourHScore)", "\(pt.oneHScore)",
@@ -604,9 +737,32 @@ class BacktestEngine: ObservableObject {
                 // Context
                 String(format: "%.4f", f?.atrPercent ?? 0),
                 "\(f?.isCrypto == true ? 1 : 0)",
+                // Cross-timeframe interactions
+                "\(f?.tfAlignment ?? 0)",
+                "\(f?.momentumAlignment ?? 0)",
+                "\(f?.structureAlignment ?? 0)",
+                "\(f?.scoreSum ?? 0)",
+                "\(f?.scoreDivergence ?? 0)",
+                // Temporal
+                "\(f?.dayOfWeek ?? 0)",
+                "\(f?.barsSinceRegimeChange ?? 0)",
+                "\(f?.regimeCode ?? 0)",
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
-                String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv)
+                String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv),
+                // Continuous forward returns
+                String(format: "%.4f", pt.fwdReturn4H ?? 0),
+                String(format: "%.4f", pt.fwdReturn12H ?? 0),
+                String(format: "%.4f", pt.fwdReturn24H ?? 0),
+                String(format: "%.4f", pt.fwdMaxUp24H ?? 0),
+                String(format: "%.4f", pt.fwdMaxDown24H ?? 0),
+                String(format: "%.4f", pt.fwdMaxFavR ?? 0),
+                {
+                    let r = pt.fwdReturn24H ?? 0
+                    if r > 0.5 { return "1" }
+                    else if r < -0.5 { return "-1" }
+                    else { return "0" }
+                }()
             ].joined(separator: ",")
             csv += row + "\n"
         }
