@@ -23,9 +23,21 @@ struct BacktestView: View {
                 }
                 .disabled(engine.isRunning)
 
+                Button(engine.isRunning ? "Batch running..." : "Run All & Export CSVs") {
+                    Task { await engine.runAllAndExport(startDate: startDate, endDate: endDate) }
+                }
+                .disabled(engine.isRunning)
+
                 if engine.isRunning {
                     ProgressView(value: engine.progress)
                     Text(engine.statusMessage).font(.caption).foregroundStyle(.secondary)
+                    if !engine.batchProgress.isEmpty {
+                        Text(engine.batchProgress).font(.caption).foregroundStyle(.blue)
+                    }
+                }
+
+                if engine.batchComplete {
+                    Text(engine.batchProgress).font(.caption).foregroundStyle(.green)
                 }
             }
 
