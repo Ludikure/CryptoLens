@@ -28,16 +28,15 @@ struct BacktestView: View {
                 }
                 .disabled(engine.isRunning)
 
-                HStack {
-                    Button("Crypto Only") {
-                        Task { await engine.batchExport(symbols: BacktestEngine.cryptoSymbols, startDate: startDate, endDate: endDate) }
-                    }
-                    .disabled(engine.isRunning)
-                    Button("Stocks Only") {
-                        Task { await engine.batchExport(symbols: BacktestEngine.stockSymbols, startDate: startDate, endDate: endDate) }
-                    }
-                    .disabled(engine.isRunning)
+                Button("Crypto Only") {
+                    Task { await engine.batchExport(symbols: BacktestEngine.cryptoSymbols, startDate: startDate, endDate: endDate) }
                 }
+                .disabled(engine.isRunning)
+
+                Button("Stocks Only") {
+                    Task { await engine.batchExport(symbols: BacktestEngine.stockSymbols, startDate: startDate, endDate: endDate) }
+                }
+                .disabled(engine.isRunning)
 
                 if engine.isRunning {
                     ProgressView(value: engine.progress)
