@@ -52,6 +52,12 @@ class AnalysisService: ObservableObject {
     @Published private(set) var resultsBySymbol: [String: AnalysisResult] = [:]
     var cachedResults: [String: AnalysisResult] { resultsBySymbol }
 
+    /// Previous indicator snapshots for rate-of-change delta computation
+    private var prevMLSnapshots: [String: (dRsi: Double, dAdx: Double, hRsi: Double, hAdx: Double, hMacdHist: Double)] = [:]
+    /// Cached ETH/BTC price for cross-asset feature
+    private var ethBtcPrice: Double = 0
+    private var ethBtcPrevPrice: Double = 0
+
     private nonisolated static var cacheDir: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
             .appendingPathComponent("analyses", isDirectory: true)
@@ -388,12 +394,38 @@ class AnalysisService: ObservableObject {
 
             if needsEnrichment { lastEnrichmentFetch[symbol] = Date() }
 
+            // Compute rate-of-change deltas from previous refresh
+            let prevSnap = prevMLSnapshots[symbol]
+            let _dRsiDelta = prevSnap.map { (tf1.rsi ?? 50) - $0.dRsi } ?? 0
+            let _dAdxDelta = prevSnap.map { (tf1.adx?.adx ?? 0) - $0.dAdx } ?? 0
+            let _hRsiDelta = prevSnap.map { (tf2.rsi ?? 50) - $0.hRsi } ?? 0
+            let _hAdxDelta = prevSnap.map { (tf2.adx?.adx ?? 0) - $0.hAdx } ?? 0
+            let _hMacdHistDelta = prevSnap.map { (tf2.macd?.histogram ?? 0) - $0.hMacdHist } ?? 0
+            prevMLSnapshots[symbol] = (dRsi: tf1.rsi ?? 50, dAdx: tf1.adx?.adx ?? 0,
+                                        hRsi: tf2.rsi ?? 50, hAdx: tf2.adx?.adx ?? 0,
+                                        hMacdHist: tf2.macd?.histogram ?? 0)
+
+            // Fetch ETH/BTC for cross-asset (crypto only, lightweight)
+            if market == .crypto {
+                ethBtcPrevPrice = ethBtcPrice
+                if let ethBtcCandles = try? await binance.fetchCandles(symbol: "ETHBTC", interval: "4h", limit: 2),
+                   let last = ethBtcCandles.last {
+                    ethBtcPrice = last.close
+                }
+            }
+            let _ethBtcDelta = ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0
+
             // ML win probability — computed from Daily + 4H + 1H features
             var tf1ML = tf1
             let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                    isCrypto: market == .crypto, derivCtx: derivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            }, vixValue: macroSnapshot?.vix)
+            }, vixValue: macroSnapshot?.vix,
+               fearGreedValue: fearGreed?.value,
+               ethBtcRatio: ethBtcPrice, ethBtcDelta: _ethBtcDelta,
+               dRsiDelta: _dRsiDelta, dAdxDelta: _dAdxDelta,
+               hRsiDelta: _hRsiDelta, hAdxDelta: _hAdxDelta,
+               hMacdHistDelta: _hMacdHistDelta)
             tf1ML.mlWinProbability = MLScoring.predict(
                 features: mlFeatures, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -528,10 +560,13 @@ class AnalysisService: ObservableObject {
             var (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
 
             // ML win probability for the AI prompt
+            let prevFG = resultsBySymbol[symbol]?.fearGreed?.value
             let mlFeatures2 = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                     isCrypto: market == .crypto, derivCtx: earlyDerivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            }, vixValue: macroSnapshot?.vix, crossAsset: crossAsset)
+            }, vixValue: macroSnapshot?.vix, crossAsset: crossAsset,
+               fearGreedValue: prevFG,
+               ethBtcRatio: ethBtcPrice, ethBtcDelta: ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0)
             tf1.mlWinProbability = MLScoring.predict(
                 features: mlFeatures2, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -840,7 +875,12 @@ class AnalysisService: ObservableObject {
 
     static func buildMLFeatures(tf1: IndicatorResult, tf2: IndicatorResult, tf3: IndicatorResult,
                                  isCrypto: Bool, derivCtx: DerivativesContext?,
-                                 vixValue: Double? = nil, crossAsset: CrossAssetContext? = nil) -> MLFeatures {
+                                 vixValue: Double? = nil, crossAsset: CrossAssetContext? = nil,
+                                 fearGreedValue: Int? = nil,
+                                 ethBtcRatio: Double = 0, ethBtcDelta: Double = 0,
+                                 dRsiDelta: Double = 0, dAdxDelta: Double = 0,
+                                 hRsiDelta: Double = 0, hAdxDelta: Double = 0,
+                                 hMacdHistDelta: Double = 0) -> MLFeatures {
         func emaCross(_ r: IndicatorResult) -> Int {
             var c = 0
             if let e = r.ema20 { c += r.price > e ? 1 : -1 }
@@ -939,12 +979,14 @@ class AnalysisService: ObservableObject {
             dayOfWeek: Calendar.current.component(.weekday, from: Date()) - 1,
             barsSinceRegimeChange: 0, // not tracked in live analysis
             regimeCode: _regimeCode,
-            // Rate-of-change — not tracked in live (would need previous refresh state)
-            dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0,
-            // Sentiment — not available in live analysis (would need API call)
-            fearGreedIndex: 50, fearGreedZone: 0,
-            // Cross-asset crypto — not tracked in live
-            ethBtcRatio: 0, ethBtcDelta6: 0
+            // Rate-of-change (from previous refresh)
+            dRsiDelta: dRsiDelta, dAdxDelta: dAdxDelta,
+            hRsiDelta: hRsiDelta, hAdxDelta: hAdxDelta, hMacdHistDelta: hMacdHistDelta,
+            // Sentiment
+            fearGreedIndex: Double(fearGreedValue ?? 50),
+            fearGreedZone: FearGreedService.zone(for: fearGreedValue ?? 50),
+            // Cross-asset crypto
+            ethBtcRatio: ethBtcRatio, ethBtcDelta6: ethBtcDelta
         )
     }
 

@@ -1,7 +1,7 @@
 import CoreML
 
 /// ML scoring using dual XGBoost models converted to CoreML.
-/// v5: 67 features including cross-TF interactions, temporal, Bollinger, StochRSI, derivatives, VIX/DXY.
+/// v6: 80 features including cross-TF interactions, temporal, rate-of-change, sentiment, ETH/BTC, raw derivatives.
 /// Crypto: 150 trees (BTC/ETH/SOL/XRP). Stock: 150 trees (12 symbols).
 enum MLScoring {
     private static let cryptoModel: MLModel? = {
