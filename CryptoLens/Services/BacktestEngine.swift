@@ -661,6 +661,12 @@ class BacktestEngine: ObservableObject {
         return Calendar.current.date(from: c)!
     }()
 
+    /// Stock start date: Jan 1 2019 (TwelveData free tier ~5000 1H candles ≈ 2.8yr + warmup).
+    private static let stockStartDate: Date = {
+        var c = DateComponents(); c.year = 2019; c.month = 1; c.day = 1
+        return Calendar.current.date(from: c)!
+    }()
+
     /// Run backtests on given symbols, auto-export CSVs to Documents.
     func batchExport(symbols: [String], startDate: Date, endDate: Date) async {
         batchComplete = false
@@ -675,7 +681,7 @@ class BacktestEngine: ObservableObject {
         for (idx, sym) in symbols.enumerated() {
             batchProgress = "[\(idx + 1)/\(symbols.count)] \(sym)..."
             let isCrypto = sym.hasSuffix("USDT")
-            let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : startDate
+            let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : max(startDate, Self.stockStartDate)
 
             // Delay between stock symbols to avoid Yahoo/TwelveData rate limits
             if !isCrypto && idx > 0 {
