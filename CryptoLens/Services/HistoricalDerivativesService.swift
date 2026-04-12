@@ -77,7 +77,7 @@ enum HistoricalDerivativesService {
 
         while cursor < endDate {
             let startMs = Int(cursor.timeIntervalSince1970 * 1000)
-            let endMs = Int(min(cursor.addingTimeInterval(1000 * 8 * 3600), endDate).timeIntervalSince1970 * 1000)
+            let endMs = Int(endDate.timeIntervalSince1970 * 1000)
             let url = "\(baseURL)/fapi/v1/fundingRate?symbol=\(symbol)&startTime=\(startMs)&endTime=\(endMs)&limit=1000"
 
             guard let data = try? await fetchJSON(url) as? [[String: Any]] else {
@@ -85,16 +85,21 @@ enum HistoricalDerivativesService {
                 continue
             }
 
+            if data.isEmpty { break }
+
+            var lastTs: Int64 = 0
             for entry in data {
                 guard let tsNum = entry["fundingTime"] as? NSNumber,
                       let rateStr = entry["fundingRate"] as? String,
                       let rate = Double(rateStr) else { continue }
                 let ts = tsNum.int64Value
+                lastTs = max(lastTs, ts)
                 results.append((Date(timeIntervalSince1970: Double(ts) / 1000), rate * 100))
             }
 
-            if data.count < 1000 { break }
-            cursor = cursor.addingTimeInterval(1000 * 8 * 3600)
+            // Advance cursor past last returned entry
+            cursor = Date(timeIntervalSince1970: Double(lastTs) / 1000 + 1)
+            if data.count < 1000 { break } // truly exhausted
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 
@@ -133,6 +138,7 @@ enum HistoricalDerivativesService {
     }
 
     /// Generic paginated fetcher for Binance futures data endpoints.
+    /// Note: OI, long/short, and taker endpoints may only return ~30 days of history.
     private static func fetchTimeSeries(endpoint: String, symbol: String, period: String,
                                          startDate: Date, endDate: Date,
                                          valueKey: String) async -> [(Date, Double)] {
@@ -141,7 +147,7 @@ enum HistoricalDerivativesService {
 
         while cursor < endDate {
             let startMs = Int(cursor.timeIntervalSince1970 * 1000)
-            let endMs = Int(min(cursor.addingTimeInterval(500 * 4 * 3600), endDate).timeIntervalSince1970 * 1000)
+            let endMs = Int(endDate.timeIntervalSince1970 * 1000)
             let url = "\(baseURL)\(endpoint)?symbol=\(symbol)&period=\(period)&startTime=\(startMs)&endTime=\(endMs)&limit=500"
 
             guard let data = try? await fetchJSON(url) as? [[String: Any]] else {
@@ -149,9 +155,13 @@ enum HistoricalDerivativesService {
                 continue
             }
 
+            if data.isEmpty { break }
+
+            var lastTs: Int64 = 0
             for entry in data {
                 guard let tsNum = entry["timestamp"] as? NSNumber else { continue }
                 let ts = tsNum.int64Value
+                lastTs = max(lastTs, ts)
                 let value: Double
                 if let str = entry[valueKey] as? String, let v = Double(str) { value = v }
                 else if let v = entry[valueKey] as? Double { value = v }
@@ -159,8 +169,8 @@ enum HistoricalDerivativesService {
                 results.append((Date(timeIntervalSince1970: Double(ts) / 1000), value))
             }
 
+            cursor = Date(timeIntervalSince1970: Double(lastTs) / 1000 + 1)
             if data.count < 500 { break }
-            cursor = cursor.addingTimeInterval(500 * 4 * 3600)
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 

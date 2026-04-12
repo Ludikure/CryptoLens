@@ -13,17 +13,24 @@ enum DerivativesCache {
         let key = "\(symbol)_derivatives"
         let url = cacheDir.appendingPathComponent("\(key).json")
 
-        // Try cache first
+        // Try cache first — validate it covers the requested date range
         if let data = try? Data(contentsOf: url),
            let cached = try? JSONDecoder().decode([String: HistoricalDerivativesService.DerivativesBar].self, from: data) {
             var result = [Date: HistoricalDerivativesService.DerivativesBar]()
             for (_, bar) in cached { result[bar.timestamp] = bar }
-            if result.count >= 100 {
+            let filtered = result.filter { $0.key >= startDate && $0.key <= endDate }
+            // Expect roughly 1 bar per 4H — require at least 25% coverage
+            let expectedBars = Int(endDate.timeIntervalSince(startDate) / (4 * 3600))
+            let minRequired = max(100, expectedBars / 4)
+            if filtered.count >= minRequired {
                 #if DEBUG
-                print("[DerivativesCache] \(symbol): \(result.count) bars from cache")
+                print("[DerivativesCache] \(symbol): \(filtered.count) bars from cache (need \(minRequired))")
                 #endif
-                return result.filter { $0.key >= startDate && $0.key <= endDate }
+                return filtered
             }
+            #if DEBUG
+            print("[DerivativesCache] \(symbol): cache too sparse (\(filtered.count)/\(minRequired)), refetching")
+            #endif
         }
 
         // Fetch fresh
