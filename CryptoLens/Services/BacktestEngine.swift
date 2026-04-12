@@ -653,7 +653,8 @@ class BacktestEngine: ObservableObject {
 
     static let cryptoSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
     static let stockSymbols = ["AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META",
-                                "AMZN", "JPM", "UNH", "HD", "MA", "ABBV"]
+                                "AMZN", "JPM", "UNH", "HD", "MA", "ABBV",
+                                "V", "AMD", "NFLX", "BA", "XOM", "CRM", "LLY", "DIS"]
     static let allSymbols = stockSymbols + cryptoSymbols
 
     /// Crypto start date: Jan 1 2020 (derivatives data begins ~2020 on Binance).
