@@ -468,6 +468,74 @@ export interface MacroSignals {
     vix: number; dxyAboveEma20: number;
 }
 
+// Volume Profile: POC, Value Area High/Low from candle volume distribution
+function computeVolumeProfile(candles: Candle[], atr: number): { poc: number; vah: number; val: number } | null {
+    if (candles.length < 10 || atr <= 0) return null;
+    let rangeHigh = -Infinity, rangeLow = Infinity;
+    for (const c of candles) { rangeHigh = Math.max(rangeHigh, c.high); rangeLow = Math.min(rangeLow, c.low); }
+    const totalRange = rangeHigh - rangeLow;
+    if (totalRange <= 0) return null;
+
+    const bucketSize = atr * 0.25;
+    const bucketCount = Math.max(10, Math.min(100, Math.ceil(totalRange / bucketSize)));
+    const actualBucket = totalRange / bucketCount;
+    const buckets = new Array(bucketCount).fill(0);
+    const n = candles.length;
+
+    const bi = (p: number) => Math.max(0, Math.min(bucketCount - 1, Math.floor((p - rangeLow) / actualBucket)));
+
+    for (let idx = 0; idx < n; idx++) {
+        const c = candles[idx];
+        const bodyTop = Math.max(c.open, c.close), bodyBot = Math.min(c.open, c.close);
+        const bodyRange = bodyTop - bodyBot, candleRange = c.high - c.low;
+        if (candleRange <= 0 || c.volume <= 0) continue;
+
+        let vol = c.volume;
+        if (idx === n - 1 && n > 1 && vol < candles[n - 2].volume * 0.7) vol *= 1.5;
+        vol *= Math.pow(0.97, n - 1 - idx); // time decay
+
+        const bodyShare = Math.max(0.5, bodyRange / candleRange);
+        const bodyVol = vol * bodyShare, wickVol = vol * (1 - bodyShare);
+        const typical = (c.high + c.low + c.close) / 3;
+
+        // Body: Gaussian toward typical price
+        const bStart = bi(bodyBot), bEnd = bi(bodyTop);
+        const sigma = (bEnd - bStart + 1) * 0.4;
+        let weights: number[] = [], tw = 0;
+        for (let i = bStart; i <= bEnd; i++) {
+            const bc = rangeLow + (i + 0.5) * actualBucket;
+            const d = sigma > 0 ? (bc - typical) / (sigma * actualBucket) : 0;
+            const w = Math.exp(-0.5 * d * d);
+            weights.push(w); tw += w;
+        }
+        if (tw > 0) for (let j = 0; j <= bEnd - bStart; j++) buckets[bStart + j] += bodyVol * weights[j] / tw;
+
+        // Wicks: uniform
+        const wStart = bi(c.low), wEnd = bi(c.high);
+        const perWick = wickVol / Math.max(1, wEnd - wStart + 1);
+        for (let i = wStart; i <= wEnd; i++) buckets[i] += perWick;
+    }
+
+    // POC
+    let maxIdx = 0;
+    for (let i = 1; i < bucketCount; i++) if (buckets[i] > buckets[maxIdx]) maxIdx = i;
+    const poc = rangeLow + (maxIdx + 0.5) * actualBucket;
+
+    // Value area: expand from POC until 70%
+    const totalVol = buckets.reduce((a, b) => a + b, 0);
+    const target = totalVol * 0.7;
+    let captured = buckets[maxIdx], lo = maxIdx, hi = maxIdx;
+    while (captured < target && (lo > 0 || hi < bucketCount - 1)) {
+        const belowVol = lo > 0 ? buckets[lo - 1] : 0;
+        const aboveVol = hi < bucketCount - 1 ? buckets[hi + 1] : 0;
+        if (belowVol >= aboveVol && lo > 0) { lo--; captured += buckets[lo]; }
+        else if (hi < bucketCount - 1) { hi++; captured += buckets[hi]; }
+        else if (lo > 0) { lo--; captured += buckets[lo]; }
+        else break;
+    }
+    return { poc, vah: rangeLow + (hi + 1) * actualBucket, val: rangeLow + lo * actualBucket };
+}
+
 export function computeAllFeatures(
     dailyCandles: Candle[],
     fourHCandles: Candle[],
@@ -579,9 +647,19 @@ export function computeAllFeatures(
         // Cross-asset crypto
         ethBtcRatio: sentiment?.ethBtcRatio ?? 0,
         ethBtcDelta6: sentiment?.ethBtcDelta6 ?? 0,
-        // Volume profile (defaults — would need VP computation ported to TS)
-        vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1,
-        vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0,
+        // Volume profile
+        ...(() => {
+            const vp = computeVolumeProfile(dailyCandles, atrVal);
+            if (!vp || atrVal <= 0) return { vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1, vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0 };
+            return {
+                vpDistToPocATR: (price - vp.poc) / atrVal,
+                vpAbovePoc: price > vp.poc ? 1 : 0,
+                vpVAWidth: (vp.vah - vp.val) / price * 100,
+                vpInValueArea: (price >= vp.val && price <= vp.vah) ? 1 : 0,
+                vpDistToVAH_ATR: (vp.vah - price) / atrVal,
+                vpDistToVAL_ATR: (price - vp.val) / atrVal,
+            };
+        })(),
         // 1-bar deltas + acceleration
         hRsiDelta1: prevSnapshot ? (fourH?.rsi ?? 50) - prevSnapshot.hRsi : 0,
         hMacdHistDelta1: prevSnapshot ? (fourH?.macdHist ?? 0) - prevSnapshot.hMacdHist : 0,
