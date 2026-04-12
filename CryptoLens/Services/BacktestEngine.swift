@@ -650,11 +650,10 @@ class BacktestEngine: ObservableObject {
     @Published var batchProgress: String = ""
     @Published var batchComplete = false
 
-    static let allSymbols = [
-        "AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META",
-        "AMZN", "JPM", "UNH", "HD", "MA", "ABBV",
-        "BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"
-    ]
+    static let cryptoSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
+    static let stockSymbols = ["AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META",
+                                "AMZN", "JPM", "UNH", "HD", "MA", "ABBV"]
+    static let allSymbols = stockSymbols + cryptoSymbols
 
     /// Crypto start date: Jan 1 2020 (derivatives data begins ~2020 on Binance).
     private static let cryptoStartDate: Date = {
@@ -662,8 +661,8 @@ class BacktestEngine: ObservableObject {
         return Calendar.current.date(from: c)!
     }()
 
-    /// Run backtests on all symbols sequentially, auto-export CSVs to Documents.
-    func runAllAndExport(startDate: Date, endDate: Date) async {
+    /// Run backtests on given symbols, auto-export CSVs to Documents.
+    func batchExport(symbols: [String], startDate: Date, endDate: Date) async {
         batchComplete = false
         let exportDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
             .appendingPathComponent("ml_exports", isDirectory: true)
@@ -673,14 +672,14 @@ class BacktestEngine: ObservableObject {
         print("[Batch] Export directory: \(exportDir.path)")
         #endif
         var exported = 0
-        for (idx, sym) in Self.allSymbols.enumerated() {
-            batchProgress = "[\(idx + 1)/\(Self.allSymbols.count)] \(sym)..."
+        for (idx, sym) in symbols.enumerated() {
+            batchProgress = "[\(idx + 1)/\(symbols.count)] \(sym)..."
             let isCrypto = sym.hasSuffix("USDT")
             let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : startDate
 
             // Delay between stock symbols to avoid Yahoo/TwelveData rate limits
             if !isCrypto && idx > 0 {
-                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
 
             await run(symbol: sym, startDate: symStart, endDate: endDate)
@@ -698,8 +697,12 @@ class BacktestEngine: ObservableObject {
                 #endif
             }
         }
-        batchProgress = "Done: \(exported)/\(Self.allSymbols.count) exported to Documents/ml_exports/"
+        batchProgress = "Done: \(exported)/\(symbols.count) exported to Documents/ml_exports/"
         batchComplete = true
+    }
+
+    func runAllAndExport(startDate: Date, endDate: Date) async {
+        await batchExport(symbols: Self.allSymbols, startDate: startDate, endDate: endDate)
     }
 
     // MARK: - ML CSV Export
