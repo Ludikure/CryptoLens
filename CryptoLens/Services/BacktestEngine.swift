@@ -677,6 +677,12 @@ class BacktestEngine: ObservableObject {
             batchProgress = "[\(idx + 1)/\(Self.allSymbols.count)] \(sym)..."
             let isCrypto = sym.hasSuffix("USDT")
             let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : startDate
+
+            // Delay between stock symbols to avoid Yahoo/TwelveData rate limits
+            if !isCrypto && idx > 0 {
+                try? await Task.sleep(nanoseconds: 3_000_000_000) // 3 seconds
+            }
+
             await run(symbol: sym, startDate: symStart, endDate: endDate)
 
             if let csv = exportCSV() {
@@ -688,7 +694,7 @@ class BacktestEngine: ObservableObject {
                 #endif
             } else {
                 #if DEBUG
-                print("[Batch] \(sym): no data to export")
+                print("[Batch] \(sym): no data — statusMessage: \(statusMessage)")
                 #endif
             }
         }
