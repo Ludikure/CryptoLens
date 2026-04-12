@@ -1,7 +1,7 @@
 import CoreML
 
 /// ML scoring using dual XGBoost models converted to CoreML.
-/// v3: 51 features including Bollinger, StochRSI, derivatives, VIX/DXY.
+/// v5: 67 features including cross-TF interactions, temporal, Bollinger, StochRSI, derivatives, VIX/DXY.
 /// Crypto: 150 trees (BTC/ETH/SOL/XRP). Stock: 150 trees (12 symbols).
 enum MLScoring {
     private static let cryptoModel: MLModel? = {
@@ -29,55 +29,60 @@ enum MLScoring {
         let model = f.isCrypto ? cryptoModel : stockModel
         guard let model else { return nil }
 
-        let input: [String: Double] = [
-            // Daily core
+        // Split into sub-dicts to help Swift type-checker
+        var input: [String: Double] = [:]
+
+        // Daily core + momentum + vol/volume (19)
+        let daily: [String: Double] = [
             "dRsi": f.dRsi, "dMacdHist": f.dMacdHist, "dAdx": f.dAdx,
-            "dAdxBullish": f.dAdxBullish ? 1 : 0,
-            "dEmaCross": Double(f.dEmaCross),
+            "dAdxBullish": f.dAdxBullish ? 1 : 0, "dEmaCross": Double(f.dEmaCross),
             "dStackBull": f.dStackBull ? 1 : 0, "dStackBear": f.dStackBear ? 1 : 0,
             "dStructBull": f.dStructBull ? 1 : 0, "dStructBear": f.dStructBear ? 1 : 0,
-            // Daily momentum
             "dStochK": f.dStochK, "dStochCross": Double(f.dStochCross),
             "dMacdCross": Double(f.dMacdCross), "dDivergence": Double(f.dDivergence),
             "dEma20Rising": f.dEma20Rising ? 1 : 0,
-            // Daily vol/volume
             "dBBPercentB": f.dBBPercentB, "dBBSqueeze": f.dBBSqueeze ? 1 : 0,
             "dBBBandwidth": f.dBBBandwidth, "dVolumeRatio": f.dVolumeRatio,
             "dAboveVwap": f.dAboveVwap ? 1 : 0,
-            // 4H core
+        ]
+        input.merge(daily) { _, new in new }
+
+        // 4H core + momentum + vol/volume (19)
+        let fourH: [String: Double] = [
             "hRsi": f.hRsi, "hMacdHist": f.hMacdHist, "hAdx": f.hAdx,
-            "hAdxBullish": f.hAdxBullish ? 1 : 0,
-            "hEmaCross": Double(f.hEmaCross),
+            "hAdxBullish": f.hAdxBullish ? 1 : 0, "hEmaCross": Double(f.hEmaCross),
             "hStackBull": f.hStackBull ? 1 : 0, "hStackBear": f.hStackBear ? 1 : 0,
             "hStructBull": f.hStructBull ? 1 : 0, "hStructBear": f.hStructBear ? 1 : 0,
-            // 4H momentum
             "hStochK": f.hStochK, "hStochCross": Double(f.hStochCross),
             "hMacdCross": Double(f.hMacdCross), "hDivergence": Double(f.hDivergence),
             "hEma20Rising": f.hEma20Rising ? 1 : 0,
-            // 4H vol/volume
             "hBBPercentB": f.hBBPercentB, "hBBSqueeze": f.hBBSqueeze ? 1 : 0,
             "hBBBandwidth": f.hBBBandwidth, "hVolumeRatio": f.hVolumeRatio,
             "hAboveVwap": f.hAboveVwap ? 1 : 0,
-            // 1H entry
+        ]
+        input.merge(fourH) { _, new in new }
+
+        // 1H entry + derivatives + macro + patterns + stock + context + cross-TF + temporal (29)
+        let rest: [String: Double] = [
             "eRsi": f.eRsi, "eEmaCross": Double(f.eEmaCross),
             "eStochK": f.eStochK, "eMacdHist": f.eMacdHist,
-            // Derivatives
             "fundingSignal": Double(f.fundingSignal), "oiSignal": Double(f.oiSignal),
             "takerSignal": Double(f.takerSignal), "crowdingSignal": Double(f.crowdingSignal),
             "derivativesCombined": Double(f.derivativesCombined),
-            // Macro
-            "vix": f.vix, "dxyAboveEma20": f.dxyAboveEma20 ? 1 : 0,
-            "volScalarML": f.volScalar,
-            // Candle patterns
+            "vix": f.vix, "dxyAboveEma20": f.dxyAboveEma20 ? 1 : 0, "volScalarML": f.volScalar,
             "last3Green": f.last3Green ? 1 : 0, "last3Red": f.last3Red ? 1 : 0,
             "last3VolIncreasing": f.last3VolIncreasing ? 1 : 0,
-            // Stock-only
-            "obvRising": f.obvRising ? 1 : 0,
-            "adLineAccumulation": f.adLineAccumulation ? 1 : 0,
-            // Context
+            "obvRising": f.obvRising ? 1 : 0, "adLineAccumulation": f.adLineAccumulation ? 1 : 0,
             "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
-            "dailyScore": Double(dailyScore), "fourHScore": Double(fourHScore)
+            "dailyScore": Double(dailyScore), "fourHScore": Double(fourHScore),
+            "tfAlignment": Double(f.tfAlignment), "momentumAlignment": Double(f.momentumAlignment),
+            "structureAlignment": Double(f.structureAlignment),
+            "scoreSum": Double(f.scoreSum), "scoreDivergence": Double(f.scoreDivergence),
+            "dayOfWeek": Double(f.dayOfWeek),
+            "barsSinceRegimeChange": Double(f.barsSinceRegimeChange),
+            "regimeCode": Double(f.regimeCode),
         ]
+        input.merge(rest) { _, new in new }
 
         let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: nsInput),
