@@ -98,6 +98,12 @@ struct MLFeatures: Codable {
     let hRsiDelta: Double         // 4H RSI change over 6 bars
     let hAdxDelta: Double         // 4H ADX change
     let hMacdHistDelta: Double    // 4H MACD histogram change
+    // Sentiment (crypto only, 50/0 for stocks)
+    let fearGreedIndex: Double    // 0-100, daily
+    let fearGreedZone: Int        // -2=extreme fear .. +2=extreme greed
+    // Cross-asset crypto
+    let ethBtcRatio: Double       // ETH/BTC price ratio
+    let ethBtcDelta6: Double      // ETH/BTC change over 6 bars
 }
 
 struct BacktestDataPoint: Codable {

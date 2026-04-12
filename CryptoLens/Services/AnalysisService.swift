@@ -940,7 +940,11 @@ class AnalysisService: ObservableObject {
             barsSinceRegimeChange: 0, // not tracked in live analysis
             regimeCode: _regimeCode,
             // Rate-of-change — not tracked in live (would need previous refresh state)
-            dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0
+            dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0,
+            // Sentiment — not available in live analysis (would need API call)
+            fearGreedIndex: 50, fearGreedZone: 0,
+            // Cross-asset crypto — not tracked in live
+            ethBtcRatio: 0, ethBtcDelta6: 0
         )
     }
 

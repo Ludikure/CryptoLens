@@ -18,7 +18,7 @@ import json
 import os
 import glob
 
-# 76 ML features (v6: +4 raw derivatives, +5 rate-of-change)
+# 80 ML features (v6b: +4 sentiment/cross-asset)
 features = [
     # Daily core (9)
     'dRsi', 'dMacdHist', 'dAdx', 'dAdxBullish',
@@ -56,6 +56,10 @@ features = [
     'dayOfWeek', 'barsSinceRegimeChange', 'regimeCode',
     # Rate-of-change (5)
     'dRsiDelta', 'dAdxDelta', 'hRsiDelta', 'hAdxDelta', 'hMacdHistDelta',
+    # Sentiment (2)
+    'fearGreedIndex', 'fearGreedZone',
+    # Cross-asset crypto (2)
+    'ethBtcRatio', 'ethBtcDelta6',
 ]
 
 DOWNLOADS = '/Users/bojanmihovilovic/Downloads'
@@ -180,13 +184,25 @@ def load_all(files, label, downsample=True):
     return combined
 
 
-def train_classifier(X_train, y_train, X_val, y_val, n_estimators=150):
+def compute_sample_weights(timestamps):
+    """Weight recent bars higher: last 1 year 3x, last 2 years 2x, older 1x."""
+    now = timestamps.max()
+    one_year = now - 365 * 86400
+    two_years = now - 2 * 365 * 86400
+    weights = np.ones(len(timestamps))
+    weights[timestamps >= two_years] = 2.0
+    weights[timestamps >= one_year] = 3.0
+    return weights
+
+
+def train_classifier(X_train, y_train, X_val, y_val, n_estimators=150, sample_weight=None):
     model = xgb.XGBClassifier(
         max_depth=3, n_estimators=n_estimators, learning_rate=0.1,
         subsample=0.8, colsample_bytree=0.8, min_child_weight=10,
         eval_metric='logloss', random_state=42
     )
-    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=0)
+    model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=0,
+              sample_weight=sample_weight)
     return model
 
 
@@ -245,8 +261,9 @@ def walk_forward_report(data, label):
         y_t = train_df['goodR']
         X_v = val_df[features].fillna(0)
         y_v = val_df['goodR']
+        w_t = compute_sample_weights(train_df['timestamp'].values)
 
-        model = train_classifier(X_t, y_t, X_v, y_v)
+        model = train_classifier(X_t, y_t, X_v, y_v, sample_weight=w_t)
         pred = model.predict(X_v)
         acc = accuracy_score(y_v, pred)
         baseline = y_v.mean()
@@ -276,7 +293,7 @@ def export_model(model, name, market, trained_on, n_samples):
         "n_features": len(features),
         "model_type": "classifier",
         "target": "goodR",
-        "description": "v6: purged CV, daily downsample, raw derivatives, rate-of-change features"
+        "description": "v6b: +fear/greed, ETH/BTC, sample weighting, purged CV, daily downsample"
     }
     json_path = f'/Users/bojanmihovilovic/CryptoLens/ml-training/{name}.json'
     with open(json_path, 'w') as f:
@@ -308,28 +325,24 @@ def train_and_report(data, market_label):
     # 1. Walk-forward CV for honest accuracy estimate
     wf_acc = walk_forward_report(data, f"{market_label} (downsampled + purged)")
 
-    # 2. Final model: train on 70% with purge gap
+    # 2. Final model: train on 70% with purge gap + sample weighting
     train_df, val_df = purged_split(data)
     X_t = train_df[features].fillna(0)
     y_t = train_df['goodR']
     X_v = val_df[features].fillna(0)
     y_v = val_df['goodR']
+    w_t = compute_sample_weights(train_df['timestamp'].values)
 
-    model = train_classifier(X_t, y_t, X_v, y_v)
-    final_acc = report(model, X_v, y_v, val_df, f"{market_label} FINAL (purged 70/30)")
+    model = train_classifier(X_t, y_t, X_v, y_v, sample_weight=w_t)
+    final_acc = report(model, X_v, y_v, val_df, f"{market_label} FINAL (purged 70/30, weighted)")
 
-    # 3. Also report naive accuracy for comparison with v5
-    naive_train, naive_val = data[:int(len(data)*0.7)], data[int(len(data)*0.7):]
-    X_nt = naive_train[features].fillna(0)
-    y_nt = naive_train['goodR']
-    X_nv = naive_val[features].fillna(0)
-    y_nv = naive_val['goodR']
-    naive_model = train_classifier(X_nt, y_nt, X_nv, y_nv)
-    naive_acc = accuracy_score(y_nv, naive_model.predict(X_nv))
+    # 3. Also report unweighted for comparison
+    model_nw = train_classifier(X_t, y_t, X_v, y_v)
+    nw_acc = accuracy_score(y_v, model_nw.predict(X_v))
 
     print(f"\n--- {market_label} ACCURACY COMPARISON ---")
-    print(f"  Naive (no purge, downsampled):  {naive_acc*100:.1f}%")
-    print(f"  Purged 70/30 (downsampled):     {final_acc*100:.1f}%")
+    print(f"  Unweighted (purged 70/30):      {nw_acc*100:.1f}%")
+    print(f"  Weighted (purged 70/30):        {final_acc*100:.1f}%")
     print(f"  Walk-forward mean (honest):     {wf_acc*100:.1f}%")
 
     return model, wf_acc

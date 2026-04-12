@@ -111,5 +111,7 @@ export function buildMLInput(
         regimeCode: (dAdx > 25 && (dStackBull || dStackBear)) ? 2 : dAdx < 20 ? 0 : 1,
         // Rate-of-change (defaults — not tracked on worker)
         dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0,
+        // Sentiment + cross-asset (defaults — not tracked on worker)
+        fearGreedIndex: 50, fearGreedZone: 0, ethBtcRatio: 0, ethBtcDelta6: 0,
     };
 }

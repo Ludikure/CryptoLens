@@ -141,6 +141,17 @@ class BacktestEngine: ObservableObject {
                     symbol: symbol, startDate: fetchStart, endDate: endDate)
             }
 
+            // Fetch Fear & Greed index (crypto only) + ETH/BTC ratio
+            var fearGreedHistory = [Date: Int]()
+            var ethBtcCandles = [Candle]()
+            if isCrypto {
+                statusMessage = "Fetching Fear & Greed index..."
+                fearGreedHistory = await FearGreedService.fetchHistory()
+                statusMessage = "Fetching ETH/BTC..."
+                ethBtcCandles = (try? await binance.fetchHistoricalCandles(
+                    symbol: "ETHBTC", interval: "4h", startDate: fetchStart, endDate: endDate)) ?? []
+            }
+
             // Fetch macro candles (VIX + DXY) for ML features
             statusMessage = "Fetching VIX/DXY..."
             let vixCandles = (try? await CandleCache.loadOrFetch(
@@ -165,7 +176,7 @@ class BacktestEngine: ObservableObject {
             #endif
 
             // Precompute index boundaries — O(n) total instead of O(n×m) filter per iteration
-            var dailyIdx = 0, oneHIdx = 0
+            var dailyIdx = 0, oneHIdx = 0, ethBtcIdx = 0
             // Temporal tracking
             var prevRegime = ""
             var barsSinceRegimeChange = 0
@@ -182,6 +193,7 @@ class BacktestEngine: ObservableObject {
                 // Advance indices to current eval time (monotonically increasing)
                 while dailyIdx < dailyCandles.count && dailyCandles[dailyIdx].time <= evalTime { dailyIdx += 1 }
                 while oneHIdx < oneHCandles.count && oneHCandles[oneHIdx].time <= evalTime { oneHIdx += 1 }
+                while ethBtcIdx < ethBtcCandles.count && ethBtcCandles[ethBtcIdx].time <= evalTime { ethBtcIdx += 1 }
 
                 guard dailyIdx >= 210, i + 1 >= 210, oneHIdx >= 30 else { continue }
 
@@ -479,7 +491,25 @@ class BacktestEngine: ObservableObject {
                     dAdxDelta: dAdxHistory.count >= 7 ? (dailyResult.adx?.adx ?? 0) - dAdxHistory[dAdxHistory.count - 7] : 0,
                     hRsiDelta: hRsiHistory.count >= 7 ? (fourHResult.rsi ?? 50) - hRsiHistory[hRsiHistory.count - 7] : 0,
                     hAdxDelta: hAdxHistory.count >= 7 ? (fourHResult.adx?.adx ?? 0) - hAdxHistory[hAdxHistory.count - 7] : 0,
-                    hMacdHistDelta: hMacdHistHistory.count >= 7 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory[hMacdHistHistory.count - 7] : 0
+                    hMacdHistDelta: hMacdHistHistory.count >= 7 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory[hMacdHistHistory.count - 7] : 0,
+                    // Sentiment
+                    fearGreedIndex: {
+                        let day = Calendar.current.startOfDay(for: evalTime)
+                        return Double(fearGreedHistory[day] ?? 50)
+                    }(),
+                    fearGreedZone: {
+                        let day = Calendar.current.startOfDay(for: evalTime)
+                        return FearGreedService.zone(for: fearGreedHistory[day] ?? 50)
+                    }(),
+                    // Cross-asset crypto
+                    ethBtcRatio: ethBtcIdx > 0 ? ethBtcCandles[ethBtcIdx - 1].close : 0,
+                    ethBtcDelta6: {
+                        guard ethBtcIdx >= 7 else { return 0.0 }
+                        let cur = ethBtcCandles[ethBtcIdx - 1].close
+                        let prev = ethBtcCandles[ethBtcIdx - 7].close
+                        guard prev > 0 else { return 0.0 }
+                        return (cur - prev) / prev * 100
+                    }()
                 )
 
                 // Update rate-of-change history
@@ -685,6 +715,8 @@ class BacktestEngine: ObservableObject {
             "dayOfWeek", "barsSinceRegimeChange", "regimeCode",
             // ML features — Rate-of-change
             "dRsiDelta", "dAdxDelta", "hRsiDelta", "hAdxDelta", "hMacdHistDelta",
+            // ML features — Sentiment + Cross-asset
+            "fearGreedIndex", "fearGreedZone", "ethBtcRatio", "ethBtcDelta6",
             // Trade outcome (bar-by-bar resolved)
             "tradeOutcome", "tradePnlPct", "tradeBarsToOutcome",
             "tradeMaxFavorable", "tradeMaxAdverse",
@@ -791,6 +823,11 @@ class BacktestEngine: ObservableObject {
                 String(format: "%.4f", f?.hRsiDelta ?? 0),
                 String(format: "%.4f", f?.hAdxDelta ?? 0),
                 String(format: "%.6f", f?.hMacdHistDelta ?? 0),
+                // Sentiment + Cross-asset
+                String(format: "%.1f", f?.fearGreedIndex ?? 50),
+                "\(f?.fearGreedZone ?? 0)",
+                String(format: "%.6f", f?.ethBtcRatio ?? 0),
+                String(format: "%.4f", f?.ethBtcDelta6 ?? 0),
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv),

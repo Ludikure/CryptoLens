@@ -91,6 +91,10 @@ enum MLScoring {
             "dRsiDelta": f.dRsiDelta, "dAdxDelta": f.dAdxDelta,
             "hRsiDelta": f.hRsiDelta, "hAdxDelta": f.hAdxDelta,
             "hMacdHistDelta": f.hMacdHistDelta,
+            "fearGreedIndex": f.fearGreedIndex,
+            "fearGreedZone": Double(f.fearGreedZone),
+            "ethBtcRatio": f.ethBtcRatio,
+            "ethBtcDelta6": f.ethBtcDelta6,
         ]
         input.merge(context) { _, new in new }
 
