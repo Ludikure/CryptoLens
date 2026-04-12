@@ -42,6 +42,12 @@ enum CandleCache {
 
     static func clearAll() { try? FileManager.default.removeItem(at: cacheDir) }
 
+    /// Clear the stitched 1H cache for a specific symbol so next fetch is fresh.
+    static func clearStitched(symbol: String) {
+        let url = cacheDir.appendingPathComponent("\(symbol)_1h_stitched.json")
+        try? FileManager.default.removeItem(at: url)
+    }
+
     /// Stitch together 1H stock candles from multiple providers for maximum history.
     /// Twelve Data: up to 5000 candles (~2.8yr) per request. Yahoo: recent 2 years.
     /// Alpha Vantage: remaining gaps (month-by-month, slow).

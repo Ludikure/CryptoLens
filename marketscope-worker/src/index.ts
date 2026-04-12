@@ -878,7 +878,7 @@ export default {
       const params: any[] = [symbol, interval];
       if (start) { query += ' AND timestamp >= ?'; params.push(parseInt(start)); }
       if (end) { query += ' AND timestamp <= ?'; params.push(parseInt(end)); }
-      query += ' ORDER BY timestamp ASC LIMIT 10000';
+      query += ' ORDER BY timestamp ASC LIMIT 100000';
 
       const rows = await env.DB.prepare(query).bind(...params).all();
       return json({ count: rows.results.length, candles: rows.results });
