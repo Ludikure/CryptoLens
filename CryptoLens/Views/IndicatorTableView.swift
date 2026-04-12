@@ -74,7 +74,7 @@ struct IndicatorTableView: View {
                         .fontWeight(abs(score) >= 7 ? .bold : .regular)
                         .foregroundStyle(color)
                 }
-                row("ML Win", tooltip: "ML probability of >= 1.5 ATR favorable move within 24H. 76 features, walk-forward validated at 63.8%. ≥70% = high probability. ≥60% = confirmed. <50% = unfavorable.") { r in
+                row("ML Win", tooltip: "ML probability of >= 1.5 ATR favorable move within 24H. 80 features, walk-forward validated at 63.8%. ≥70% = high probability. ≥60% = confirmed. <50% = unfavorable.") { r in
                     if let ml = r.mlWinProbability {
                         let pct = Int(ml * 100)
                         let color: Color = pct >= 70 ? .green :

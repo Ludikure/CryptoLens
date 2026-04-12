@@ -1,4 +1,4 @@
-// Full 51-feature computation for server-side ML predictions.
+// Full 80-feature computation for server-side ML predictions.
 // Mirrors Swift IndicatorEngine.computeAll() + BacktestEngine MLFeatures extraction.
 
 export interface Candle {
@@ -37,9 +37,24 @@ export interface FullFeatures {
     last3Green: number; last3Red: number; last3VolIncreasing: number;
     // Stock-only (2)
     obvRising: number; adLineAccumulation: number;
+    // Derivatives raw (4)
+    fundingRateRaw: number; oiChangePct: number;
+    takerRatioRaw: number; longPctRaw: number;
     // Context (4)
     atrPercent: number; atrPercentile: number;
     dailyScore: number; fourHScore: number;
+    // Cross-timeframe interactions (5)
+    tfAlignment: number; momentumAlignment: number; structureAlignment: number;
+    scoreSum: number; scoreDivergence: number;
+    // Temporal (3)
+    dayOfWeek: number; barsSinceRegimeChange: number; regimeCode: number;
+    // Rate-of-change (5)
+    dRsiDelta: number; dAdxDelta: number; hRsiDelta: number;
+    hAdxDelta: number; hMacdHistDelta: number;
+    // Sentiment (2)
+    fearGreedIndex: number; fearGreedZone: number;
+    // Cross-asset crypto (2)
+    ethBtcRatio: number; ethBtcDelta6: number;
 }
 
 // ============================================================
@@ -427,6 +442,17 @@ function extractFeatures(candles: Candle[], isCrypto: boolean): TimeframeFeature
 export interface DerivativesSignals {
     fundingSignal: number; oiSignal: number; takerSignal: number;
     crowdingSignal: number; derivativesCombined: number;
+    fundingRateRaw?: number; oiChangePct?: number;
+    takerRatioRaw?: number; longPctRaw?: number;
+}
+
+export interface SentimentSignals {
+    fearGreedIndex: number; fearGreedZone: number;
+    ethBtcRatio: number; ethBtcDelta6: number;
+}
+
+export interface PreviousSnapshot {
+    dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number;
 }
 
 export interface MacroSignals {
@@ -439,7 +465,9 @@ export function computeAllFeatures(
     oneHCandles: Candle[],
     isCrypto: boolean,
     derivatives: DerivativesSignals,
-    macro: MacroSignals
+    macro: MacroSignals,
+    sentiment?: SentimentSignals,
+    prevSnapshot?: PreviousSnapshot
 ): FullFeatures {
     const daily = extractFeatures(dailyCandles, isCrypto);
     const fourH = fourHCandles.length >= 210 ? extractFeatures(fourHCandles, isCrypto) : null;
@@ -498,6 +526,11 @@ export function computeAllFeatures(
         fundingSignal: derivatives.fundingSignal, oiSignal: derivatives.oiSignal,
         takerSignal: derivatives.takerSignal, crowdingSignal: derivatives.crowdingSignal,
         derivativesCombined: derivatives.derivativesCombined,
+        // Derivatives raw
+        fundingRateRaw: derivatives.fundingRateRaw ?? 0,
+        oiChangePct: derivatives.oiChangePct ?? 0,
+        takerRatioRaw: derivatives.takerRatioRaw ?? 1.0,
+        longPctRaw: derivatives.longPctRaw ?? 50,
         // Macro
         vix: macro.vix, dxyAboveEma20: macro.dxyAboveEma20, volScalarML: volScalar,
         // Candle patterns
@@ -507,5 +540,35 @@ export function computeAllFeatures(
         // Context
         atrPercent, atrPercentile,
         dailyScore: daily.score, fourHScore: fourH?.score ?? 0,
+        // Cross-timeframe interactions
+        tfAlignment: (() => {
+            const ds = daily.score, hs = fourH?.score ?? 0;
+            let a = 0;
+            if (ds > 3) a += 1; else if (ds < -3) a -= 1;
+            if (hs > 3) a += 1; else if (hs < -3) a -= 1;
+            return a;
+        })(),
+        momentumAlignment: (daily.macdHist > 0 && (fourH?.macdHist ?? 0) > 0) ? 1 :
+                           (daily.macdHist < 0 && (fourH?.macdHist ?? 0) < 0) ? -1 : 0,
+        structureAlignment: (daily.structBull && (fourH?.structBull ?? 0)) ? 1 :
+                            (daily.structBear && (fourH?.structBear ?? 0)) ? -1 : 0,
+        scoreSum: daily.score + (fourH?.score ?? 0) + (oneH?.score ?? 0),
+        scoreDivergence: Math.abs(daily.score - (fourH?.score ?? 0)),
+        // Temporal
+        dayOfWeek: new Date().getDay(),
+        barsSinceRegimeChange: 0, // would need KV state tracking
+        regimeCode: (daily.adx > 25 && (daily.stackBull || daily.stackBear)) ? 2 : daily.adx < 20 ? 0 : 1,
+        // Rate-of-change
+        dRsiDelta: prevSnapshot ? daily.rsi - prevSnapshot.dRsi : 0,
+        dAdxDelta: prevSnapshot ? daily.adx - prevSnapshot.dAdx : 0,
+        hRsiDelta: prevSnapshot ? (fourH?.rsi ?? 50) - prevSnapshot.hRsi : 0,
+        hAdxDelta: prevSnapshot ? (fourH?.adx ?? 0) - prevSnapshot.hAdx : 0,
+        hMacdHistDelta: prevSnapshot ? (fourH?.macdHist ?? 0) - prevSnapshot.hMacdHist : 0,
+        // Sentiment
+        fearGreedIndex: sentiment?.fearGreedIndex ?? 50,
+        fearGreedZone: sentiment?.fearGreedZone ?? 0,
+        // Cross-asset crypto
+        ethBtcRatio: sentiment?.ethBtcRatio ?? 0,
+        ethBtcDelta6: sentiment?.ethBtcDelta6 ?? 0,
     };
 }

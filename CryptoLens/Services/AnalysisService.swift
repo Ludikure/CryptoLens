@@ -57,6 +57,8 @@ class AnalysisService: ObservableObject {
     /// Cached ETH/BTC price for cross-asset feature
     private var ethBtcPrice: Double = 0
     private var ethBtcPrevPrice: Double = 0
+    /// Regime tracking for barsSinceRegimeChange
+    private var lastRegime: [String: (code: Int, since: Date)] = [:]
 
     private nonisolated static var cacheDir: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -415,6 +417,19 @@ class AnalysisService: ObservableObject {
             }
             let _ethBtcDelta = ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0
 
+            // Track regime for barsSinceRegimeChange
+            let _adxLive = tf1.adx?.adx ?? 0
+            let _stackBullLive = tf1.ema20.flatMap { e20 in tf1.ema50.flatMap { e50 in tf1.ema200.map { e200 in e20 > e50 && e50 > e200 } } } ?? false
+            let _stackBearLive = tf1.ema20.flatMap { e20 in tf1.ema50.flatMap { e50 in tf1.ema200.map { e200 in e20 < e50 && e50 < e200 } } } ?? false
+            let _regimeCodeLive = (_adxLive > 25 && (_stackBullLive || _stackBearLive)) ? 2 : _adxLive < 20 ? 0 : 1
+            let _barsSinceRegime: Int
+            if let prev = lastRegime[symbol], prev.code == _regimeCodeLive {
+                _barsSinceRegime = min(Int(Date().timeIntervalSince(prev.since) / (4 * 3600)), 100)
+            } else {
+                lastRegime[symbol] = (code: _regimeCodeLive, since: Date())
+                _barsSinceRegime = 0
+            }
+
             // ML win probability — computed from Daily + 4H + 1H features
             var tf1ML = tf1
             let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
@@ -425,7 +440,8 @@ class AnalysisService: ObservableObject {
                ethBtcRatio: ethBtcPrice, ethBtcDelta: _ethBtcDelta,
                dRsiDelta: _dRsiDelta, dAdxDelta: _dAdxDelta,
                hRsiDelta: _hRsiDelta, hAdxDelta: _hAdxDelta,
-               hMacdHistDelta: _hMacdHistDelta)
+               hMacdHistDelta: _hMacdHistDelta,
+               barsSinceRegimeChange: _barsSinceRegime)
             tf1ML.mlWinProbability = MLScoring.predict(
                 features: mlFeatures, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -880,7 +896,8 @@ class AnalysisService: ObservableObject {
                                  ethBtcRatio: Double = 0, ethBtcDelta: Double = 0,
                                  dRsiDelta: Double = 0, dAdxDelta: Double = 0,
                                  hRsiDelta: Double = 0, hAdxDelta: Double = 0,
-                                 hMacdHistDelta: Double = 0) -> MLFeatures {
+                                 hMacdHistDelta: Double = 0,
+                                 barsSinceRegimeChange: Int = 0) -> MLFeatures {
         func emaCross(_ r: IndicatorResult) -> Int {
             var c = 0
             if let e = r.ema20 { c += r.price > e ? 1 : -1 }
@@ -977,7 +994,7 @@ class AnalysisService: ObservableObject {
             scoreSum: tf1.biasScore + tf2.biasScore + tf3.biasScore,
             scoreDivergence: abs(tf1.biasScore - tf2.biasScore),
             dayOfWeek: Calendar.current.component(.weekday, from: Date()) - 1,
-            barsSinceRegimeChange: 0, // not tracked in live analysis
+            barsSinceRegimeChange: barsSinceRegimeChange,
             regimeCode: _regimeCode,
             // Rate-of-change (from previous refresh)
             dRsiDelta: dRsiDelta, dAdxDelta: dAdxDelta,

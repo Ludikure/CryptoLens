@@ -1283,6 +1283,40 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
   const ML_THRESHOLD = 0.60;
 
+  // Fetch Fear & Greed index (global, once per cron run)
+  let fearGreedIndex = 50, fearGreedZone = 0;
+  try {
+    const fgResp = await fetch('https://api.alternative.me/fng/?limit=1&format=json');
+    if (fgResp.ok) {
+      const fgData = await fgResp.json() as any;
+      const val = parseInt(fgData?.data?.[0]?.value ?? '50');
+      fearGreedIndex = val;
+      fearGreedZone = val <= 20 ? -2 : val <= 40 ? -1 : val <= 60 ? 0 : val <= 80 ? 1 : 2;
+    }
+  } catch {}
+
+  // Fetch ETH/BTC ratio (global, once per cron run)
+  let ethBtcRatio = 0, ethBtcDelta6 = 0;
+  try {
+    const ebResp = await fetch(`${BINANCE_SPOT}/klines?symbol=ETHBTC&interval=4h&limit=7`);
+    if (ebResp.ok) {
+      const ebData = await ebResp.json() as any[];
+      if (ebData.length >= 7) {
+        ethBtcRatio = +ebData[ebData.length - 1][4];
+        const prev = +ebData[0][4];
+        ethBtcDelta6 = prev > 0 ? (ethBtcRatio - prev) / prev * 100 : 0;
+      } else if (ebData.length > 0) {
+        ethBtcRatio = +ebData[ebData.length - 1][4];
+      }
+    }
+  } catch {}
+
+  // Load previous ML snapshots for rate-of-change deltas
+  const prevSnapshotsRaw = await env.ALERTS.get('ml_snapshots');
+  const prevSnapshots: Record<string, { dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number }> =
+    prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
+  const newSnapshots: typeof prevSnapshots = {};
+
   for (const symbol of config.symbols) {
     try {
       const isCrypto = symbol.endsWith('USDT');
@@ -1340,10 +1374,36 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         }
       }
 
-      // Compute all 51 features
-      const zeroDeriv = { fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0 };
+      // Fetch live funding rate for crypto
+      let derivSignals: any = { fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0 };
+      if (isCrypto) {
+        try {
+          const frResp = await fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1`);
+          if (frResp.ok) {
+            const frData = await frResp.json() as any[];
+            if (frData.length > 0) {
+              const rate = parseFloat(frData[0].fundingRate) * 100;
+              derivSignals.fundingRateRaw = rate;
+              if (rate > 0.05) derivSignals.fundingSignal = -1;
+              else if (rate > 0.03) derivSignals.fundingSignal = -1;
+              else if (rate < -0.05) derivSignals.fundingSignal = 1;
+              else if (rate < -0.03) derivSignals.fundingSignal = 1;
+              derivSignals.derivativesCombined = derivSignals.fundingSignal;
+            }
+          }
+        } catch {}
+      }
       const defaultMacro = { vix: 20, dxyAboveEma20: 0 };
-      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, zeroDeriv, defaultMacro);
+
+      // Compute all 80 features
+      const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6 } : undefined;
+      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol]);
+
+      // Save snapshot for next cron's rate-of-change deltas
+      newSnapshots[symbol] = {
+        dRsi: features.dRsi, dAdx: features.dAdx,
+        hRsi: features.hRsi, hAdx: features.hAdx, hMacdHist: features.hMacdHist
+      };
 
       // ML predict using full features
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
@@ -1360,6 +1420,9 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       console.log(`[score] ${symbol} error: ${e}`);
     }
   }
+
+  // Save ML snapshots for next cron's rate-of-change deltas
+  await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
 
   // Save new ML probabilities to KV (fast) + D1 (persistent)
   await env.ALERTS.put(`mlprobs:${deviceId}`, JSON.stringify(newProbs),

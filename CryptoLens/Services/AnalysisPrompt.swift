@@ -80,7 +80,7 @@ enum AnalysisPrompt {
         This gate fires BEFORE the kill condition gate.
 
         ML WIN PROBABILITY (if shown in data header):
-        ML_WIN is a machine learning model's prediction of favorable move probability — the likelihood that price moves >= 1.5 ATR in the setup direction within 24H. Trained on 50,000+ bars across 16 symbols (BTC/ETH/SOL/XRP + 12 stocks) using XGBoost with 76 features spanning Daily, 4H, and 1H indicators, Bollinger Bands, StochRSI, VWAP, derivatives (crypto, including raw funding rate/OI/taker ratio), VIX, DXY, cross-timeframe alignment, and rate-of-change deltas. Validated via walk-forward CV at 63.8% accuracy. Separate crypto and stock models are selected automatically.
+        ML_WIN is a machine learning model's prediction of favorable move probability — the likelihood that price moves >= 1.5 ATR in the setup direction within 24H. Trained on 50,000+ bars across 16 symbols (BTC/ETH/SOL/XRP + 12 stocks) using XGBoost with 80 features spanning Daily, 4H, and 1H indicators, Bollinger Bands, StochRSI, VWAP, derivatives (crypto, including raw funding rate/OI/taker ratio), VIX, DXY, cross-timeframe alignment, rate-of-change deltas, Fear & Greed index, and ETH/BTC ratio. Validated via walk-forward CV at 63.8% accuracy. Separate crypto and stock models are selected automatically.
 
         ML_WIN adjusts conviction AFTER the score gate passes:
         - ML_WIN >= 70%: Upgrade conviction by one level. MODERATE → HIGH, MODERATE-LOW → MODERATE. The model sees non-linear feature interactions the linear score misses.
