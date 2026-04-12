@@ -66,8 +66,9 @@ class BacktestEngine: ObservableObject {
             async let archive1H = fetchFromArchive(symbol: symbol, interval: "1h", startDate: fetchStart, endDate: endDate)
 
             let (ad, a4, a1) = await (archiveDaily, archive4H, archive1H)
-            // Expect ~6 4H bars per daily bar; archive is only valid if 4H isn't severely truncated
-            let expectedMin4H = ((ad?.count ?? 0) * 4)
+            // Crypto: ~6 4H bars per daily bar. Stocks: ~1.6 (6.5h trading day / 4h).
+            let fourHPerDay = isCrypto ? 4 : 1
+            let expectedMin4H = ((ad?.count ?? 0) * fourHPerDay)
             let archiveHit = (ad?.count ?? 0) >= 250 && (a4?.count ?? 0) >= max(250, expectedMin4H)
 
             if archiveHit, let ad = ad, let a4 = a4 {
@@ -661,11 +662,6 @@ class BacktestEngine: ObservableObject {
         return Calendar.current.date(from: c)!
     }()
 
-    /// Stock start date: Jan 1 2019 (TwelveData free tier ~5000 1H candles ≈ 2.8yr + warmup).
-    private static let stockStartDate: Date = {
-        var c = DateComponents(); c.year = 2019; c.month = 1; c.day = 1
-        return Calendar.current.date(from: c)!
-    }()
 
     /// Run backtests on given symbols, auto-export CSVs to Documents.
     func batchExport(symbols: [String], startDate: Date, endDate: Date) async {
@@ -681,7 +677,7 @@ class BacktestEngine: ObservableObject {
         for (idx, sym) in symbols.enumerated() {
             batchProgress = "[\(idx + 1)/\(symbols.count)] \(sym)..."
             let isCrypto = sym.hasSuffix("USDT")
-            let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : max(startDate, Self.stockStartDate)
+            let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : startDate
 
             // Delay between stock symbols to avoid Yahoo/TwelveData rate limits
             if !isCrypto && idx > 0 {
