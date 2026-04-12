@@ -53,7 +53,9 @@ class AnalysisService: ObservableObject {
     var cachedResults: [String: AnalysisResult] { resultsBySymbol }
 
     /// Previous indicator snapshots for rate-of-change delta computation
-    private var prevMLSnapshots: [String: (dRsi: Double, dAdx: Double, hRsi: Double, hAdx: Double, hMacdHist: Double)] = [:]
+    private var prevMLSnapshots: [String: (dRsi: Double, dAdx: Double, hRsi: Double, hAdx: Double, hMacdHist: Double,
+                                           hRsiD1: Double, hMacdD1: Double, dRsiD1: Double,
+                                           dAdxD1: Double)] = [:]
     /// Cached ETH/BTC price for cross-asset feature
     private var ethBtcPrice: Double = 0
     private var ethBtcPrevPrice: Double = 0
@@ -403,9 +405,20 @@ class AnalysisService: ObservableObject {
             let _hRsiDelta = prevSnap.map { (tf2.rsi ?? 50) - $0.hRsi } ?? 0
             let _hAdxDelta = prevSnap.map { (tf2.adx?.adx ?? 0) - $0.hAdx } ?? 0
             let _hMacdHistDelta = prevSnap.map { (tf2.macd?.histogram ?? 0) - $0.hMacdHist } ?? 0
+            // 1-bar deltas (same values as 6-bar but from single refresh interval)
+            let _hRsiDelta1 = _hRsiDelta  // refresh-to-refresh = 1-bar equivalent
+            let _hMacdHistDelta1 = _hMacdHistDelta
+            let _dRsiDelta1 = _dRsiDelta
+            let _dAdxDelta1 = _dAdxDelta
+            // Acceleration: current delta - previous delta
+            let _hRsiAccel = prevSnap.map { _hRsiDelta1 - $0.hRsiD1 } ?? 0
+            let _hMacdAccel = prevSnap.map { _hMacdHistDelta1 - $0.hMacdD1 } ?? 0
+            let _dAdxAccel = prevSnap.map { _dAdxDelta1 - $0.dAdxD1 } ?? 0
             prevMLSnapshots[symbol] = (dRsi: tf1.rsi ?? 50, dAdx: tf1.adx?.adx ?? 0,
                                         hRsi: tf2.rsi ?? 50, hAdx: tf2.adx?.adx ?? 0,
-                                        hMacdHist: tf2.macd?.histogram ?? 0)
+                                        hMacdHist: tf2.macd?.histogram ?? 0,
+                                        hRsiD1: _hRsiDelta1, hMacdD1: _hMacdHistDelta1,
+                                        dRsiD1: _dRsiDelta1, dAdxD1: _dAdxDelta1)
 
             // Fetch ETH/BTC for cross-asset (crypto only, lightweight)
             if market == .crypto {
@@ -441,7 +454,10 @@ class AnalysisService: ObservableObject {
                dRsiDelta: _dRsiDelta, dAdxDelta: _dAdxDelta,
                hRsiDelta: _hRsiDelta, hAdxDelta: _hAdxDelta,
                hMacdHistDelta: _hMacdHistDelta,
-               barsSinceRegimeChange: _barsSinceRegime)
+               barsSinceRegimeChange: _barsSinceRegime,
+               hRsiDelta1: _hRsiDelta1, hMacdHistDelta1: _hMacdHistDelta1,
+               dRsiDelta1: _dRsiDelta1,
+               hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel)
             tf1ML.mlWinProbability = MLScoring.predict(
                 features: mlFeatures, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -897,7 +913,11 @@ class AnalysisService: ObservableObject {
                                  dRsiDelta: Double = 0, dAdxDelta: Double = 0,
                                  hRsiDelta: Double = 0, hAdxDelta: Double = 0,
                                  hMacdHistDelta: Double = 0,
-                                 barsSinceRegimeChange: Int = 0) -> MLFeatures {
+                                 barsSinceRegimeChange: Int = 0,
+                                 hRsiDelta1: Double = 0, hMacdHistDelta1: Double = 0,
+                                 dRsiDelta1: Double = 0,
+                                 hRsiAccel: Double = 0, hMacdAccel: Double = 0,
+                                 dAdxAccel: Double = 0) -> MLFeatures {
         func emaCross(_ r: IndicatorResult) -> Int {
             var c = 0
             if let e = r.ema20 { c += r.price > e ? 1 : -1 }
@@ -1023,9 +1043,9 @@ class AnalysisService: ObservableObject {
                 guard let vp = tf1.volumeProfile, let atr = tf2.atr?.atr, atr > 0 else { return 0.0 }
                 return (tf1.price - vp.valueAreaLow) / atr
             }(),
-            // 1-bar deltas + acceleration — defaults (would need previous bar tracking)
-            hRsiDelta1: 0, hMacdHistDelta1: 0, dRsiDelta1: 0,
-            hRsiAccel: 0, hMacdAccel: 0, dAdxAccel: 0,
+            // 1-bar deltas + acceleration
+            hRsiDelta1: hRsiDelta1, hMacdHistDelta1: hMacdHistDelta1, dRsiDelta1: dRsiDelta1,
+            hRsiAccel: hRsiAccel, hMacdAccel: hMacdAccel, dAdxAccel: dAdxAccel,
             // Time-of-day
             hourBucket: {
                 let h = Calendar.current.component(.hour, from: Date())
