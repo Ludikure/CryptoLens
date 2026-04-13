@@ -122,5 +122,7 @@ export function buildMLInput(
         // Time-of-day
         hourBucket: (() => { const h = new Date().getUTCHours(); return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3; })(),
         isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,
+        // Basis (defaults — not available in buildMLInput path)
+        basisPct: 0, basisExtreme: 0,
     };
 }

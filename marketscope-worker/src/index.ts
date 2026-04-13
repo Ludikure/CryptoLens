@@ -1480,7 +1480,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
       // Compute all 80 features
-      const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6 } : undefined;
+      const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
       const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol]);
 
       // Save snapshot for next cron's rate-of-change deltas + acceleration

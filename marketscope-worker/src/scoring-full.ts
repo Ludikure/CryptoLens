@@ -63,6 +63,8 @@ export interface FullFeatures {
     hRsiAccel: number; hMacdAccel: number; dAdxAccel: number;
     // Time-of-day (2)
     hourBucket: number; isWeekend: number;
+    // Basis (2)
+    basisPct: number; basisExtreme: number;
 }
 
 // ============================================================
@@ -457,6 +459,7 @@ export interface DerivativesSignals {
 export interface SentimentSignals {
     fearGreedIndex: number; fearGreedZone: number;
     ethBtcRatio: number; ethBtcDelta6: number;
+    basisPct?: number;
 }
 
 export interface PreviousSnapshot {
@@ -670,5 +673,8 @@ export function computeAllFeatures(
         // Time-of-day
         hourBucket: (() => { const h = new Date().getUTCHours(); return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3; })(),
         isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,
+        // Basis
+        basisPct: sentiment?.basisPct ?? 0,
+        basisExtreme: (sentiment?.basisPct ?? 0) > 0.5 ? 1 : (sentiment?.basisPct ?? 0) < -0.5 ? -1 : 0,
     };
 }
