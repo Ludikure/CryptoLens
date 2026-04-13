@@ -1399,24 +1399,83 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         }
       }
 
-      // Fetch live funding rate for crypto
+      // Fetch live derivatives for crypto (funding + top trader + taker + OI + basis)
       let derivSignals: any = { fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0 };
       if (isCrypto) {
+        const FAPI = 'https://fapi.binance.com';
+        let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0;
+        let openInterest = 0, markPrice = 0, indexPrice = 0, basisPct = 0, longPct = 0, takerRatio = 0;
+
+        // Funding rate
         try {
-          const frResp = await fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${symbol}&limit=1`);
-          if (frResp.ok) {
-            const frData = await frResp.json() as any[];
-            if (frData.length > 0) {
-              const rate = parseFloat(frData[0].fundingRate) * 100;
-              derivSignals.fundingRateRaw = rate;
-              if (rate > 0.05) derivSignals.fundingSignal = -1;
-              else if (rate > 0.03) derivSignals.fundingSignal = -1;
-              else if (rate < -0.05) derivSignals.fundingSignal = 1;
-              else if (rate < -0.03) derivSignals.fundingSignal = 1;
-              derivSignals.derivativesCombined = derivSignals.fundingSignal;
-            }
+          const r = await fetch(`${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&limit=1`);
+          if (r.ok) { const d = await r.json() as any[]; if (d.length) fundingRate = parseFloat(d[0].fundingRate) * 100; }
+        } catch {}
+
+        // Top trader L/S position ratio (smart money)
+        try {
+          const r = await fetch(`${FAPI}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=4h&limit=1`);
+          if (r.ok) { const d = await r.json() as any[]; if (d.length) topTraderLongPct = parseFloat(d[0].longAccount) * 100; }
+        } catch {}
+
+        // Taker buy/sell volumes
+        try {
+          const r = await fetch(`${FAPI}/futures/data/takerlongshortRatio?symbol=${symbol}&period=4h&limit=1`);
+          if (r.ok) {
+            const d = await r.json() as any[];
+            if (d.length) { takerBuyVol = parseFloat(d[0].buyVol); takerSellVol = parseFloat(d[0].sellVol); takerRatio = parseFloat(d[0].buySellRatio); }
           }
         } catch {}
+
+        // Open interest
+        try {
+          const r = await fetch(`${FAPI}/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=1`);
+          if (r.ok) { const d = await r.json() as any[]; if (d.length) openInterest = parseFloat(d[0].sumOpenInterest); }
+        } catch {}
+
+        // Global L/S ratio
+        try {
+          const r = await fetch(`${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=4h&limit=1`);
+          if (r.ok) { const d = await r.json() as any[]; if (d.length) longPct = parseFloat(d[0].longAccount) * 100; }
+        } catch {}
+
+        // Premium index (basis)
+        try {
+          const r = await fetch(`${FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`);
+          if (r.ok) {
+            const d = await r.json() as any;
+            markPrice = parseFloat(d.markPrice); indexPrice = parseFloat(d.indexPrice);
+            if (indexPrice > 0) basisPct = (markPrice - indexPrice) / indexPrice * 100;
+          }
+        } catch {}
+
+        // Build derivative signals
+        derivSignals.fundingRateRaw = fundingRate;
+        derivSignals.longPctRaw = longPct || 50;
+        derivSignals.takerRatioRaw = takerRatio || 1.0;
+        if (fundingRate > 0.05) derivSignals.fundingSignal = -1;
+        else if (fundingRate > 0.03) derivSignals.fundingSignal = -1;
+        else if (fundingRate < -0.05) derivSignals.fundingSignal = 1;
+        else if (fundingRate < -0.03) derivSignals.fundingSignal = 1;
+        if (takerRatio > 1.1) derivSignals.takerSignal = 1;
+        else if (takerRatio < 0.9) derivSignals.takerSignal = -1;
+        if (longPct > 60) derivSignals.crowdingSignal = -1;
+        else if (longPct < 40) derivSignals.crowdingSignal = 1;
+        derivSignals.derivativesCombined = Math.max(-3, Math.min(3,
+          derivSignals.fundingSignal + derivSignals.oiSignal + derivSignals.takerSignal + derivSignals.crowdingSignal));
+
+        // Archive to D1 (every 4H — check if last archive was >3.5H ago)
+        const archiveKey = `deriv_archive:${symbol}`;
+        const lastArchive = await env.ALERTS.get(archiveKey);
+        if (!lastArchive || Date.now() - parseInt(lastArchive) > 3.5 * 3600 * 1000) {
+          const ts = Math.floor(Date.now() / 1000);
+          try {
+            await env.DB.prepare(
+              'INSERT OR REPLACE INTO derivatives_history (symbol, timestamp, funding_rate, open_interest, long_percent, taker_ratio, top_trader_long_pct, taker_buy_vol, taker_sell_vol, mark_price, index_price, basis_pct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).bind(symbol, ts, fundingRate, openInterest, longPct, takerRatio, topTraderLongPct, takerBuyVol, takerSellVol, markPrice, indexPrice, basisPct).run();
+            await env.ALERTS.put(archiveKey, String(Date.now()), { expirationTtl: 14400 });
+          } catch {}
+        }
       }
       const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
