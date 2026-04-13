@@ -193,4 +193,15 @@ class BinanceService {
         // Bybit returns newest first — reverse to oldest first (Binance convention)
         return candles.reversed()
     }
+
+    /// Fetch premium index (basis) = (markPrice - indexPrice) / indexPrice * 100
+    func fetchPremiumIndex(symbol: String) async throws -> Double {
+        guard let url = URL(string: "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=\(symbol)") else { return 0 }
+        let (data, _) = try await session.data(from: url)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let markStr = json["markPrice"] as? String, let mark = Double(markStr),
+              let indexStr = json["indexPrice"] as? String, let index = Double(indexStr),
+              index > 0 else { return 0 }
+        return (mark - index) / index * 100
+    }
 }

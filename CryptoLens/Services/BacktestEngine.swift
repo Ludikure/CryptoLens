@@ -562,7 +562,10 @@ class BacktestEngine: ObservableObject {
                     isWeekend: {
                         let wd = Calendar.current.component(.weekday, from: evalTime)
                         return wd == 1 || wd == 7
-                    }()
+                    }(),
+                    // Basis — not available in backtest (would need premium index history download)
+                    basisPct: 0,
+                    basisExtreme: 0
                 )
 
                 // Update 1-bar delta tracking for acceleration

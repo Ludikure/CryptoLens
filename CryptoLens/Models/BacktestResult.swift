@@ -122,6 +122,9 @@ struct MLFeatures: Codable {
     // Time-of-day (crypto sessions)
     let hourBucket: Int           // 0=Asia, 1=Europe, 2=US, 3=Overlap
     let isWeekend: Bool           // Saturday/Sunday
+    // Basis (futures premium/discount vs spot)
+    let basisPct: Double          // (mark - index) / index * 100
+    let basisExtreme: Int         // 1 if >0.5%, -1 if <-0.5%, 0 otherwise
 }
 
 struct BacktestDataPoint: Codable {

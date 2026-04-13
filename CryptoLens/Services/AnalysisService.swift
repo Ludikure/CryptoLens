@@ -430,6 +430,14 @@ class AnalysisService: ObservableObject {
             }
             let _ethBtcDelta = ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0
 
+            // Fetch basis (futures premium vs spot) for crypto
+            var _basisPct = 0.0
+            if market == .crypto {
+                if let premiumData = try? await binance.fetchPremiumIndex(symbol: symbol) {
+                    _basisPct = premiumData
+                }
+            }
+
             // Track regime for barsSinceRegimeChange
             let _adxLive = tf1.adx?.adx ?? 0
             let _stackBullLive = tf1.ema20.flatMap { e20 in tf1.ema50.flatMap { e50 in tf1.ema200.map { e200 in e20 > e50 && e50 > e200 } } } ?? false
@@ -457,7 +465,8 @@ class AnalysisService: ObservableObject {
                barsSinceRegimeChange: _barsSinceRegime,
                hRsiDelta1: _hRsiDelta1, hMacdHistDelta1: _hMacdHistDelta1,
                dRsiDelta1: _dRsiDelta1,
-               hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel)
+               hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel,
+               basisPct: _basisPct)
             tf1ML.mlWinProbability = MLScoring.predict(
                 features: mlFeatures, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -594,6 +603,7 @@ class AnalysisService: ObservableObject {
             // ML win probability for the AI prompt — use same snapshot as refresh path
             let prevFG = resultsBySymbol[symbol]?.fearGreed?.value
             let snap2 = prevMLSnapshots[symbol]
+            let _basisPct2 = market == .crypto ? (try? await binance.fetchPremiumIndex(symbol: symbol)) ?? 0 : 0.0
             let mlFeatures2 = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                     isCrypto: market == .crypto, derivCtx: earlyDerivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
@@ -610,7 +620,8 @@ class AnalysisService: ObservableObject {
                dRsiDelta1: snap2.map { (tf1.rsi ?? 50) - $0.dRsi } ?? 0,
                hRsiAccel: snap2.map { ((tf2.rsi ?? 50) - $0.hRsi) - $0.hRsiD1 } ?? 0,
                hMacdAccel: snap2.map { ((tf2.macd?.histogram ?? 0) - $0.hMacdHist) - $0.hMacdD1 } ?? 0,
-               dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0)
+               dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0,
+               basisPct: _basisPct2)
             tf1.mlWinProbability = MLScoring.predict(
                 features: mlFeatures2, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
 
@@ -932,7 +943,8 @@ class AnalysisService: ObservableObject {
                                  hRsiDelta1: Double = 0, hMacdHistDelta1: Double = 0,
                                  dRsiDelta1: Double = 0,
                                  hRsiAccel: Double = 0, hMacdAccel: Double = 0,
-                                 dAdxAccel: Double = 0) -> MLFeatures {
+                                 dAdxAccel: Double = 0,
+                                 basisPct: Double = 0) -> MLFeatures {
         func emaCross(_ r: IndicatorResult) -> Int {
             var c = 0
             if let e = r.ema20 { c += r.price > e ? 1 : -1 }
@@ -1069,7 +1081,10 @@ class AnalysisService: ObservableObject {
             isWeekend: {
                 let wd = Calendar.current.component(.weekday, from: Date())
                 return wd == 1 || wd == 7
-            }()
+            }(),
+            // Basis
+            basisPct: basisPct,
+            basisExtreme: basisPct > 0.5 ? 1 : basisPct < -0.5 ? -1 : 0
         )
     }
 
