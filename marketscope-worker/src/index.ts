@@ -1281,7 +1281,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   }
   const newProbs: Record<string, number> = {};
   const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
-  const ML_THRESHOLD = 0.60;
+  const ML_THRESHOLD = 0.65;
+  const SCORE_THRESHOLD = 5;
 
   // Fetch Fear & Greed index (global, once per cron run)
   let fearGreedIndex = 50, fearGreedZone = 0;
@@ -1500,8 +1501,9 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
       const prevProb = prevProbs[symbol] || 0;
 
-      // ML probability crossing detection
-      if (prevProb < ML_THRESHOLD && mlProb >= ML_THRESHOLD) {
+      // ML probability crossing detection — require both ML >= 65% AND |score| >= 5
+      const absScore = Math.abs(features.dailyScore);
+      if (prevProb < ML_THRESHOLD && mlProb >= ML_THRESHOLD && absScore >= SCORE_THRESHOLD) {
         const bias = features.dailyScore < 0 ? 'Bearish' : features.dailyScore > 0 ? 'Bullish' : 'Neutral';
         triggered.push({ symbol, score: features.dailyScore, mlProb, direction: bias });
       }
