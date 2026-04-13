@@ -65,6 +65,10 @@ export interface FullFeatures {
     hourBucket: number; isWeekend: number;
     // Basis (2)
     basisPct: number; basisExtreme: number;
+    // Stock features (9)
+    fiftyTwoWeekPct: number; distToFiftyTwoHigh: number;
+    gapPercent: number; gapFilled: number; gapDirectionAligned: number;
+    relStrengthVsSpy: number; beta: number; vixLevelCode: number; isMarketHours: number;
 }
 
 // ============================================================
@@ -676,5 +680,11 @@ export function computeAllFeatures(
         // Basis
         basisPct: sentiment?.basisPct ?? 0,
         basisExtreme: (sentiment?.basisPct ?? 0) > 0.5 ? 1 : (sentiment?.basisPct ?? 0) < -0.5 ? -1 : 0,
+        // Stock features (defaults — not computed on worker)
+        fiftyTwoWeekPct: 50, distToFiftyTwoHigh: 0,
+        gapPercent: 0, gapFilled: 0, gapDirectionAligned: 0,
+        relStrengthVsSpy: 0, beta: 1.0,
+        vixLevelCode: macro.vix < 15 ? 0 : macro.vix < 25 ? 1 : macro.vix < 35 ? 2 : 3,
+        isMarketHours: 1,
     };
 }

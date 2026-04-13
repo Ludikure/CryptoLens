@@ -108,6 +108,11 @@ enum MLScoring {
             "hRsiAccel": f.hRsiAccel, "hMacdAccel": f.hMacdAccel, "dAdxAccel": f.dAdxAccel,
             "hourBucket": Double(f.hourBucket), "isWeekend": f.isWeekend ? 1 : 0,
             "basisPct": f.basisPct, "basisExtreme": Double(f.basisExtreme),
+            "fiftyTwoWeekPct": f.fiftyTwoWeekPct, "distToFiftyTwoHigh": f.distToFiftyTwoHigh,
+            "gapPercent": f.gapPercent, "gapFilled": f.gapFilled ? 1 : 0,
+            "gapDirectionAligned": Double(f.gapDirectionAligned),
+            "relStrengthVsSpy": f.relStrengthVsSpy, "beta": f.beta,
+            "vixLevelCode": Double(f.vixLevelCode), "isMarketHours": f.isMarketHours ? 1 : 0,
         ]
         input.merge(phaseA) { _, new in new }
 

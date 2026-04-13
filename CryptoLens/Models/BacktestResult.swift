@@ -125,6 +125,16 @@ struct MLFeatures: Codable {
     // Basis (futures premium/discount vs spot)
     let basisPct: Double          // (mark - index) / index * 100
     let basisExtreme: Int         // 1 if >0.5%, -1 if <-0.5%, 0 otherwise
+    // Stock features (0/defaults for crypto)
+    let fiftyTwoWeekPct: Double   // 0-100, where price sits in 52-week range
+    let distToFiftyTwoHigh: Double // % distance to 52-week high
+    let gapPercent: Double        // overnight gap as % of price
+    let gapFilled: Bool           // gap has been filled today
+    let gapDirectionAligned: Int  // 1=gap matches bias, -1=opposes, 0=no gap
+    let relStrengthVsSpy: Double  // stock 5-day return minus SPY 5-day return
+    let beta: Double              // 60-day rolling beta vs SPY
+    let vixLevelCode: Int         // 0=complacent, 1=normal, 2=elevated, 3=extreme
+    let isMarketHours: Bool       // regular trading hours
 }
 
 struct BacktestDataPoint: Codable {

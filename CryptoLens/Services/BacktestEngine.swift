@@ -166,6 +166,17 @@ class BacktestEngine: ObservableObject {
             let dxyCloses = dxyCandles.map(\.close)
             let dxyEma20List = MovingAverages.computeEMA(values: dxyCloses, period: 20)
 
+            // Fetch SPY candles for stock relative strength + beta
+            var spyCandles = [Candle]()
+            if !isCrypto {
+                statusMessage = "Fetching SPY..."
+                spyCandles = (try? await CandleCache.loadOrFetch(
+                    symbol: "SPY", interval: "1d", startDate: fetchStart, endDate: endDate,
+                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+            }
+            var spyIdx = 0
+
             statusMessage = "Running walk-forward..."
 
             let evalStartIndex = fourHCandles.firstIndex { $0.time >= startDate } ?? 200
@@ -199,6 +210,7 @@ class BacktestEngine: ObservableObject {
                 while dailyIdx < dailyCandles.count && dailyCandles[dailyIdx].time <= evalTime { dailyIdx += 1 }
                 while oneHIdx < oneHCandles.count && oneHCandles[oneHIdx].time <= evalTime { oneHIdx += 1 }
                 while ethBtcIdx < ethBtcCandles.count && ethBtcCandles[ethBtcIdx].time <= evalTime { ethBtcIdx += 1 }
+                while spyIdx < spyCandles.count && spyCandles[spyIdx].time <= evalTime { spyIdx += 1 }
 
                 guard dailyIdx >= 210, i + 1 >= 210, oneHIdx >= 30 else { continue }
 
@@ -565,7 +577,77 @@ class BacktestEngine: ObservableObject {
                     }(),
                     // Basis — not available in backtest (would need premium index history download)
                     basisPct: 0,
-                    basisExtreme: 0
+                    basisExtreme: 0,
+                    // Stock features
+                    fiftyTwoWeekPct: {
+                        guard !isCrypto, dailyIdx >= 252 else { return 50.0 }
+                        let lookback = Array(dailyCandles[max(0, dailyIdx - 252)..<dailyIdx])
+                        let high52 = lookback.map(\.high).max() ?? price
+                        let low52 = lookback.map(\.low).min() ?? price
+                        return high52 != low52 ? (price - low52) / (high52 - low52) * 100 : 50
+                    }(),
+                    distToFiftyTwoHigh: {
+                        guard !isCrypto, dailyIdx >= 252 else { return 0.0 }
+                        let lookback = Array(dailyCandles[max(0, dailyIdx - 252)..<dailyIdx])
+                        let high52 = lookback.map(\.high).max() ?? price
+                        return high52 > 0 ? (high52 - price) / price * 100 : 0
+                    }(),
+                    gapPercent: {
+                        guard !isCrypto, dailyIdx >= 2 else { return 0.0 }
+                        let prevClose = dailyCandles[dailyIdx - 2].close
+                        let todayOpen = dailyCandles[dailyIdx - 1].open
+                        return prevClose > 0 ? (todayOpen - prevClose) / prevClose * 100 : 0
+                    }(),
+                    gapFilled: {
+                        guard !isCrypto, dailyIdx >= 2 else { return false }
+                        let prevClose = dailyCandles[dailyIdx - 2].close
+                        let todayOpen = dailyCandles[dailyIdx - 1].open
+                        let gapUp = todayOpen > prevClose
+                        return gapUp ? fourHCandles[i].low <= prevClose : fourHCandles[i].high >= prevClose
+                    }(),
+                    gapDirectionAligned: {
+                        guard !isCrypto, dailyIdx >= 2 else { return 0 }
+                        let prevClose = dailyCandles[dailyIdx - 2].close
+                        let todayOpen = dailyCandles[dailyIdx - 1].open
+                        let gapPct = (todayOpen - prevClose) / prevClose * 100
+                        guard abs(gapPct) >= 0.3 else { return 0 }
+                        let gapBull = gapPct > 0
+                        let scoreBull = dailyResult.biasScore > 0
+                        return gapBull == scoreBull ? 1 : -1
+                    }(),
+                    relStrengthVsSpy: {
+                        guard !isCrypto, spyIdx >= 6, dailyIdx >= 6 else { return 0.0 }
+                        let stockReturn = (dailyCandles[dailyIdx - 1].close - dailyCandles[dailyIdx - 6].close) / dailyCandles[dailyIdx - 6].close * 100
+                        let spyReturn = (spyCandles[spyIdx - 1].close - spyCandles[max(0, spyIdx - 6)].close) / spyCandles[max(0, spyIdx - 6)].close * 100
+                        return stockReturn - spyReturn
+                    }(),
+                    beta: {
+                        guard !isCrypto, spyIdx >= 60, dailyIdx >= 60 else { return 1.0 }
+                        let n = 60
+                        let stockSlice = Array(dailyCandles[max(0, dailyIdx - n)..<dailyIdx])
+                        let spySlice = Array(spyCandles[max(0, spyIdx - n)..<spyIdx])
+                        guard stockSlice.count >= 2, spySlice.count >= 2 else { return 1.0 }
+                        let stockReturns = zip(stockSlice.dropFirst(), stockSlice).map { ($0.close - $1.close) / $1.close }
+                        let spyReturns = zip(spySlice.dropFirst(), spySlice).map { ($0.close - $1.close) / $1.close }
+                        let pairs = min(stockReturns.count, spyReturns.count)
+                        guard pairs >= 10 else { return 1.0 }
+                        let sr = Array(stockReturns.prefix(pairs))
+                        let mr = Array(spyReturns.prefix(pairs))
+                        let meanS = sr.reduce(0, +) / Double(pairs)
+                        let meanM = mr.reduce(0, +) / Double(pairs)
+                        var cov = 0.0, varM = 0.0
+                        for j in 0..<pairs { cov += (sr[j] - meanS) * (mr[j] - meanM); varM += (mr[j] - meanM) * (mr[j] - meanM) }
+                        return varM > 0 ? cov / varM : 1.0
+                    }(),
+                    vixLevelCode: {
+                        let v = vixValue ?? 20
+                        return v < 15 ? 0 : v < 25 ? 1 : v < 35 ? 2 : 3
+                    }(),
+                    isMarketHours: {
+                        guard !isCrypto else { return true }
+                        let h = Calendar.current.component(.hour, from: evalTime)
+                        return h >= 9 && h < 16
+                    }()
                 )
 
                 // Update 1-bar delta tracking for acceleration
@@ -792,6 +874,10 @@ class BacktestEngine: ObservableObject {
             "dRsiDelta", "dAdxDelta", "hRsiDelta", "hAdxDelta", "hMacdHistDelta",
             // ML features — Sentiment + Cross-asset
             "fearGreedIndex", "fearGreedZone", "ethBtcRatio", "ethBtcDelta6",
+            // ML features — Stock
+            "fiftyTwoWeekPct", "distToFiftyTwoHigh",
+            "gapPercent", "gapFilled", "gapDirectionAligned",
+            "relStrengthVsSpy", "beta", "vixLevelCode", "isMarketHours",
             // ML features — Volume profile
             "vpDistToPocATR", "vpAbovePoc", "vpVAWidth", "vpInValueArea",
             "vpDistToVAH_ATR", "vpDistToVAL_ATR",
@@ -928,6 +1014,16 @@ class BacktestEngine: ObservableObject {
                 // Time-of-day
                 "\(f?.hourBucket ?? 0)",
                 "\(f?.isWeekend == true ? 1 : 0)",
+                // Stock features
+                String(format: "%.2f", f?.fiftyTwoWeekPct ?? 50),
+                String(format: "%.4f", f?.distToFiftyTwoHigh ?? 0),
+                String(format: "%.4f", f?.gapPercent ?? 0),
+                "\(f?.gapFilled == true ? 1 : 0)",
+                "\(f?.gapDirectionAligned ?? 0)",
+                String(format: "%.4f", f?.relStrengthVsSpy ?? 0),
+                String(format: "%.4f", f?.beta ?? 1.0),
+                "\(f?.vixLevelCode ?? 1)",
+                "\(f?.isMarketHours == true ? 1 : 0)",
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv),

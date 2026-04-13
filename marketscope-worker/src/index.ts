@@ -138,7 +138,7 @@ export default {
     }
 
     // All endpoints (except /register, /bls/actuals) require valid auth token
-    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/history' && !path.startsWith('/twelvedata')) {
+    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/history' && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       // Check D1 first, then KV fallback
       const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();

@@ -18,7 +18,7 @@ import json
 import os
 import glob
 
-# 94 ML features (v7: +6 volume profile, +6 RoC windows/accel, +2 time-of-day)
+# 105 ML features (v7b: +9 stock features, +2 basis)
 features = [
     # Daily core (9)
     'dRsi', 'dMacdHist', 'dAdx', 'dAdxBullish',
@@ -60,6 +60,12 @@ features = [
     'fearGreedIndex', 'fearGreedZone',
     # Cross-asset crypto (2)
     'ethBtcRatio', 'ethBtcDelta6',
+    # Basis (2)
+    'basisPct', 'basisExtreme',
+    # Stock features (9)
+    'fiftyTwoWeekPct', 'distToFiftyTwoHigh',
+    'gapPercent', 'gapFilled', 'gapDirectionAligned',
+    'relStrengthVsSpy', 'beta', 'vixLevelCode', 'isMarketHours',
     # Volume profile (6)
     'vpDistToPocATR', 'vpAbovePoc', 'vpVAWidth', 'vpInValueArea',
     'vpDistToVAH_ATR', 'vpDistToVAL_ATR',

@@ -124,5 +124,9 @@ export function buildMLInput(
         isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,
         // Basis (defaults — not available in buildMLInput path)
         basisPct: 0, basisExtreme: 0,
+        // Stock features (defaults)
+        fiftyTwoWeekPct: 50, distToFiftyTwoHigh: 0,
+        gapPercent: 0, gapFilled: 0, gapDirectionAligned: 0,
+        relStrengthVsSpy: 0, beta: 1.0, vixLevelCode: 1, isMarketHours: 1,
     };
 }

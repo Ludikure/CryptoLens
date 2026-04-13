@@ -1084,7 +1084,31 @@ class AnalysisService: ObservableObject {
             }(),
             // Basis
             basisPct: basisPct,
-            basisExtreme: basisPct > 0.5 ? 1 : basisPct < -0.5 ? -1 : 0
+            basisExtreme: basisPct > 0.5 ? 1 : basisPct < -0.5 ? -1 : 0,
+            // Stock features — computed from live data when available
+            fiftyTwoWeekPct: {
+                guard !isCrypto, let hi = tf1.candles.map(\.high).max(), let lo = tf1.candles.map(\.low).min(), hi != lo else { return 50.0 }
+                return (tf1.price - lo) / (hi - lo) * 100
+            }(),
+            distToFiftyTwoHigh: {
+                guard !isCrypto, let hi = tf1.candles.map(\.high).max(), hi > 0 else { return 0.0 }
+                return (hi - tf1.price) / tf1.price * 100
+            }(),
+            gapPercent: {
+                guard !isCrypto, tf1.candles.count >= 2 else { return 0.0 }
+                let prev = tf1.candles[tf1.candles.count - 2].close
+                let todayOpen = tf1.candles.last!.open
+                return prev > 0 ? (todayOpen - prev) / prev * 100 : 0
+            }(),
+            gapFilled: false, // would need intraday tracking
+            gapDirectionAligned: 0, // would need gap + score comparison at open
+            relStrengthVsSpy: 0, // would need SPY candles in live
+            beta: 1.0,
+            vixLevelCode: {
+                let v = vixValue ?? 20
+                return v < 15 ? 0 : v < 25 ? 1 : v < 35 ? 2 : 3
+            }(),
+            isMarketHours: !isCrypto ? MarketHours.isMarketOpen() : true
         )
     }
 
