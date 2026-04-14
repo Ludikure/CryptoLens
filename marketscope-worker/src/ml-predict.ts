@@ -1,5 +1,5 @@
 // XGBoost inference in TypeScript — evaluates exported tree JSON.
-// v6: Dual models with 80 features each. Crypto (150 trees), Stock (150 trees).
+// v8d: Dual models with 105 features. Calibrated (lr=0.05, 150 trees).
 
 import cryptoModelData from './ml-model-crypto.json';
 import stockModelData from './ml-model-stock.json';
@@ -17,6 +17,8 @@ interface TreeNode {
 
 const cryptoTrees: TreeNode[] = cryptoModelData.trees;
 const stockTrees: TreeNode[] = stockModelData.trees;
+const cryptoBaseScore: number = (cryptoModelData as any).base_score ?? 0.5;
+const stockBaseScore: number = (stockModelData as any).base_score ?? 0.5;
 
 function evaluateTree(node: TreeNode, input: Record<string, number>): number {
     if (node.leaf !== undefined) return node.leaf;
@@ -40,7 +42,10 @@ function sigmoid(x: number): number {
 
 export function mlPredict(input: Record<string, number>, isCrypto: boolean): number {
     const trees = isCrypto ? cryptoTrees : stockTrees;
-    let sum = 0;
+    const baseScore = isCrypto ? cryptoBaseScore : stockBaseScore;
+    // XGBoost prediction: sigmoid(logit(base_score) + sum_of_trees)
+    const baseLogit = Math.log(baseScore / (1 - baseScore));
+    let sum = baseLogit;
     for (const tree of trees) {
         sum += evaluateTree(tree, input);
     }
