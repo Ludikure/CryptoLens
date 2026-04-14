@@ -23,11 +23,10 @@ enum OutcomeTracker {
             var tracked = loadTrackedSetups(url: url)
             var changed = false
 
-            // Build price check points: every candle high/low + current price
-            // This catches every wick, not just the latest snapshot
-            struct PricePoint { let high: Double; let low: Double; let time: Date }
-            var checkPoints = recentCandles.map { PricePoint(high: $0.high, low: $0.low, time: $0.time) }
-            checkPoints.append(PricePoint(high: currentPrice, low: currentPrice, time: Date()))
+            // Build price check points with open for same-candle heuristic
+            struct PricePoint { let open: Double; let high: Double; let low: Double; let time: Date }
+            var checkPoints = recentCandles.map { PricePoint(open: $0.open, high: $0.high, low: $0.low, time: $0.time) }
+            checkPoints.append(PricePoint(open: currentPrice, high: currentPrice, low: currentPrice, time: Date()))
 
             for i in tracked.indices {
                 guard !tracked[i].outcome.resolved else { continue }
@@ -35,6 +34,7 @@ enum OutcomeTracker {
                 let setup = tracked[i].setup
                 let isLong = setup.direction == "LONG"
                 let setupTime = tracked[i].timestamp
+                var activeStop = setup.stopLoss
 
                 // Only check candles AFTER setup was registered
                 let relevantPoints = checkPoints.filter { $0.time >= setupTime }
@@ -48,10 +48,10 @@ enum OutcomeTracker {
                             tracked[i].outcome.entryHitTime = point.time
                             changed = true
                         }
-                        continue  // Don't check targets until entry is hit
+                        continue
                     }
 
-                    // Skip candles that occurred before entry was hit
+                    // Skip candles before entry
                     if let entryTime = tracked[i].outcome.entryHitTime, point.time < entryTime {
                         continue
                     }
@@ -69,23 +69,41 @@ enum OutcomeTracker {
                     // Once resolved, only track excursions
                     if tracked[i].outcome.resolved { continue }
 
-                    // Check stop loss
-                    let stopHit = isLong ? point.low <= setup.stopLoss : point.high >= setup.stopLoss
-                    if stopHit {
+                    // Check stop and TP1 with open-proximity heuristic
+                    let stopHit = isLong ? point.low <= activeStop : point.high >= activeStop
+                    let tp1Hit = isLong ? point.high >= setup.tp1 : point.low <= setup.tp1
+
+                    if stopHit && tp1Hit && !tracked[i].outcome.tp1Hit {
+                        // Same-candle ambiguity: closer to open hits first
+                        let distToStop = abs(point.open - activeStop)
+                        let distToTP1 = abs(point.open - setup.tp1)
+                        if distToStop <= distToTP1 {
+                            tracked[i].outcome.stopHit = true
+                            tracked[i].outcome.outcomeTime = point.time
+                            changed = true; break
+                        } else {
+                            tracked[i].outcome.tp1Hit = true
+                            activeStop = setup.entry  // Move stop to breakeven
+                            changed = true
+                        }
+                    } else if stopHit {
                         tracked[i].outcome.stopHit = true
                         tracked[i].outcome.outcomeTime = point.time
+                        changed = true; break
+                    } else if tp1Hit && !tracked[i].outcome.tp1Hit {
+                        tracked[i].outcome.tp1Hit = true
+                        activeStop = setup.entry  // Move stop to breakeven
                         changed = true
-                        break  // Resolved — stop scanning
                     }
 
-                    // Check TPs
-                    if !tracked[i].outcome.tp1Hit {
-                        let hit = isLong ? point.high >= setup.tp1 : point.low <= setup.tp1
-                        if hit { tracked[i].outcome.tp1Hit = true; changed = true }
-                    }
+                    // Check TP2
                     if let tp2 = setup.tp2, !tracked[i].outcome.tp2Hit {
                         let hit = isLong ? point.high >= tp2 : point.low <= tp2
-                        if hit { tracked[i].outcome.tp2Hit = true; changed = true }
+                        if hit {
+                            tracked[i].outcome.tp2Hit = true
+                            tracked[i].outcome.outcomeTime = point.time
+                            changed = true; break
+                        }
                     }
                 }
             }

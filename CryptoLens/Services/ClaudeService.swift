@@ -14,7 +14,8 @@ class ClaudeService: AIProvider {
 
     func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market = .crypto, stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil, positioning: PositioningSnapshot? = nil, stockSentiment: StockSentimentData? = nil, economicEvents: [EconomicEvent] = [], macro: MacroSnapshot? = nil, weeklyContext: String? = nil, spyContext: String? = nil, spotPressure: SpotPressure? = nil, dataQuality: DataQuality? = nil, crossAsset: CrossAssetContext? = nil) async throws -> ClaudeAnalysisResponse {
         let prompt = AnalysisPrompt.buildUserPrompt(indicators: indicators, sentiment: sentiment, symbol: symbol, stockInfo: stockInfo, derivatives: derivatives, positioning: positioning, stockSentiment: stockSentiment, economicEvents: economicEvents, macro: macro, weeklyContext: weeklyContext, spyContext: spyContext, spotPressure: spotPressure, dataQuality: dataQuality, crossAsset: crossAsset)
-        let system = AnalysisPrompt.systemPrompt(market: market)
+        let savedParams = ScoringParams.loadSaved(for: market) ?? (market == .crypto ? .cryptoDefault : .stockDefault)
+        let system = AnalysisPrompt.systemPrompt(market: market, params: savedParams)
 
         // All AI calls go through the worker proxy — API key stays server-side
         return try await analyzeViaWorker(prompt: prompt, system: system)
