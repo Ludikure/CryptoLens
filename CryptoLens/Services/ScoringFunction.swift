@@ -121,8 +121,9 @@ enum ScoringFunction {
             score += s.derivativesCombinedSignal * p.derivativesWeight
         }
 
-        // ── Momentum override (non-daily only) ──
-        if !isDaily {
+        // ── Momentum override (non-daily, mixed regime only) ──
+        let isMixedRegime = !s.stackBullish && !s.stackBearish
+        if !isDaily && isMixedRegime {
             let oversoldThreshold: Double = is4H ? 30 : 35
             let overboughtThreshold: Double = is4H ? 70 : 65
             let overrideWeight = is4H ? 2 : 3
@@ -145,29 +146,35 @@ enum ScoringFunction {
             }
         }
 
-        // ── Adaptive thresholds ──
+        // ── Adaptive thresholds (ADX-aware) ──
+        // Trending (ADX > 25): high vol means strong moves → lower thresholds (1/volScalar)
+        // Ranging (ADX < 20): high vol means noise → raise thresholds (volScalar)
+        // Transitioning: use raw volScalar (default behavior)
+        let adaptiveScalar: Double
+        if p.useAdaptive {
+            if s.adxValue >= p.adxModBreak {
+                adaptiveScalar = 1.0 / s.volScalar  // Trending: invert — high vol lowers thresholds
+            } else if s.adxValue < p.adxWeakBreak {
+                adaptiveScalar = s.volScalar          // Ranging: high vol raises thresholds
+            } else {
+                adaptiveScalar = 1.0                  // Transitioning: no scaling
+            }
+        } else {
+            adaptiveScalar = 1.0
+        }
+
         let strongThreshold: Int
         let directionalThreshold: Int
 
         if isDaily {
-            if p.useAdaptive {
-                strongThreshold = max(3, Int(round(Double(p.dailyStrongThreshold) * s.volScalar)))
-                directionalThreshold = max(2, Int(round(Double(p.dailyDirectionalThreshold) * s.volScalar)))
-            } else {
-                strongThreshold = p.dailyStrongThreshold
-                directionalThreshold = p.dailyDirectionalThreshold
-            }
+            strongThreshold = max(3, Int(round(Double(p.dailyStrongThreshold) * adaptiveScalar)))
+            directionalThreshold = max(2, Int(round(Double(p.dailyDirectionalThreshold) * adaptiveScalar)))
         } else if is4H {
-            if p.useAdaptive {
-                strongThreshold = max(3, Int(round(Double(p.fourHStrongThreshold) * s.volScalar)))
-                directionalThreshold = max(2, Int(round(Double(p.fourHDirectionalThreshold) * s.volScalar)))
-            } else {
-                strongThreshold = p.fourHStrongThreshold
-                directionalThreshold = p.fourHDirectionalThreshold
-            }
+            strongThreshold = max(3, Int(round(Double(p.fourHStrongThreshold) * adaptiveScalar)))
+            directionalThreshold = max(2, Int(round(Double(p.fourHDirectionalThreshold) * adaptiveScalar)))
         } else {
-            strongThreshold = max(3, Int(round(5.0 * s.volScalar)))
-            directionalThreshold = max(1, Int(round(2.0 * s.volScalar)))
+            strongThreshold = max(3, Int(round(5.0 * adaptiveScalar)))
+            directionalThreshold = max(1, Int(round(2.0 * adaptiveScalar)))
         }
 
         // ── Label assignment ──

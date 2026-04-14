@@ -34,7 +34,8 @@ enum OutcomeTracker {
                 let setup = tracked[i].setup
                 let isLong = setup.direction == "LONG"
                 let setupTime = tracked[i].timestamp
-                var activeStop = setup.stopLoss
+                // If TP1 was already hit (from previous refresh), stop is at breakeven
+                var activeStop = tracked[i].outcome.tp1Hit ? setup.entry : setup.stopLoss
 
                 // Only check candles AFTER setup was registered
                 let relevantPoints = checkPoints.filter { $0.time >= setupTime }
