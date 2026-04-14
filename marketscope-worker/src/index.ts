@@ -1343,7 +1343,11 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
   const newSnapshots: typeof prevSnapshots = {};
 
-  for (const symbol of config.symbols) {
+  // Always process these crypto symbols for D1 archiving, even if not in watchlist
+  const ARCHIVE_CRYPTO = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT'];
+  const allSymbols = [...new Set([...config.symbols, ...ARCHIVE_CRYPTO])];
+
+  for (const symbol of allSymbols) {
     try {
       const isCrypto = symbol.endsWith('USDT');
 
@@ -1501,9 +1505,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
       const prevProb = prevProbs[symbol] || 0;
 
-      // ML probability crossing detection — require both ML >= 65% AND |score| >= 5
+      // ML probability crossing detection — require both ML >= 65% AND |score| >= 5 (watchlist only)
       const absScore = Math.abs(features.dailyScore);
-      if (prevProb < ML_THRESHOLD && mlProb >= ML_THRESHOLD && absScore >= SCORE_THRESHOLD) {
+      const inWatchlist = config.symbols.includes(symbol);
+      if (inWatchlist && prevProb < ML_THRESHOLD && mlProb >= ML_THRESHOLD && absScore >= SCORE_THRESHOLD) {
         const bias = features.dailyScore < 0 ? 'Bearish' : features.dailyScore > 0 ? 'Bullish' : 'Neutral';
         triggered.push({ symbol, score: features.dailyScore, mlProb, direction: bias });
       }
