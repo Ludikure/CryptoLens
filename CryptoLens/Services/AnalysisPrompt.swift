@@ -3,7 +3,11 @@ import Foundation
 /// Shared prompt construction and response parsing for all AI providers.
 enum AnalysisPrompt {
 
-    static func systemPrompt(market: Market = .crypto) -> String {
+    static func systemPrompt(market: Market = .crypto, params: ScoringParams? = nil) -> String {
+        let p = params ?? (market == .crypto ? .cryptoDefault : .stockDefault)
+        let dT = p.dailyDirectionalThreshold  // score gate for daily
+        let hT = p.fourHDirectionalThreshold  // score gate for 4H
+        let sT = p.dailyStrongThreshold       // strong conviction threshold
         let tf = market == .crypto
             ? (trend: "Daily", bias: "4H", entry: "1H")
             : (trend: "Daily", bias: "4H", entry: "1H")
@@ -41,11 +45,11 @@ enum AnalysisPrompt {
            → Output: "Bias: [DIRECTION] (Rule 1 — D+4H aligned [direction], 1H [state] classified as counter-trend pullback)"
 
         Rule 2 — DAILY + 4H LABELS CONFLICT (one Bearish, one Bullish):
-           → If Daily |score| >= 5: Bias = Daily direction. The 4H opposition is a counter-trend pullback providing a better entry. Proceed to Step 4.
+           → If Daily |score| >= \(dT): Bias = Daily direction. The 4H opposition is a counter-trend pullback providing a better entry. Proceed to Step 4.
            → Output: "Bias: [DIRECTION] (Rule 2 override — Daily score X, 4H pullback providing entry)"
-           → If 4H |score| >= 5 but Daily |score| < 5: Bias = 4H direction. Daily is indecisive, 4H has conviction. Proceed to Step 4.
+           → If 4H |score| >= \(hT) but Daily |score| < \(dT): Bias = 4H direction. Daily is indecisive, 4H has conviction. Proceed to Step 4.
            → Output: "Bias: [DIRECTION] (Rule 2 — 4H score X overrides weak Daily)"
-           → If both |score| < 5: Bias = FLAT. Skip Step 4. No trade.
+           → If Daily |score| < \(dT) AND 4H |score| < \(hT): Bias = FLAT. Skip Step 4. No trade.
            → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label], neither has sufficient conviction)"
 
         Rule 3 — DAILY OR 4H LABEL IS NEUTRAL:
@@ -69,10 +73,10 @@ enum AnalysisPrompt {
         - Both |score| >= 7: 66% resolved WR, +1.023% expectancy (best)
         - D/4H conflict with stronger |score| >= 7: 69% resolved WR, +1.161% expectancy (pullback entry)
         - Either |score| >= 7: 57% resolved WR, +0.510% expectancy
-        - Either |score| 5-6: 55% resolved WR, +0.452% expectancy (with full confluence)
-        - Both |score| < 5: ~50% — no edge
+        - Either |score| \(dT)-\(sT - 1): 55% resolved WR, +0.452% expectancy (with full confluence)
+        - Both |score| < \(dT): ~50% — no edge
 
-        If max(|Daily score|, |4H score|) < 5:
+        If |Daily score| < \(dT) AND |4H score| < \(hT):
           → NO SETUP regardless of bias alignment or confluence.
           → Output: "NO SETUP — Insufficient conviction (Daily: X, 4H: Y, minimum: ±5 on either). Watching for score to strengthen."
           → Proceed to Risk Factors with what would change the score.
@@ -92,7 +96,7 @@ enum AnalysisPrompt {
         - Score +8 but ML_WIN 42% → NO TRADE. Indicators align but the pattern historically loses.
         - Score +5 but ML_WIN 71% → MODERATE (upgraded from MODERATE-LOW). Marginal indicators but high-probability pattern.
 
-        ML_WIN does NOT override the score gate. If max(|Daily|, |4H|) < 5, it's still NO SETUP even if ML_WIN is 80%. The gate ensures minimum indicator alignment; ML refines within that.
+        ML_WIN does NOT override the score gate. If |Daily| < \(dT) AND |4H| < \(hT), it's still NO SETUP even if ML_WIN is 80%. The gate ensures minimum indicator alignment; ML refines within that.
 
         If ML_WIN is not present in the data header, ignore this section entirely and use the linear conviction hierarchy as-is.
 
@@ -138,8 +142,8 @@ enum AnalysisPrompt {
           Level + signal + risk all present. No macro event within 12 hours.
         - MODERATE: Linear MODERATE (Either |score| >= 7) AND ML_WIN >= 50%. OR: Linear MODERATE-LOW with ML_WIN >= 70% (ML upgrade).
           At least 2 of 3 (level/signal/risk) present. No macro event within 4 hours.
-        - MODERATE-LOW: Either |score| 5-6, ML_WIN >= 50%. All three (level + signal + risk) required. One missing = no trade.
-        - LOW: Both |score| < 5, OR ML_WIN < 50%, OR macro event within 2 hours. → NO TRADE.
+        - MODERATE-LOW: Either |score| \(dT)-\(sT - 1), ML_WIN >= 50%. All three (level + signal + risk) required. One missing = no trade.
+        - LOW: Both |score| < \(dT), OR ML_WIN < 50%, OR macro event within 2 hours. → NO TRADE.
         Direction follows the timeframe with the stronger |score|. If both are equal, Daily has authority.
         One line: what makes it work, what kills it.
 
@@ -247,7 +251,7 @@ enum AnalysisPrompt {
         State which rule fired AND the ML probability (if present in data): "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback. (ML: 65%)" This must match your Step 3 declaration. If ML_WIN is in the data header, you MUST include it in the Bias line — never omit it.
 
         ## Trade Setup
-        Only if conviction is MODERATE-LOW or higher, bias is LONG or SHORT, and score gate is met (crypto: max(|Daily|,|4H|) >= 5; stocks: >= 3). Present as a markdown table:
+        Only if conviction is MODERATE-LOW or higher, bias is LONG or SHORT, and score gate is met (|Daily| >= \(dT) or |4H| >= \(hT)). Present as a markdown table:
         | Level | Price | Why | R:R |
         |-------|-------|-----|-----|
         | Entry | $X | reason | - |
@@ -258,7 +262,7 @@ enum AnalysisPrompt {
         Conviction: HIGH / MODERATE / MODERATE-LOW (ML: XX%)
         Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
-        If score gate not met (crypto: both < 5; stocks: both < 3), bias is FLAT, or conviction is LOW:
+        If score gate not met (|Daily| < \(dT) AND |4H| < \(hT)), bias is FLAT, or conviction is LOW:
         "NO SETUP — [specific reason]." Skip the table entirely.
 
         ## Risk Factors
@@ -391,9 +395,6 @@ enum AnalysisPrompt {
     - Combined with derivatives: crowded longs + aggressive spot selling + falling CVD = trap confirmed. No setup. Exchange outflows + shorts crowding + negative funding + rising CVD = squeeze setup.
     - Spot flows confirm or deny derivatives signals. Derivatives show what traders are betting. Spot pressure shows what is actually being bought and sold. When they disagree, follow the spot pressure.
     """
-
-    // Keep backward-compatible static
-    static let systemPrompt = systemPrompt(market: .crypto)
 
     static func buildUserPrompt(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String,
                                 stockInfo: StockInfo? = nil, derivatives: DerivativesData? = nil,

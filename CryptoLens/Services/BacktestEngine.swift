@@ -274,35 +274,61 @@ class BacktestEngine: ObservableObject {
                 if alignment.contains("bearish") || alignment.contains("bullish") {
                     let simATR = fourHResult.atr?.atr ?? (price * 0.015)
                     let isBull = alignment.contains("bullish")
-                    let entry = price
-                    let stop = isBull ? entry - simATR * 2.0 : entry + simATR * 2.0
-                    let tp1 = isBull ? entry + simATR * 2.0 : entry - simATR * 2.0
-                    let tp2 = isBull ? entry + simATR * 4.0 : entry - simATR * 4.0
+                    // Slippage: 0.015% crypto, 0.03% stocks
+                    let slippagePct = isCrypto ? 0.00015 : 0.0003
+                    let slippage = price * slippagePct
+                    let entry = isBull ? price + slippage : price - slippage
+                    var stop = isBull ? entry - simATR * 2.0 - slippage : entry + simATR * 2.0 + slippage
+                    let tp1 = isBull ? entry + simATR * 2.0 - slippage : entry - simATR * 2.0 + slippage
+                    let tp2 = isBull ? entry + simATR * 4.0 - slippage : entry - simATR * 4.0 + slippage
                     let risk = abs(entry - stop)
 
                     let scanIdx = oneHIdx
-                    let maxScan = 72  // 72h scan window (backtest-proven optimal for 2.0 ATR)
+                    let maxScan = 72
                     var outcome = "EXPIRED"
                     var bars = maxScan
                     var peakFav = 0.0, peakAdv = 0.0
+                    var tp1Reached = false
+                    var tp1ReachedBar = 0
 
                     for bar in 0..<maxScan {
                         let idx = scanIdx + bar
                         guard idx < oneHCandles.count else { break }
                         let c = oneHCandles[idx]
-                        if isBull {
-                            peakFav = max(peakFav, c.high - entry)
-                            peakAdv = max(peakAdv, entry - c.low)
-                            if c.low <= stop { outcome = "STOPPED"; bars = bar + 1; break }
-                            if c.high >= tp2 { outcome = "TP2"; bars = bar + 1; break }
-                            if c.high >= tp1 { outcome = "TP1"; bars = bar + 1; break }
-                        } else {
-                            peakFav = max(peakFav, entry - c.low)
-                            peakAdv = max(peakAdv, c.high - entry)
-                            if c.high >= stop { outcome = "STOPPED"; bars = bar + 1; break }
-                            if c.low <= tp2 { outcome = "TP2"; bars = bar + 1; break }
-                            if c.low <= tp1 { outcome = "TP1"; bars = bar + 1; break }
+
+                        let fav = isBull ? c.high - entry : entry - c.low
+                        let adv = isBull ? entry - c.low : c.high - entry
+                        peakFav = max(peakFav, fav)
+                        peakAdv = max(peakAdv, adv)
+
+                        let stopHit = isBull ? c.low <= stop : c.high >= stop
+                        let tp1Hit = isBull ? c.high >= tp1 : c.low <= tp1
+                        let tp2Hit = isBull ? c.high >= tp2 : c.low <= tp2
+
+                        // Same-candle ambiguity: use open proximity
+                        if stopHit && tp1Hit {
+                            let distToStop = abs(c.open - stop)
+                            let distToTP1 = abs(c.open - tp1)
+                            if distToStop <= distToTP1 {
+                                outcome = "STOPPED"; bars = bar + 1; break
+                            } else {
+                                tp1Reached = true; tp1ReachedBar = bar
+                                stop = entry  // Move stop to breakeven after TP1
+                            }
+                        } else if stopHit {
+                            outcome = "STOPPED"; bars = bar + 1; break
+                        } else if tp1Hit && !tp1Reached {
+                            tp1Reached = true; tp1ReachedBar = bar
+                            stop = entry  // Move stop to breakeven after TP1
                         }
+
+                        // TP2 checked after TP1 tracking (correct order)
+                        if tp2Hit { outcome = "TP2"; bars = bar + 1; break }
+                    }
+
+                    // Credit TP1 if reached but TP2 was not
+                    if outcome == "EXPIRED" && tp1Reached {
+                        outcome = "TP1"; bars = tp1ReachedBar + 1
                     }
 
                     let pnl: Double
@@ -1247,20 +1273,29 @@ class BacktestEngine: ObservableObject {
                     let t2 = ctx.isBullish ? e + t2d : e - t2d
 
                     var outcome = "EXPIRED"; var bars = window
+                    var sweepTP1Hit = false; var sweepTP1Bar = 0
+                    var sweepStop = s
                     for bar in 0..<window {
                         let idx = ctx.oneHStartIdx + bar
                         guard idx < oneHCandles.count else { break }
                         let c = oneHCandles[idx]
-                        if ctx.isBullish {
-                            if c.low <= s { outcome = "STOPPED"; bars = bar+1; break }
-                            if c.high >= t2 { outcome = "TP2"; bars = bar+1; break }
-                            if c.high >= t1 { outcome = "TP1"; bars = bar+1; break }
-                        } else {
-                            if c.high >= s { outcome = "STOPPED"; bars = bar+1; break }
-                            if c.low <= t2 { outcome = "TP2"; bars = bar+1; break }
-                            if c.low <= t1 { outcome = "TP1"; bars = bar+1; break }
+                        let stopHit = ctx.isBullish ? c.low <= sweepStop : c.high >= sweepStop
+                        let tp1Hit = ctx.isBullish ? c.high >= t1 : c.low <= t1
+                        let tp2Hit = ctx.isBullish ? c.high >= t2 : c.low <= t2
+
+                        if stopHit && tp1Hit {
+                            let dStop = abs(c.open - sweepStop)
+                            let dTP = abs(c.open - t1)
+                            if dStop <= dTP { outcome = "STOPPED"; bars = bar+1; break }
+                            else { sweepTP1Hit = true; sweepTP1Bar = bar; sweepStop = e }
+                        } else if stopHit {
+                            outcome = "STOPPED"; bars = bar+1; break
+                        } else if tp1Hit && !sweepTP1Hit {
+                            sweepTP1Hit = true; sweepTP1Bar = bar; sweepStop = e
                         }
+                        if tp2Hit { outcome = "TP2"; bars = bar+1; break }
                     }
+                    if outcome == "EXPIRED" && sweepTP1Hit { outcome = "TP1"; bars = sweepTP1Bar+1 }
                     totalBars += bars
                     switch outcome {
                     case "TP1": tp1W += 1; totalPnlW += t1d / e * 100
