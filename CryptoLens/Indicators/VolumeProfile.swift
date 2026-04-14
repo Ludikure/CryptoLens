@@ -24,6 +24,7 @@ enum VolumeProfile {
         guard totalRange > 0 else { return nil }
 
         let bucketSize = atr * 0.25
+        guard bucketSize > 0 else { return nil }
         let bucketCount = max(10, min(100, Int(ceil(totalRange / bucketSize))))
         let actualBucketSize = totalRange / Double(bucketCount)
 

@@ -89,8 +89,9 @@ enum GapAnalysis {
     static func detect(opens: [Double], closes: [Double]) -> GapResult? {
         guard opens.count >= 2, closes.count >= 2 else { return nil }
         let prevClose = closes[closes.count - 2]
+        guard prevClose > 0 else { return nil }
         let todayOpen = opens[opens.count - 1]
-        let current = closes.last!
+        guard let current = closes.last else { return nil }
         let gapPercent = ((todayOpen - prevClose) / prevClose) * 100.0
 
         guard abs(gapPercent) > 0.3 else { return nil } // Ignore tiny gaps

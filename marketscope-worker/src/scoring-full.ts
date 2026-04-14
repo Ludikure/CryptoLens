@@ -559,7 +559,8 @@ export function computeAllFeatures(
 
     // ATR + percentile from daily
     const atrVal = computeATR(dailyCandles);
-    const price = dailyCandles[dailyCandles.length - 1]?.close || 1;
+    const price = dailyCandles[dailyCandles.length - 1]?.close;
+    if (!price || price <= 0) return {} as FullFeatures; // Invalid price data
     const atrPercent = (atrVal / price) * 100;
     const atrPercentile = computeATRPercentile(dailyCandles);
 

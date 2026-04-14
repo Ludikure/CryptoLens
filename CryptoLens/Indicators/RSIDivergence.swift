@@ -25,13 +25,13 @@ enum RSIDivergence {
         }
 
         // Bullish: price makes lower low, RSI makes higher low
-        if priceLows.count >= 2
+        if priceLows.count >= 2 && rsiAtLows.count >= 2
             && priceLows[priceLows.count - 1] < priceLows[priceLows.count - 2]
             && rsiAtLows[rsiAtLows.count - 1] > rsiAtLows[rsiAtLows.count - 2] {
             return "bullish_divergence"
         }
         // Bearish: price makes higher high, RSI makes lower high
-        if priceHighs.count >= 2
+        if priceHighs.count >= 2 && rsiAtHighs.count >= 2
             && priceHighs[priceHighs.count - 1] > priceHighs[priceHighs.count - 2]
             && rsiAtHighs[rsiAtHighs.count - 1] < rsiAtHighs[rsiAtHighs.count - 2] {
             return "bearish_divergence"

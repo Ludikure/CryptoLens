@@ -1073,7 +1073,11 @@ async function checkAllDeviceAlerts(env: Env) {
   ).all();
   for (const row of devices.results) {
     const deviceId = row.device_id as string;
-    await checkDeviceAlerts(env, deviceId);
+    try {
+      await checkDeviceAlerts(env, deviceId);
+    } catch (e) {
+      console.log(`[cron] alert check failed for ${deviceId}: ${e}`);
+    }
   }
 }
 
@@ -1458,9 +1462,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         derivSignals.fundingRateRaw = fundingRate;
         derivSignals.longPctRaw = longPct || 50;
         derivSignals.takerRatioRaw = takerRatio || 1.0;
-        if (fundingRate > 0.05) derivSignals.fundingSignal = -1;
-        else if (fundingRate > 0.03) derivSignals.fundingSignal = -1;
-        else if (fundingRate < -0.05) derivSignals.fundingSignal = 1;
+        if (fundingRate > 0.03) derivSignals.fundingSignal = -1;
         else if (fundingRate < -0.03) derivSignals.fundingSignal = 1;
         if (takerRatio > 1.1) derivSignals.takerSignal = 1;
         else if (takerRatio < 0.9) derivSignals.takerSignal = -1;

@@ -227,7 +227,7 @@ struct IndicatorResult: Identifiable, Codable {
         fibonacci = try container.decodeIfPresent(FibResult.self, forKey: .fibonacci)
         supportResistance = try container.decode(SRResult.self, forKey: .supportResistance)
         candlePatterns = try container.decode([PatternResult].self, forKey: .candlePatterns)
-        volumeProfile = try? container.decodeIfPresent(VolumeProfileResult.self, forKey: .volumeProfile)
+        volumeProfile = try container.decodeIfPresent(VolumeProfileResult.self, forKey: .volumeProfile)
         volumeRatio = try container.decodeIfPresent(Double.self, forKey: .volumeRatio)
         divergence = try container.decodeIfPresent(String.self, forKey: .divergence)
         bias = try container.decode(String.self, forKey: .bias)
@@ -251,11 +251,11 @@ struct IndicatorResult: Identifiable, Codable {
         ema20Series = (try? container.decodeIfPresent([Double].self, forKey: .ema20Series)) ?? []
         ema50Series = (try? container.decodeIfPresent([Double].self, forKey: .ema50Series)) ?? []
         ema200Series = (try? container.decodeIfPresent([Double].self, forKey: .ema200Series)) ?? []
-        atrPercentile = try? container.decodeIfPresent(Double.self, forKey: .atrPercentile)
-        atrPercentileLabel = try? container.decodeIfPresent(String.self, forKey: .atrPercentileLabel)
-        momentumOverride = try? container.decodeIfPresent(String.self, forKey: .momentumOverride)
-        biasScore = (try? container.decodeIfPresent(Int.self, forKey: .biasScore)) ?? 0
-        marketStructure = try? container.decodeIfPresent(MarketStructureResult.self, forKey: .marketStructure)
-        volScalar = try? container.decodeIfPresent(Double.self, forKey: .volScalar)
+        atrPercentile = try container.decodeIfPresent(Double.self, forKey: .atrPercentile)
+        atrPercentileLabel = try container.decodeIfPresent(String.self, forKey: .atrPercentileLabel)
+        momentumOverride = try container.decodeIfPresent(String.self, forKey: .momentumOverride)
+        biasScore = try container.decodeIfPresent(Int.self, forKey: .biasScore) ?? 0
+        marketStructure = try container.decodeIfPresent(MarketStructureResult.self, forKey: .marketStructure)
+        volScalar = try container.decodeIfPresent(Double.self, forKey: .volScalar)
     }
 }

@@ -44,6 +44,7 @@ export function mlPredict(input: Record<string, number>, isCrypto: boolean): num
     for (const tree of trees) {
         sum += evaluateTree(tree, input);
     }
+    if (!isFinite(sum)) return 0.5;
     return sigmoid(sum);
 }
 
