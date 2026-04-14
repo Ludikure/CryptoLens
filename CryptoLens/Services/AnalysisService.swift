@@ -1097,7 +1097,7 @@ class AnalysisService: ObservableObject {
             gapPercent: {
                 guard !isCrypto, tf1.candles.count >= 2 else { return 0.0 }
                 let prev = tf1.candles[tf1.candles.count - 2].close
-                let todayOpen = tf1.candles.last!.open
+                guard let todayOpen = tf1.candles.last?.open else { return 0.0 }
                 return prev > 0 ? (todayOpen - prev) / prev * 100 : 0
             }(),
             gapFilled: false, // would need intraday tracking
@@ -1126,7 +1126,7 @@ class AnalysisService: ObservableObject {
             var derivCtx: DerivativesContext? = nil
             if let d = derivatives {
                 let candles4H = try await c2
-                let priceRising = candles4H.count >= 2 && candles4H.last!.close > candles4H[candles4H.count - 2].close
+                let priceRising = candles4H.count >= 2 && (candles4H.last?.close ?? 0) > candles4H[candles4H.count - 2].close
                 derivCtx = DerivativesContext.from(data: d, priceRising: priceRising)
                 let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset, derivatives: derivCtx)
                 let r2 = IndicatorEngine.computeAll(candles: candles4H, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
@@ -1189,10 +1189,10 @@ class AnalysisService: ObservableObject {
         let recentEMA = ema20List.suffix(5)
 
         if distPct > 0.5 {
-            let rising = recentEMA.count >= 2 && recentEMA.last! > recentEMA.first!
+            let rising = recentEMA.count >= 2 && (recentEMA.last ?? 0) > (recentEMA.first ?? 0)
             return rising ? (1, "up", price, ema20) : (0, "flat", price, ema20)
         } else if distPct < -0.5 {
-            let falling = recentEMA.count >= 2 && recentEMA.last! < recentEMA.first!
+            let falling = recentEMA.count >= 2 && (recentEMA.last ?? 0) < (recentEMA.first ?? 0)
             return falling ? (-1, "down", price, ema20) : (0, "flat", price, ema20)
         }
         return (0, "flat", price, ema20)

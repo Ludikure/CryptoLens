@@ -23,8 +23,7 @@ enum MACD {
     static func compute(closes: [Double], fast: Int = 12, slow: Int = 26, signal: Int = 9) -> MACDResult? {
         guard let (macdLine, signalLine) = computeLines(closes: closes, fast: fast, slow: slow, signal: signal) else { return nil }
 
-        let rawMacd = macdLine.last!
-        let rawSignal = signalLine.last!
+        guard let rawMacd = macdLine.last, let rawSignal = signalLine.last else { return nil }
         let macdVal = rawMacd.rounded(toPlaces: 2)
         let signalVal = rawSignal.rounded(toPlaces: 2)
         let histogram = (rawMacd - rawSignal).rounded(toPlaces: 2)  // from raw values to avoid compounding rounding

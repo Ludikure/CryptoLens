@@ -573,22 +573,22 @@ class BacktestEngine: ObservableObject {
                         return (price - vp.valueAreaLow) / atr
                     }(),
                     // 1-bar deltas
-                    hRsiDelta1: hRsiHistory.count >= 1 ? (fourHResult.rsi ?? 50) - hRsiHistory.last! : 0,
-                    hMacdHistDelta1: hMacdHistHistory.count >= 1 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory.last! : 0,
-                    dRsiDelta1: dRsiHistory.count >= 1 ? (dailyResult.rsi ?? 50) - dRsiHistory.last! : 0,
+                    hRsiDelta1: hRsiHistory.last.map { (fourHResult.rsi ?? 50) - $0 } ?? 0,
+                    hMacdHistDelta1: hMacdHistHistory.last.map { (fourHResult.macd?.histogram ?? 0) - $0 } ?? 0,
+                    dRsiDelta1: dRsiHistory.last.map { (dailyResult.rsi ?? 50) - $0 } ?? 0,
                     // Acceleration
                     hRsiAccel: {
-                        let cur = hRsiHistory.count >= 1 ? (fourHResult.rsi ?? 50) - hRsiHistory.last! : 0
+                        let cur = hRsiHistory.last.map { (fourHResult.rsi ?? 50) - $0 } ?? 0
                         let accel = cur - prevHRsiDelta1
                         return accel
                     }(),
                     hMacdAccel: {
-                        let cur = hMacdHistHistory.count >= 1 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory.last! : 0
+                        let cur = hMacdHistHistory.last.map { (fourHResult.macd?.histogram ?? 0) - $0 } ?? 0
                         let accel = cur - prevHMacdHistDelta1
                         return accel
                     }(),
                     dAdxAccel: {
-                        let cur = dAdxHistory.count >= 1 ? (dailyResult.adx?.adx ?? 0) - dAdxHistory.last! : 0
+                        let cur = dAdxHistory.last.map { (dailyResult.adx?.adx ?? 0) - $0 } ?? 0
                         let accel = cur - prevDAdxDelta1
                         return accel
                     }(),
@@ -677,9 +677,9 @@ class BacktestEngine: ObservableObject {
                 )
 
                 // Update 1-bar delta tracking for acceleration
-                let curHRsiDelta1 = hRsiHistory.count >= 1 ? (fourHResult.rsi ?? 50) - hRsiHistory.last! : 0
-                let curHMacdDelta1 = hMacdHistHistory.count >= 1 ? (fourHResult.macd?.histogram ?? 0) - hMacdHistHistory.last! : 0
-                let curDAdxDelta1 = dAdxHistory.count >= 1 ? (dailyResult.adx?.adx ?? 0) - dAdxHistory.last! : 0
+                let curHRsiDelta1 = hRsiHistory.last.map { (fourHResult.rsi ?? 50) - $0 } ?? 0
+                let curHMacdDelta1 = hMacdHistHistory.last.map { (fourHResult.macd?.histogram ?? 0) - $0 } ?? 0
+                let curDAdxDelta1 = dAdxHistory.last.map { (dailyResult.adx?.adx ?? 0) - $0 } ?? 0
                 prevHRsiDelta1 = curHRsiDelta1
                 prevHMacdHistDelta1 = curHMacdDelta1
                 prevDAdxDelta1 = curDAdxDelta1

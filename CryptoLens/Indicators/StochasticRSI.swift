@@ -40,8 +40,7 @@ enum StochasticRSI {
             dValues.append(window.reduce(0, +) / Double(dSmooth))
         }
 
-        let rawK = kValues.last!
-        let rawD = dValues.last!
+        guard let rawK = kValues.last, let rawD = dValues.last else { return StochasticRSIFull(result: nil, kValues: [], dValues: []) }
 
         var crossover: String? = nil
         if kValues.count >= 2, dValues.count >= 2 {

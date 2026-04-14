@@ -53,8 +53,9 @@ enum ADX {
         }
 
         let adxFinal = adx.rounded(toPlaces: 2)
-        let plusDIFinal = dxValues.last!.plusDI.rounded(toPlaces: 2)
-        let minusDIFinal = dxValues.last!.minusDI.rounded(toPlaces: 2)
+        guard let lastDX = dxValues.last else { return nil }
+        let plusDIFinal = lastDX.plusDI.rounded(toPlaces: 2)
+        let minusDIFinal = lastDX.minusDI.rounded(toPlaces: 2)
 
         let strength: String
         if adxFinal < 20 { strength = "Weak/No Trend" }
