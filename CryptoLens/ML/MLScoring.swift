@@ -1,7 +1,7 @@
 import CoreML
 
 /// ML scoring using dual XGBoost models converted to CoreML.
-/// v6: 80 features including cross-TF interactions, temporal, rate-of-change, sentiment, ETH/BTC, raw derivatives.
+/// v8: 101 features. No score dependency (dailyScore/fourHScore/scoreSum/scoreDivergence removed).
 /// Crypto: 150 trees (BTC/ETH/SOL/XRP). Stock: 150 trees (12 symbols).
 enum MLScoring {
     private static let cryptoModel: MLModel? = {
@@ -78,12 +78,12 @@ enum MLScoring {
         ]
         input.merge(entry) { _, new in new }
 
-        // Context + cross-TF + temporal + rate-of-change (18)
+        // Context + cross-TF + temporal + rate-of-change
+        // v8: dailyScore, fourHScore, scoreSum, scoreDivergence removed (circular dependency)
         let context: [String: Double] = [
             "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
             "tfAlignment": Double(f.tfAlignment), "momentumAlignment": Double(f.momentumAlignment),
             "structureAlignment": Double(f.structureAlignment),
-            "scoreSum": Double(f.scoreSum), "scoreDivergence": Double(f.scoreDivergence),
             "dayOfWeek": Double(f.dayOfWeek),
             "barsSinceRegimeChange": Double(f.barsSinceRegimeChange),
             "regimeCode": Double(f.regimeCode),
