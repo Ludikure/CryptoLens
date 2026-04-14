@@ -175,8 +175,8 @@ enum IndicatorEngine {
         )
 
         let scored = ScoringFunction.score(snapshot: snapshot, params: params)
-        var score = scored.score
-        var bias = scored.bias
+        let score = scored.score
+        let bias = scored.bias
 
         // Momentum override label (diagnostic only — scoring already applied by ScoringFunction)
         var momentumOverride: String? = nil
