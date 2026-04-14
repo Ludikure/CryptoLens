@@ -115,6 +115,15 @@ enum MLScoring {
         ]
         input.merge(phaseA) { _, new in new }
 
+        // v8c: computed features (derived from existing MLFeatures)
+        let computed: [String: Double] = [
+            "volWeightedRsi": f.dRsi * f.dVolumeRatio,
+            "hVolWeightedRsi": f.hRsi * f.hVolumeRatio,
+            "atrExpansionRate": 0,  // needs prev bar atrPercent (default 0 in live)
+            "fundingSlope": 0,      // needs prev bar fundingRate (default 0 in live)
+        ]
+        input.merge(computed) { _, new in new }
+
         let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: nsInput),
               let output = try? model.prediction(from: provider) else {

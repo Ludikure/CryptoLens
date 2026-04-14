@@ -124,6 +124,10 @@ export function buildMLInput(
         isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,
         // Basis (defaults — not available in buildMLInput path)
         basisPct: 0, basisExtreme: 0,
+        // v8c computed features
+        volWeightedRsi: dRsi * 1.0, // volumeRatio not available in buildMLInput
+        hVolWeightedRsi: hRsi * 1.0,
+        atrExpansionRate: 0, fundingSlope: 0,
         // Stock features (defaults)
         fiftyTwoWeekPct: 50, distToFiftyTwoHigh: 0,
         gapPercent: 0, gapFilled: 0, gapDirectionAligned: 0,

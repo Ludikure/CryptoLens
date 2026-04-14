@@ -69,6 +69,9 @@ export interface FullFeatures {
     fiftyTwoWeekPct: number; distToFiftyTwoHigh: number;
     gapPercent: number; gapFilled: number; gapDirectionAligned: number;
     relStrengthVsSpy: number; beta: number; vixLevelCode: number; isMarketHours: number;
+    // Computed features (4)
+    volWeightedRsi: number; hVolWeightedRsi: number;
+    atrExpansionRate: number; fundingSlope: number;
 }
 
 // ============================================================
@@ -687,5 +690,10 @@ export function computeAllFeatures(
         relStrengthVsSpy: 0, beta: 1.0,
         vixLevelCode: macro.vix < 15 ? 0 : macro.vix < 25 ? 1 : macro.vix < 35 ? 2 : 3,
         isMarketHours: 1,
+        // Computed features
+        volWeightedRsi: daily.rsi * daily.volumeRatio,
+        hVolWeightedRsi: (fourH?.rsi ?? 50) * (fourH?.volumeRatio ?? 1.0),
+        atrExpansionRate: 0, // needs previous bar's atrPercent
+        fundingSlope: 0,     // needs previous bar's fundingRate
     };
 }
