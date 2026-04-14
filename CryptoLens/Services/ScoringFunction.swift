@@ -36,9 +36,11 @@ enum ScoringFunction {
             }
         }
 
-        // 1b: EMA20 slope
-        if s.ema20Rising { score += p.emaSlopeWeight }
-        else { score -= p.emaSlopeWeight }
+        // 1b: EMA20 slope (only if weight configured)
+        if p.emaSlopeWeight > 0 {
+            if s.ema20Rising { score += p.emaSlopeWeight }
+            else { score -= p.emaSlopeWeight }
+        }
 
         // 1c: Market structure
         if s.structureBullish { score += p.structureWeight }
@@ -80,7 +82,7 @@ enum ScoringFunction {
 
         // MACD (ADX-weighted, dead zone gated)
         if s.adxValue >= p.adxWeakBreak && s.macdHistAboveDeadZone {
-            let macdWeight = s.adxValue >= 25 ? p.macdMaxWeight : max(1, p.macdMaxWeight - 1)
+            let macdWeight = s.adxValue >= p.adxModBreak ? p.macdMaxWeight : max(1, p.macdMaxWeight - 1)
             if s.macdHistogram > 0 {
                 score += s.macdCrossover == "bullish" ? macdWeight : max(macdWeight - 1, 0)
             } else {
@@ -157,7 +159,7 @@ enum ScoringFunction {
             }
         } else if is4H {
             if p.useAdaptive {
-                strongThreshold = max(4, Int(round(Double(p.fourHStrongThreshold) * s.volScalar)))
+                strongThreshold = max(3, Int(round(Double(p.fourHStrongThreshold) * s.volScalar)))
                 directionalThreshold = max(2, Int(round(Double(p.fourHDirectionalThreshold) * s.volScalar)))
             } else {
                 strongThreshold = p.fourHStrongThreshold
@@ -206,7 +208,7 @@ enum ScoringFunction {
             }
 
             // Ranging override (daily only)
-            if isDaily && s.adxValue < 20 && abs(score) < strongThreshold {
+            if isDaily && s.adxValue < p.adxWeakBreak && abs(score) < strongThreshold {
                 bias = "Neutral"
             }
         }

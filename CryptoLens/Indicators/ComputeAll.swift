@@ -121,128 +121,64 @@ enum IndicatorEngine {
         } else { rawAtrPercentile = 50 }
         let volScalar = max(0.75, min(1.35, 0.75 + (rawAtrPercentile / 100.0) * 0.6))
 
-        // ── Signed Bias Score (optimizer-tunable weights) ──
+        // ── Signed Bias Score (via ScoringFunction — single source of truth) ──
         let params = ScoringParams.loadSaved(for: market) ?? (market == .crypto ? .cryptoDefault : .stockDefault)
-        var score = 0
         let isDaily = label.contains("Daily") || label.contains("1D")
         let is4H = label.contains("4H")
 
-        // ── Layer 1: Trend (leading + confirming signals) ──
+        // Build snapshot from computed indicators
+        let atrValue = atr?.atr ?? (current * 0.01)
+        let snapshot = ScoringSnapshot(
+            timestamp: candles.last?.time ?? Date(),
+            price: current,
+            timeframe: timeframe,
+            isCrypto: market == .crypto,
+            ema20: ema20, ema50: ema50, ema200: ema200,
+            emaCrossCount: emaCrossCount,
+            ema20Rising: ema20List.count >= 6 && ema20List[ema20List.count - 1] > ema20List[ema20List.count - 6],
+            stackBullish: emaRegime == .bullish,
+            stackBearish: emaRegime == .bearish,
+            structureBullish: marketStructure?.label.contains("bullish") ?? false,
+            structureBearish: marketStructure?.label.contains("bearish") ?? false,
+            adxValue: adx?.adx ?? 0,
+            adxBullish: adx?.direction == "Bullish",
+            rsi: rsi,
+            macdHistogram: macd?.histogram ?? 0,
+            macdCrossover: macd?.crossover,
+            macdHistAboveDeadZone: {
+                guard let m = macd else { return false }
+                return abs(m.histogram) > atrValue * 0.001 * volScalar
+            }(),
+            stochK: stochRSIFull.result?.k,
+            stochCrossover: stochRSIFull.result?.crossover,
+            aboveVwap: vwap.map { current > $0.vwap } ?? false,
+            divergence: divergence,
+            last3Green: candles.count >= 3 && candles.suffix(3).allSatisfy { $0.close >= $0.open },
+            last3Red: candles.count >= 3 && candles.suffix(3).allSatisfy { $0.close < $0.open },
+            last3VolIncreasing: {
+                let last3 = Array(candles.suffix(3))
+                return last3.count == 3 && last3[2].volume >= last3[1].volume && last3[1].volume >= last3[0].volume
+            }(),
+            currentRSI: validRSI.last,
+            crossAssetSignal: crossAsset?.combinedSignal ?? 0,
+            volScalar: volScalar,
+            obvRising: obv?.trend == "Rising",
+            adLineAccumulation: adLine?.trend == "Accumulation",
+            derivativesCombinedSignal: derivatives?.combinedSignal ?? 0,
+            fundingSignal: derivatives?.fundingSignal ?? 0,
+            oiSignal: derivatives?.oiSignal ?? 0,
+            takerSignal: derivatives?.takerSignal ?? 0,
+            crowdingSignal: derivatives?.crowdingSignal ?? 0,
+            vix: nil, dxyPrice: nil, dxyAboveEma20: nil,
+            atrPercent: atr.map { $0.atr / current * 100 },
+            priceAfter4H: nil, priceAfter24H: nil, forwardHigh24H: nil, forwardLow24H: nil
+        )
 
-        // 1a: Price position (LEADING)
-        if let _ = ema20, let _ = ema50, let _ = ema200 {
-            switch emaCrossCount {
-            case 3: score += params.pricePositionWeight
-            case 2: score += max(1, params.pricePositionWeight - 1)
-            case 1: score -= max(1, params.pricePositionWeight - 1)
-            case 0: score -= params.pricePositionWeight
-            default: break
-            }
-        }
+        let scored = ScoringFunction.score(snapshot: snapshot, params: params)
+        var score = scored.score
+        var bias = scored.bias
 
-        // 1b: EMA20 slope (LEADING)
-        if params.emaSlopeWeight > 0 && ema20List.count >= 6 {
-            let ema20Now = ema20List[ema20List.count - 1]
-            let ema20Prior = ema20List[ema20List.count - 6]
-            if ema20Now > ema20Prior { score += params.emaSlopeWeight }
-            else if ema20Now < ema20Prior { score -= params.emaSlopeWeight }
-        }
-
-        // 1c: Market structure (LEADING)
-        if let ms = marketStructure {
-            if ms.label.contains("bullish") { score += params.structureWeight }
-            else if ms.label.contains("bearish") { score -= params.structureWeight }
-        }
-
-        // 1d: EMA stack confirmation (LAGGING)
-        if let e20 = ema20, let e50 = ema50, let e200 = ema200 {
-            if e20 > e50 && e50 > e200 { score += params.stackConfirmWeight }
-            else if e20 < e50 && e50 < e200 { score -= params.stackConfirmWeight }
-        }
-
-        // ── Layer 2: Trend Strength (ADX) ──
-        if let a = adx {
-            if a.adx >= params.adxStrongBreak {
-                score += a.direction == "Bullish" ? params.adxStrongWeight : -params.adxStrongWeight
-            } else if a.adx >= params.adxModBreak {
-                score += a.direction == "Bullish" ? params.adxModWeight : -params.adxModWeight
-            } else if a.adx >= params.adxWeakBreak {
-                score += a.direction == "Bullish" ? params.adxWeakWeight : -params.adxWeakWeight
-            }
-        }
-
-        // ── Layer 3: Momentum (RSI + MACD, regime-aware) ──
-        if let r = rsi {
-            switch emaRegime {
-            case .bullish:
-                if r < 40 { score += params.rsiWeight }
-                else if r < 50 { score += max(1, params.rsiWeight - 1) }
-            case .bearish:
-                if r > 60 { score -= params.rsiWeight }
-                else if r > 50 { score -= max(1, params.rsiWeight - 1) }
-            case .mixed:
-                let rsiOB = min(75.0, 70.0 + (volScalar - 1.0) * 15)
-                let rsiBull = min(60.0, 55.0 + (volScalar - 1.0) * 15)
-                let rsiOS = max(25.0, 30.0 - (volScalar - 1.0) * 15)
-                let rsiBear = max(40.0, 45.0 - (volScalar - 1.0) * 15)
-                if r > rsiOB { score += params.rsiWeight }
-                else if r > rsiBull { score += max(1, params.rsiWeight - 1) }
-                else if r < rsiOS { score -= params.rsiWeight }
-                else if r < rsiBear { score -= max(1, params.rsiWeight - 1) }
-            }
-        }
-
-        if let m = macd {
-            let adxValue = adx?.adx ?? 0
-            let atrValue = atr?.atr ?? (current * 0.01)
-            let histDeadZone = atrValue * 0.001 * volScalar
-
-            if adxValue >= params.adxWeakBreak && abs(m.histogram) > histDeadZone {
-                let macdWeight = adxValue >= params.adxModBreak ? params.macdMaxWeight : max(1, params.macdMaxWeight - 1)
-                if m.histogram > 0 {
-                    score += m.crossover == "bullish" ? macdWeight : max(macdWeight - 1, 0)
-                } else {
-                    score -= m.crossover == "bearish" ? macdWeight : max(macdWeight - 1, 0)
-                }
-            }
-        }
-
-        // ── Layer 4: Confirmation (VWAP, Stoch RSI, Divergence) ──
-        if let v = vwap?.vwap, v > 0 {
-            if current > v { score += params.vwapWeight } else { score -= params.vwapWeight }
-        }
-
-        if params.stochWeight > 0, let stoch = stochRSIFull.result, !isDaily {
-            let stochLow = max(5.0, 15.0 - (volScalar - 1.0) * 20)
-            let stochHigh = min(95.0, 85.0 + (volScalar - 1.0) * 20)
-            if stoch.k < stochLow && stoch.crossover == "bullish" { score += params.stochWeight }
-            else if stoch.k > stochHigh && stoch.crossover == "bearish" { score -= params.stochWeight }
-        }
-
-        if params.divergenceWeight > 0, let div = divergence {
-            if div == "bullish" && score < 0 { score += params.divergenceWeight }
-            if div == "bearish" && score > 0 { score -= params.divergenceWeight }
-        }
-
-        // Stock-only bias signals
-        if market == .stock {
-            if let o = obv, o.trend == "Rising" { score += 1 }
-            else if obv?.trend == "Falling" { score -= 1 }
-            if let ad = adLine, ad.trend == "Accumulation" { score += 1 }
-            else if adLine?.trend == "Distribution" { score -= 1 }
-        }
-
-        // ── Layer 5: Cross-Asset Confirmation (Daily only, crypto only) ──
-        if isDaily && market == .crypto, let ca = crossAsset {
-            score += ca.combinedSignal * params.crossAssetWeight
-        }
-
-        // ── Layer 6: Derivatives (crypto only, non-price-derived) ──
-        if isDaily && market == .crypto, let dctx = derivatives {
-            score += dctx.combinedSignal * params.derivativesWeight
-        }
-
-        // ── Momentum Override (volume-gated, reduced weight on 4H) ──
+        // Momentum override label (diagnostic only — scoring already applied by ScoringFunction)
         var momentumOverride: String? = nil
         if !isDaily && validRSI.count >= 5 && candles.count >= 3 {
             let recentRSI = Array(validRSI.suffix(5))
@@ -250,107 +186,22 @@ enum IndicatorEngine {
             let rsiMax = recentRSI.max() ?? 50
             let currentRSI = validRSI.last ?? 50
             let last3 = Array(candles.suffix(3))
-            let last3AllGreen = last3.allSatisfy { $0.close >= $0.open }
-            let last3AllRed = last3.allSatisfy { $0.close < $0.open }
-            let last3VolIncreasing = last3.count == 3 && last3[2].volume >= last3[1].volume && last3[1].volume >= last3[0].volume
-
             let oversoldThreshold: Double = is4H ? 30 : 35
             let overboughtThreshold: Double = is4H ? 70 : 65
-            let overrideWeight = is4H ? 2 : 3
-
-            if rsiMin < oversoldThreshold && currentRSI > 60 && last3AllGreen && last3VolIncreasing {
+            if rsiMin < oversoldThreshold && currentRSI > 60 && last3.allSatisfy({ $0.close >= $0.open }) {
                 momentumOverride = "bullish_reversal"
-                score += overrideWeight
-            }
-            if rsiMax > overboughtThreshold && currentRSI < 40 && last3AllRed && last3VolIncreasing {
+            } else if rsiMax > overboughtThreshold && currentRSI < 40 && last3.allSatisfy({ $0.close < $0.open }) {
                 momentumOverride = "bearish_reversal"
-                score -= overrideWeight
             }
-            if momentumOverride == nil && last3AllGreen && last3VolIncreasing && currentRSI > 55 {
-                score += is4H ? 1 : 2
-            }
-            if momentumOverride == nil && last3AllRed && last3VolIncreasing && currentRSI < 45 {
-                score -= is4H ? 1 : 2
-            }
-        }
-
-        // ── Label Assignment (optimizer-tuned thresholds, optionally adaptive) ──
-        let adaptiveScalar = params.useAdaptive ? volScalar : 1.0
-        let strongThreshold: Int
-        let directionalThreshold: Int
-        if isDaily {
-            strongThreshold = max(3, Int(round(Double(params.dailyStrongThreshold) * adaptiveScalar)))
-            directionalThreshold = max(2, Int(round(Double(params.dailyDirectionalThreshold) * adaptiveScalar)))
-        } else if is4H {
-            strongThreshold = max(3, Int(round(Double(params.fourHStrongThreshold) * adaptiveScalar)))
-            directionalThreshold = max(2, Int(round(Double(params.fourHDirectionalThreshold) * adaptiveScalar)))
-        } else {
-            strongThreshold = max(3, Int(round(5.0 * adaptiveScalar)))
-            directionalThreshold = max(1, Int(round(2.0 * adaptiveScalar)))
-        }
-
-        var bias: String
-        if score >= strongThreshold { bias = "Strong Bullish" }
-        else if score >= directionalThreshold { bias = "Bullish" }
-        else if score <= -strongThreshold { bias = "Strong Bearish" }
-        else if score <= -directionalThreshold { bias = "Bearish" }
-        else { bias = "Neutral" }
-
-        // ── EMA Structure Gate (structure-aware) ──
-        // Trend structure caps/floors the label. Momentum can soften but not flip.
-        let structureLabel = marketStructure?.label ?? ""
-        let priceBelowAll = emaCrossCount == 0
-        let priceAboveAll = emaCrossCount == 3
-        if let _ = ema20, let _ = ema50, let _ = ema200 {
-            switch emaRegime {
-            case .bearish:
-                if priceBelowAll && !structureLabel.contains("bullish") {
-                    if bias == "Strong Bullish" || bias == "Bullish" || bias == "Neutral" { bias = "Bearish" }
-                } else {
-                    if bias == "Strong Bullish" || bias == "Bullish" { bias = "Neutral" }
-                }
-            case .bullish:
-                if priceAboveAll && !structureLabel.contains("bearish") {
-                    if bias == "Strong Bearish" || bias == "Bearish" || bias == "Neutral" { bias = "Bullish" }
-                } else {
-                    if bias == "Strong Bearish" || bias == "Bearish" { bias = "Neutral" }
-                }
-            case .mixed:
-                break
-            }
-        }
-
-        // Momentum override: only in mixed regime (gate handles bullish/bearish)
-        if emaRegime == .mixed {
-            if momentumOverride == "bullish_reversal" && bias.contains("Bearish") { bias = "Neutral" }
-            if momentumOverride == "bearish_reversal" && bias.contains("Bullish") { bias = "Neutral" }
         }
 
         #if DEBUG
         print("[MarketScope] [\(label)] score: \(score) → \(bias) | params: \(params.label) | vol: \(String(format: "%.2f", volScalar))")
         #endif
 
-        // Crypto daily: base 18 + derivatives ±3 = 21. Stock: no derivatives, max ~18.
         let maxScore: Double = (market == .crypto && isDaily) ? 21.0 : 18.0
         let clampedScore = min(max(Double(score), -maxScore), maxScore)
         let bullPct = ((clampedScore / maxScore) + 1.0) / 2.0 * 100.0
-
-        // ── Exhaustion Cap ──
-        // Extreme scores (±8+) indicate indicator saturation, not higher conviction.
-        // When every indicator agrees, the move is typically extended.
-        // Cap at directional (not Strong) to avoid false confidence on exhausted moves.
-        if abs(score) > 8 && (bias == "Strong Bullish" || bias == "Strong Bearish") {
-            bias = bias.contains("Bullish") ? "Bullish" : "Bearish"
-        }
-
-        // ── Ranging Regime Override (Daily only) ──
-        // ADX < 20 = no trend. Force Neutral unless score exceeds strong threshold.
-        if isDaily {
-            let adxValue = adx?.adx ?? 0
-            if adxValue < params.adxWeakBreak && abs(score) < strongThreshold {
-                bias = "Neutral"
-            }
-        }
 
         // Compute ATR percentile BEFORE truncation (needs full candle history)
         let atrPercentileResult = VolatilityRegime.atrPercentile(candles: candles)
