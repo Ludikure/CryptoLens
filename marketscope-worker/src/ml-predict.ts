@@ -99,13 +99,12 @@ export function buildMLInput(
         obvRising: 0, adLineAccumulation: 0,
         // Context
         atrPercent, atrPercentile,
-        dailyScore, fourHScore,
+        // dailyScore/fourHScore removed from ML features (v8 — circular dependency fix)
         // Cross-timeframe interactions
         tfAlignment: tfAlign,
         momentumAlignment: (dMacdHist > 0 && hMacdHist > 0) ? 1 : (dMacdHist < 0 && hMacdHist < 0) ? -1 : 0,
         structureAlignment: (dStructBull && hStructBull) ? 1 : (dStructBear && hStructBear) ? -1 : 0,
-        scoreSum: dailyScore + fourHScore + _oneHScore,
-        scoreDivergence: Math.abs(dailyScore - fourHScore),
+        // scoreSum/scoreDivergence removed from ML features (v8)
         // Temporal
         dayOfWeek: new Date().getDay(), // 0=Sun..6=Sat
         barsSinceRegimeChange: 0, // not tracked on worker — default

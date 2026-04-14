@@ -25,7 +25,7 @@ enum MLScoring {
     }()
 
     /// Predict from expanded MLFeatures struct.
-    static func predict(features f: MLFeatures, dailyScore: Int, fourHScore: Int) -> Double? {
+    static func predict(features f: MLFeatures) -> Double? {
         let model = f.isCrypto ? cryptoModel : stockModel
         guard let model else { return nil }
 
@@ -81,7 +81,6 @@ enum MLScoring {
         // Context + cross-TF + temporal + rate-of-change (18)
         let context: [String: Double] = [
             "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
-            "dailyScore": Double(dailyScore), "fourHScore": Double(fourHScore),
             "tfAlignment": Double(f.tfAlignment), "momentumAlignment": Double(f.momentumAlignment),
             "structureAlignment": Double(f.structureAlignment),
             "scoreSum": Double(f.scoreSum), "scoreDivergence": Double(f.scoreDivergence),

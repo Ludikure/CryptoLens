@@ -467,8 +467,7 @@ class AnalysisService: ObservableObject {
                dRsiDelta1: _dRsiDelta1,
                hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel,
                basisPct: _basisPct)
-            tf1ML.mlWinProbability = MLScoring.predict(
-                features: mlFeatures, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
+            tf1ML.mlWinProbability = MLScoring.predict(features: mlFeatures)
 
             let prevResult = resultsBySymbol[symbol]
             let result = AnalysisResult(
@@ -622,8 +621,7 @@ class AnalysisService: ObservableObject {
                hMacdAccel: snap2.map { ((tf2.macd?.histogram ?? 0) - $0.hMacdHist) - $0.hMacdD1 } ?? 0,
                dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0,
                basisPct: _basisPct2)
-            tf1.mlWinProbability = MLScoring.predict(
-                features: mlFeatures2, dailyScore: tf1.biasScore, fourHScore: tf2.biasScore)
+            tf1.mlWinProbability = MLScoring.predict(features: mlFeatures2)
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
