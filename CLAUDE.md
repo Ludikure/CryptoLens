@@ -132,6 +132,94 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 - Use `.task { }` instead of `.onAppear { Task { } }` for async work in views (auto-cancels on disappear).
 - Use iOS 17 `onChange` form: `.onChange(of: value) { }` (zero-parameter) or `.onChange(of: value) { old, new in }`.
 
+## ML Scoring Pipeline
+
+### Overview
+
+XGBoost binary classifier predicting `goodR` — probability of ≥1.5 ATR favorable move within 24H. Dual models (crypto/stock) selected by `isCrypto`. Walk-forward validated.
+
+- **Features:** 105 (v7b)
+- **Crypto model:** 6 symbols (BTC/ETH/SOL/XRP/BNB/ADA), 65.3% WF accuracy
+- **Stock model:** 20 symbols, 64.1% WF accuracy
+- **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
+- **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x)
+
+### Feature Groups (105 total)
+
+| Group | Count | Source |
+|-------|-------|--------|
+| Daily core + momentum + vol/volume | 19 | IndicatorEngine |
+| 4H core + momentum + vol/volume | 19 | IndicatorEngine |
+| 1H entry | 4 | IndicatorEngine |
+| Derivatives discrete | 5 | Binance fapi |
+| Derivatives raw | 4 | Binance fapi (fundingRateRaw, oiChangePct, takerRatioRaw, longPctRaw) |
+| Macro | 3 | VIX (Yahoo), DXY, volScalar |
+| Candle patterns | 3 | Computed |
+| Stock-only (OBV, A/D) | 2 | IndicatorEngine |
+| Context | 4 | atrPercent, atrPercentile, dailyScore, fourHScore |
+| Cross-TF interactions | 5 | tfAlignment, momentumAlignment, structureAlignment, scoreSum, scoreDivergence |
+| Temporal | 3 | dayOfWeek, barsSinceRegimeChange, regimeCode |
+| Rate-of-change (6-bar) | 5 | Delta vs 6 bars ago |
+| Sentiment | 2 | Fear & Greed (Alternative.me) |
+| Cross-asset crypto | 2 | ETH/BTC ratio (Binance) |
+| Basis | 2 | Futures premium (Binance fapi premiumIndex) |
+| Volume profile | 6 | vpDistToPocATR, vpVAWidth, vpInValueArea, etc. |
+| 1-bar deltas | 3 | Momentum spikes |
+| Acceleration | 3 | Delta of deltas |
+| Time-of-day | 2 | hourBucket (crypto sessions), isWeekend |
+| Stock features | 9 | fiftyTwoWeekPct, gap analysis, relStrengthVsSpy, beta, vixLevelCode, isMarketHours |
+
+### Files
+
+| File | Purpose |
+|------|---------|
+| `Models/BacktestResult.swift` | `MLFeatures` struct (105 fields), `BacktestDataPoint` |
+| `ML/MLScoring.swift` | CoreML inference, maps MLFeatures → input dict |
+| `ML/MarketScoreML_crypto.mlmodel` | CoreML crypto model |
+| `ML/MarketScoreML_stock.mlmodel` | CoreML stock model |
+| `Services/BacktestEngine.swift` | Backtest loop, feature extraction, CSV export, batch export |
+| `Services/AnalysisService.swift` | `buildMLFeatures()` for live predictions |
+| `Services/FearGreedService.swift` | Historical Fear & Greed from Alternative.me |
+| `marketscope-worker/src/ml-predict.ts` | Worker XGBoost tree evaluator |
+| `marketscope-worker/src/scoring-full.ts` | Worker 105-feature computation |
+| `ml-training/train_v6_robust.py` | Training script with walk-forward CV |
+| `ml-training/download_basis.py` | Download premium index from data.binance.vision |
+
+### ML in Live Predictions
+
+- `AnalysisService.buildMLFeatures()` constructs `MLFeatures` from live indicator data
+- Rate-of-change deltas computed from `prevMLSnapshots` (stored per-symbol between refreshes)
+- Basis fetched from Binance `/fapi/v1/premiumIndex`
+- Fear & Greed from CoinGecko (already fetched for sentiment)
+- ETH/BTC from Binance ETHBTC candles
+- Previous 1-bar deltas stored for acceleration computation
+- Regime changes tracked via `lastRegime` dict
+
+### Worker ML Scoring (Cron)
+
+- Runs every minute via `scheduled()` handler
+- Fetches candles, computes all 105 features via `scoring-full.ts`
+- Fetches live: VIX/DXY (Yahoo), Fear & Greed (Alternative.me), ETH/BTC (Binance), funding rate + OI + L/S + taker + basis (Binance fapi)
+- Rate-of-change + acceleration from KV-persisted snapshots
+- Volume profile computed via TypeScript port of `VolumeProfile.swift`
+- Archives derivatives to D1 every 4H for future training
+- Notifications: fires when ML crosses 65% AND |dailyScore| >= 5
+
+### Backtest & Training
+
+- `BacktestEngine` runs walk-forward eval on historical candles
+- Fetches from D1 archive first, falls back to Binance/Yahoo/TwelveData
+- Crypto clamped to Jan 2020 start (derivatives coverage)
+- Exports CSV with all 105 features + forward returns + trade outcomes
+- Batch export: separate "Crypto Only" / "Stocks Only" buttons
+- 3-second delay between stock symbols to avoid rate limiting
+- Training: `train_v6_robust.py` with purged time-series CV, daily downsampling, sample weighting
+
+### Backtester Symbols
+
+- **Crypto (6):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ADAUSDT
+- **Stocks (20):** AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, JPM, UNH, HD, MA, ABBV, V, AMD, NFLX, BA, XOM, CRM, LLY, DIS
+
 ## Known Remaining Issues (Low Severity)
 
 - No certificate pinning on network calls
@@ -139,4 +227,5 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 - Missing App Group entitlement on main app target (widget can't share data)
 - `aps-environment` hardcoded to `development` in entitlements
 - Worker: APNs tries sandbox first then production (doubles latency); JWT not cached per cron; cron processes devices sequentially
-- Worker: single 752-line index.ts file (should be split into modules)
+- Worker VIX/DXY hardcoded default as fallback (low importance features)
+- Some stock ML features default in live (relStrengthVsSpy, beta, gapFilled — would need SPY candle fetch + intraday tracking)
