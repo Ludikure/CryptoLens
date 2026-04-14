@@ -1550,8 +1550,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   for (const t of triggered) {
     const ticker = t.symbol.replace('USDT', '');
     await sendAPNs(env, pushToken,
-      `${ticker} — High Conviction ${t.direction} (ML: ${Math.round(t.mlProb * 100)}%)`,
-      `Win probability crossed 60%. Score: ${t.score > 0 ? '+' : ''}${t.score}. Tap to analyze.`
+      `${ticker} ${t.direction} — ML ${Math.round(t.mlProb * 100)}%`,
+      `Score ${t.score > 0 ? '+' : ''}${t.score}. High conviction setup detected.`
     );
     // Log notification to D1
     await env.DB.prepare(
