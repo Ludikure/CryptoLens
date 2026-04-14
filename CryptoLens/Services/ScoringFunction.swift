@@ -1,8 +1,8 @@
 import Foundation
 
-/// Pure scoring function: takes a snapshot + params, returns (score, bias).
-/// Mirrors the logic in IndicatorEngine.computeAll but is parameterized for optimization.
-/// IMPORTANT: Keep in sync with ComputeAll scoring layers. Any edit here must be reflected there and vice versa.
+/// Single source of truth for scoring: takes a snapshot + params, returns (score, bias).
+/// ComputeAll delegates to this function. OptimizerEngine and LayerDiagnostic call it directly.
+/// All scoring changes must be made here — ComputeAll only builds the snapshot.
 enum ScoringFunction {
 
     static func score(snapshot s: ScoringSnapshot, params p: ScoringParams) -> (score: Int, bias: String) {
@@ -91,7 +91,10 @@ enum ScoringFunction {
         }
 
         // ── Layer 4: Confirmation ──
-        if s.aboveVwap { score += p.vwapWeight } else { score -= p.vwapWeight }
+        // Only apply VWAP when weight is configured (avoids penalizing bars without VWAP data)
+        if p.vwapWeight > 0 {
+            if s.aboveVwap { score += p.vwapWeight } else { score -= p.vwapWeight }
+        }
 
         if let k = s.stochK, !isDaily {
             let stochLow = max(5.0, 15.0 - (s.volScalar - 1.0) * 20)

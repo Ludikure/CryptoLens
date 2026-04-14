@@ -180,17 +180,21 @@ enum IndicatorEngine {
 
         // Momentum override label (diagnostic only — scoring already applied by ScoringFunction)
         var momentumOverride: String? = nil
-        if !isDaily && validRSI.count >= 5 && candles.count >= 3 {
+        // Momentum override label — must match ScoringFunction conditions exactly
+        // (mixed regime + RSI + green/red candles + volume confirmation)
+        let isMixedRegime = emaRegime == .mixed
+        if !isDaily && isMixedRegime && validRSI.count >= 5 && candles.count >= 3 {
             let recentRSI = Array(validRSI.suffix(5))
             let rsiMin = recentRSI.min() ?? 50
             let rsiMax = recentRSI.max() ?? 50
             let currentRSI = validRSI.last ?? 50
             let last3 = Array(candles.suffix(3))
+            let last3VolInc = last3.count == 3 && last3[2].volume >= last3[1].volume && last3[1].volume >= last3[0].volume
             let oversoldThreshold: Double = is4H ? 30 : 35
             let overboughtThreshold: Double = is4H ? 70 : 65
-            if rsiMin < oversoldThreshold && currentRSI > 60 && last3.allSatisfy({ $0.close >= $0.open }) {
+            if rsiMin < oversoldThreshold && currentRSI > 60 && last3.allSatisfy({ $0.close >= $0.open }) && last3VolInc {
                 momentumOverride = "bullish_reversal"
-            } else if rsiMax > overboughtThreshold && currentRSI < 40 && last3.allSatisfy({ $0.close < $0.open }) {
+            } else if rsiMax > overboughtThreshold && currentRSI < 40 && last3.allSatisfy({ $0.close < $0.open }) && last3VolInc {
                 momentumOverride = "bearish_reversal"
             }
         }
