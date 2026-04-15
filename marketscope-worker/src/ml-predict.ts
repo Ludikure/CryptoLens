@@ -31,7 +31,7 @@ function calibrate(rawProb: number, isCrypto: boolean): number {
     let lo = 0;
     for (let i = 1; i < x.length; i++) { if (x[i] > rawProb) { lo = i - 1; break; } }
     const t = (rawProb - x[lo]) / (x[lo + 1] - x[lo]);
-    return Math.max(0, Math.min(1, y[lo] + t * (y[lo + 1] - y[lo])));
+    return Math.max(0, Math.min(0.85, y[lo] + t * (y[lo + 1] - y[lo])));
 }
 
 function evaluateTree(node: TreeNode, input: Record<string, number>): number {

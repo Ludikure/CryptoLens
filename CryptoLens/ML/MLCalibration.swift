@@ -36,8 +36,8 @@ enum MLCalibration {
             if x[mid] <= rawProb { lo = mid } else { hi = mid }
         }
 
-        // Linear interpolation
+        // Linear interpolation, capped at 85% (model accuracy is ~65%, no higher claims)
         let t = (rawProb - x[lo]) / (x[hi] - x[lo])
-        return max(0, min(1, y[lo] + t * (y[hi] - y[lo])))
+        return max(0, min(0.85, y[lo] + t * (y[hi] - y[lo])))
     }
 }
