@@ -83,7 +83,7 @@ struct ScoringParams: Codable, Identifiable, Equatable {
     static var stockDefault: ScoringParams {
         var p = ScoringParams()
         p.pricePositionWeight = 3
-        p.emaSlopeWeight = 0
+        p.emaSlopeWeight = 1       // optimizer: ES=1 (was 0)
         p.structureWeight = 1
         p.stackConfirmWeight = 0
         p.adxWeakWeight = 1; p.adxModWeight = 2; p.adxStrongWeight = 3
@@ -95,7 +95,7 @@ struct ScoringParams: Codable, Identifiable, Equatable {
         p.crossAssetWeight = 1
         p.derivativesWeight = 0
         p.dailyDirectionalThreshold = 3
-        p.dailyStrongThreshold = 6
+        p.dailyStrongThreshold = 7  // optimizer: dt3s7 (was 6)
         p.fourHDirectionalThreshold = 2
         p.fourHStrongThreshold = 4
         return p
