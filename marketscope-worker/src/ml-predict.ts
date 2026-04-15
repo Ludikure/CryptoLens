@@ -19,6 +19,20 @@ const cryptoTrees: TreeNode[] = cryptoModelData.trees;
 const stockTrees: TreeNode[] = stockModelData.trees;
 const cryptoBaseScore: number = (cryptoModelData as any).base_score ?? 0.5;
 const stockBaseScore: number = (stockModelData as any).base_score ?? 0.5;
+const cryptoCal = (cryptoModelData as any).calibration as { x: number[]; y: number[] } | undefined;
+const stockCal = (stockModelData as any).calibration as { x: number[]; y: number[] } | undefined;
+
+function calibrate(rawProb: number, isCrypto: boolean): number {
+    const cal = isCrypto ? cryptoCal : stockCal;
+    if (!cal || cal.x.length < 2) return rawProb;
+    const { x, y } = cal;
+    if (rawProb <= x[0]) return y[0];
+    if (rawProb >= x[x.length - 1]) return y[y.length - 1];
+    let lo = 0;
+    for (let i = 1; i < x.length; i++) { if (x[i] > rawProb) { lo = i - 1; break; } }
+    const t = (rawProb - x[lo]) / (x[lo + 1] - x[lo]);
+    return Math.max(0, Math.min(1, y[lo] + t * (y[lo + 1] - y[lo])));
+}
 
 function evaluateTree(node: TreeNode, input: Record<string, number>): number {
     if (node.leaf !== undefined) return node.leaf;
@@ -50,7 +64,7 @@ export function mlPredict(input: Record<string, number>, isCrypto: boolean): num
         sum += evaluateTree(tree, input);
     }
     if (!isFinite(sum)) return 0.5;
-    return sigmoid(sum);
+    return calibrate(sigmoid(sum), isCrypto);
 }
 
 /// Build feature dict from scoring results + candle data.

@@ -135,7 +135,7 @@ enum MLScoring {
 
         if let probs = output.featureValue(for: "classProbability")?.dictionaryValue,
            let winProb = probs[Int64(1)] as? Double {
-            return winProb
+            return MLCalibration.calibrate(winProb, isCrypto: f.isCrypto)
         }
         #if DEBUG
         print("[MLScoring] Could not extract classProbability")
