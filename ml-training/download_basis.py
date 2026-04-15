@@ -12,7 +12,8 @@ import pandas as pd
 from datetime import datetime
 
 DOWNLOADS = '/Users/bojanmihovilovic/Downloads'
-SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT']
+SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT',
+           'LINKUSDT', 'AVAXUSDT', 'DOTUSDT', 'NEARUSDT']
 BASE_URL = 'https://data.binance.vision/data/futures/um/monthly/premiumIndexKlines'
 
 
