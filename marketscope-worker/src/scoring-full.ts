@@ -72,6 +72,8 @@ export interface FullFeatures {
     // Computed features (4)
     volWeightedRsi: number; hVolWeightedRsi: number;
     atrExpansionRate: number; fundingSlope: number;
+    // Order flow (3)
+    largeBuyRatio: number; largeTradeImbalance: number; largeTradeIntensity: number;
 }
 
 // ============================================================
@@ -467,6 +469,7 @@ export interface SentimentSignals {
     fearGreedIndex: number; fearGreedZone: number;
     ethBtcRatio: number; ethBtcDelta6: number;
     basisPct?: number;
+    largeBuyVol?: number; largeSellVol?: number;
 }
 
 export interface PreviousSnapshot {
@@ -695,5 +698,16 @@ export function computeAllFeatures(
         hVolWeightedRsi: (fourH?.rsi ?? 50) * (fourH?.volumeRatio ?? 1.0),
         atrExpansionRate: 0, // needs previous bar's atrPercent
         fundingSlope: 0,     // needs previous bar's fundingRate
+        // Order flow (from aggTrades)
+        ...(() => {
+            const buyVol = sentiment?.largeBuyVol ?? 0;
+            const sellVol = sentiment?.largeSellVol ?? 0;
+            const total = buyVol + sellVol;
+            return {
+                largeBuyRatio: total > 0 ? buyVol / total : 0.5,
+                largeTradeImbalance: total > 0 ? (buyVol - sellVol) / total : 0,
+                largeTradeIntensity: total > 0 ? 1 : 0,
+            };
+        })(),
     };
 }

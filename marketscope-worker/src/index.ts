@@ -1458,6 +1458,31 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           }
         } catch {}
 
+        // Large trade detection from aggTrades (smart money flow)
+        let largeBuyVol = 0, largeSellVol = 0, largeBuyCount = 0, largeSellCount = 0;
+        try {
+          const atResp = await fetch(`https://api.binance.com/api/v3/aggTrades?symbol=${symbol}&limit=1000`);
+          if (atResp.ok) {
+            const trades = await atResp.json() as any[];
+            // Price-adaptive threshold: trades > 0.5 BTC equivalent
+            const lastPrice = trades.length > 0 ? parseFloat(trades[trades.length - 1].p) : 1;
+            const threshold = lastPrice * 0.5; // ~$37K for BTC, ~$1K for ETH, scales per asset
+            for (const t of trades) {
+              const qty = parseFloat(t.q);
+              const price = parseFloat(t.p);
+              const notional = qty * price;
+              if (notional < threshold) continue;
+              if (t.m) { // maker = true means taker was selling
+                largeSellVol += notional;
+                largeSellCount++;
+              } else {
+                largeBuyVol += notional;
+                largeBuyCount++;
+              }
+            }
+          }
+        } catch {}
+
         // Build derivative signals
         derivSignals.fundingRateRaw = fundingRate;
         derivSignals.longPctRaw = longPct || 50;
@@ -1478,8 +1503,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           const ts = Math.floor(Date.now() / 1000);
           try {
             await env.DB.prepare(
-              'INSERT OR REPLACE INTO derivatives_history (symbol, timestamp, funding_rate, open_interest, long_percent, taker_ratio, top_trader_long_pct, taker_buy_vol, taker_sell_vol, mark_price, index_price, basis_pct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-            ).bind(symbol, ts, fundingRate, openInterest, longPct, takerRatio, topTraderLongPct, takerBuyVol, takerSellVol, markPrice, indexPrice, basisPct).run();
+              'INSERT OR REPLACE INTO derivatives_history (symbol, timestamp, funding_rate, open_interest, long_percent, taker_ratio, top_trader_long_pct, taker_buy_vol, taker_sell_vol, mark_price, index_price, basis_pct, large_buy_vol, large_sell_vol, large_buy_count, large_sell_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+            ).bind(symbol, ts, fundingRate, openInterest, longPct, takerRatio, topTraderLongPct, takerBuyVol, takerSellVol, markPrice, indexPrice, basisPct, largeBuyVol, largeSellVol, largeBuyCount, largeSellCount).run();
             await env.ALERTS.put(archiveKey, String(Date.now()), { expirationTtl: 14400 });
           } catch {}
         }
@@ -1487,7 +1512,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
       // Compute all 80 features
-      const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
+      const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct, largeBuyVol, largeSellVol } : undefined;
       const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol]);
 
       // Save snapshot for next cron's rate-of-change deltas + acceleration
