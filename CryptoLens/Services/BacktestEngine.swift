@@ -762,7 +762,8 @@ class BacktestEngine: ObservableObject {
     @Published var batchProgress: String = ""
     @Published var batchComplete = false
 
-    static let cryptoSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT"]
+    static let cryptoSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT",
+                                "LINKUSDT", "AVAXUSDT", "DOTUSDT", "NEARUSDT"]
     static let stockSymbols = ["AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META",
                                 "AMZN", "JPM", "UNH", "HD", "MA", "ABBV",
                                 "V", "AMD", "NFLX", "BA", "XOM", "CRM", "LLY", "DIS"]
