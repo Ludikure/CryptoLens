@@ -6,8 +6,9 @@ enum MLCalibration {
     private static let cryptoMap: (x: [Double], y: [Double])? = {
         guard let url = Bundle.main.url(forResource: "crypto_calibration", withExtension: "json"),
               let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: [Double]],
-              let x = json["x"], let y = json["y"], x.count == y.count, x.count >= 2
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let x = json["x"] as? [Double], let y = json["y"] as? [Double],
+              x.count == y.count, x.count >= 2
         else { return nil }
         return (x, y)
     }()
@@ -15,8 +16,9 @@ enum MLCalibration {
     private static let stockMap: (x: [Double], y: [Double])? = {
         guard let url = Bundle.main.url(forResource: "stock_calibration", withExtension: "json"),
               let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: [Double]],
-              let x = json["x"], let y = json["y"], x.count == y.count, x.count >= 2
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let x = json["x"] as? [Double], let y = json["y"] as? [Double],
+              x.count == y.count, x.count >= 2
         else { return nil }
         return (x, y)
     }()

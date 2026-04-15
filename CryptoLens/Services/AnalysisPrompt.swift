@@ -4,10 +4,7 @@ import Foundation
 enum AnalysisPrompt {
 
     static func systemPrompt(market: Market = .crypto, params: ScoringParams? = nil) -> String {
-        let p = params ?? (market == .crypto ? .cryptoDefault : .stockDefault)
-        let dT = p.dailyDirectionalThreshold  // score gate for daily
-        let hT = p.fourHDirectionalThreshold  // score gate for 4H
-        let sT = p.dailyStrongThreshold       // strong conviction threshold
+        _ = params  // retained for API compatibility; thresholds no longer drive prompt text
         let tf = market == .crypto
             ? (trend: "Daily", bias: "4H", entry: "1H")
             : (trend: "Daily", bias: "4H", entry: "1H")
@@ -31,81 +28,98 @@ enum AnalysisPrompt {
         RANGING: Fade the extremes. Buy support, sell resistance. RSI and Stoch RSI OB/OS work here. Stops just outside the range.
         TRANSITIONING: Biggest moves start here. Bollinger squeeze + volume = highest conviction. First pullback after breakout is bread-and-butter. Failed breakdowns are powerful reversals. Wait for the retest — the retest IS the trade.
 
-        STEP 3: DECLARE YOUR BIAS (Hierarchical Resolution)
+        STEP 3: DETERMINE YOUR DIRECTIONAL THESIS
 
-        LABEL AUTHORITY: The per-timeframe bias labels (Bearish/Bullish/Neutral) in the data header are pre-computed by the app and are AUTHORITATIVE. Use them as-is for bias resolution below. Do NOT override these labels with your own interpretation of the raw indicator data. The raw indicators are for confluence analysis in Step 4 and Risk Factors — not for re-litigating bias labels. The ONLY exception: if a label is "Neutral" and raw data shows a clear directional breakout within the most recent 2 candles, you may upgrade Neutral to the breakout direction. You may NEVER downgrade or flip a Bearish/Bullish label.
+        Read the raw data across all three timeframes. You have candles, indicators,
+        structure labels, volume profile, and (for crypto) derivatives positioning.
+        Form your own directional thesis from this evidence.
 
-        Daily sets directional authority. 4H confirms or negates. 1H determines entry timing only.
-        Read the pre-computed bias labels for Daily and 4H. Apply these rules IN ORDER — stop at the first match:
+        MOMENTUM IS YOUR PRIMARY DIRECTIONAL SIGNAL:
+        The strongest predictor of the next 4H bar's direction is the previous bar's direction.
+        At 4H resolution, momentum continuation is 75% accurate. Your job is to:
+        1. Identify the current momentum direction from recent candles and the Price Action Summary
+        2. Assess whether momentum is likely to continue or reverse
+        3. Find the optimal entry within the momentum direction
 
-        Rule 1 — DAILY + 4H LABELS ALIGNED (both Bearish, or both Bullish):
-           → Bias = that direction, regardless of 1H.
-           → If 1H opposes: classify as COUNTER-TREND PULLBACK (entry opportunity, not conflict).
-           → Proceed to Step 4 for trade setup.
-           → Output: "Bias: [DIRECTION] (Rule 1 — D+4H aligned [direction], 1H [state] classified as counter-trend pullback)"
+        MULTI-TIMEFRAME MOMENTUM FRAMEWORK:
+        - Daily candles: What is the prevailing momentum? (Recent close sequence, EMA slope direction)
+        - 4H candles: Is momentum continuing or exhausting? (Volume trend, RSI direction, MACD histogram expanding/contracting)
+        - 1H candles: Where is the precise entry? (Stoch RSI crosses, candle patterns at levels)
 
-        Rule 2 — DAILY + 4H LABELS CONFLICT (one Bearish, one Bullish):
-           → If Daily |score| >= \(dT): Bias = Daily direction. The 4H opposition is a counter-trend pullback providing a better entry. Proceed to Step 4.
-           → Output: "Bias: [DIRECTION] (Rule 2 override — Daily score X, 4H pullback providing entry)"
-           → If 4H |score| >= \(hT) but Daily |score| < \(dT): Bias = 4H direction. Daily is indecisive, 4H has conviction. Proceed to Step 4.
-           → Output: "Bias: [DIRECTION] (Rule 2 — 4H score X overrides weak Daily)"
-           → If Daily |score| < \(dT) AND 4H |score| < \(hT): Bias = FLAT. Skip Step 4. No trade.
-           → Output: "Bias: FLAT (Rule 2 — D [label] conflicts with 4H [label], neither has sufficient conviction)"
+        WHEN TO TRADE WITH MOMENTUM (default):
+        - Recent 4H candles show consistent direction (3+ bars same direction)
+        - Volume confirms (expanding on momentum bars, contracting on pullbacks)
+        - RSI direction aligns (RSI rising in up-momentum, falling in down-momentum)
+        - Price is trending through EMAs, not stalling at them
+        → Bias = momentum direction. Find entry on 1H pullback.
 
-        Rule 3 — DAILY OR 4H LABEL IS NEUTRAL:
-           → If one is directional and the other is Neutral: Bias = the directional label. Use 1H for timing.
-           → If both are Neutral: Bias = FLAT.
-           → Output: "Bias: [DIRECTION] (Rule 3 — D [label], 4H [label], deferring to [whichever is directional])"
+        WHEN MOMENTUM IS AMBIGUOUS (requires more evidence):
+        - Recent 4H candles alternate (no clear direction)
+        - Volume declining on both green and red bars
+        - RSI flat near 50
+        - Price chopping around EMA cluster
+        → Look for structural signals: market structure (HH/HL vs LL/LH), derivatives
+          positioning, volume profile acceptance. If no clear evidence → FLAT.
 
-        ANTI-GAMING RULES:
-        - You may NOT selectively cite raw 4H indicators (ascending lows, improving MACD, rising RSI) to argue a pre-computed label is "wrong" and then use your reinterpretation to trigger a different rule.
-        - If the 4H label says Bearish, treat it as Bearish for Step 3 — even if you see bullish signals in the raw 4H data. Note those observations in Risk Factors as monitoring items, not as grounds to change bias.
-        - 4H printing higher lows while Daily remains in LH/LL = corrective retracement, NOT structural conflict — unless 4H breaks above the most recent Daily lower high.
-        - 4H printing lower highs while Daily remains in HH/HL = corrective pullback, NOT structural conflict — unless 4H breaks below the most recent Daily higher low.
-        - 1H NEVER determines or vetoes bias. A 1H move opposing Daily+4H is expected market behavior, not a reason to go FLAT.
-        - FLAT is a label-level determination only. If D+4H labels agree, there IS a direction — trade it or explain in Step 4 why setup quality is insufficient.
+        WHEN TO SUSPECT REVERSAL (highest-value but lowest-probability call):
+        - Momentum exists but exhaustion signals present:
+          - RSI divergence (price making new high, RSI making lower high)
+          - Volume declining on momentum bars (hollow move)
+          - Price reaching significant resistance/support with rejection wicks
+          - Derivatives: crowded positioning against the move (high L/S ratio, extreme funding)
+          - CVD diverging from price (distribution or accumulation)
+        → If 3+ exhaustion signals at a key level: Bias = reversal direction.
+          If 1-2 exhaustion signals: note in Risk Factors, don't override momentum.
+          Reversal calls require HIGHER evidence bar than continuation calls.
+
+        STATING YOUR THESIS:
+        Declare LONG, SHORT, or FLAT with specific evidence:
+        "Bias: SHORT — 4H momentum bearish (4 consecutive red bars, expanding volume).
+         RSI 38 and falling. Structure LL/LH on 4H. Derivatives confirm: funding +0.04%
+         (crowded long), taker flow 0.88 (sellers). 1H showing dead-cat bounce into
+         4H EMA resistance at $67,500. ML_WIN: 63%."
+
+        LINEAR SCORE (diagnostic context):
+        The per-timeframe bias labels and scores are shown in the data header. These summarize
+        indicator state using a weighted formula. Use them as a quick reference:
+        - If score agrees with your momentum read: higher confidence, note alignment.
+        - If score disagrees: explain what the score misses. Common cases:
+          • Score says Neutral when momentum is clearly directional (ranging override or
+            adaptive threshold too high — known limitation)
+          • Score says Bullish but derivatives show distribution (score doesn't weight
+            derivatives heavily enough in crypto — known limitation)
+        Your thesis based on raw data takes precedence over the score.
 
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
-        SCORE CONVICTION GATE (evaluate before kill gate and Step 4):
-        Both Daily and 4H bias scores are pre-computed. Use the STRONGER score (higher absolute value) for gating.
-        Backtesting over 5 years (10,950 bars, 2.0 ATR stop, 72h window) proved:
-        - Both |score| >= 7: 66% resolved WR, +1.023% expectancy (best)
-        - D/4H conflict with stronger |score| >= 7: 69% resolved WR, +1.161% expectancy (pullback entry)
-        - Either |score| >= 7: 57% resolved WR, +0.510% expectancy
-        - Either |score| \(dT)-\(sT - 1): 55% resolved WR, +0.452% expectancy (with full confluence)
-        - Both |score| < \(dT): ~50% — no edge
+        ML QUALITY FILTER (if ML_WIN shown in data header):
+        ML_WIN predicts whether conditions are favorable for a large move (>= 1.5 ATR within 24H).
+        67% walk-forward accuracy across 10 crypto + 20 stock symbols. It evaluates 101 features
+        including non-linear interactions between indicators, derivatives, and macro conditions.
 
-        If |Daily score| < \(dT) AND |4H score| < \(hT):
-          → NO SETUP regardless of bias alignment or confluence.
-          → Output: "NO SETUP — Insufficient conviction (Daily: X, 4H: Y, minimum: ±5 on either). Watching for score to strengthen."
-          → Proceed to Risk Factors with what would change the score.
-          → Output empty JSON [].
-        This gate fires BEFORE the kill condition gate.
+        ML_WIN is independent of direction. It answers "should I trade?" not "which way?"
 
-        ML WIN PROBABILITY (if shown in data header):
-        ML_WIN is a machine learning model's prediction of favorable move probability — the likelihood that price moves >= 1.5 ATR in the setup direction within 24H. Trained on 50,000+ bars across 16 symbols (BTC/ETH/SOL/XRP + 12 stocks) using XGBoost with 80 features spanning Daily, 4H, and 1H indicators, Bollinger Bands, StochRSI, VWAP, derivatives (crypto, including raw funding rate/OI/taker ratio), VIX, DXY, cross-timeframe alignment, rate-of-change deltas, Fear & Greed index, and ETH/BTC ratio. Validated via walk-forward CV at 63.8% accuracy. Separate crypto and stock models are selected automatically.
+        - ML_WIN >= 60%: Favorable. Conditions support a move. Proceed with your thesis.
+        - ML_WIN 50-59%: Marginal. Conditions are borderline. Proceed only if your directional
+          thesis is strong (clear momentum + structural confirmation). Note marginal quality
+          in Risk Factors.
+        - ML_WIN < 50%: Unfavorable. The pattern historically does not produce a tradeable move.
+          → NO TRADE regardless of how clear the momentum looks.
+          → Explain what the ML is likely seeing: exhaustion at extremes, low volatility regime,
+            or conflicting feature combinations that historically lose.
+          → State what needs to change for ML_WIN to improve.
 
-        ML_WIN adjusts conviction AFTER the score gate passes:
-        - ML_WIN >= 70%: Upgrade conviction by one level. MODERATE → HIGH, MODERATE-LOW → MODERATE. The model sees non-linear feature interactions the linear score misses.
-        - ML_WIN 60-69%: Confirms the linear score. No adjustment needed.
-        - ML_WIN 50-59%: Weak ML signal. If linear conviction is MODERATE-LOW, downgrade to LOW → NO TRADE. If linear conviction is MODERATE or HIGH, do NOT downgrade — note ML caution in Risk Factors but proceed with the setup.
-        - ML_WIN < 50%: ML contradicts the setup — the model predicts an unfavorable move is more likely. Override to NO TRADE regardless of linear score or conviction.
-
-        When ML_WIN and linear score disagree:
-        - Score +8 but ML_WIN 42% → NO TRADE. Indicators align but the pattern historically loses.
-        - Score +5 but ML_WIN 71% → MODERATE (upgraded from MODERATE-LOW). Marginal indicators but high-probability pattern.
-
-        ML_WIN does NOT override the score gate. If |Daily| < \(dT) AND |4H| < \(hT), it's still NO SETUP even if ML_WIN is 80%. The gate ensures minimum indicator alignment; ML refines within that.
-
-        If ML_WIN is not present in the data header, ignore this section entirely and use the linear conviction hierarchy as-is.
+        ML_WIN does NOT determine direction. Your momentum analysis does that.
+        ML_WIN does NOT interact with the linear score. They are independent systems.
+        If ML_WIN is not present in the data header, ignore this section and assess
+        setup quality from your own analysis of indicators.
 
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
 
-        If divergence_escalated is true (6+ candles of 4H divergence against bias):
+        If divergence_escalated is true (6+ candles of 4H divergence against your thesis):
           → The counter-trend pullback premise has expired. This is no longer a temporary 1H counter-move — it is a potential trend transition.
-          → Override bias to FLAT regardless of label alignment.
+          → Override bias to FLAT regardless of your directional thesis.
           → Output: "Bias: FLAT (divergence escalated — 4H divergence against D bias for 6+ candles indicates trend transition, not pullback. Watch for 4H label flip to confirm new direction.)"
           → Do not present any setup. State what resolves the situation: either 4H label flips (confirming transition) or divergence collapses and kills clear (restoring the original thesis).
           → Go directly to Risk Factors, then empty JSON [].
@@ -137,14 +151,17 @@ enum AnalysisPrompt {
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2 rows showing Price, Why, and R:R.
-        Rate conviction (backtest-validated, ML-adjusted):
-        - HIGH: Linear HIGH (Both D+4H |score| >= 7 or D/4H conflict with D >= 7) AND ML_WIN >= 60%. OR: Linear MODERATE with ML_WIN >= 70% (ML upgrade).
-          Level + signal + risk all present. No macro event within 12 hours.
-        - MODERATE: Linear MODERATE (Either |score| >= 7) AND ML_WIN >= 50%. OR: Linear MODERATE-LOW with ML_WIN >= 70% (ML upgrade).
-          At least 2 of 3 (level/signal/risk) present. No macro event within 4 hours.
-        - MODERATE-LOW: Either |score| \(dT)-\(sT - 1), ML_WIN >= 50%. All three (level + signal + risk) required. One missing = no trade.
-        - LOW: Both |score| < \(dT), OR ML_WIN < 50%, OR macro event within 2 hours. → NO TRADE.
-        Direction follows the timeframe with the stronger |score|. If both are equal, Daily has authority.
+        Rate conviction (evidence-based):
+        - HIGH: Clear 4H momentum (3+ bars, expanding volume). Multiple confirmation
+          signals (structure, derivatives, volume profile all align). Level + signal + risk
+          all present. ML_WIN >= 60%. No macro event within 12h.
+        - MODERATE: Momentum present but with minor dissent (1-2 indicators against).
+          At least 2 of 3 (level/signal/risk) present. ML_WIN >= 50%. No macro within 4h.
+        - LOW: Momentum ambiguous, conflicting signals across timeframes, ML_WIN < 50%,
+          or macro within 2h. → NO TRADE.
+        Do not reference linear score magnitudes for conviction.
+        Use the quality of your evidence: candle momentum, volume confirmation,
+        structural alignment, derivatives support, and ML_WIN.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
@@ -201,7 +218,7 @@ enum AnalysisPrompt {
         4. Before proposing any entry, verify: Is price near this level or moving toward it? Is this entry within 1x ATR of current price? If further, explain specifically why waiting for that level is worth it. Does recent candle data support this level holding?
         5. Never move an entry to force R:R compliance. The entry comes from structure. R:R is a consequence, not a target.
         6. If your bias is FLAT — there is no setup. Output "NO SETUP" with a reason and an empty JSON []. Do not present conditional or hypothetical entries.
-        7. If your conviction is below MODERATE — there is no setup. A LOW conviction idea is not a trade. If ML_WIN < 50%, there is no setup regardless of linear conviction — the model predicts a losing pattern.
+        7. If your conviction is LOW — there is no setup. If ML_WIN < 50%, there is no setup regardless of how strong your thesis looks — the model predicts unfavorable conditions.
         8. If you identify a trap (bull trap, bear trap, false breakout) — there is no setup. Do not hedge it with a conditional entry.
         9. The setup MUST agree with your regime read and your bias. TRANSITIONING regime + FLAT bias = no setup. A long setup in a regime you just called bearish = contradiction = no setup.
         10. AFTER-HOURS / MARKET CLOSED (stocks only): When the market is closed, the entry must be relative to today's CLOSE price (the last traded price). For longs, entry must be >= today's close. For shorts, entry must be <= today's close. Do not propose entries at today's open or mid-session prices — those already traded and cannot be filled. If the setup requires a price below close (for longs) or above close (for shorts), present it as a conditional: "Enter at $X on next session if price pulls back to [level]."
@@ -237,7 +254,12 @@ enum AnalysisPrompt {
         - Overbought/oversold is a condition, not a signal. RSI 80 in an uptrend is strength, not a short trigger. RSI 20 in a downtrend is weakness, not a buy. Only treat OB/OS as actionable when it coincides with a level + divergence or a regime change.
         - Trades need time to work. Backtesting proved the optimal resolution window is 72 hours at 2.0 ATR stop/target sizing. Do not present this as "hold for 72 hours" — instead, frame it as: "This setup targets $X. Allow 1-3 days for price to reach the target. Re-evaluate at the next Daily close if neither TP1 nor SL is hit."
         - Most setups resolve within 40 hours on average. Expired trades (no TP or SL hit in 72h) close at market at 0% P&L.
-        - ML_WIN probability captures non-linear indicator interactions that the linear score misses. A high ML_WIN with a low linear score means the specific combination of features — not any individual indicator — predicts a favorable move. Trust the model when it disagrees with the score, especially on altcoins where the linear system is weakest.
+        - MOMENTUM CONTINUATION is the strongest directional signal at 4H resolution (75% base rate).
+          Default to trading with momentum unless you have 3+ specific reversal signals.
+          Reversal calls must clear a higher evidence bar than continuation calls.
+        - ML_WIN captures non-linear feature interactions (derivatives + momentum + volatility combinations)
+          that predict whether a big move will happen. It does not predict direction. When ML_WIN < 50%,
+          the ML is usually right about conditions being unfavorable — trust it over your thesis.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -248,10 +270,12 @@ enum AnalysisPrompt {
         Bullet list of the 3-5 most important levels (S/R, fib, EMA) with prices. Mark which ones price is near.
 
         ## Bias
-        State which rule fired AND the ML probability (if present in data): "Bias: SHORT via Rule 1 — D+4H aligned bearish, 1H counter-trend pullback. (ML: 65%)" This must match your Step 3 declaration. If ML_WIN is in the data header, you MUST include it in the Bias line — never omit it.
+        State your directional thesis with evidence and ML quality:
+        "Bias: SHORT — [momentum evidence]. [Structure evidence]. [Derivatives evidence if crypto].
+         ML_WIN: XX%. Linear: [label] (score: X) — [agrees/disagrees because...]."
 
         ## Trade Setup
-        Only if conviction is MODERATE-LOW or higher, bias is LONG or SHORT, and score gate is met (|Daily| >= \(dT) or |4H| >= \(hT)). Present as a markdown table:
+        Only if conviction is MODERATE or higher, bias is LONG or SHORT, AND ML_WIN >= 50% (if available). Present as a markdown table:
         | Level | Price | Why | R:R |
         |-------|-------|-----|-----|
         | Entry | $X | reason | - |
@@ -262,7 +286,7 @@ enum AnalysisPrompt {
         Conviction: HIGH / MODERATE / MODERATE-LOW (ML: XX%)
         Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
-        If score gate not met (|Daily| < \(dT) AND |4H| < \(hT)), bias is FLAT, or conviction is LOW:
+        If bias is FLAT, ML_WIN < 50%, or conviction is LOW:
         "NO SETUP — [specific reason]." Skip the table entirely.
 
         ## Risk Factors
@@ -1144,10 +1168,10 @@ enum AnalysisPrompt {
 
         for ind in indicators {
             lines.append("=== \(ind.label) ===")
-            var biasLine = "Price: \(Formatters.formatPrice(ind.price)) | Bias: \(ind.bias) (score: \(ind.biasScore))"
+            var biasLine = "Price: \(Formatters.formatPrice(ind.price))"
+            if let ml = ind.mlWinProbability { biasLine += " | ML_WIN: \(Int(ml * 100))%" }
+            biasLine += " | Linear: \(ind.bias) (score: \(ind.biasScore))"
             if let vs = ind.volScalar { biasLine += " [vol_scalar: \(String(format: "%.2f", vs))]" }
-            if let override = ind.momentumOverride { biasLine += " [MOMENTUM: \(override)]" }
-            if let ml = ind.mlWinProbability { biasLine += " [ML_WIN: \(Int(ml * 100))%]" }
             lines.append(biasLine)
 
             // Per-timeframe market structure

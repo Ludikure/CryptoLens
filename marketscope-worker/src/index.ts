@@ -5,6 +5,21 @@ import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './sc
 import { mlPredict, buildMLInput } from './ml-predict';
 import { computeAllFeatures, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 
+// Drop the most recent candle if it is still in-progress (closeTime > now).
+// Without this, every minute's cron sees a different "current" close (the live tick),
+// which mutates indicator values and ML features even though no candle has actually closed.
+const INTERVAL_MS: Record<string, number> = {
+  '1m': 60_000, '5m': 300_000, '15m': 900_000, '30m': 1_800_000,
+  '1h': 3_600_000, '4h': 14_400_000, '1d': 86_400_000, '1w': 604_800_000,
+};
+function dropInProgress<T extends { time: number }>(candles: T[], interval: string): T[] {
+  if (!candles.length) return candles;
+  const ms = INTERVAL_MS[interval];
+  if (!ms) return candles;
+  const last = candles[candles.length - 1];
+  return last.time + ms > Date.now() ? candles.slice(0, -1) : candles;
+}
+
 export interface Env {
   ALERTS: KVNamespace;       // Hot cache for market data
   DB: D1Database;            // Persistent state + candle archive
@@ -1270,23 +1285,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     stockThreshold: (watchlistRows.results[0].stock_threshold as number) || 3,
   };
 
-  // Load previous ML probabilities (D1 with KV fallback)
-  const prevScores = await env.DB.prepare(
-    'SELECT symbol, ml_probability FROM score_history WHERE device_id = ? AND id IN (SELECT MAX(id) FROM score_history WHERE device_id = ? GROUP BY symbol)'
-  ).bind(deviceId, deviceId).all();
-  const prevProbs: Record<string, number> = {};
-  for (const row of prevScores.results) {
-    prevProbs[row.symbol as string] = row.ml_probability as number;
-  }
-  // KV fallback for first run after migration
-  if (Object.keys(prevProbs).length === 0) {
-    const prevRaw = await env.ALERTS.get(`mlprobs:${deviceId}`);
-    if (prevRaw) Object.assign(prevProbs, JSON.parse(prevRaw));
-  }
   const newProbs: Record<string, number> = {};
   const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
   const ML_THRESHOLD = 0.65;
-  const SCORE_THRESHOLD = 5;
+  const NOTIFY_COOLDOWN_SEC = 12 * 60 * 60; // 12h between notifications per (device, symbol)
 
   // Fetch Fear & Greed index (global, once per cron run)
   let fearGreedIndex = 50, fearGreedZone = 0;
@@ -1301,14 +1303,16 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   } catch {}
 
   // Fetch ETH/BTC ratio (global, once per cron run)
+  // iOS training used delta of last two 4H closes (1-bar delta despite the "6" suffix).
+  // Matching that so the model sees the same feature distribution it was trained on.
   let ethBtcRatio = 0, ethBtcDelta6 = 0;
   try {
-    const ebResp = await fetch(`${BINANCE_SPOT}/klines?symbol=ETHBTC&interval=4h&limit=7`);
+    const ebResp = await fetch(`${BINANCE_SPOT}/klines?symbol=ETHBTC&interval=4h&limit=2`);
     if (ebResp.ok) {
       const ebData = await ebResp.json() as any[];
-      if (ebData.length >= 7) {
+      if (ebData.length >= 2) {
         ethBtcRatio = +ebData[ebData.length - 1][4];
-        const prev = +ebData[0][4];
+        const prev = +ebData[ebData.length - 2][4];
         ethBtcDelta6 = prev > 0 ? (ethBtcRatio - prev) / prev * 100 : 0;
       } else if (ebData.length > 0) {
         ethBtcRatio = +ebData[ebData.length - 1][4];
@@ -1385,7 +1389,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
             const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=4h&limit=260`);
             if (resp.ok) {
               const data = await resp.json() as any[];
-              fourHCandles = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
+              const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
+              fourHCandles = dropInProgress(parsed, '4h');
               await env.ALERTS.put(cacheKey4H, JSON.stringify(fourHCandles), { expirationTtl: 300 });
               archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
             }
@@ -1401,7 +1406,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
             const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=1h&limit=100`);
             if (resp.ok) {
               const data = await resp.json() as any[];
-              oneHCandles = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
+              const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
+              oneHCandles = dropInProgress(parsed, '1h');
               await env.ALERTS.put(cacheKey1H, JSON.stringify(oneHCandles), { expirationTtl: 300 });
             }
           } catch {}
@@ -1410,10 +1416,12 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
       // Fetch live derivatives for crypto (funding + top trader + taker + OI + basis)
       let derivSignals: any = { fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0 };
+      // Hoisted so the sentiment object below can read them outside the isCrypto block
+      let basisPct = 0, largeBuyVol = 0, largeSellVol = 0;
       if (isCrypto) {
         const FAPI = 'https://fapi.binance.com';
         let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0;
-        let openInterest = 0, markPrice = 0, indexPrice = 0, basisPct = 0, longPct = 0, takerRatio = 0;
+        let openInterest = 0, markPrice = 0, indexPrice = 0, longPct = 0, takerRatio = 0;
 
         // Funding rate
         try {
@@ -1459,7 +1467,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         } catch {}
 
         // Large trade detection from aggTrades (smart money flow)
-        let largeBuyVol = 0, largeSellVol = 0, largeBuyCount = 0, largeSellCount = 0;
+        let largeBuyCount = 0, largeSellCount = 0;
         try {
           const atResp = await fetch(`https://api.binance.com/api/v3/aggTrades?symbol=${symbol}&limit=1000`);
           if (atResp.ok) {
@@ -1512,7 +1520,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
       // Compute all 80 features
-      const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct, largeBuyVol, largeSellVol } : undefined;
+      const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
       const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol]);
 
       // Save snapshot for next cron's rate-of-change deltas + acceleration
@@ -1530,14 +1538,17 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
       newProbs[symbol] = mlProb;
 
-      const prevProb = prevProbs[symbol] || 0;
-
-      // ML probability crossing detection — require both ML >= 65% AND |score| >= 5 (watchlist only)
-      const absScore = Math.abs(features.dailyScore);
+      // ML quality gate — fire whenever ML >= threshold and we haven't notified
+      // for this (device, symbol) in the last NOTIFY_COOLDOWN_SEC. The crossing-based
+      // trigger doesn't work with the new architecture: probabilities can sit pinned at
+      // the calibration cap for hours, so requiring a fall-then-rise would never fire.
       const inWatchlist = config.symbols.includes(symbol);
-      if (inWatchlist && prevProb < ML_THRESHOLD && mlProb >= ML_THRESHOLD && absScore >= SCORE_THRESHOLD) {
-        const bias = features.dailyScore < 0 ? 'Bearish' : features.dailyScore > 0 ? 'Bullish' : 'Neutral';
-        triggered.push({ symbol, score: features.dailyScore, mlProb, direction: bias });
+      if (inWatchlist && mlProb >= ML_THRESHOLD) {
+        const cooldownKey = `notif:${deviceId}:${symbol}`;
+        const lastFired = await env.ALERTS.get(cooldownKey);
+        if (!lastFired) {
+          triggered.push({ symbol, score: features.dailyScore, mlProb, direction: '' });
+        }
       }
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);
@@ -1547,9 +1558,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   // Save ML snapshots for next cron's rate-of-change deltas
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
 
-  // Save new ML probabilities to KV (fast) + D1 (persistent)
-  await env.ALERTS.put(`mlprobs:${deviceId}`, JSON.stringify(newProbs),
-    { expirationTtl: 86400 * 7 });
   // Log score history to D1
   for (const [sym, prob] of Object.entries(newProbs)) {
     const t = triggered.find(t => t.symbol === sym);
@@ -1575,9 +1583,12 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   for (const t of triggered) {
     const ticker = t.symbol.replace('USDT', '');
     await sendAPNs(env, pushToken,
-      `${ticker} ${t.direction} — ML ${Math.round(t.mlProb * 100)}%`,
-      `Score ${t.score > 0 ? '+' : ''}${t.score}. High conviction setup detected.`
+      `${ticker} — Setup conditions favorable (ML ${Math.round(t.mlProb * 100)}%)`,
+      `Open the app for the directional analysis.`
     );
+    // Stamp cooldown so this (device, symbol) won't fire again for NOTIFY_COOLDOWN_SEC
+    await env.ALERTS.put(`notif:${deviceId}:${t.symbol}`, String(Date.now()),
+      { expirationTtl: NOTIFY_COOLDOWN_SEC });
     // Log notification to D1
     await env.DB.prepare(
       'INSERT INTO notifications (device_id, symbol, type, ml_probability, score, direction) VALUES (?, ?, ?, ?, ?, ?)'
@@ -1592,9 +1603,10 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
     );
     if (!resp.ok) return [];
     const data = await resp.json() as any[];
-    return data.map((k: any) => ({
+    const candles = data.map((k: any) => ({
       time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
     }));
+    return dropInProgress(candles, '1d');
   } else {
     const resp = await fetch(
       `${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=2y`,
@@ -1606,12 +1618,13 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
     if (!r?.timestamp) return [];
     const ts = r.timestamp;
     const q = r.indicators.quote[0];
-    return ts.map((t: number, i: number) => ({
+    const candles = ts.map((t: number, i: number) => ({
       time: t * 1000,
       open: q.open[i] || 0, high: q.high[i] || 0,
       low: q.low[i] || 0, close: q.close[i] || 0,
       volume: q.volume[i] || 0
     })).filter((c: ScoreCandle) => c.close > 0);
+    return dropInProgress(candles, '1d');
   }
 }
 

@@ -55,16 +55,23 @@ function sigmoid(x: number): number {
 }
 
 export function mlPredict(input: Record<string, number>, isCrypto: boolean): number {
+    return mlPredictWithRaw(input, isCrypto).calibrated;
+}
+
+export function mlPredictWithRaw(
+    input: Record<string, number>,
+    isCrypto: boolean,
+): { raw: number; calibrated: number } {
     const trees = isCrypto ? cryptoTrees : stockTrees;
     const baseScore = isCrypto ? cryptoBaseScore : stockBaseScore;
-    // XGBoost prediction: sigmoid(logit(base_score) + sum_of_trees)
     const baseLogit = Math.log(baseScore / (1 - baseScore));
     let sum = baseLogit;
     for (const tree of trees) {
         sum += evaluateTree(tree, input);
     }
-    if (!isFinite(sum)) return 0.5;
-    return calibrate(sigmoid(sum), isCrypto);
+    if (!isFinite(sum)) return { raw: 0.5, calibrated: 0.5 };
+    const raw = sigmoid(sum);
+    return { raw, calibrated: calibrate(raw, isCrypto) };
 }
 
 /// Build feature dict from scoring results + candle data.

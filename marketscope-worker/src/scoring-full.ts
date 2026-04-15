@@ -72,8 +72,6 @@ export interface FullFeatures {
     // Computed features (4)
     volWeightedRsi: number; hVolWeightedRsi: number;
     atrExpansionRate: number; fundingSlope: number;
-    // Order flow (3)
-    largeBuyRatio: number; largeTradeImbalance: number; largeTradeIntensity: number;
 }
 
 // ============================================================
@@ -144,35 +142,62 @@ function computeMACD(closes: number[]): { macdLine: number[]; signalLine: number
     return { macdLine, signalLine, histogram, crossover };
 }
 
+// Mirrors Swift ADX.computeFull() — Wilder smoothing on +DM/-DM/TR, then ADX is
+// Wilder-smoothed DX across all history. Previous version returned raw DX over last 28 bars.
 function computeADX(candles: Candle[], period: number = 14): { adx: number; plusDI: number; minusDI: number } | null {
-    if (candles.length < period * 2) return null;
-    let atrSum = 0, plusDMSum = 0, minusDMSum = 0;
-
-    for (let i = candles.length - period * 2; i < candles.length; i++) {
-        const h = candles[i].high, l = candles[i].low;
-        const ph = candles[i - 1].high, pl = candles[i - 1].low, pc = candles[i - 1].close;
-        const tr = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
-        const plusDM = h - ph > pl - l ? Math.max(h - ph, 0) : 0;
-        const minusDM = pl - l > h - ph ? Math.max(pl - l, 0) : 0;
-        atrSum += tr; plusDMSum += plusDM; minusDMSum += minusDM;
+    if (candles.length < period * 2 + 1) return null;
+    const plusDMs: number[] = [];
+    const minusDMs: number[] = [];
+    const trs: number[] = [];
+    for (let i = 1; i < candles.length; i++) {
+        const upMove = candles[i].high - candles[i - 1].high;
+        const downMove = candles[i - 1].low - candles[i].low;
+        plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
+        minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+        const h = candles[i].high, l = candles[i].low, pc = candles[i - 1].close;
+        trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
     }
 
-    if (atrSum === 0) return null;
-    const plusDI = (plusDMSum / atrSum) * 100;
-    const minusDI = (minusDMSum / atrSum) * 100;
-    if (plusDI + minusDI === 0) return null;
-    const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI) * 100;
-    return { adx: dx, plusDI, minusDI };
+    let smoothedPlus = plusDMs.slice(0, period).reduce((a, b) => a + b, 0);
+    let smoothedMinus = minusDMs.slice(0, period).reduce((a, b) => a + b, 0);
+    let smoothedTR = trs.slice(0, period).reduce((a, b) => a + b, 0);
+
+    const dxValues: { dx: number; plusDI: number; minusDI: number }[] = [];
+    for (let i = period; i < plusDMs.length; i++) {
+        smoothedPlus = smoothedPlus - smoothedPlus / period + plusDMs[i];
+        smoothedMinus = smoothedMinus - smoothedMinus / period + minusDMs[i];
+        smoothedTR = smoothedTR - smoothedTR / period + trs[i];
+        if (smoothedTR === 0) continue;
+        const plusDI = (smoothedPlus / smoothedTR) * 100;
+        const minusDI = (smoothedMinus / smoothedTR) * 100;
+        const diSum = plusDI + minusDI;
+        const dx = diSum !== 0 ? (Math.abs(plusDI - minusDI) / diSum) * 100 : 0;
+        dxValues.push({ dx, plusDI, minusDI });
+    }
+
+    if (dxValues.length < period) return null;
+    let adx = dxValues.slice(0, period).reduce((s, v) => s + v.dx, 0) / period;
+    for (let i = period; i < dxValues.length; i++) {
+        adx = (adx * (period - 1) + dxValues[i].dx) / period;
+    }
+    const last = dxValues[dxValues.length - 1];
+    return { adx, plusDI: last.plusDI, minusDI: last.minusDI };
 }
 
+// Mirrors Swift ATR.compute() — Wilder smoothing over full TR series.
+// Previous version was simple mean of last 14 TRs, which ran 2-3× higher during recent volatility.
 function computeATR(candles: Candle[], period: number = 14): number {
     if (candles.length < period + 1) return candles[candles.length - 1]?.close * 0.01 || 1;
-    let sum = 0;
-    for (let i = candles.length - period; i < candles.length; i++) {
+    const trs: number[] = [];
+    for (let i = 1; i < candles.length; i++) {
         const h = candles[i].high, l = candles[i].low, pc = candles[i - 1].close;
-        sum += Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
+        trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
     }
-    return sum / period;
+    let atr = trs.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < trs.length; i++) {
+        atr = (atr * (period - 1) + trs[i]) / period;
+    }
+    return atr;
 }
 
 function computeStochRSI(closes: number[], rsiPeriod: number = 14, stochPeriod: number = 14, kSmooth: number = 3, dSmooth: number = 3): { k: number; d: number; crossover: number } {
@@ -233,7 +258,9 @@ function computeBollingerBands(closes: number[], period: number = 20, stdDev: nu
         : bandwidth;
     const squeeze = bandwidth < avgBW * 0.75;
 
-    return { percentB, squeeze, bandwidth };
+    // Return bandwidth as percentage (× 100) to match iOS BollingerBands.compute(),
+    // which is what the training data used.
+    return { percentB, squeeze, bandwidth: bandwidth * 100 };
 }
 
 function computeVolumeRatio(volumes: number[], period: number = 20): number {
@@ -469,7 +496,6 @@ export interface SentimentSignals {
     fearGreedIndex: number; fearGreedZone: number;
     ethBtcRatio: number; ethBtcDelta6: number;
     basisPct?: number;
-    largeBuyVol?: number; largeSellVol?: number;
 }
 
 export interface PreviousSnapshot {
@@ -563,11 +589,14 @@ export function computeAllFeatures(
     const fourH = fourHCandles.length >= 210 ? extractFeatures(fourHCandles, isCrypto) : null;
     const oneH = oneHCandles.length >= 30 ? extractFeatures(oneHCandles, isCrypto) : null;
 
-    // ATR + percentile from daily
-    const atrVal = computeATR(dailyCandles);
+    // atrPercent is from 4H ATR (matches iOS BacktestEngine line 498 which trained the model).
+    // atrPercentile stays on daily (iOS BacktestEngine line 499).
     const price = dailyCandles[dailyCandles.length - 1]?.close;
-    if (!price || price <= 0) return {} as FullFeatures; // Invalid price data
-    const atrPercent = (atrVal / price) * 100;
+    if (!price || price <= 0) return {} as FullFeatures;
+    const atrVal = computeATR(dailyCandles); // still used for daily-scale features (volume profile, etc.)
+    const fourHAtr = fourHCandles.length >= 15 ? computeATR(fourHCandles) : atrVal;
+    const fourHPrice = fourHCandles[fourHCandles.length - 1]?.close || price;
+    const atrPercent = (fourHAtr / fourHPrice) * 100;
     const atrPercentile = computeATRPercentile(dailyCandles);
 
     // Vol scalar from daily ATR percentile
@@ -661,17 +690,19 @@ export function computeAllFeatures(
         // Cross-asset crypto
         ethBtcRatio: sentiment?.ethBtcRatio ?? 0,
         ethBtcDelta6: sentiment?.ethBtcDelta6 ?? 0,
-        // Volume profile
+        // Volume profile — POC/VA computed on daily candles, but ATR-normalized distances
+        // use 4H ATR (matches iOS BacktestEngine lines 557-572 that produced the training CSVs).
         ...(() => {
             const vp = computeVolumeProfile(dailyCandles, atrVal);
-            if (!vp || atrVal <= 0) return { vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1, vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0 };
+            const normAtr = fourHAtr;
+            if (!vp || normAtr <= 0) return { vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1, vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0 };
             return {
-                vpDistToPocATR: (price - vp.poc) / atrVal,
+                vpDistToPocATR: (price - vp.poc) / normAtr,
                 vpAbovePoc: price > vp.poc ? 1 : 0,
                 vpVAWidth: (vp.vah - vp.val) / price * 100,
                 vpInValueArea: (price >= vp.val && price <= vp.vah) ? 1 : 0,
-                vpDistToVAH_ATR: (vp.vah - price) / atrVal,
-                vpDistToVAL_ATR: (price - vp.val) / atrVal,
+                vpDistToVAH_ATR: (vp.vah - price) / normAtr,
+                vpDistToVAL_ATR: (price - vp.val) / normAtr,
             };
         })(),
         // 1-bar deltas + acceleration
@@ -698,16 +729,5 @@ export function computeAllFeatures(
         hVolWeightedRsi: (fourH?.rsi ?? 50) * (fourH?.volumeRatio ?? 1.0),
         atrExpansionRate: 0, // needs previous bar's atrPercent
         fundingSlope: 0,     // needs previous bar's fundingRate
-        // Order flow (from aggTrades)
-        ...(() => {
-            const buyVol = sentiment?.largeBuyVol ?? 0;
-            const sellVol = sentiment?.largeSellVol ?? 0;
-            const total = buyVol + sellVol;
-            return {
-                largeBuyRatio: total > 0 ? buyVol / total : 0.5,
-                largeTradeImbalance: total > 0 ? (buyVol - sellVol) / total : 0,
-                largeTradeIntensity: total > 0 ? 1 : 0,
-            };
-        })(),
     };
 }

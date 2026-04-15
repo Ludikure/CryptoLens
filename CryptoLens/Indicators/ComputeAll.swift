@@ -1,7 +1,33 @@
 import Foundation
 
 enum IndicatorEngine {
-    static func computeAll(candles: [Candle], timeframe: String, label: String, market: Market = .crypto, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesContext? = nil) -> IndicatorResult {
+    /// Drop the most recent candle if it is still in-progress (closeTime > now).
+    /// Live ticks would otherwise mutate every indicator on every refresh, causing
+    /// score and ML output to flicker between cron/refresh cycles.
+    private static func droppingInProgress(_ candles: [Candle], timeframe: String) -> [Candle] {
+        guard let last = candles.last,
+              let intervalSec = intervalSeconds(timeframe) else { return candles }
+        let candleClose = last.time.addingTimeInterval(intervalSec)
+        return candleClose > Date() ? Array(candles.dropLast()) : candles
+    }
+
+    private static func intervalSeconds(_ timeframe: String) -> TimeInterval? {
+        switch timeframe.lowercased() {
+        case "1m": return 60
+        case "5m": return 5 * 60
+        case "15m": return 15 * 60
+        case "30m": return 30 * 60
+        case "1h", "60m": return 60 * 60
+        case "2h": return 2 * 60 * 60
+        case "4h": return 4 * 60 * 60
+        case "1d", "1day", "d": return 24 * 60 * 60
+        case "1week", "1w", "w": return 7 * 24 * 60 * 60
+        default: return nil
+        }
+    }
+
+    static func computeAll(candles rawCandles: [Candle], timeframe: String, label: String, market: Market = .crypto, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesContext? = nil) -> IndicatorResult {
+        let candles = droppingInProgress(rawCandles, timeframe: timeframe)
         let closes = candles.map(\.close)
         let highs = candles.map(\.high)
         let lows = candles.map(\.low)
