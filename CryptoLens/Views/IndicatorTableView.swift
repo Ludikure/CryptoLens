@@ -65,16 +65,7 @@ struct IndicatorTableView: View {
                 .background(Color(.systemGray5))
 
                 // Rows
-                row("Bias Score", tooltip: "Signed score from all indicators combined. ±7+ = high conviction (backtest-proven). ±5-6 = tradeable with confluence. Below ±5 = no trade.") { r in
-                    let score = r.biasScore
-                    let color: Color = abs(score) >= 7 ? (score > 0 ? .green : .red) :
-                                       abs(score) >= 5 ? (score > 0 ? Color.green.opacity(0.7) : Color.red.opacity(0.7)) :
-                                       .secondary
-                    Text("\(score > 0 ? "+" : "")\(score)")
-                        .fontWeight(abs(score) >= 7 ? .bold : .regular)
-                        .foregroundStyle(color)
-                }
-                row("ML Win", tooltip: "ML probability of >= 1.5 ATR favorable move within 24H. 80 features, walk-forward validated at 63.8%. ≥70% = high probability. ≥60% = confirmed. <50% = unfavorable.") { r in
+                row("ML Win", tooltip: "v9 calibrated probability of >=1.5 ATR favorable move within 24h. Direction-agnostic — LLM determines direction. ≥70% = high probability. <50% = unfavorable.") { r in
                     if let ml = r.mlWinProbability {
                         let pct = Int(ml * 100)
                         let color: Color = pct >= 70 ? .green :

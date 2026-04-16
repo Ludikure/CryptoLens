@@ -1534,7 +1534,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         dAdxD1: ps ? features.dAdx - ps.dAdx : 0,
       };
 
-      // ML predict using full features
+      // v9 single-model: direction-agnostic goodR probability
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
       newProbs[symbol] = mlProb;
 

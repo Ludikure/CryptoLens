@@ -21,9 +21,9 @@ struct PriceHeaderView: View {
             }
 
             HStack(spacing: 10) {
-                BiasPill(label: "Daily", bias: result.daily.bias, percent: result.daily.bullPercent)
-                BiasPill(label: "4H", bias: result.h4.bias, percent: result.h4.bullPercent)
-                BiasPill(label: "1H", bias: result.h1.bias, percent: result.h1.bullPercent)
+                CandleMomentumPill(label: "Daily", candles: result.daily.candles)
+                CandleMomentumPill(label: "4H",    candles: result.h4.candles)
+                CandleMomentumPill(label: "1H",    candles: result.h1.candles)
             }
         }
         .frame(maxWidth: .infinity)
@@ -32,29 +32,29 @@ struct PriceHeaderView: View {
     }
 }
 
-struct BiasPill: View {
+/// Shows the color of the last 3 closed candles for a timeframe.
+/// Green = close > open, red = close < open, grey = doji.
+/// This is the raw momentum signal the LLM sees — no scoring formula.
+struct CandleMomentumPill: View {
     let label: String
-    let bias: String
-    let percent: Double
+    let candles: [Candle]
 
-    private var color: Color {
-        switch bias {
-        case "Strong Bullish", "Bullish": return Color(.systemGreen).opacity(0.15)
-        case "Strong Bearish", "Bearish": return Color(.systemRed).opacity(0.15)
-        default: return Color(.systemGray5)
-        }
+    private var lastThree: [Candle] {
+        Array(candles.suffix(3))
     }
 
-    private var textColor: Color {
-        switch bias {
-        case "Strong Bullish", "Bullish": return Color(.systemGreen)
-        case "Strong Bearish", "Bearish": return Color(.systemRed)
-        default: return .secondary
-        }
+    private func color(for candle: Candle) -> Color {
+        if candle.close > candle.open { return .green }
+        if candle.close < candle.open { return .red }
+        return .secondary
     }
 
-    private var pillShortBias: String {
-        shortBias(bias)
+    private var summary: String {
+        let greens = lastThree.filter { $0.close > $0.open }.count
+        let reds   = lastThree.filter { $0.close < $0.open }.count
+        if greens == lastThree.count && greens > 0 { return "↑" }
+        if reds == lastThree.count && reds > 0    { return "↓" }
+        return "~"
     }
 
     var body: some View {
@@ -62,14 +62,21 @@ struct BiasPill: View {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-            Text(pillShortBias)
-                .font(.caption2)
-                .fontWeight(.semibold)
-                .foregroundStyle(textColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(color, in: Capsule())
+            HStack(spacing: 3) {
+                ForEach(Array(lastThree.enumerated()), id: \.offset) { _, c in
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(color(for: c))
+                        .frame(width: 10, height: 14)
+                }
+                Text(summary)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(Color(.systemGray5), in: Capsule())
         }
-        .accessibilityLabel("\(label) bias: \(pillShortBias)")
+        .accessibilityLabel("\(label) last 3 candles: \(summary)")
     }
 }

@@ -1,38 +1,46 @@
 import CoreML
 
-/// ML scoring using dual XGBoost models converted to CoreML.
-/// v8: 101 features. No score dependency (dailyScore/fourHScore/scoreSum/scoreDivergence removed).
-/// Crypto: 150 trees (BTC/ETH/SOL/XRP). Stock: 150 trees (12 symbols).
+/// ML scoring using v9 dual XGBoost models. Returns a single calibrated goodR probability
+/// (direction-agnostic "will there be a >=1.5 ATR favorable move within 24H"). The LLM
+/// determines direction from candles and indicators.
 enum MLScoring {
-    private static let cryptoModel: MLModel? = {
-        guard let url = Bundle.main.url(forResource: "MarketScoreML_crypto", withExtension: "mlmodelc") else {
+    private static let cryptoModel: MLModel? = loadModel("MarketScoreML_crypto")
+    private static let stockModel: MLModel?  = loadModel("MarketScoreML_stock")
+
+    private static func loadModel(_ name: String) -> MLModel? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "mlmodelc") else {
             #if DEBUG
-            print("[MLScoring] MarketScoreML_crypto.mlmodelc not found in bundle")
+            print("[MLScoring] \(name).mlmodelc not found in bundle")
             #endif
             return nil
         }
         return try? MLModel(contentsOf: url)
-    }()
+    }
 
-    private static let stockModel: MLModel? = {
-        guard let url = Bundle.main.url(forResource: "MarketScoreML_stock", withExtension: "mlmodelc") else {
-            #if DEBUG
-            print("[MLScoring] MarketScoreML_stock.mlmodelc not found in bundle")
-            #endif
-            return nil
-        }
-        return try? MLModel(contentsOf: url)
-    }()
-
-    /// Predict from expanded MLFeatures struct.
+    /// Predict calibrated probability of a >=1.5 ATR favorable move within 24h.
     static func predict(features f: MLFeatures) -> Double? {
         let model = f.isCrypto ? cryptoModel : stockModel
         guard let model else { return nil }
+        let input = buildFeatureDict(f)
+        let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
+        do {
+            let provider = try MLDictionaryFeatureProvider(dictionary: nsInput)
+            let output = try model.prediction(from: provider)
+            guard let fv = output.featureValue(for: "classProbability") else { return nil }
+            let probs = fv.dictionaryValue
+            guard let n = probs[Int64(1)] ?? probs[1] ?? probs["1"] else { return nil }
+            return MLCalibration.calibrate(n.doubleValue, isCrypto: f.isCrypto)
+        } catch {
+            #if DEBUG
+            print("[MLScoring] prediction threw: \(error)")
+            #endif
+            return nil
+        }
+    }
 
-        // Split into sub-dicts to help Swift type-checker
+    private static func buildFeatureDict(_ f: MLFeatures) -> [String: Double] {
         var input: [String: Double] = [:]
 
-        // Daily core + momentum + vol/volume (19)
         let daily: [String: Double] = [
             "dRsi": f.dRsi, "dMacdHist": f.dMacdHist, "dAdx": f.dAdx,
             "dAdxBullish": f.dAdxBullish ? 1 : 0, "dEmaCross": Double(f.dEmaCross),
@@ -47,7 +55,6 @@ enum MLScoring {
         ]
         input.merge(daily) { _, new in new }
 
-        // 4H core + momentum + vol/volume (19)
         let fourH: [String: Double] = [
             "hRsi": f.hRsi, "hMacdHist": f.hMacdHist, "hAdx": f.hAdx,
             "hAdxBullish": f.hAdxBullish ? 1 : 0, "hEmaCross": Double(f.hEmaCross),
@@ -62,7 +69,6 @@ enum MLScoring {
         ]
         input.merge(fourH) { _, new in new }
 
-        // 1H entry + derivatives + macro + patterns + stock + context (21)
         let entry: [String: Double] = [
             "eRsi": f.eRsi, "eEmaCross": Double(f.eEmaCross),
             "eStochK": f.eStochK, "eMacdHist": f.eMacdHist,
@@ -78,8 +84,7 @@ enum MLScoring {
         ]
         input.merge(entry) { _, new in new }
 
-        // Context + cross-TF + temporal + rate-of-change
-        // v8: dailyScore, fourHScore, scoreSum, scoreDivergence removed (circular dependency)
+        // v9 does not use dailyScore/fourHScore/scoreSum/scoreDivergence — omitted from input
         let context: [String: Double] = [
             "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
             "tfAlignment": Double(f.tfAlignment), "momentumAlignment": Double(f.momentumAlignment),
@@ -97,7 +102,6 @@ enum MLScoring {
         ]
         input.merge(context) { _, new in new }
 
-        // Volume profile + 1-bar deltas + acceleration + time-of-day (14)
         let phaseA: [String: Double] = [
             "vpDistToPocATR": f.vpDistToPocATR, "vpAbovePoc": f.vpAbovePoc ? 1 : 0,
             "vpVAWidth": f.vpVAWidth, "vpInValueArea": f.vpInValueArea ? 1 : 0,
@@ -115,31 +119,14 @@ enum MLScoring {
         ]
         input.merge(phaseA) { _, new in new }
 
-        // v8c: computed features (derived from existing MLFeatures)
         let computed: [String: Double] = [
             "volWeightedRsi": f.dRsi * f.dVolumeRatio,
             "hVolWeightedRsi": f.hRsi * f.hVolumeRatio,
-            "atrExpansionRate": 0,  // needs prev bar atrPercent (default 0 in live)
-            "fundingSlope": 0,      // needs prev bar fundingRate (default 0 in live)
+            "atrExpansionRate": 0,
+            "fundingSlope": 0,
         ]
         input.merge(computed) { _, new in new }
 
-        let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
-        guard let provider = try? MLDictionaryFeatureProvider(dictionary: nsInput),
-              let output = try? model.prediction(from: provider) else {
-            #if DEBUG
-            print("[MLScoring] Prediction failed")
-            #endif
-            return nil
-        }
-
-        if let probs = output.featureValue(for: "classProbability")?.dictionaryValue,
-           let winProb = probs[Int64(1)] as? Double {
-            return MLCalibration.calibrate(winProb, isCrypto: f.isCrypto)
-        }
-        #if DEBUG
-        print("[MLScoring] Could not extract classProbability")
-        #endif
-        return nil
+        return input
     }
 }

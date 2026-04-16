@@ -6,7 +6,7 @@ MarketScope is an iOS app for multi-timeframe technical analysis of crypto and s
 
 - **Bundle ID:** `com.ludikure.CryptoLens`
 - **App Store name:** MarketScope
-- **Version:** 1.1 (build 18)
+- **Version:** 1.2 (build 21)
 - **Deployment target:** iOS 17.0
 - **Xcode:** 16.0
 - **Project generator:** XcodeGen (`project.yml`)
@@ -50,7 +50,7 @@ TypeScript worker that proxies API calls, handles auth, push notifications (APNs
 - **`AlertsStore`** and **`FavoritesStore`** are `@MainActor` — all mutations must happen on main thread. `AlertsStore` has `processPendingBackgroundAlerts()` for bridging background-triggered alerts.
 - **`Constants.customStocks`** and its accessors (`stock(for:)`, `asset(for:)`) are `@MainActor`.
 - **Symbol selection** is unified in `AnalysisService.switchToSymbol()` — both `ContentView` and `FavoritePillsView` delegate to it. It handles cancellation of in-flight requests.
-- **Indicator computation** happens in `IndicatorEngine.computeAll()` — pure functions, no side effects. Includes full MACD/ADX/volume ratio series for chart sub-panels.
+- **Indicator computation** happens in `IndicatorEngine.computeAll()` — pure functions, no side effects. Includes full MACD/ADX/volume ratio series for chart sub-panels. **In-progress candle is dropped at the top of `computeAll`** (if `last.time + interval > now`) so live price ticks don't mutate indicators between refreshes. Same logic mirrored in `marketscope-worker/src/index.ts` via `dropInProgress()`.
 - **`AnalysisHistoryStore`** serializes all disk I/O on a dedicated `DispatchQueue`.
 - **`OutcomeTracker`** tracks trade setup outcomes (entry/SL/TP hits, max excursions) and FLAT/kill outcomes (false conservatism detection). Persists to `~/Library/Caches/trade_outcomes/`.
 - **Cache:** `AnalysisService` caches results per-symbol in memory (`resultsBySymbol`) and on disk (`~/Library/Caches/analyses/`). `loadCache` is `nonisolated` to avoid blocking main thread.
@@ -103,14 +103,16 @@ The app pre-computes authoritative flags passed to the LLM in the `PRE-COMPUTED 
 
 ## System Prompt Architecture
 
-The AI system prompt (`AnalysisPrompt.swift`) follows a strict 4-step decision tree:
+The AI system prompt (`AnalysisPrompt.swift`) is momentum-based with ML directional quality as a gate. Old architecture (LABEL AUTHORITY, Rule 1/2/3, anti-gaming, score conviction gate) was removed — linear score is now diagnostic only. Steps:
+
 1. **Step 1 — Regime**: Pre-computed label (TRENDING/RANGING/TRANSITIONING), authoritative
 2. **Step 2 — Playbook**: Per-regime trading rules
-3. **Step 3 — Bias**: Hierarchical resolution using pre-computed labels (Rules 1/2/3). Anti-gaming rules prevent the LLM from overriding labels with raw indicator cherry-picking.
-4. **Kill Condition Gate**: Pre-computed kill conditions block setup construction if ANY_KILLED=true. Structured watching output with prerequisites → trigger → re-evaluate.
-5. **Step 4 — Trade Setup**: Level + Signal + Risk. Counter-trend pullback setup with mandatory kill checklist (PASS cases only). Conviction: HIGH/MODERATE/LOW/FLAT.
+3. **Step 3 — Directional thesis**: LLM reads raw candles/indicators across timeframes and forms its own thesis. Momentum continuation (75% base rate at 4H) is the default; reversal calls require 3+ exhaustion signals at a key level.
+4. **ML Quality Filter**: `ML_WIN` is a direction-agnostic calibrated probability. `>=60%` favorable, `50–59%` marginal, `<50%` no trade.
+5. **Kill Condition Gate**: Pre-computed kill conditions block setup construction if ANY_KILLED=true.
+6. **Step 4 — Trade Setup**: Level + Signal + Risk. Conviction HIGH/MODERATE/LOW based on evidence quality + ML_WIN.
 
-Output includes: Market Regime, Key Levels, Bias (with rule citation), Trade Setup table, Risk Factors (max 3 bullets), Next Decision Point, JSON block.
+Output includes: Market Regime, Key Levels, Bias (with evidence + ML_WIN value), Trade Setup table, Risk Factors (max 3 bullets), Next Decision Point, JSON block.
 
 Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOMING sections.
 
@@ -136,13 +138,15 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 
 ### Overview
 
-XGBoost binary classifier predicting `goodR` — probability of ≥1.5 ATR favorable move within 24H. Dual models (crypto/stock) selected by `isCrypto`. Walk-forward validated.
+v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
 
-- **Features:** 105 (v7b)
-- **Crypto model:** 6 symbols (BTC/ETH/SOL/XRP/BNB/ADA), 65.3% WF accuracy
+- **Features:** 105
+- **Crypto model:** 10 symbols (BTC/ETH/SOL/XRP/BNB/ADA/LINK/AVAX/DOT/NEAR), 66.9% WF accuracy
 - **Stock model:** 20 symbols, 64.1% WF accuracy
 - **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
-- **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x)
+- **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x), hyperparams `depth=3, n_estimators=100, lr=0.03, reg_alpha=0.1, reg_lambda=1.0`
+- **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85 (validation ceiling — top empirical win rate bucket 77.8% in training)
+- **Directional signed-model experiment (v10):** trained `goodR_long` / `goodR_short` splits; abandoned — top-bucket accuracy identical to v9, crypto-short rarely fires (9 samples above 0.70), stock-short calibration saturates at 0.43. The architecture (v9 quality + LLM direction + isotonic calibration) is the right one.
 
 ### Feature Groups (105 total)
 
@@ -156,13 +160,13 @@ XGBoost binary classifier predicting `goodR` — probability of ≥1.5 ATR favor
 | Macro | 3 | VIX (Yahoo), DXY, volScalar |
 | Candle patterns | 3 | Computed |
 | Stock-only (OBV, A/D) | 2 | IndicatorEngine |
-| Context | 4 | atrPercent, atrPercentile, dailyScore, fourHScore |
+| Context | 4 | atrPercent (4H), atrPercentile (daily), dailyScore, fourHScore |
 | Cross-TF interactions | 5 | tfAlignment, momentumAlignment, structureAlignment, scoreSum, scoreDivergence |
 | Temporal | 3 | dayOfWeek, barsSinceRegimeChange, regimeCode |
 | Rate-of-change (6-bar) | 5 | Delta vs 6 bars ago |
 | Sentiment | 2 | Fear & Greed (Alternative.me) |
 | Cross-asset crypto | 2 | ETH/BTC ratio (Binance) |
-| Basis | 2 | Futures premium (Binance fapi premiumIndex) |
+| Basis | 2 | Futures premium (Binance fapi premiumIndex) — `basisPct`, `basisExtreme` |
 | Volume profile | 6 | vpDistToPocATR, vpVAWidth, vpInValueArea, etc. |
 | 1-bar deltas | 3 | Momentum spikes |
 | Acceleration | 3 | Delta of deltas |
@@ -174,16 +178,18 @@ XGBoost binary classifier predicting `goodR` — probability of ≥1.5 ATR favor
 | File | Purpose |
 |------|---------|
 | `Models/BacktestResult.swift` | `MLFeatures` struct (105 fields), `BacktestDataPoint` |
-| `ML/MLScoring.swift` | CoreML inference, maps MLFeatures → input dict |
-| `ML/MarketScoreML_crypto.mlmodel` | CoreML crypto model |
-| `ML/MarketScoreML_stock.mlmodel` | CoreML stock model |
+| `ML/MLScoring.swift` | CoreML inference; `predict(features:)` returns calibrated goodR |
+| `ML/MLCalibration.swift` | Isotonic calibration; 2 maps loaded from bundle JSONs |
+| `ML/MarketScoreML_{crypto,stock}.mlmodel` | 2 CoreML models |
+| `ML/{crypto,stock}_calibration.json` | iOS sidecar calibration maps |
 | `Services/BacktestEngine.swift` | Backtest loop, feature extraction, CSV export, batch export |
-| `Services/AnalysisService.swift` | `buildMLFeatures()` for live predictions |
+| `Services/AnalysisService.swift` | `buildMLFeatures()` for live predictions; stores `mlWinProbability` on `IndicatorResult` |
 | `Services/FearGreedService.swift` | Historical Fear & Greed from Alternative.me |
-| `marketscope-worker/src/ml-predict.ts` | Worker XGBoost tree evaluator |
-| `marketscope-worker/src/scoring-full.ts` | Worker 105-feature computation |
-| `ml-training/train_v6_robust.py` | Training script with walk-forward CV |
-| `ml-training/download_basis.py` | Download premium index from data.binance.vision |
+| `marketscope-worker/src/ml-predict.ts` | Worker `mlPredict()` evaluates tree JSONs, applies embedded calibration |
+| `marketscope-worker/src/ml-model-{crypto,stock}.json` | 2 worker model JSONs (trees + calibration block) |
+| `marketscope-worker/src/scoring-full.ts` | Worker 105-feature computation (Wilder ADX/ATR, 4H-ATR-normalized volume profile, %-scale BB bandwidth — must match `IndicatorEngine` to stay in training distribution) |
+| `ml-training/calibrate_v9.py` | Training + isotonic calibration script — trains 2 models, exports CoreML + worker JSON |
+| `ml-training/train_signed_v10.py` | Abandoned signed-model experiment (kept as reference) |
 
 ### ML in Live Predictions
 
@@ -198,12 +204,13 @@ XGBoost binary classifier predicting `goodR` — probability of ≥1.5 ATR favor
 ### Worker ML Scoring (Cron)
 
 - Runs every minute via `scheduled()` handler
-- Fetches candles, computes all 105 features via `scoring-full.ts`
-- Fetches live: VIX/DXY (Yahoo), Fear & Greed (Alternative.me), ETH/BTC (Binance), funding rate + OI + L/S + taker + basis (Binance fapi)
+- Fetches candles (in-progress dropped via `dropInProgress()`), computes all 105 features via `scoring-full.ts`
+- Fetches live: VIX/DXY (Yahoo), Fear & Greed (Alternative.me), ETH/BTC (Binance, 1-bar 4H delta), funding rate + OI + L/S + taker + basis (Binance fapi)
 - Rate-of-change + acceleration from KV-persisted snapshots
-- Volume profile computed via TypeScript port of `VolumeProfile.swift`
+- Volume profile computed via TypeScript port of `VolumeProfile.swift`, ATR-normalized by 4H ATR (matches training)
 - Archives derivatives to D1 every 4H for future training
-- Notifications: fires when ML crosses 65% AND |dailyScore| >= 5
+- Writes calibrated goodR probability to `score_history.ml_probability` per cron per symbol
+- Notifications: fires when ML_WIN >= 0.65 **and** no fire for this (device, symbol) in past 12h (KV-backed cooldown at `notif:${deviceId}:${symbol}` with 12h TTL). Old crossing-based trigger was removed — it never fired once probabilities pinned at the calibration cap.
 
 ### Backtest & Training
 
@@ -213,12 +220,24 @@ XGBoost binary classifier predicting `goodR` — probability of ≥1.5 ATR favor
 - Exports CSV with all 105 features + forward returns + trade outcomes
 - Batch export: separate "Crypto Only" / "Stocks Only" buttons
 - 3-second delay between stock symbols to avoid rate limiting
-- Training: `train_v6_robust.py` with purged time-series CV, daily downsampling, sample weighting
+- Training: `calibrate_v9.py` with purged time-series CV, daily downsampling, sample weighting
 
 ### Backtester Symbols
 
-- **Crypto (6):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ADAUSDT
+- **Crypto (10):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, DOTUSDT, NEARUSDT
 - **Stocks (20):** AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, JPM, UNH, HD, MA, ABBV, V, AMD, NFLX, BA, XOM, CRM, LLY, DIS
+
+### Known Port Gaps (worker vs iOS)
+
+After the port audit in 2026-04, iOS/worker raw agreement is within ~30bp on BTC. Remaining known gaps in `scoring-full.ts` that the worker approximates differently from iOS (training source of truth):
+
+- `tfAlignment` — worker depends on its own scoring.ts (simpler formula) so underlying dailyScore/fourHScore differ from iOS's ScoringFunction.swift
+- `dStructBull/Bear` — worker uses EMA stack as proxy; iOS uses `MarketStructure.analyze` (HH/HL/LL/LH swing detection)
+- `oiSignal` — worker has no prev-OI state tracking (`oiChangePct=0` always)
+- `hAboveVwap` — VWAP session-anchoring differs subtly
+- Volume profile POC/VA binning has small residual differences
+
+These drift the worker's per-symbol raw value ~30bp from iOS but land in the same calibration bucket for the common high-confidence regime, so the calibrated output typically matches.
 
 ## Known Remaining Issues (Low Severity)
 

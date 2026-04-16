@@ -79,40 +79,29 @@ enum AnalysisPrompt {
          (crowded long), taker flow 0.88 (sellers). 1H showing dead-cat bounce into
          4H EMA resistance at $67,500. ML_WIN: 63%."
 
-        LINEAR SCORE (diagnostic context):
-        The per-timeframe bias labels and scores are shown in the data header. These summarize
-        indicator state using a weighted formula. Use them as a quick reference:
-        - If score agrees with your momentum read: higher confidence, note alignment.
-        - If score disagrees: explain what the score misses. Common cases:
-          • Score says Neutral when momentum is clearly directional (ranging override or
-            adaptive threshold too high — known limitation)
-          • Score says Bullish but derivatives show distribution (score doesn't weight
-            derivatives heavily enough in crypto — known limitation)
-        Your thesis based on raw data takes precedence over the score.
-
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
         ML QUALITY FILTER (if ML_WIN shown in data header):
-        ML_WIN predicts whether conditions are favorable for a large move (>= 1.5 ATR within 24H).
-        67% walk-forward accuracy across 10 crypto + 20 stock symbols. It evaluates 101 features
-        including non-linear interactions between indicators, derivatives, and macro conditions.
+        ML_WIN is a direction-agnostic calibrated probability of a >= 1.5 ATR favorable move
+        within 24H. 66.9% walk-forward accuracy across 10 crypto + 20 stock symbols. Capped
+        at 85% (validation ceiling — reliability check: [0.70, 0.85) bucket actual win rate
+        77.8% on held-out data).
 
-        ML_WIN is independent of direction. It answers "should I trade?" not "which way?"
+        ML_WIN answers "are conditions favorable to trade at all?" — it does NOT pick direction.
+        Your momentum read determines direction; ML_WIN gates whether to take the trade.
 
         - ML_WIN >= 60%: Favorable. Conditions support a move. Proceed with your thesis.
         - ML_WIN 50-59%: Marginal. Conditions are borderline. Proceed only if your directional
-          thesis is strong (clear momentum + structural confirmation). Note marginal quality
-          in Risk Factors.
+          thesis is strong (clear momentum + structural + derivatives all aligned). Note the
+          marginal ML quality in Risk Factors.
         - ML_WIN < 50%: Unfavorable. The pattern historically does not produce a tradeable move.
-          → NO TRADE regardless of how clear the momentum looks.
-          → Explain what the ML is likely seeing: exhaustion at extremes, low volatility regime,
-            or conflicting feature combinations that historically lose.
-          → State what needs to change for ML_WIN to improve.
+          NO TRADE regardless of how clear the momentum looks. Explain what the ML is likely
+          seeing (exhaustion at extremes, low-volatility regime, conflicting feature combinations
+          that historically lose) and state what needs to change for ML_WIN to improve.
 
         ML_WIN does NOT determine direction. Your momentum analysis does that.
-        ML_WIN does NOT interact with the linear score. They are independent systems.
-        If ML_WIN is not present in the data header, ignore this section and assess
-        setup quality from your own analysis of indicators.
+        If ML_WIN is not in the data header, ignore this section and judge setup quality
+        from your own analysis of indicators.
 
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
@@ -120,15 +109,15 @@ enum AnalysisPrompt {
         If divergence_escalated is true (6+ candles of 4H divergence against your thesis):
           → The counter-trend pullback premise has expired. This is no longer a temporary 1H counter-move — it is a potential trend transition.
           → Override bias to FLAT regardless of your directional thesis.
-          → Output: "Bias: FLAT (divergence escalated — 4H divergence against D bias for 6+ candles indicates trend transition, not pullback. Watch for 4H label flip to confirm new direction.)"
-          → Do not present any setup. State what resolves the situation: either 4H label flips (confirming transition) or divergence collapses and kills clear (restoring the original thesis).
+          → Output: "Bias: FLAT (divergence escalated — 4H divergence against your thesis for 6+ candles indicates trend transition, not pullback. Watch for 4H structural break (lower low / higher high on 4H) to confirm new direction.)"
+          → Do not present any setup. State what resolves the situation: either 4H breaks structurally in the new direction (confirming transition) or divergence collapses and kills clear (restoring the original thesis).
           → Go directly to Risk Factors, then empty JSON [].
 
         If ANY_KILLED is true (but divergence not escalated):
           → Skip Step 4 entirely. Do not construct a setup table.
           → Output format:
             ## Bias
-            "Bias: [DIRECTION] (Rule 1 — D+4H aligned [direction]). Counter-trend entry BLOCKED: [kill flag names only, no explanation]. See Risk Factors for monitoring items."
+            "Bias: [DIRECTION]. Counter-trend entry BLOCKED: [kill flag names only, no explanation]. See Risk Factors for monitoring items."
             Do not explain what divergence means or why volume matters. The kill names are sufficient.
             ## Trade Setup
             "NO SETUP — Kill conditions active."
@@ -159,7 +148,6 @@ enum AnalysisPrompt {
           At least 2 of 3 (level/signal/risk) present. ML_WIN >= 50%. No macro within 4h.
         - LOW: Momentum ambiguous, conflicting signals across timeframes, ML_WIN < 50%,
           or macro within 2h. → NO TRADE.
-        Do not reference linear score magnitudes for conviction.
         Use the quality of your evidence: candle momentum, volume confirmation,
         structural alignment, derivatives support, and ML_WIN.
         One line: what makes it work, what kills it.
@@ -170,12 +158,12 @@ enum AnalysisPrompt {
         Show both directions when both have merit. Show one when only one makes sense. Show none when the market isn't giving anything. Never force it.
 
         COUNTER-TREND PULLBACK SETUP:
-        Trigger: Bias set by Daily+4H alignment, but 1H is moving AGAINST that bias.
+        Trigger: Your Daily+4H directional thesis is clear, but 1H is moving AGAINST that thesis.
         This is a HIGH-PROBABILITY pattern — you are entering with the higher-timeframe trend after the lower timeframe exhausts its counter-move.
 
         ENTRY CONDITIONS (ALL required):
-        1. Daily and 4H bias aligned in the same direction (from Step 3).
-        2. 1H is in a counter-trend move (squeeze, impulse, or drift against D/4H bias).
+        1. Your directional thesis (Step 3) is supported by Daily AND 4H momentum (same direction).
+        2. 1H is in a counter-trend move (squeeze, impulse, or drift against your thesis).
         3. 1H counter-move reaches a significant higher-timeframe level:
            - For shorts: 1H rallies into 4H resistance, EMA cluster, prior breakdown level, or upper volume profile zone (VAH/POC).
            - For longs: 1H sells off into 4H support, EMA cluster, prior breakout level, or lower volume profile zone (VAL/POC).
@@ -184,7 +172,7 @@ enum AnalysisPrompt {
            - Bullish: hammer, bullish engulfing, squeeze failure to downside, 1H RSI divergence, volume decline on push lower, taker ratio rising.
 
         ENTRY TRIGGER:
-        - Enter in the direction of Daily+4H bias AFTER the 1H exhaustion signal confirms.
+        - Enter in the direction of your thesis AFTER the 1H exhaustion signal confirms.
         - "Confirms" = 1H candle close showing rejection (wick > body at the level), OR 1H close back below/above the level after a false breakout.
 
         STOP PLACEMENT:
@@ -199,14 +187,14 @@ enum AnalysisPrompt {
         - If no structural level exists near the ATR targets, use the ATR targets as-is — they are backtest-proven.
 
         KILL CONDITIONS (do NOT enter even if pattern forms):
-        - 4H shows bullish/bearish divergence AGAINST the Daily bias direction (suggests Daily trend is weakening, not just a pullback).
+        - 4H shows bullish/bearish divergence AGAINST your thesis direction (suggests higher-timeframe trend is weakening, not just a pullback).
         - Volume on the 1H counter-move is significantly HIGHER than the prior trend-direction move (institutional participation in the counter-move).
         - Funding rate has flipped to support the counter-move direction (market structure shifting, not just a pullback).
         - High-impact macro event within 4 hours.
 
         MANDATORY: Output the kill condition checklist ONLY when presenting a counter-trend pullback setup (all checks will be PASS). If ANY_KILLED is true, the kill gate already blocked entry — do not repeat the checklist. Kill conditions are pre-computed in the PRE-COMPUTED FLAGS section and are authoritative. Do not re-evaluate from raw data.
         The kill condition flags are:
-        - divergence_against_bias: 4H RSI/MACD showing divergence against the bias direction
+        - divergence_against_bias: 4H RSI/MACD showing divergence against your thesis direction
         - counter_move_volume_exceeds: 1H counter-move volume > 1.2x trend volume
         - funding_supports_counter: Funding rate flipped to support the counter-move
         - macro_event_within_4h: High-impact macro event within 4 hours
@@ -234,10 +222,16 @@ enum AnalysisPrompt {
         - "Hammer at support ($65,730)" is a trade trigger. "Hammer in space" is noise.
 
         CANDLE VERIFICATION:
-        Recent candles (5 per timeframe) are included. Before finalizing any entry:
+        Recent candles (5 per timeframe) are included. All candles shown are CLOSED — the currently
+        forming candle is excluded from indicator computation to keep values stable between refreshes.
+        The "Price:" shown in each timeframe header is the last CLOSED candle's close, not the live tick.
+        Before finalizing any entry:
         - Is your proposed entry within the recent candle range?
         - If price shows no momentum toward the entry level, the entry is unrealistic — revise or wait.
-        - If the current candle is forming near a key level with a pattern, that's a stronger signal than a completed pattern several candles ago.
+        - The most recent closed candle's pattern at a key level is the freshest signal available.
+        - Because the display price may lag the live market by up to one candle period, propose entries
+          as ranges/levels rather than exact prints when precision matters (e.g. "enter on retest of
+          $X ± 0.2%" rather than "enter at $X").
 
         THINGS YOU KNOW:
         - Volume precedes price. A move without volume is a lie.
@@ -257,9 +251,10 @@ enum AnalysisPrompt {
         - MOMENTUM CONTINUATION is the strongest directional signal at 4H resolution (75% base rate).
           Default to trading with momentum unless you have 3+ specific reversal signals.
           Reversal calls must clear a higher evidence bar than continuation calls.
-        - ML_WIN captures non-linear feature interactions (derivatives + momentum + volatility combinations)
-          that predict whether a big move will happen. It does not predict direction. When ML_WIN < 50%,
-          the ML is usually right about conditions being unfavorable — trust it over your thesis.
+        - ML_WIN captures non-linear feature interactions (derivatives + momentum + volatility
+          combinations) that predict whether a big move will happen. It does not predict direction.
+          When ML_WIN < 50%, the ML is usually right about conditions being unfavorable — trust it
+          over your thesis.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -272,7 +267,7 @@ enum AnalysisPrompt {
         ## Bias
         State your directional thesis with evidence and ML quality:
         "Bias: SHORT — [momentum evidence]. [Structure evidence]. [Derivatives evidence if crypto].
-         ML_WIN: XX%. Linear: [label] (score: X) — [agrees/disagrees because...]."
+         ML_WIN: XX%."
 
         ## Trade Setup
         Only if conviction is MODERATE or higher, bias is LONG or SHORT, AND ML_WIN >= 50% (if available). Present as a markdown table:
@@ -358,18 +353,15 @@ enum AnalysisPrompt {
             - TP1: 1.5x ATR from entry. TP2: 3.0x ATR.
             - Hold window: up to 72h. Most stock setups resolve within 24h due to market hours.
 
-            STOCK BIAS RULES:
-            - Rule 2 override does NOT apply to stocks. D/4H conflict = FLAT regardless of Daily score.
-            - Stock trends are more mean-reverting than crypto — trading through D/4H conflicts loses money.
+            STOCK DIRECTIONAL RULES:
+            - Stock trends are more mean-reverting than crypto. When Daily and 4H momentum DISAGREE
+              (one clearly trending up, the other clearly trending down), default to FLAT. The higher-TF
+              exhaustion is a stronger signal than crypto's "trade the counter-trend pullback."
+            - Only take a directional trade when Daily and 4H momentum AGREE, OR when one is clearly
+              exhausting with 3+ reversal signals against a stretched extreme.
+            - Fundamentals (earnings, analyst revisions, insider buying) can strengthen or weaken a
+              momentum thesis but should not override clear cross-TF exhaustion.
 
-            STOCK SCORE GATE:
-            - max(|Daily|, |4H|) >= 3 to consider a setup (lower bar than crypto).
-            - Stocks rely more on level quality and fundamentals than score magnitude.
-            - Conviction hierarchy for stocks:
-              - HIGH: Both |score| >= 6, level + signal + risk present.
-              - MODERATE: Either |score| >= 6, at least 2 of 3 present.
-              - MODERATE-LOW: Either |score| 3-5 with all three present.
-              - LOW: Both |score| < 3. → NO TRADE.
 
             STOCK SENTIMENT DATA (if provided):
             - VIX (Intraday): Real-time from Yahoo Finance. >30 = extreme fear (historically bullish). <15 = complacency (watch for pullback). Prefer this over VIX EOD during market hours.
@@ -395,8 +387,10 @@ enum AnalysisPrompt {
     private static let cryptoContext = """
     CRYPTO CONTEXT:
     - Trading 24/7, no market hours.
-    - Timeframes: Daily (trend), 4H (directional bias), 1H (entry).
-    - 4H sets direction, 1H sets entry. No 1H entry opposing 4H bias unless counter-trend criteria met.
+    - Timeframes: Daily (trend context), 4H (dominant momentum signal), 1H (entry timing).
+    - 4H momentum is the strongest directional signal (75% continuation base rate). The 1H is entry
+      precision only — a 1H move opposing 4H momentum is either exhaustion (potential reversal, high bar)
+      or a counter-trend pullback (entry opportunity with 4H trend).
     """
 
     private static let derivativesGuidance = """
@@ -1170,7 +1164,6 @@ enum AnalysisPrompt {
             lines.append("=== \(ind.label) ===")
             var biasLine = "Price: \(Formatters.formatPrice(ind.price))"
             if let ml = ind.mlWinProbability { biasLine += " | ML_WIN: \(Int(ml * 100))%" }
-            biasLine += " | Linear: \(ind.bias) (score: \(ind.biasScore))"
             if let vs = ind.volScalar { biasLine += " [vol_scalar: \(String(format: "%.2f", vs))]" }
             lines.append(biasLine)
 
