@@ -61,6 +61,11 @@ class AnalysisService: ObservableObject {
     private var ethBtcPrevPrice: Double = 0
     /// Regime tracking for barsSinceRegimeChange
     private var lastRegime: [String: (code: Int, since: Date)] = [:]
+    private var spyDailyCandles: [Candle] = []
+    private var spyLastFetch: Date = .distantPast
+    private var darkPoolCache: [String: (ratio: Double, zscore: Double)] = [:]
+    private var darkPoolLastFetch: Date = .distantPast
+    private var fundingHistory: [String: [Double]] = [:]
 
     private nonisolated static var cacheDir: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
@@ -451,6 +456,52 @@ class AnalysisService: ObservableObject {
                 _barsSinceRegime = 0
             }
 
+            // Fetch SPY candles + dark pool for stock ML features
+            var _darkPool: (ratio: Double, zscore: Double)? = nil
+            if market == .stock {
+                await refreshSPYCandles()
+                _darkPool = await fetchDarkPool(symbol: symbol)
+            }
+
+            // Compute OI × price interaction, funding slope, body/wick ratio
+            let _oiPriceInteraction: Double = {
+                guard market == .crypto, let d = derivData else { return 0 }
+                let oiPct = d.oiChange24h ?? 0
+                let candles = tf2.candles
+                guard candles.count >= 2 else { return 0 }
+                let pricePct = (candles.last!.close - candles[candles.count - 2].close) / candles[candles.count - 2].close * 100
+                return oiPct * pricePct
+            }()
+            let _fundingSlope: Double = {
+                guard market == .crypto, let d = derivData else { return 0 }
+                var hist = fundingHistory[symbol] ?? []
+                hist.append(d.fundingRatePercent)
+                if hist.count > 4 { hist = Array(hist.suffix(4)) }
+                fundingHistory[symbol] = hist
+                guard hist.count >= 3 else { return 0 }
+                let n = Double(hist.count)
+                let xMean = (n - 1) / 2.0
+                let yMean = hist.reduce(0, +) / n
+                var num = 0.0, den = 0.0
+                for (j, v) in hist.enumerated() {
+                    let x = Double(j) - xMean
+                    num += x * (v - yMean)
+                    den += x * x
+                }
+                return den > 0 ? num / den : 0
+            }()
+            let _bodyWickRatio: Double = {
+                let candles = tf2.candles
+                let n = min(5, candles.count)
+                guard n > 0 else { return 0.5 }
+                var sum = 0.0, count = 0
+                for c in candles.suffix(n) {
+                    let range = c.high - c.low
+                    if range > 0 { sum += abs(c.close - c.open) / range; count += 1 }
+                }
+                return count > 0 ? sum / Double(count) : 0.5
+            }()
+
             // ML win probability — computed from Daily + 4H + 1H features
             var tf1ML = tf1
             let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
@@ -466,7 +517,11 @@ class AnalysisService: ObservableObject {
                hRsiDelta1: _hRsiDelta1, hMacdHistDelta1: _hMacdHistDelta1,
                dRsiDelta1: _dRsiDelta1,
                hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel,
-               basisPct: _basisPct)
+               basisPct: _basisPct,
+               spyCandles: spyDailyCandles, dailyCandles: tf1.candles,
+               darkPool: _darkPool,
+               oiPriceInteraction: _oiPriceInteraction, fundingSlope: _fundingSlope,
+               bodyWickRatio: _bodyWickRatio)
             tf1ML.mlWinProbability = MLScoring.predict(features: mlFeatures)
 
             let prevResult = resultsBySymbol[symbol]
@@ -620,7 +675,36 @@ class AnalysisService: ObservableObject {
                hRsiAccel: snap2.map { ((tf2.rsi ?? 50) - $0.hRsi) - $0.hRsiD1 } ?? 0,
                hMacdAccel: snap2.map { ((tf2.macd?.histogram ?? 0) - $0.hMacdHist) - $0.hMacdD1 } ?? 0,
                dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0,
-               basisPct: _basisPct2)
+               basisPct: _basisPct2,
+               spyCandles: spyDailyCandles, dailyCandles: tf1.candles,
+               darkPool: market == .stock ? await fetchDarkPool(symbol: symbol) : nil,
+               oiPriceInteraction: {
+                   guard market == .crypto, let d = earlyDerivData else { return 0.0 }
+                   let oiPct = d.oiChange24h ?? 0
+                   let candles = tf2.candles
+                   guard candles.count >= 2 else { return 0.0 }
+                   let pricePct = (candles.last!.close - candles[candles.count - 2].close) / candles[candles.count - 2].close * 100
+                   return oiPct * pricePct
+               }(),
+               fundingSlope: {
+                   guard market == .crypto else { return 0.0 }
+                   let hist = fundingHistory[symbol] ?? []
+                   guard hist.count >= 3 else { return 0.0 }
+                   let n = Double(hist.count)
+                   let xMean = (n - 1) / 2.0
+                   let yMean = hist.reduce(0, +) / n
+                   var num = 0.0, den = 0.0
+                   for (j, v) in hist.enumerated() { let x = Double(j) - xMean; num += x * (v - yMean); den += x * x }
+                   return den > 0 ? num / den : 0
+               }(),
+               bodyWickRatio: {
+                   let candles = tf2.candles
+                   let n = min(5, candles.count)
+                   guard n > 0 else { return 0.5 }
+                   var sum = 0.0, count = 0
+                   for c in candles.suffix(n) { let range = c.high - c.low; if range > 0 { sum += abs(c.close - c.open) / range; count += 1 } }
+                   return count > 0 ? sum / Double(count) : 0.5
+               }())
             tf1.mlWinProbability = MLScoring.predict(features: mlFeatures2)
 
             // Candle staleness check: how old is the latest candle?
@@ -895,9 +979,41 @@ class AnalysisService: ObservableObject {
         return lines.joined(separator: "\n")
     }
 
+    private func fetchDarkPool(symbol: String) async -> (ratio: Double, zscore: Double)? {
+        if let cached = darkPoolCache[symbol], Date().timeIntervalSince(darkPoolLastFetch) < 3600 {
+            return cached
+        }
+        guard let url = URL(string: "\(PushService.workerURL)/darkpool?symbol=\(symbol)") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let ratio = json["ratio"] as? Double,
+                  let zscore = json["zscore"] as? Double else { return nil }
+            let result = (ratio: ratio, zscore: zscore)
+            darkPoolCache[symbol] = result
+            darkPoolLastFetch = Date()
+            return result
+        } catch {
+            return nil
+        }
+    }
+
+    private func refreshSPYCandles() async {
+        guard Date().timeIntervalSince(spyLastFetch) > 300 else { return }
+        if let candles = try? await yahoo.fetchCandles(symbol: "SPY", interval: "1d"), candles.count >= 60 {
+            spyDailyCandles = candles
+            spyLastFetch = Date()
+        }
+    }
+
     private func buildSPYContext() async -> String? {
-        guard let candles = try? await yahoo.fetchCandles(symbol: "SPY", interval: "1d"),
-              let last = candles.last else { return nil }
+        await refreshSPYCandles()
+        let candles = spyDailyCandles
+        guard let last = candles.last else { return nil }
 
         let result = IndicatorEngine.computeAll(candles: candles, timeframe: "1d", label: "SPY Daily")
         var parts = [String]()
@@ -943,7 +1059,13 @@ class AnalysisService: ObservableObject {
                                  dRsiDelta1: Double = 0,
                                  hRsiAccel: Double = 0, hMacdAccel: Double = 0,
                                  dAdxAccel: Double = 0,
-                                 basisPct: Double = 0) -> MLFeatures {
+                                 basisPct: Double = 0,
+                                 spyCandles: [Candle] = [],
+                                 dailyCandles: [Candle] = [],
+                                 darkPool: (ratio: Double, zscore: Double)? = nil,
+                                 oiPriceInteraction: Double = 0,
+                                 fundingSlope: Double = 0,
+                                 bodyWickRatio: Double = 0.5) -> MLFeatures {
         func emaCross(_ r: IndicatorResult) -> Int {
             var c = 0
             if let e = r.ema20 { c += r.price > e ? 1 : -1 }
@@ -1097,15 +1219,61 @@ class AnalysisService: ObservableObject {
                 guard let todayOpen = tf1.candles.last?.open else { return 0.0 }
                 return prev > 0 ? (todayOpen - prev) / prev * 100 : 0
             }(),
-            gapFilled: false, // would need intraday tracking
-            gapDirectionAligned: 0, // would need gap + score comparison at open
-            relStrengthVsSpy: 0, // would need SPY candles in live
-            beta: 1.0,
+            gapFilled: {
+                guard !isCrypto, dailyCandles.count >= 2 else { return false }
+                let prevClose = dailyCandles[dailyCandles.count - 2].close
+                guard let todayOpen = dailyCandles.last?.open else { return false }
+                let gapUp = todayOpen > prevClose
+                return gapUp ? price < prevClose : price > prevClose
+            }(),
+            gapDirectionAligned: {
+                guard !isCrypto, dailyCandles.count >= 2 else { return 0 }
+                let prevClose = dailyCandles[dailyCandles.count - 2].close
+                guard let todayOpen = dailyCandles.last?.open else { return 0 }
+                let gapPct = (todayOpen - prevClose) / prevClose * 100
+                guard abs(gapPct) >= 0.3 else { return 0 }
+                return (gapPct > 0) == (tf1.biasScore > 0) ? 1 : -1
+            }(),
+            relStrengthVsSpy: {
+                guard !isCrypto, spyCandles.count >= 6, dailyCandles.count >= 6 else { return 0.0 }
+                let stockRet = (dailyCandles[dailyCandles.count - 1].close - dailyCandles[dailyCandles.count - 6].close) / dailyCandles[dailyCandles.count - 6].close * 100
+                let spyRet = (spyCandles[spyCandles.count - 1].close - spyCandles[spyCandles.count - 6].close) / spyCandles[spyCandles.count - 6].close * 100
+                return stockRet - spyRet
+            }(),
+            beta: {
+                guard !isCrypto, spyCandles.count >= 60, dailyCandles.count >= 60 else { return 1.0 }
+                let n = 60
+                let stockSlice = Array(dailyCandles.suffix(n))
+                let spySlice = Array(spyCandles.suffix(n))
+                guard stockSlice.count >= 2, spySlice.count >= 2 else { return 1.0 }
+                let stockReturns = zip(stockSlice.dropFirst(), stockSlice).map { ($0.close - $1.close) / $1.close }
+                let spyReturns = zip(spySlice.dropFirst(), spySlice).map { ($0.close - $1.close) / $1.close }
+                let pairs = min(stockReturns.count, spyReturns.count)
+                guard pairs >= 10 else { return 1.0 }
+                let sr = Array(stockReturns.prefix(pairs))
+                let mr = Array(spyReturns.prefix(pairs))
+                let meanS = sr.reduce(0, +) / Double(pairs)
+                let meanM = mr.reduce(0, +) / Double(pairs)
+                var cov = 0.0, varM = 0.0
+                for j in 0..<pairs { cov += (sr[j] - meanS) * (mr[j] - meanM); varM += (mr[j] - meanM) * (mr[j] - meanM) }
+                return varM > 0 ? cov / varM : 1.0
+            }(),
             vixLevelCode: {
                 let v = vixValue ?? 20
                 return v < 15 ? 0 : v < 25 ? 1 : v < 35 ? 2 : 3
             }(),
             isMarketHours: !isCrypto ? MarketHours.isMarketOpen() : true,
+            earningsProximity: {
+                guard !isCrypto else { return 0.0 }
+                let earn = EarningsCalendar.features(for: symbol, at: Date())
+                let nearest = min(earn.daysTo, earn.daysSince)
+                return nearest >= 60 ? 0.0 : exp(-Double(nearest) / 7.0)
+            }(),
+            shortVolumeRatio: darkPool?.ratio ?? 0.5,
+            shortVolumeZScore: darkPool?.zscore ?? 0.0,
+            oiPriceInteraction: oiPriceInteraction,
+            fundingSlope: fundingSlope,
+            bodyWickRatio: bodyWickRatio,
         )
     }
 

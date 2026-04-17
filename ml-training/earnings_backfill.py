@@ -15,26 +15,37 @@ from datetime import datetime, timezone
 import yfinance as yf
 
 STOCK_SYMBOLS = [
-    # Mega-cap (20)
-    'AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'JPM',
-    'UNH', 'HD', 'MA', 'ABBV', 'V', 'AMD', 'NFLX', 'BA', 'XOM',
-    'CRM', 'LLY', 'DIS',
+    # Mega-cap tech
+    'AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN',
+    'CRM', 'NFLX', 'AMD', 'ORCL', 'ADBE', 'INTC', 'CSCO',
+    # Semiconductors
+    'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL',
     # High-beta growth
-    'PLTR', 'ROKU', 'SHOP',
-    # High short-interest
+    'PLTR', 'ROKU', 'SHOP', 'SQ', 'SNAP', 'COIN', 'RBLX',
+    # High short-interest / meme
     'BYND', 'GME',
-    # Cyclical industrials
-    'CAT', 'DE', 'X',
-    # Energy
-    'OXY', 'FANG',
-    # Biotech (catalyst-driven)
+    # Financials
+    'JPM', 'GS', 'MS', 'BAC', 'WFC', 'BLK', 'SCHW',
+    # Healthcare / pharma
+    'UNH', 'LLY', 'ABBV', 'JNJ', 'PFE', 'MRK', 'TMO',
+    # Biotech
     'REGN', 'VRTX', 'GILD', 'BIIB',
-    # REITs (rate-driven)
+    # Consumer
+    'HD', 'MA', 'V', 'DIS', 'NKE', 'SBUX', 'MCD', 'WMT', 'COST',
+    # Cyclicals
+    'CAT', 'DE', 'X', 'BA',
+    # Energy
+    'XOM', 'OXY', 'FANG', 'CVX', 'SLB',
+    # Defense / aerospace
+    'LMT', 'RTX', 'GD',
+    # Transport
+    'UNP', 'FDX', 'DAL',
+    # Telecom / media
+    'T', 'VZ', 'CMCSA',
+    # REITs
     'SPG', 'O',
-    # Financial (yield-curve sensitive)
-    'GS',
-    # ETFs (no earnings — feature will default to "no risk")
-    'SPY', 'QQQ', 'IWM', 'XLE', 'XLF',
+    # ETFs (no earnings — feature will default to 0)
+    'SPY', 'QQQ', 'IWM', 'XLE', 'XLF', 'XLK', 'XLV', 'GLD', 'TLT',
 ]
 
 OUTPUT = '/Users/bojanmihovilovic/CryptoLens/ml-training/earnings_history.json'

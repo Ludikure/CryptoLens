@@ -153,7 +153,7 @@ export default {
     }
 
     // All endpoints (except /register, /bls/actuals) require valid auth token
-    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/history' && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
+    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/history' && path !== '/darkpool' && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       // Check D1 first, then KV fallback
       const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();
@@ -881,6 +881,18 @@ export default {
       }
     }
 
+    // === Dark Pool (FINRA RegSHO short sale volume) ===
+    if (path === '/darkpool') {
+      const symbol = url.searchParams.get('symbol')?.toUpperCase();
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const dpCached = await env.ALERTS.get('darkpool:latest');
+      if (dpCached) {
+        const data = JSON.parse(dpCached) as Record<string, { ratio: number; zscore: number }>;
+        if (data[symbol]) return json(data[symbol]);
+      }
+      return json({ ratio: 0.5, zscore: 0 });
+    }
+
     // === D1 Candle History (permanent archive — for backtest/optimizer) ===
     if (path === '/history' && request.method === 'GET') {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
@@ -1352,10 +1364,90 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     }
   } catch {}
 
+  // Fetch SPY candles once for stock relative strength + beta
+  let spyCandles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] = [];
+  const hasStocks = config.symbols.some((s: string) => !s.endsWith('USDT'));
+  if (hasStocks) {
+    try {
+      const spyResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/SPY?interval=1d&range=6mo`);
+      if (spyResp.ok) {
+        const spyData = await spyResp.json() as any;
+        const result = spyData?.chart?.result?.[0];
+        const ts = result?.timestamp || [];
+        const q = result?.indicators?.quote?.[0] || {};
+        for (let i = 0; i < ts.length; i++) {
+          if (q.open?.[i] != null && q.close?.[i] != null) {
+            spyCandles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Fetch FINRA dark pool data (once per day, cached in KV)
+  let darkPoolData: Record<string, { ratio: number; zscore: number }> = {};
+  if (hasStocks) {
+    const dpCacheKey = 'darkpool:latest';
+    const dpCached = await env.ALERTS.get(dpCacheKey);
+    if (dpCached) {
+      darkPoolData = JSON.parse(dpCached);
+    } else {
+      try {
+        // FINRA publishes after market close; try today, fall back to yesterday
+        const now = new Date();
+        const tryDates = [0, 1, 2, 3].map(d => {
+          const dt = new Date(now.getTime() - d * 86400000);
+          return dt.toISOString().slice(0, 10).replace(/-/g, '');
+        });
+        let lines: string[] = [];
+        for (const dateStr of tryDates) {
+          try {
+            const resp = await fetch(`https://cdn.finra.org/equity/regsho/daily/CNMSshvol${dateStr}.txt`);
+            if (resp.ok) {
+              lines = (await resp.text()).split('\n');
+              break;
+            }
+          } catch {}
+        }
+        if (lines.length > 0) {
+          // Parse and compute ratios for our symbols
+          const ratios: Record<string, number[]> = {};
+          for (const line of lines) {
+            const parts = line.split('|');
+            if (parts.length < 5) continue;
+            const sym = parts[1];
+            const shortVol = parseFloat(parts[2]);
+            const totalVol = parseFloat(parts[4]);
+            if (totalVol > 0 && !isNaN(shortVol)) {
+              darkPoolData[sym] = { ratio: shortVol / totalVol, zscore: 0 };
+            }
+          }
+          // Load historical ratios from KV for Z-score computation
+          const histKey = 'darkpool:history';
+          const histRaw = await env.ALERTS.get(histKey);
+          const hist: Record<string, number[]> = histRaw ? JSON.parse(histRaw) : {};
+          for (const [sym, dp] of Object.entries(darkPoolData)) {
+            if (!hist[sym]) hist[sym] = [];
+            hist[sym].push(dp.ratio);
+            if (hist[sym].length > 20) hist[sym] = hist[sym].slice(-20);
+            const arr = hist[sym];
+            if (arr.length >= 5) {
+              const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+              const std = Math.sqrt(arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length);
+              dp.zscore = std > 0.001 ? (dp.ratio - mean) / std : 0;
+            }
+          }
+          await env.ALERTS.put(histKey, JSON.stringify(hist), { expirationTtl: 86400 * 30 });
+          await env.ALERTS.put(dpCacheKey, JSON.stringify(darkPoolData), { expirationTtl: 14400 });
+        }
+      } catch {}
+    }
+  }
+
   // Load previous ML snapshots for rate-of-change deltas + acceleration
   const prevSnapshotsRaw = await env.ALERTS.get('ml_snapshots');
   const prevSnapshots: Record<string, { dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number;
-    hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number }> =
+    hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number; fundingHist?: number[] }> =
     prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
   const newSnapshots: typeof prevSnapshots = {};
 
@@ -1532,10 +1624,12 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
       // Compute all 80 features
       const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
-      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol]);
+      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol], spyCandles, isCrypto ? undefined : darkPoolData[symbol]);
 
       // Save snapshot for next cron's rate-of-change deltas + acceleration
       const ps = prevSnapshots[symbol];
+      const prevFundingHist = ps?.fundingHist || [];
+      const newFundingHist = isCrypto ? [...prevFundingHist, derivSignals.fundingRateRaw || 0].slice(-4) : [];
       newSnapshots[symbol] = {
         dRsi: features.dRsi, dAdx: features.dAdx,
         hRsi: features.hRsi, hAdx: features.hAdx, hMacdHist: features.hMacdHist,
@@ -1543,6 +1637,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         hMacdD1: ps ? features.hMacdHist - ps.hMacdHist : 0,
         dRsiD1: ps ? features.dRsi - ps.dRsi : 0,
         dAdxD1: ps ? features.dAdx - ps.dAdx : 0,
+        fundingHist: newFundingHist,
       };
 
       // v9 single-model: direction-agnostic goodR probability

@@ -133,6 +133,16 @@ struct MLFeatures: Codable {
     let beta: Double              // 60-day rolling beta vs SPY
     let vixLevelCode: Int         // 0=complacent, 1=normal, 2=elevated, 3=extreme
     let isMarketHours: Bool       // regular trading hours
+    // Earnings proximity (stocks only, 0 for crypto)
+    let earningsProximity: Double // exp(-daysToNearest / 7), peaks at 1.0 on earnings day
+    // Dark pool (stocks only, 0 for crypto) — FINRA RegSHO short sale volume
+    let shortVolumeRatio: Double  // ShortVolume / TotalVolume (typically 0.4-0.6)
+    let shortVolumeZScore: Double // 20-day Z-score of ratio (anomaly detection)
+    // Derivatives interactions (crypto only, 0 for stocks)
+    let oiPriceInteraction: Double // oiChangePct × priceChangePct — confirms/diverges
+    let fundingSlope: Double       // linear slope of last 4 funding rates — acceleration
+    // Candle structure
+    let bodyWickRatio: Double      // avg(body/range) over last 5 bars — conviction vs indecision
 }
 
 struct BacktestDataPoint: Codable {

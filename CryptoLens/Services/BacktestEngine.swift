@@ -202,6 +202,8 @@ class BacktestEngine: ObservableObject {
             var prevHRsiDelta1 = 0.0
             var prevHMacdHistDelta1 = 0.0
             var prevDAdxDelta1 = 0.0
+            // Funding rate history for slope (last 4 bars)
+            var fundingHistory = [Double]()
 
             for i in evalStartIndex..<(fourHCandles.count - 6) {
                 let evalTime = fourHCandles[i].time
@@ -672,6 +674,57 @@ class BacktestEngine: ObservableObject {
                         let h = Calendar.current.component(.hour, from: evalTime)
                         return h >= 9 && h < 16
                     }(),
+                    earningsProximity: {
+                        guard !isCrypto else { return 0.0 }
+                        let earn = EarningsCalendar.features(for: symbol.replacingOccurrences(of: "USDT", with: ""), at: evalTime)
+                        let nearest = min(earn.daysTo, earn.daysSince)
+                        return nearest >= 60 ? 0.0 : exp(-Double(nearest) / 7.0)
+                    }(),
+                    shortVolumeRatio: {
+                        guard !isCrypto else { return 0.5 }
+                        let dp = DarkPoolData.features(for: symbol, at: evalTime)
+                        return dp.ratio
+                    }(),
+                    shortVolumeZScore: {
+                        guard !isCrypto else { return 0.0 }
+                        let dp = DarkPoolData.features(for: symbol, at: evalTime)
+                        return dp.zscore
+                    }(),
+                    oiPriceInteraction: {
+                        guard isCrypto, let oi = derivCtx?.oiChangePct, i > 0 else { return 0.0 }
+                        let pricePct = (fourHCandles[i].close - fourHCandles[i - 1].close) / fourHCandles[i - 1].close * 100
+                        return oi * pricePct
+                    }(),
+                    fundingSlope: {
+                        guard isCrypto else { return 0.0 }
+                        let fr = derivCtx?.fundingRateRaw ?? 0
+                        fundingHistory.append(fr)
+                        if fundingHistory.count > 4 { fundingHistory.removeFirst() }
+                        guard fundingHistory.count >= 3 else { return 0.0 }
+                        let n = Double(fundingHistory.count)
+                        let xMean = (n - 1) / 2.0
+                        var num = 0.0, den = 0.0
+                        for (j, v) in fundingHistory.enumerated() {
+                            let x = Double(j) - xMean
+                            num += x * (v - fundingHistory.reduce(0, +) / n)
+                            den += x * x
+                        }
+                        return den > 0 ? num / den : 0.0
+                    }(),
+                    bodyWickRatio: {
+                        let startIdx = max(0, i - 4)
+                        let slice = fourHCandles[startIdx...i]
+                        var sum = 0.0
+                        var count = 0
+                        for c in slice {
+                            let range = c.high - c.low
+                            if range > 0 {
+                                sum += abs(c.close - c.open) / range
+                                count += 1
+                            }
+                        }
+                        return count > 0 ? sum / Double(count) : 0.5
+                    }(),
                 )
 
                 // Update 1-bar delta tracking for acceleration
@@ -781,26 +834,37 @@ class BacktestEngine: ObservableObject {
         "TIAUSDT", "JUPUSDT", "PEPEUSDT",
     ]
     static let stockSymbols = [
-        // Mega-cap
-        "AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "JPM",
-        "UNH", "HD", "MA", "ABBV", "V", "AMD", "NFLX", "BA", "XOM",
-        "CRM", "LLY", "DIS",
+        // Mega-cap tech
+        "AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META", "AMZN",
+        "CRM", "NFLX", "AMD", "ORCL", "ADBE", "INTC", "CSCO",
+        // Semiconductors
+        "AVGO", "QCOM", "MU", "AMAT", "LRCX", "MRVL",
         // High-beta growth
-        "PLTR", "ROKU", "SHOP",
-        // High short-interest
+        "PLTR", "ROKU", "SHOP", "SQ", "SNAP", "COIN", "RBLX",
+        // High short-interest / meme
         "BYND", "GME",
-        // Cyclical industrials
-        "CAT", "DE", "X",
-        // Energy
-        "OXY", "FANG",
+        // Financials
+        "JPM", "GS", "MS", "BAC", "WFC", "BLK", "SCHW",
+        // Healthcare / pharma
+        "UNH", "LLY", "ABBV", "JNJ", "PFE", "MRK", "TMO",
         // Biotech (catalyst-driven)
         "REGN", "VRTX", "GILD", "BIIB",
+        // Consumer
+        "HD", "MA", "V", "DIS", "NKE", "SBUX", "MCD", "WMT", "COST",
+        // Cyclical industrials
+        "CAT", "DE", "X", "BA",
+        // Energy
+        "XOM", "OXY", "FANG", "CVX", "SLB",
+        // Defense / aerospace
+        "LMT", "RTX", "GD",
+        // Transport
+        "UNP", "FDX", "DAL",
+        // Telecom / media
+        "T", "VZ", "CMCSA",
         // REITs (rate-driven)
         "SPG", "O",
-        // Financial
-        "GS",
         // ETFs (no earnings — different regime)
-        "SPY", "QQQ", "IWM", "XLE", "XLF",
+        "SPY", "QQQ", "IWM", "XLE", "XLF", "XLK", "XLV", "GLD", "TLT",
     ]
     static let allSymbols = stockSymbols + cryptoSymbols
 
@@ -939,7 +1003,9 @@ class BacktestEngine: ObservableObject {
             "fiftyTwoWeekPct", "distToFiftyTwoHigh",
             "gapPercent", "gapFilled", "gapDirectionAligned",
             "relStrengthVsSpy", "beta", "vixLevelCode", "isMarketHours",
-            // ML features — Earnings calendar
+            // ML features — Earnings + Dark pool
+            "earningsProximity", "shortVolumeRatio", "shortVolumeZScore",
+            "oiPriceInteraction", "fundingSlope", "bodyWickRatio",
             // ML features — Volume profile
             "vpDistToPocATR", "vpAbovePoc", "vpVAWidth", "vpInValueArea",
             "vpDistToVAH_ATR", "vpDistToVAL_ATR",
@@ -1084,6 +1150,13 @@ class BacktestEngine: ObservableObject {
                 String(format: "%.4f", f?.beta ?? 1.0),
                 "\(f?.vixLevelCode ?? 1)",
                 "\(f?.isMarketHours == true ? 1 : 0)",
+                // Earnings + Dark pool
+                String(format: "%.4f", f?.earningsProximity ?? 0),
+                String(format: "%.6f", f?.shortVolumeRatio ?? 0.5),
+                String(format: "%.4f", f?.shortVolumeZScore ?? 0),
+                String(format: "%.4f", f?.oiPriceInteraction ?? 0),
+                String(format: "%.6f", f?.fundingSlope ?? 0),
+                String(format: "%.4f", f?.bodyWickRatio ?? 0.5),
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv),

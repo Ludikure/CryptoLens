@@ -67,6 +67,14 @@ export interface FullFeatures {
     fiftyTwoWeekPct: number; distToFiftyTwoHigh: number;
     gapPercent: number; gapFilled: number; gapDirectionAligned: number;
     relStrengthVsSpy: number; beta: number; vixLevelCode: number; isMarketHours: number;
+    // Earnings (1)
+    earningsProximity: number;
+    // Dark pool (2)
+    shortVolumeRatio: number; shortVolumeZScore: number;
+    // Derivatives interactions (2)
+    oiPriceInteraction: number; fundingSlope: number;
+    // Candle structure (1)
+    bodyWickRatio: number;
     // Computed features (4)
     volWeightedRsi: number; hVolWeightedRsi: number;
     atrExpansionRate: number; fundingSlope: number;
@@ -532,6 +540,7 @@ export interface SentimentSignals {
 export interface PreviousSnapshot {
     dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number;
     hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number;
+    fundingHist?: number[];
 }
 
 export interface MacroSignals {
@@ -614,7 +623,9 @@ export function computeAllFeatures(
     derivatives: DerivativesSignals,
     macro: MacroSignals,
     sentiment?: SentimentSignals,
-    prevSnapshot?: PreviousSnapshot
+    prevSnapshot?: PreviousSnapshot,
+    spyCandles: Candle[] = [],
+    darkPool?: { ratio: number; zscore: number }
 ): FullFeatures {
     const daily = extractFeatures(dailyCandles, isCrypto);
     const fourH = fourHCandles.length >= 210 ? extractFeatures(fourHCandles, isCrypto) : null;
@@ -746,16 +757,108 @@ export function computeAllFeatures(
         // Basis
         basisPct: sentiment?.basisPct ?? 0,
         basisExtreme: (sentiment?.basisPct ?? 0) > 0.5 ? 1 : (sentiment?.basisPct ?? 0) < -0.5 ? -1 : 0,
-        // Stock features (defaults — not computed on worker)
-        fiftyTwoWeekPct: 50, distToFiftyTwoHigh: 0,
-        gapPercent: 0, gapFilled: 0, gapDirectionAligned: 0,
-        relStrengthVsSpy: 0, beta: 1.0,
+        // Stock features
+        fiftyTwoWeekPct: (() => {
+            if (isCrypto) return 50;
+            const highs = dailyCandles.map(c => c.high);
+            const lows = dailyCandles.map(c => c.low);
+            const hi = Math.max(...highs), lo = Math.min(...lows);
+            return hi !== lo ? (price - lo) / (hi - lo) * 100 : 50;
+        })(),
+        distToFiftyTwoHigh: (() => {
+            if (isCrypto) return 0;
+            const hi = Math.max(...dailyCandles.map(c => c.high));
+            return hi > 0 ? (hi - price) / price * 100 : 0;
+        })(),
+        gapPercent: (() => {
+            if (isCrypto || dailyCandles.length < 2) return 0;
+            const prev = dailyCandles[dailyCandles.length - 2].close;
+            const todayOpen = dailyCandles[dailyCandles.length - 1].open;
+            return prev > 0 ? (todayOpen - prev) / prev * 100 : 0;
+        })(),
+        gapFilled: (() => {
+            if (isCrypto || dailyCandles.length < 2) return 0;
+            const prev = dailyCandles[dailyCandles.length - 2].close;
+            const todayOpen = dailyCandles[dailyCandles.length - 1].open;
+            const gapUp = todayOpen > prev;
+            return (gapUp ? price <= prev : price >= prev) ? 1 : 0;
+        })(),
+        gapDirectionAligned: (() => {
+            if (isCrypto || dailyCandles.length < 2) return 0;
+            const prev = dailyCandles[dailyCandles.length - 2].close;
+            const todayOpen = dailyCandles[dailyCandles.length - 1].open;
+            const gapPct = (todayOpen - prev) / prev * 100;
+            if (Math.abs(gapPct) < 0.3) return 0;
+            const score = computeScore(dailyCandles, isCrypto);
+            return (gapPct > 0) === (score > 0) ? 1 : -1;
+        })(),
+        relStrengthVsSpy: (() => {
+            if (isCrypto || spyCandles.length < 6 || dailyCandles.length < 6) return 0;
+            const stockRet = (dailyCandles[dailyCandles.length - 1].close - dailyCandles[dailyCandles.length - 6].close) / dailyCandles[dailyCandles.length - 6].close * 100;
+            const spyRet = (spyCandles[spyCandles.length - 1].close - spyCandles[spyCandles.length - 6].close) / spyCandles[spyCandles.length - 6].close * 100;
+            return stockRet - spyRet;
+        })(),
+        beta: (() => {
+            if (isCrypto || spyCandles.length < 60 || dailyCandles.length < 60) return 1.0;
+            const n = 60;
+            const stockSlice = dailyCandles.slice(-n);
+            const spySlice = spyCandles.slice(-n);
+            if (stockSlice.length < 2 || spySlice.length < 2) return 1.0;
+            const stockReturns: number[] = [];
+            for (let i = 1; i < stockSlice.length; i++) stockReturns.push((stockSlice[i].close - stockSlice[i-1].close) / stockSlice[i-1].close);
+            const spyReturns: number[] = [];
+            for (let i = 1; i < spySlice.length; i++) spyReturns.push((spySlice[i].close - spySlice[i-1].close) / spySlice[i-1].close);
+            const pairs = Math.min(stockReturns.length, spyReturns.length);
+            if (pairs < 10) return 1.0;
+            const sr = stockReturns.slice(0, pairs), mr = spyReturns.slice(0, pairs);
+            const meanS = sr.reduce((a, b) => a + b, 0) / pairs;
+            const meanM = mr.reduce((a, b) => a + b, 0) / pairs;
+            let cov = 0, varM = 0;
+            for (let j = 0; j < pairs; j++) { cov += (sr[j] - meanS) * (mr[j] - meanM); varM += (mr[j] - meanM) * (mr[j] - meanM); }
+            return varM > 0 ? cov / varM : 1.0;
+        })(),
         vixLevelCode: macro.vix < 15 ? 0 : macro.vix < 25 ? 1 : macro.vix < 35 ? 2 : 3,
         isMarketHours: 1,
+        // Earnings (not computed on worker — no calendar data; defaults to 0)
+        earningsProximity: 0,
+        // Dark pool — passed via darkPool param
+        shortVolumeRatio: darkPool?.ratio ?? 0.5,
+        shortVolumeZScore: darkPool?.zscore ?? 0,
+        // Derivatives interactions
+        oiPriceInteraction: (() => {
+            if (!isCrypto || !derivatives.oiChangePct) return 0;
+            const candles4H = fourHCandles;
+            if (candles4H.length < 2) return 0;
+            const pricePct = (candles4H[candles4H.length - 1].close - candles4H[candles4H.length - 2].close) / candles4H[candles4H.length - 2].close * 100;
+            return (derivatives.oiChangePct || 0) * pricePct;
+        })(),
+        fundingSlope: (() => {
+            if (!isCrypto || !prevSnapshot) return 0;
+            const hist = prevSnapshot.fundingHist || [];
+            if (hist.length < 3) return 0;
+            const n = hist.length;
+            const xMean = (n - 1) / 2;
+            const yMean = hist.reduce((a: number, b: number) => a + b, 0) / n;
+            let num = 0, den = 0;
+            for (let j = 0; j < n; j++) { const x = j - xMean; num += x * (hist[j] - yMean); den += x * x; }
+            return den > 0 ? num / den : 0;
+        })(),
+        // Candle structure
+        bodyWickRatio: (() => {
+            const candles4H = fourHCandles;
+            const n = Math.min(5, candles4H.length);
+            if (n === 0) return 0.5;
+            let sum = 0, count = 0;
+            for (let j = candles4H.length - n; j < candles4H.length; j++) {
+                const c = candles4H[j];
+                const range = c.high - c.low;
+                if (range > 0) { sum += Math.abs(c.close - c.open) / range; count++; }
+            }
+            return count > 0 ? sum / count : 0.5;
+        })(),
         // Computed features
         volWeightedRsi: daily.rsi * daily.volumeRatio,
         hVolWeightedRsi: (fourH?.rsi ?? 50) * (fourH?.volumeRatio ?? 1.0),
-        atrExpansionRate: 0, // needs previous bar's atrPercent
-        fundingSlope: 0,     // needs previous bar's fundingRate
+        atrExpansionRate: 0,
     };
 }

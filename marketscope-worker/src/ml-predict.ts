@@ -105,8 +105,8 @@ export function buildMLInput(
         basisPct: 0, basisExtreme: 0,
         fiftyTwoWeekPct: 50, distToFiftyTwoHigh: 0,
         gapPercent: 0, gapFilled: 0, gapDirectionAligned: 0,
-        relStrengthVsSpy: 0, beta: 1, vixLevelCode: 1, isMarketHours: 1,
+        relStrengthVsSpy: 0, beta: 1, vixLevelCode: 1, isMarketHours: 1, earningsProximity: 0, shortVolumeRatio: 0.5, shortVolumeZScore: 0, oiPriceInteraction: 0, fundingSlope: 0, bodyWickRatio: 0.5,
         volWeightedRsi: dRsi, hVolWeightedRsi: hRsi,
-        atrExpansionRate: 0, fundingSlope: 0,
+        atrExpansionRate: 0,
     };
 }

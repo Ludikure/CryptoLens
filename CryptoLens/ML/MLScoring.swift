@@ -115,6 +115,12 @@ enum MLScoring {
             "gapDirectionAligned": Double(f.gapDirectionAligned),
             "relStrengthVsSpy": f.relStrengthVsSpy, "beta": f.beta,
             "vixLevelCode": Double(f.vixLevelCode), "isMarketHours": f.isMarketHours ? 1 : 0,
+            "earningsProximity": f.earningsProximity,
+            "shortVolumeRatio": f.shortVolumeRatio,
+            "shortVolumeZScore": f.shortVolumeZScore,
+            "oiPriceInteraction": f.oiPriceInteraction,
+            "fundingSlope": f.fundingSlope,
+            "bodyWickRatio": f.bodyWickRatio,
         ]
         input.merge(phaseA) { _, new in new }
 
@@ -122,7 +128,6 @@ enum MLScoring {
             "volWeightedRsi": f.dRsi * f.dVolumeRatio,
             "hVolWeightedRsi": f.hRsi * f.hVolumeRatio,
             "atrExpansionRate": 0,
-            "fundingSlope": 0,
         ]
         input.merge(computed) { _, new in new }
 

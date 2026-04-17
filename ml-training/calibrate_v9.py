@@ -50,8 +50,11 @@ FEATURES = [
     'hRsiDelta1', 'hMacdHistDelta1', 'dRsiDelta1',
     'hRsiAccel', 'hMacdAccel', 'dAdxAccel',
     'hourBucket', 'isWeekend',
+    'earningsProximity',
+    'shortVolumeRatio', 'shortVolumeZScore',
+    'oiPriceInteraction', 'fundingSlope', 'bodyWickRatio',
 ]
-assert len(FEATURES) == 101, f"expected 101 features, got {len(FEATURES)}"
+assert len(FEATURES) == 107, f"expected 107 features, got {len(FEATURES)}"
 
 DOWNLOADS = '/Volumes/External/Downloads'
 REPO = '/Users/bojanmihovilovic/CryptoLens'
@@ -73,26 +76,37 @@ CRYPTO_SYMBOLS = [
     'ARB', 'SUI', 'PENDLE', 'SEI', 'TIA', 'JUP', 'PEPE',
 ]
 STOCK_SYMBOLS = [
-    # Mega-cap
-    'AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'JPM',
-    'UNH', 'HD', 'MA', 'ABBV', 'V', 'AMD', 'NFLX', 'BA', 'XOM',
-    'CRM', 'LLY', 'DIS',
-    # Growth
-    'PLTR', 'ROKU', 'SHOP',
-    # Short-squeeze
+    # Mega-cap tech
+    'AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN',
+    'CRM', 'NFLX', 'AMD', 'ORCL', 'ADBE', 'INTC', 'CSCO',
+    # Semiconductors
+    'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL',
+    # High-beta growth
+    'PLTR', 'ROKU', 'SHOP', 'SQ', 'SNAP', 'COIN', 'RBLX',
+    # High short-interest / meme
     'BYND', 'GME',
-    # Cyclicals
-    'CAT', 'DE', 'X',
-    # Energy
-    'OXY', 'FANG',
+    # Financials
+    'JPM', 'GS', 'MS', 'BAC', 'WFC', 'BLK', 'SCHW',
+    # Healthcare / pharma
+    'UNH', 'LLY', 'ABBV', 'JNJ', 'PFE', 'MRK', 'TMO',
     # Biotech
     'REGN', 'VRTX', 'GILD', 'BIIB',
+    # Consumer
+    'HD', 'MA', 'V', 'DIS', 'NKE', 'SBUX', 'MCD', 'WMT', 'COST',
+    # Cyclicals
+    'CAT', 'DE', 'X', 'BA',
+    # Energy
+    'XOM', 'OXY', 'FANG', 'CVX', 'SLB',
+    # Defense / aerospace
+    'LMT', 'RTX', 'GD',
+    # Transport
+    'UNP', 'FDX', 'DAL',
+    # Telecom / media
+    'T', 'VZ', 'CMCSA',
     # REITs
     'SPG', 'O',
-    # Financial
-    'GS',
     # ETFs
-    'SPY', 'QQQ', 'IWM', 'XLE', 'XLF',
+    'SPY', 'QQQ', 'IWM', 'XLE', 'XLF', 'XLK', 'XLV', 'GLD', 'TLT',
 ]
 
 CAP = 0.85  # ceiling on calibrated probability
@@ -312,7 +326,7 @@ if __name__ == '__main__':
     calibrate_market(CRYPTO_SYMBOLS, True, "Crypto (10 symbols)", "crypto")
 
     print("\n\n##### STOCKS #####")
-    calibrate_market(STOCK_SYMBOLS, False, "Stocks (20 symbols)", "stock")
+    calibrate_market(STOCK_SYMBOLS, False, "Stocks (82 symbols)", "stock")
 
     print("\n" + "=" * 60)
     print("DONE")

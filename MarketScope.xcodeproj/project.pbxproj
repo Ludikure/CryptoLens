@@ -115,6 +115,7 @@
 		D29E865FEFB95906739B0EAF /* AnalysisStateMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D87BB163A44C9CA82CFF0F1 /* AnalysisStateMigration.swift */; };
 		D6C409FE7FFB821922F77556 /* VWAP.swift in Sources */ = {isa = PBXBuildFile; fileRef = D491749D3AAE2A4A1C55903B /* VWAP.swift */; };
 		D771A2287A53DAEE8C41D9E3 /* EconomicEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42970ECF6D41089ED70B4361 /* EconomicEvent.swift */; };
+		D82E974BF87FC786836A9CB4 /* DarkPoolData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09AD174CC96B0CBAB38D9844 /* DarkPoolData.swift */; };
 		DD28DFD78AE34A6F1EF4F8E0 /* SpotPressureAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58B2E5EFCF02DC42400FCA88 /* SpotPressureAnalyzer.swift */; };
 		DD41AFA234F03EFA66B4D337 /* MACD.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8251FCFAA56BF737CFEDAC8B /* MACD.swift */; };
 		DD5AADC1DE46E69A7F236840 /* MarketScoreML_stock.mlmodel in Sources */ = {isa = PBXBuildFile; fileRef = 8DF8C8B14435C1816C8414DD /* MarketScoreML_stock.mlmodel */; };
@@ -166,6 +167,7 @@
 		08FE6A3E4EF46DDD47822E60 /* MacroContextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroContextView.swift; sourceTree = "<group>"; };
 		092DF23B357D97EB5420DC31 /* StockSentimentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StockSentimentView.swift; sourceTree = "<group>"; };
 		09AAF6BFAA40D31F154B42C7 /* MacroDataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacroDataService.swift; sourceTree = "<group>"; };
+		09AD174CC96B0CBAB38D9844 /* DarkPoolData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DarkPoolData.swift; sourceTree = "<group>"; };
 		0B08599D1603C5AB66273B24 /* PositioningAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningAnalyzer.swift; sourceTree = "<group>"; };
 		0BB3A257C06C78BA23D12112 /* AnalysisResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisResult.swift; sourceTree = "<group>"; };
 		1130BA47A4CBC38DABF202C7 /* TiingoProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TiingoProvider.swift; sourceTree = "<group>"; };
@@ -325,6 +327,7 @@
 				DA5961A704972E8E2F585273 /* CoinbaseService.swift */,
 				C6C40E0EF0FD7E88BF65CDA4 /* CoinGeckoService.swift */,
 				7733BFEB69A3031C96882AD8 /* ConnectionStatus.swift */,
+				09AD174CC96B0CBAB38D9844 /* DarkPoolData.swift */,
 				3EEAE99A396856BF50B2B37C /* DerivativesCache.swift */,
 				8829EA677390B0BFA2AACCC2 /* DerivativesService.swift */,
 				774EAFA76A70F4924070E2BA /* EarningsCalendar.swift */,
@@ -663,6 +666,7 @@
 				68B6B1452B61E92287BDC954 /* ContentView.swift in Sources */,
 				4F88BD36B63AF59B583C0C72 /* CrossAssetContext.swift in Sources */,
 				0B074A729A333B3D2633AC73 /* CryptoLensApp.swift in Sources */,
+				D82E974BF87FC786836A9CB4 /* DarkPoolData.swift in Sources */,
 				1B5CA24C22D0CBED6012138B /* DataQuality.swift in Sources */,
 				636D9100892E8ACA32E67EA8 /* DerivativesCache.swift in Sources */,
 				013DA6AEB813102D16159585 /* DerivativesCardView.swift in Sources */,
