@@ -86,8 +86,6 @@ struct MLFeatures: Codable {
     let tfAlignment: Int          // +2 all bull, -2 all bear, 0 mixed
     let momentumAlignment: Int    // D+4H MACD same sign: +1 bull, -1 bear, 0 mixed
     let structureAlignment: Int   // D+4H struct same: +1 bull, -1 bear, 0 mixed
-    let scoreSum: Int             // dailyScore + fourHScore + oneHScore
-    let scoreDivergence: Int      // abs(dailyScore - fourHScore)
     // Temporal features
     let dayOfWeek: Int            // 1=Mon ... 5=Fri (0=weekend for crypto)
     let barsSinceRegimeChange: Int // how many 4H bars in current regime

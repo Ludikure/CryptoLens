@@ -70,7 +70,6 @@ export function buildMLInput(
     hEmaCross: number, hStackBull: boolean, hStackBear: boolean,
     hStructBull: boolean, hStructBear: boolean,
     atrPercent: number, volScalar: number, atrPercentile: number,
-    dailyScore: number, fourHScore: number,
 ): Record<string, number> {
     return {
         dRsi, dMacdHist, dAdx, dAdxBullish: dAdxBullish ? 1 : 0,
@@ -91,9 +90,8 @@ export function buildMLInput(
         vix: 20, dxyAboveEma20: 0, volScalarML: volScalar,
         last3Green: 0, last3Red: 0, last3VolIncreasing: 0,
         obvRising: 0, adLineAccumulation: 0,
-        atrPercent, atrPercentile, dailyScore, fourHScore,
+        atrPercent, atrPercentile,
         tfAlignment: 0, momentumAlignment: 0, structureAlignment: 0,
-        scoreSum: dailyScore + fourHScore, scoreDivergence: Math.abs(dailyScore - fourHScore),
         dayOfWeek: new Date().getDay(), barsSinceRegimeChange: 0, regimeCode: 1,
         dRsiDelta: 0, dAdxDelta: 0, hRsiDelta: 0, hAdxDelta: 0, hMacdHistDelta: 0,
         fearGreedIndex: 50, fearGreedZone: 0,

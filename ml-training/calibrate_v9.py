@@ -35,8 +35,8 @@ FEATURES = [
     'vix', 'dxyAboveEma20', 'volScalarML',
     'last3Green', 'last3Red', 'last3VolIncreasing',
     'obvRising', 'adLineAccumulation',
-    'atrPercent', 'atrPercentile', 'dailyScore', 'fourHScore',
-    'tfAlignment', 'momentumAlignment', 'structureAlignment', 'scoreSum', 'scoreDivergence',
+    'atrPercent', 'atrPercentile',
+    'tfAlignment', 'momentumAlignment', 'structureAlignment',
     'dayOfWeek', 'barsSinceRegimeChange', 'regimeCode',
     'dRsiDelta', 'dAdxDelta', 'hRsiDelta', 'hAdxDelta', 'hMacdHistDelta',
     'fearGreedIndex', 'fearGreedZone',
@@ -51,18 +51,49 @@ FEATURES = [
     'hRsiAccel', 'hMacdAccel', 'dAdxAccel',
     'hourBucket', 'isWeekend',
 ]
-assert len(FEATURES) == 105, f"expected 105 features, got {len(FEATURES)}"
+assert len(FEATURES) == 101, f"expected 101 features, got {len(FEATURES)}"
 
-DOWNLOADS = '/Users/bojanmihovilovic/Downloads'
+DOWNLOADS = '/Volumes/External/Downloads'
 REPO = '/Users/bojanmihovilovic/CryptoLens'
 WORKER = f'{REPO}/marketscope-worker/src'
 IOS_ML = f'{REPO}/CryptoLens/ML'
+ML_TRAINING = f'{REPO}/ml-training'
 
-CRYPTO_SYMBOLS = ['BTC', 'ETH', 'SOL', 'XRP', 'BNB', 'ADA',
-                  'LINK', 'AVAX', 'DOT', 'NEAR']
-STOCK_SYMBOLS = ['AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN',
-                 'JPM', 'UNH', 'HD', 'MA', 'ABBV', 'V', 'AMD', 'NFLX',
-                 'BA', 'XOM', 'CRM', 'LLY', 'DIS']
+CRYPTO_SYMBOLS = [
+    # Pre-2021
+    'BTC', 'ETH', 'BCH', 'XRP', 'LTC', 'TRX', 'ETC', 'LINK', 'XLM', 'ADA',
+    'XMR', 'DASH', 'ZEC', 'XTZ', 'BNB', 'ATOM', 'ONT', 'IOTA', 'BAT', 'VET',
+    'NEO', 'QTUM', 'IOST', 'THETA', 'ALGO', 'ZIL', 'KNC', 'ZRX', 'COMP', 'DOGE',
+    'KAVA', 'BAND', 'RLC', 'SNX', 'DOT', 'YFI', 'CRV', 'TRB', 'RUNE', 'SUSHI',
+    'EGLD', 'SOL', 'ICX', 'STORJ', 'UNI', 'AVAX', 'ENJ', 'KSM', 'NEAR', 'AAVE',
+    'FIL', 'RSR', 'BEL', 'AXS', 'SKL', 'GRT',
+    # Post-2021
+    'SAND', 'MANA', 'HBAR', 'MATIC', 'ICP', 'DYDX', 'GALA',
+    'IMX', 'GMT', 'APE', 'INJ', 'LDO', 'APT',
+    'ARB', 'SUI', 'PENDLE', 'SEI', 'TIA', 'JUP', 'PEPE',
+]
+STOCK_SYMBOLS = [
+    # Mega-cap
+    'AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'JPM',
+    'UNH', 'HD', 'MA', 'ABBV', 'V', 'AMD', 'NFLX', 'BA', 'XOM',
+    'CRM', 'LLY', 'DIS',
+    # Growth
+    'PLTR', 'ROKU', 'SHOP',
+    # Short-squeeze
+    'BYND', 'GME',
+    # Cyclicals
+    'CAT', 'DE', 'X',
+    # Energy
+    'OXY', 'FANG',
+    # Biotech
+    'REGN', 'VRTX', 'GILD', 'BIIB',
+    # REITs
+    'SPG', 'O',
+    # Financial
+    'GS',
+    # ETFs
+    'SPY', 'QQQ', 'IWM', 'XLE', 'XLF',
+]
 
 CAP = 0.85  # ceiling on calibrated probability
 
@@ -83,7 +114,15 @@ def load_symbol(symbol, is_crypto):
     valid['goodR'] = (valid['fwdMaxFavR'] >= 1.5).astype(int)
     for feat in FEATURES:
         if feat not in valid.columns:
-            default = 1.0 if feat == 'takerRatioRaw' else 50.0 if feat == 'longPctRaw' else 0.0
+            # Default values for features missing from older CSV exports
+            if feat == 'takerRatioRaw':
+                default = 1.0
+            elif feat == 'longPctRaw':
+                default = 50.0
+            elif feat in ('daysToEarnings', 'daysSinceEarnings'):
+                default = 60.0  # "no earnings within 60 days" is the safe neutral
+            else:
+                default = 0.0
             valid[feat] = default
     return valid
 
@@ -132,10 +171,10 @@ def make_model():
 
 
 def walk_forward_oof(data, n_folds=3, purge=48):
-    """Return (oof_probs, y_true) — out-of-fold predictions across folds."""
+    """Return (oof_probs, y_true, final_model) — OOF predictions for calibration fit,
+    plus a final model trained on ALL data for export to production."""
     n = len(data)
-    oof_probs = []
-    oof_y = []
+    oof_probs, oof_y = [], []
     for i in range(n_folds):
         train_end = int(n * (0.4 + i * 0.15))
         val_start = train_end + purge
@@ -155,7 +194,12 @@ def walk_forward_oof(data, n_folds=3, purge=48):
               f"p_mean={p.mean():.3f}, p_max={p.max():.3f}")
         oof_probs.append(p)
         oof_y.append(y_v.values)
-    return np.concatenate(oof_probs), np.concatenate(oof_y)
+    # Train final model on ALL data for production export
+    X_all, y_all = data[FEATURES].fillna(0), data['goodR']
+    w_all = compute_sample_weights(data['timestamp'].values)
+    final_model = make_model()
+    final_model.fit(X_all, y_all, sample_weight=w_all, verbose=0)
+    return np.concatenate(oof_probs), np.concatenate(oof_y), final_model
 
 
 def fit_calibration(probs, y_true):
@@ -195,21 +239,54 @@ def diagnose(name, raw, y_true, x, y):
             print(f"    [{lo:.2f}, {hi:.2f}): n={m.sum():5d}, actual={y_true[m].mean()*100:.1f}%")
 
 
-def update_worker_model(market, x, y):
+def export_worker_model(market, model, n_samples, x_cal, y_cal):
+    """Export XGBoost trees + calibration block to worker JSON."""
+    booster = model.get_booster()
+    trees = [json.loads(t) for t in booster.get_dump(dump_format='json')]
     path = f'{WORKER}/ml-model-{market}.json'
-    with open(path) as f:
-        m = json.load(f)
-    m['calibration'] = {'x': x, 'y': y, 'cap': CAP, 'method': 'isotonic'}
+    try:
+        with open(path) as f:
+            existing = json.load(f)
+        base_score = existing.get('base_score', 0.5)
+    except Exception:
+        base_score = 0.5
+    m = {
+        'features': FEATURES,
+        'trees': trees,
+        'base_score': base_score,
+        'version': 9,
+        'market': market,
+        'n_features': len(FEATURES),
+        'n_trees': len(trees),
+        'n_samples': n_samples,
+        'model_type': 'classifier',
+        'target': 'goodR',
+        'calibration': {'x': x_cal, 'y': y_cal, 'cap': CAP, 'method': 'isotonic'},
+        'description': f'v9 {market} — goodR = fwdMaxFavR>=1.5, {n_samples} bars',
+    }
     with open(path, 'w') as f:
         json.dump(m, f)
-    print(f"  wrote calibration into {path} ({len(x)} breakpoints)")
+    print(f"  wrote {path} ({len(trees)} trees, {len(x_cal)} cal breakpoints)")
 
 
-def write_ios_calibration(market, x, y):
-    path = f'{IOS_ML}/{market}_calibration.json'
-    with open(path, 'w') as f:
-        json.dump({'x': x, 'y': y, 'cap': CAP}, f)
-    print(f"  wrote {path}")
+def export_ios_model(market, model, x_cal, y_cal):
+    """Export CoreML .mlmodel for iOS bundle + sidecar calibration JSON."""
+    cal_path = f'{IOS_ML}/{market}_calibration.json'
+    with open(cal_path, 'w') as f:
+        json.dump({'x': x_cal, 'y': y_cal, 'cap': CAP}, f)
+    print(f"  wrote {cal_path}")
+    try:
+        import coremltools as ct
+        import shutil
+        coreml = ct.converters.xgboost.convert(model, feature_names=FEATURES, mode='classifier')
+        coreml.short_description = f'MarketScope v9 {market} goodR'
+        training_path = f'{ML_TRAINING}/MarketScoreML_{market}.mlmodel'
+        coreml.save(training_path)
+        ios_path = f'{IOS_ML}/MarketScoreML_{market}.mlmodel'
+        shutil.copy2(training_path, ios_path)
+        print(f"  wrote {ios_path}")
+    except Exception as e:
+        print(f"  CoreML export FAILED: {e}")
 
 
 def calibrate_market(symbols, is_crypto, label, market_key):
@@ -218,12 +295,12 @@ def calibrate_market(symbols, is_crypto, label, market_key):
         print(f"!! no data for {label}")
         return
     print(f"\n  walk-forward CV (capturing out-of-fold predictions):")
-    probs, y = walk_forward_oof(data)
+    probs, y, final_model = walk_forward_oof(data)
     print(f"  total OOF samples: {len(probs)}")
     x_cal, y_cal = fit_calibration(probs, y)
     diagnose(label, probs, y, x_cal, y_cal)
-    update_worker_model(market_key, x_cal, y_cal)
-    write_ios_calibration(market_key, x_cal, y_cal)
+    export_worker_model(market_key, final_model, len(data), x_cal, y_cal)
+    export_ios_model(market_key, final_model, x_cal, y_cal)
 
 
 if __name__ == '__main__':

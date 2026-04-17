@@ -42,10 +42,8 @@ export interface FullFeatures {
     takerRatioRaw: number; longPctRaw: number;
     // Context (4)
     atrPercent: number; atrPercentile: number;
-    dailyScore: number; fourHScore: number;
     // Cross-timeframe interactions (5)
     tfAlignment: number; momentumAlignment: number; structureAlignment: number;
-    scoreSum: number; scoreDivergence: number;
     // Temporal (3)
     dayOfWeek: number; barsSinceRegimeChange: number; regimeCode: number;
     // Rate-of-change (5)
@@ -337,12 +335,16 @@ function computeATRPercentile(candles: Candle[], atrPeriod: number = 14): number
     return (rank / sorted.length) * 100;
 }
 
+// Faithful port of iOS ScoringFunction.score() — matches ScoringParams.cryptoDefault / stockDefault.
+// The raw integer score feeds tfAlignment (75 tree splits in v9).
 function computeScore(candles: Candle[], isCrypto: boolean): number {
     const closes = candles.map(c => c.close);
     const price = closes[closes.length - 1];
-    const pp = isCrypto ? 1 : 3;
-    const sc = isCrypto ? 1 : 0;
-    const st = 1, rsiW = 3, macdW = 3;
+    const pp = isCrypto ? 1 : 3;   // pricePositionWeight
+    const es = isCrypto ? 0 : 1;   // emaSlopeWeight
+    const st = 1;                   // structureWeight
+    const sc = isCrypto ? 1 : 0;   // stackConfirmWeight
+    const rsiW = 3, macdW = 3;
 
     let score = 0;
     const ema20 = emaArray(closes, 20);
@@ -351,48 +353,77 @@ function computeScore(candles: Candle[], isCrypto: boolean): number {
     const e20 = ema20[ema20.length - 1];
     const e50 = ema50[ema50.length - 1];
     const e200 = ema200[ema200.length - 1];
-
     const stackBull = e20 > e50 && e50 > e200;
     const stackBear = e20 < e50 && e50 < e200;
+    const regime = stackBull ? 'bullish' : stackBear ? 'bearish' : 'mixed';
 
-    if (stackBull) score += sc; else if (stackBear) score -= sc;
-
-    let aboveCount = 0;
-    if (price > e20) aboveCount++; else aboveCount--;
-    if (price > e50) aboveCount++; else aboveCount--;
-    if (price > e200) aboveCount++; else aboveCount--;
-    if (aboveCount === 3) score += pp;
-    else if (aboveCount === -3) score -= pp;
-    else if (aboveCount >= 1) score += Math.max(1, pp - 1);
-    else if (aboveCount <= -1) score -= Math.max(1, pp - 1);
-
-    if (stackBull) score += st; else if (stackBear) score -= st;
-
-    const rsiVal = computeRSI(closes);
-    const r = rsiVal[rsiVal.length - 1];
-    const rsiOB = stackBear ? 60 : 70;
-    if (r > rsiOB) score -= rsiW;
-    else if (r < 30) score += rsiW;
-    else if (r > 60 && stackBull) score += Math.max(1, rsiW - 1);
-    else if (r < 40 && stackBear) score -= Math.max(1, rsiW - 1);
-
-    const macdResult = computeMACD(closes);
-    const atrVal = computeATR(candles);
-    const deadZone = atrVal * 0.05;
-    if (Math.abs(macdResult.histogram[macdResult.histogram.length - 1]) > deadZone) {
-        const adxResult = computeADX(candles);
-        const adxGated = !adxResult || adxResult.adx >= 20;
-        if (adxGated) {
-            score += macdResult.histogram[macdResult.histogram.length - 1] > 0 ? macdW : -macdW;
-        }
+    // 1a: Price position (unsigned count 0-3)
+    let emaCross = 0;
+    if (price > e20) emaCross++;
+    if (price > e50) emaCross++;
+    if (price > e200) emaCross++;
+    switch (emaCross) {
+        case 3: score += pp; break;
+        case 2: score += Math.max(1, pp - 1); break;
+        case 1: score -= Math.max(1, pp - 1); break;
+        case 0: score -= pp; break;
     }
 
+    // 1b: EMA20 slope (stocks only)
+    if (es > 0 && ema20.length >= 6) {
+        score += e20 > ema20[ema20.length - 6] ? es : -es;
+    }
+
+    // 1c: Structure (approximated from stack — matches extractFeatures)
+    if (stackBull) score += st; else if (stackBear) score -= st;
+
+    // 1d: Stack confirm
+    if (stackBull) score += sc; else if (stackBear) score -= sc;
+
+    // Layer 2: ADX (tiered weights)
     const adxResult = computeADX(candles);
-    if (adxResult) {
-        const dir = adxResult.plusDI > adxResult.minusDI ? 1 : -1;
-        if (adxResult.adx >= 40) score += dir * 3;
-        else if (adxResult.adx >= 30) score += dir * 2;
-        else if (adxResult.adx >= 20) score += dir * 1;
+    const adxVal = adxResult?.adx ?? 0;
+    const adxBull = adxResult ? adxResult.plusDI > adxResult.minusDI : false;
+    if (adxVal >= 40)      score += adxBull ? 3 : -3;
+    else if (adxVal >= 30) score += adxBull ? 2 : -2;
+    else if (adxVal >= 20) score += adxBull ? 1 : -1;
+
+    // Layer 3: RSI (regime-aware with adaptive thresholds)
+    const rsiValues = computeRSI(closes);
+    const r = rsiValues[rsiValues.length - 1];
+    const atrPtile = computeATRPercentile(candles);
+    let volScalar = 1.0;
+    if (atrPtile > 80) volScalar = 0.75;
+    else if (atrPtile > 60) volScalar = 0.90;
+    else if (atrPtile < 20) volScalar = 1.35;
+    else if (atrPtile < 40) volScalar = 1.15;
+
+    if (regime === 'bullish') {
+        if (r < 40) score += rsiW;
+        else if (r < 50) score += Math.max(1, rsiW - 1);
+    } else if (regime === 'bearish') {
+        if (r > 60) score -= rsiW;
+        else if (r > 50) score -= Math.max(1, rsiW - 1);
+    } else {
+        const rsiOB = Math.min(75, 70 + (volScalar - 1) * 15);
+        const rsiBull = Math.min(60, 55 + (volScalar - 1) * 15);
+        const rsiOS = Math.max(25, 30 - (volScalar - 1) * 15);
+        const rsiBear = Math.max(40, 45 - (volScalar - 1) * 15);
+        if (r > rsiOB) score += rsiW;
+        else if (r > rsiBull) score += Math.max(1, rsiW - 1);
+        else if (r < rsiOS) score -= rsiW;
+        else if (r < rsiBear) score -= Math.max(1, rsiW - 1);
+    }
+
+    // Layer 4: MACD (ADX-gated, dead zone, crossover-aware)
+    const macdResult = computeMACD(closes);
+    const hist = macdResult.histogram[macdResult.histogram.length - 1];
+    const atrVal = computeATR(candles);
+    const deadZone = atrVal * 0.05;
+    if (adxVal >= 20 && Math.abs(hist) > deadZone) {
+        const mw = adxVal >= 30 ? macdW : Math.max(1, macdW - 1);
+        if (hist > 0) score += macdResult.crossover === 1 ? mw : Math.max(mw - 1, 0);
+        else          score -= macdResult.crossover === -1 ? mw : Math.max(mw - 1, 0);
     }
 
     return score;
@@ -659,7 +690,6 @@ export function computeAllFeatures(
         obvRising, adLineAccumulation,
         // Context
         atrPercent, atrPercentile,
-        dailyScore: daily.score, fourHScore: fourH?.score ?? 0,
         // Cross-timeframe interactions
         tfAlignment: (() => {
             const ds = daily.score, hs = fourH?.score ?? 0;
@@ -672,8 +702,6 @@ export function computeAllFeatures(
                            (daily.macdHist < 0 && (fourH?.macdHist ?? 0) < 0) ? -1 : 0,
         structureAlignment: (daily.structBull && (fourH?.structBull ?? 0)) ? 1 :
                             (daily.structBear && (fourH?.structBear ?? 0)) ? -1 : 0,
-        scoreSum: daily.score + (fourH?.score ?? 0) + (oneH?.score ?? 0),
-        scoreDivergence: Math.abs(daily.score - (fourH?.score ?? 0)),
         // Temporal
         dayOfWeek: new Date().getDay(),
         barsSinceRegimeChange: 0, // would need KV state tracking

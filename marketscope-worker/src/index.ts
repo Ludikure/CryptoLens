@@ -1287,8 +1287,16 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
   const newProbs: Record<string, number> = {};
   const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
-  const ML_THRESHOLD = 0.65;
-  const NOTIFY_COOLDOWN_SEC = 12 * 60 * 60; // 12h between notifications per (device, symbol)
+  const ML_THRESHOLD = 0.70; // top-bucket only — [0.70, 0.85) had 73.1% actual win rate in WF validation
+  // Notifications fire only at these hours in USER LOCAL TIME, and at most once per (device, symbol)
+  // in the 5h cooldown window (covers the 6h gap between adjacent target hours).
+  const NOTIFY_COOLDOWN_SEC = 5 * 60 * 60;
+  const NOTIFY_HOURS = [9, 15, 21];  // 9am, 3pm, 9pm
+  const NOTIFY_TZ = 'America/New_York'; // change if user is in a different timezone
+  const userHour = Number(new Date().toLocaleString('en-US', {
+    timeZone: NOTIFY_TZ, hour: '2-digit', hour12: false,
+  }));
+  const inNotifyWindow = NOTIFY_HOURS.includes(userHour);
 
   // Fetch Fear & Greed index (global, once per cron run)
   let fearGreedIndex = 50, fearGreedZone = 0;
@@ -1352,7 +1360,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   const newSnapshots: typeof prevSnapshots = {};
 
   // Always process these crypto symbols for D1 archiving, even if not in watchlist
-  const ARCHIVE_CRYPTO = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT'];
+  const ARCHIVE_CRYPTO = [
+    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT',
+    'LINKUSDT', 'AVAXUSDT', 'DOTUSDT', 'NEARUSDT',
+  ];
   const allSymbols = [...new Set([...config.symbols, ...ARCHIVE_CRYPTO])];
 
   for (const symbol of allSymbols) {
@@ -1538,12 +1549,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
       newProbs[symbol] = mlProb;
 
-      // ML quality gate — fire whenever ML >= threshold and we haven't notified
-      // for this (device, symbol) in the last NOTIFY_COOLDOWN_SEC. The crossing-based
-      // trigger doesn't work with the new architecture: probabilities can sit pinned at
-      // the calibration cap for hours, so requiring a fall-then-rise would never fire.
+      // ML quality gate — fire only at 9am/3pm/9pm user-local AND when ML >= threshold AND
+      // we haven't notified for this (device, symbol) in the cooldown window.
       const inWatchlist = config.symbols.includes(symbol);
-      if (inWatchlist && mlProb >= ML_THRESHOLD) {
+      if (inWatchlist && inNotifyWindow && mlProb >= ML_THRESHOLD) {
         const cooldownKey = `notif:${deviceId}:${symbol}`;
         const lastFired = await env.ALERTS.get(cooldownKey);
         if (!lastFired) {

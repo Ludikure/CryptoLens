@@ -84,7 +84,6 @@ enum MLScoring {
         ]
         input.merge(entry) { _, new in new }
 
-        // v9 does not use dailyScore/fourHScore/scoreSum/scoreDivergence — omitted from input
         let context: [String: Double] = [
             "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
             "tfAlignment": Double(f.tfAlignment), "momentumAlignment": Double(f.momentumAlignment),

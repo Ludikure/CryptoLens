@@ -456,7 +456,7 @@ class AnalysisService: ObservableObject {
             let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                    isCrypto: market == .crypto, derivCtx: derivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            }, vixValue: macroSnapshot?.vix,
+            }, symbol: symbol, vixValue: macroSnapshot?.vix,
                fearGreedValue: fearGreed?.value,
                ethBtcRatio: ethBtcPrice, ethBtcDelta: _ethBtcDelta,
                dRsiDelta: _dRsiDelta, dAdxDelta: _dAdxDelta,
@@ -606,7 +606,7 @@ class AnalysisService: ObservableObject {
             let mlFeatures2 = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                     isCrypto: market == .crypto, derivCtx: earlyDerivData.map {
                 DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            }, vixValue: macroSnapshot?.vix, crossAsset: crossAsset,
+            }, symbol: symbol, vixValue: macroSnapshot?.vix, crossAsset: crossAsset,
                fearGreedValue: prevFG,
                ethBtcRatio: ethBtcPrice, ethBtcDelta: ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0,
                dRsiDelta: snap2.map { (tf1.rsi ?? 50) - $0.dRsi } ?? 0,
@@ -931,6 +931,7 @@ class AnalysisService: ObservableObject {
 
     static func buildMLFeatures(tf1: IndicatorResult, tf2: IndicatorResult, tf3: IndicatorResult,
                                  isCrypto: Bool, derivCtx: DerivativesContext?,
+                                 symbol: String = "",
                                  vixValue: Double? = nil, crossAsset: CrossAssetContext? = nil,
                                  fearGreedValue: Int? = nil,
                                  ethBtcRatio: Double = 0, ethBtcDelta: Double = 0,
@@ -1036,8 +1037,6 @@ class AnalysisService: ObservableObject {
             atrPercent: tf2.atr?.atrPercent ?? 0, atrPercentile: tf1.atrPercentile ?? 50,
             isCrypto: isCrypto,
             tfAlignment: _tfAlign, momentumAlignment: _momAlign, structureAlignment: _structAlign,
-            scoreSum: tf1.biasScore + tf2.biasScore + tf3.biasScore,
-            scoreDivergence: abs(tf1.biasScore - tf2.biasScore),
             dayOfWeek: Calendar.current.component(.weekday, from: Date()) - 1,
             barsSinceRegimeChange: barsSinceRegimeChange,
             regimeCode: _regimeCode,
@@ -1106,7 +1105,7 @@ class AnalysisService: ObservableObject {
                 let v = vixValue ?? 20
                 return v < 15 ? 0 : v < 25 ? 1 : v < 35 ? 2 : 3
             }(),
-            isMarketHours: !isCrypto ? MarketHours.isMarketOpen() : true
+            isMarketHours: !isCrypto ? MarketHours.isMarketOpen() : true,
         )
     }
 

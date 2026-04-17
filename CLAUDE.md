@@ -140,15 +140,15 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 
 v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
 
-- **Features:** 105
-- **Crypto model:** 10 symbols (BTC/ETH/SOL/XRP/BNB/ADA/LINK/AVAX/DOT/NEAR), 66.9% WF accuracy
-- **Stock model:** 20 symbols, 64.1% WF accuracy
+- **Features:** 101 (stripped from 105: removed dailyScore, fourHScore, scoreSum, scoreDivergence — 0-6 tree splits each, noise-level; removed daysToEarnings, daysSinceEarnings, isEarningsWeek — 0 splits, no signal)
+- **Crypto model:** 76 symbols (56 pre-2021 + 20 post-2021), 141,742 bars, **72.6% WF accuracy**
+- **Stock model:** 43 symbols (mega-cap + growth + cyclicals + energy + biotech + REITs + financials + ETFs), 47,829 bars, **66.4% WF accuracy**
 - **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
 - **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x), hyperparams `depth=3, n_estimators=100, lr=0.03, reg_alpha=0.1, reg_lambda=1.0`
-- **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85 (validation ceiling — top empirical win rate bucket 77.8% in training)
-- **Directional signed-model experiment (v10):** trained `goodR_long` / `goodR_short` splits; abandoned — top-bucket accuracy identical to v9, crypto-short rarely fires (9 samples above 0.70), stock-short calibration saturates at 0.43. The architecture (v9 quality + LLM direction + isotonic calibration) is the right one.
+- **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85. Top-bucket reliability: crypto [0.70, 0.85) = 73.1% actual on 8,834 samples; stocks [0.70, 0.85) = 75.1% on 10,901 samples.
+- **Abandoned experiments:** v10 signed models (goodR_long/short) — identical top-bucket, crypto-short too sparse (9 samples), stock-short saturates at 0.43. Earnings calendar features (3) — 0 tree splits, no signal. Score-derived features (4) — noise-level splits, create unnecessary ScoringFunction→ML dependency.
 
-### Feature Groups (105 total)
+### Feature Groups (101 total)
 
 | Group | Count | Source |
 |-------|-------|--------|
@@ -160,8 +160,8 @@ v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnosti
 | Macro | 3 | VIX (Yahoo), DXY, volScalar |
 | Candle patterns | 3 | Computed |
 | Stock-only (OBV, A/D) | 2 | IndicatorEngine |
-| Context | 4 | atrPercent (4H), atrPercentile (daily), dailyScore, fourHScore |
-| Cross-TF interactions | 5 | tfAlignment, momentumAlignment, structureAlignment, scoreSum, scoreDivergence |
+| Context | 2 | atrPercent (4H), atrPercentile (daily) |
+| Cross-TF interactions | 3 | tfAlignment, momentumAlignment, structureAlignment |
 | Temporal | 3 | dayOfWeek, barsSinceRegimeChange, regimeCode |
 | Rate-of-change (6-bar) | 5 | Delta vs 6 bars ago |
 | Sentiment | 2 | Fear & Greed (Alternative.me) |
@@ -172,12 +172,13 @@ v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnosti
 | Acceleration | 3 | Delta of deltas |
 | Time-of-day | 2 | hourBucket (crypto sessions), isWeekend |
 | Stock features | 9 | fiftyTwoWeekPct, gap analysis, relStrengthVsSpy, beta, vixLevelCode, isMarketHours |
+| Computed | 4 | volWeightedRsi, hVolWeightedRsi, atrExpansionRate, fundingSlope |
 
 ### Files
 
 | File | Purpose |
 |------|---------|
-| `Models/BacktestResult.swift` | `MLFeatures` struct (105 fields), `BacktestDataPoint` |
+| `Models/BacktestResult.swift` | `MLFeatures` struct (101 fields), `BacktestDataPoint` |
 | `ML/MLScoring.swift` | CoreML inference; `predict(features:)` returns calibrated goodR |
 | `ML/MLCalibration.swift` | Isotonic calibration; 2 maps loaded from bundle JSONs |
 | `ML/MarketScoreML_{crypto,stock}.mlmodel` | 2 CoreML models |
@@ -187,7 +188,9 @@ v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnosti
 | `Services/FearGreedService.swift` | Historical Fear & Greed from Alternative.me |
 | `marketscope-worker/src/ml-predict.ts` | Worker `mlPredict()` evaluates tree JSONs, applies embedded calibration |
 | `marketscope-worker/src/ml-model-{crypto,stock}.json` | 2 worker model JSONs (trees + calibration block) |
-| `marketscope-worker/src/scoring-full.ts` | Worker 105-feature computation (Wilder ADX/ATR, 4H-ATR-normalized volume profile, %-scale BB bandwidth — must match `IndicatorEngine` to stay in training distribution) |
+| `marketscope-worker/src/scoring-full.ts` | Worker 101-feature computation (Wilder ADX/ATR, 4H-ATR-normalized volume profile, %-scale BB bandwidth, ported ScoringFunction for tfAlignment — must match `IndicatorEngine` to stay in training distribution) |
+| `Services/EarningsCalendar.swift` | Stock earnings date lookup from bundled JSON (not used in ML — 0 tree splits — but available for future use) |
+| `Resources/earnings_history.json` | Bundled earnings dates for 39 stocks, 2020-2026 (from yfinance via `ml-training/earnings_backfill.py`) |
 | `ml-training/calibrate_v9.py` | Training + isotonic calibration script — trains 2 models, exports CoreML + worker JSON |
 | `ml-training/train_signed_v10.py` | Abandoned signed-model experiment (kept as reference) |
 
@@ -204,40 +207,40 @@ v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnosti
 ### Worker ML Scoring (Cron)
 
 - Runs every minute via `scheduled()` handler
-- Fetches candles (in-progress dropped via `dropInProgress()`), computes all 105 features via `scoring-full.ts`
+- Fetches candles (in-progress dropped via `dropInProgress()`), computes all 101 features via `scoring-full.ts`
 - Fetches live: VIX/DXY (Yahoo), Fear & Greed (Alternative.me), ETH/BTC (Binance, 1-bar 4H delta), funding rate + OI + L/S + taker + basis (Binance fapi)
 - Rate-of-change + acceleration from KV-persisted snapshots
 - Volume profile computed via TypeScript port of `VolumeProfile.swift`, ATR-normalized by 4H ATR (matches training)
 - Archives derivatives to D1 every 4H for future training
 - Writes calibrated goodR probability to `score_history.ml_probability` per cron per symbol
-- Notifications: fires when ML_WIN >= 0.65 **and** no fire for this (device, symbol) in past 12h (KV-backed cooldown at `notif:${deviceId}:${symbol}` with 12h TTL). Old crossing-based trigger was removed — it never fired once probabilities pinned at the calibration cap.
+- Notifications: fires when ML_WIN >= 0.70 (top-bucket only, 73% actual win rate), at hours 9/15/21 `America/New_York`, with 5h KV-backed cooldown per (device, symbol). Max 3 notifications/day/symbol.
 
 ### Backtest & Training
 
 - `BacktestEngine` runs walk-forward eval on historical candles
 - Fetches from D1 archive first, falls back to Binance/Yahoo/TwelveData
 - Crypto clamped to Jan 2020 start (derivatives coverage)
-- Exports CSV with all 105 features + forward returns + trade outcomes
+- Exports CSV with all 101 features + forward returns + trade outcomes
 - Batch export: separate "Crypto Only" / "Stocks Only" buttons
 - 3-second delay between stock symbols to avoid rate limiting
 - Training: `calibrate_v9.py` with purged time-series CV, daily downsampling, sample weighting
 
 ### Backtester Symbols
 
-- **Crypto (10):** BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ADAUSDT, LINKUSDT, AVAXUSDT, DOTUSDT, NEARUSDT
-- **Stocks (20):** AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, JPM, UNH, HD, MA, ABBV, V, AMD, NFLX, BA, XOM, CRM, LLY, DIS
+- **Crypto (76):** 56 pre-2021 (BTC, ETH, BCH, XRP, LTC, TRX, ETC, LINK, XLM, ADA, XMR, DASH, ZEC, XTZ, BNB, ATOM, ONT, IOTA, BAT, VET, NEO, QTUM, IOST, THETA, ALGO, ZIL, KNC, ZRX, COMP, DOGE, KAVA, BAND, RLC, SNX, DOT, YFI, CRV, TRB, RUNE, SUSHI, EGLD, SOL, ICX, STORJ, UNI, AVAX, ENJ, KSM, NEAR, AAVE, FIL, RSR, BEL, AXS, SKL, GRT) + 20 post-2021 (SAND, MANA, HBAR, MATIC, ICP, DYDX, GALA, IMX, GMT, APE, INJ, LDO, APT, ARB, SUI, PENDLE, SEI, TIA, JUP, PEPE)
+- **Stocks (44):** Mega-cap (AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, JPM, UNH, HD, MA, ABBV, V, AMD, NFLX, BA, XOM, CRM, LLY, DIS) + Growth (PLTR, ROKU, SHOP) + Short-interest (BYND, GME) + Cyclicals (CAT, DE, X) + Energy (OXY, FANG) + Biotech (REGN, VRTX, GILD, BIIB) + REITs (SPG, O) + Financial (GS) + ETFs (SPY, QQQ, IWM, XLE, XLF)
 
-### Known Port Gaps (worker vs iOS)
+### Worker/iOS Feature Parity
 
-After the port audit in 2026-04, iOS/worker raw agreement is within ~30bp on BTC. Remaining known gaps in `scoring-full.ts` that the worker approximates differently from iOS (training source of truth):
+After the 2026-04-16 port audit + scoring port, most features are synced:
 
-- `tfAlignment` — worker depends on its own scoring.ts (simpler formula) so underlying dailyScore/fourHScore differ from iOS's ScoringFunction.swift
-- `dStructBull/Bear` — worker uses EMA stack as proxy; iOS uses `MarketStructure.analyze` (HH/HL/LL/LH swing detection)
+**Fixed:** ADX (Wilder smoothing), ATR (Wilder + 4H source), BB bandwidth (×100), atrPercent (4H), volume profile ATR normalization (4H), ethBtcDelta6 (1-bar), ScoringFunction ported faithfully to TypeScript (`computeScore` in `scoring-full.ts` matches iOS's `ScoringFunction.score()`), score-derived features removed (no longer a divergence source).
+
+**Remaining minor gaps:**
+- `dStructBull/Bear` — both sides use EMA stack as proxy (consistent approximation; iOS's MarketStructure.analyze not ported but both sides approximate the same way)
 - `oiSignal` — worker has no prev-OI state tracking (`oiChangePct=0` always)
 - `hAboveVwap` — VWAP session-anchoring differs subtly
 - Volume profile POC/VA binning has small residual differences
-
-These drift the worker's per-symbol raw value ~30bp from iOS but land in the same calibration bucket for the common high-confidence regime, so the calibrated output typically matches.
 
 ## Known Remaining Issues (Low Severity)
 

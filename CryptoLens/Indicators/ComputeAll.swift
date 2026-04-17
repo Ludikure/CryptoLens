@@ -33,7 +33,11 @@ enum IndicatorEngine {
         let lows = candles.map(\.low)
         let opens = candles.map(\.open)
         let volumes = candles.map(\.volume)
+        // `current` is the last closed close — used for all indicator math (atrPercent, VP distance,
+        // stops) so the values stay stable between refreshes. `displayPrice` is the live tick (if the
+        // in-progress candle is present), shown in the UI so the user always sees the real market price.
         let current = closes.last ?? 0
+        let displayPrice = rawCandles.last?.close ?? current
 
         // Common indicators (compute series once, derive scalar from last value)
         let rsiSeries = RSI.computeSeries(closes: closes)
@@ -279,7 +283,7 @@ enum IndicatorEngine {
         var result = IndicatorResult(
             timeframe: timeframe,
             label: label,
-            price: current,
+            price: displayPrice,
             rsi: rsi,
             stochRSI: stochRSIFull.result,
             macd: macd,

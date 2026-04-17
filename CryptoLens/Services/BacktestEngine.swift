@@ -523,8 +523,6 @@ class BacktestEngine: ObservableObject {
                         if dSBr && hSBr { return -1 }
                         return 0
                     }(),
-                    scoreSum: dailyResult.biasScore + fourHResult.biasScore + oneHResult.biasScore,
-                    scoreDivergence: abs(dailyResult.biasScore - fourHResult.biasScore),
                     // Temporal
                     dayOfWeek: Calendar.current.component(.weekday, from: evalTime) - 1, // 0=Sun..6=Sat
                     barsSinceRegimeChange: min(barsSinceRegimeChange, 100), // cap at 100
@@ -673,7 +671,7 @@ class BacktestEngine: ObservableObject {
                         guard !isCrypto else { return true }
                         let h = Calendar.current.component(.hour, from: evalTime)
                         return h >= 9 && h < 16
-                    }()
+                    }(),
                 )
 
                 // Update 1-bar delta tracking for acceleration
@@ -762,11 +760,48 @@ class BacktestEngine: ObservableObject {
     @Published var batchProgress: String = ""
     @Published var batchComplete = false
 
-    static let cryptoSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "ADAUSDT",
-                                "LINKUSDT", "AVAXUSDT", "DOTUSDT", "NEARUSDT"]
-    static let stockSymbols = ["AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META",
-                                "AMZN", "JPM", "UNH", "HD", "MA", "ABBV",
-                                "V", "AMD", "NFLX", "BA", "XOM", "CRM", "LLY", "DIS"]
+    static let cryptoSymbols = [
+        // Pre-2021 (4-5 years of data covering crash/bull/bear/recovery)
+        "BTCUSDT", "ETHUSDT", "BCHUSDT", "XRPUSDT", "LTCUSDT", "TRXUSDT",
+        "ETCUSDT", "LINKUSDT", "XLMUSDT", "ADAUSDT", "XMRUSDT", "DASHUSDT",
+        "ZECUSDT", "XTZUSDT", "BNBUSDT", "ATOMUSDT", "ONTUSDT", "IOTAUSDT",
+        "BATUSDT", "VETUSDT", "NEOUSDT", "QTUMUSDT", "IOSTUSDT", "THETAUSDT",
+        "ALGOUSDT", "ZILUSDT", "KNCUSDT", "ZRXUSDT", "COMPUSDT", "DOGEUSDT",
+        "KAVAUSDT", "BANDUSDT", "RLCUSDT", "SNXUSDT", "DOTUSDT", "YFIUSDT",
+        "CRVUSDT", "TRBUSDT", "RUNEUSDT", "SUSHIUSDT", "EGLDUSDT", "SOLUSDT",
+        "ICXUSDT", "STORJUSDT", "UNIUSDT", "AVAXUSDT", "ENJUSDT", "KSMUSDT",
+        "NEARUSDT", "AAVEUSDT", "FILUSDT", "RSRUSDT", "BELUSDT", "AXSUSDT",
+        "SKLUSDT", "GRTUSDT",
+        // Post-2021 (high-profile, sufficient history)
+        "SANDUSDT", "MANAUSDT", "HBARUSDT", "MATICUSDT",
+        "ICPUSDT", "DYDXUSDT", "GALAUSDT",
+        "IMXUSDT", "GMTUSDT", "APEUSDT",
+        "INJUSDT", "LDOUSDT", "APTUSDT",
+        "ARBUSDT", "SUIUSDT", "PENDLEUSDT", "SEIUSDT",
+        "TIAUSDT", "JUPUSDT", "PEPEUSDT",
+    ]
+    static let stockSymbols = [
+        // Mega-cap
+        "AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "JPM",
+        "UNH", "HD", "MA", "ABBV", "V", "AMD", "NFLX", "BA", "XOM",
+        "CRM", "LLY", "DIS",
+        // High-beta growth
+        "PLTR", "ROKU", "SHOP",
+        // High short-interest
+        "BYND", "GME",
+        // Cyclical industrials
+        "CAT", "DE", "X",
+        // Energy
+        "OXY", "FANG",
+        // Biotech (catalyst-driven)
+        "REGN", "VRTX", "GILD", "BIIB",
+        // REITs (rate-driven)
+        "SPG", "O",
+        // Financial
+        "GS",
+        // ETFs (no earnings — different regime)
+        "SPY", "QQQ", "IWM", "XLE", "XLF",
+    ]
     static let allSymbols = stockSymbols + cryptoSymbols
 
     /// Crypto start date: Jan 1 2020 (derivatives data begins ~2020 on Binance).
@@ -894,7 +929,6 @@ class BacktestEngine: ObservableObject {
             "atrPercent", "isCrypto",
             // ML features — Cross-timeframe interactions
             "tfAlignment", "momentumAlignment", "structureAlignment",
-            "scoreSum", "scoreDivergence",
             // ML features — Temporal
             "dayOfWeek", "barsSinceRegimeChange", "regimeCode",
             // ML features — Rate-of-change
@@ -905,6 +939,7 @@ class BacktestEngine: ObservableObject {
             "fiftyTwoWeekPct", "distToFiftyTwoHigh",
             "gapPercent", "gapFilled", "gapDirectionAligned",
             "relStrengthVsSpy", "beta", "vixLevelCode", "isMarketHours",
+            // ML features — Earnings calendar
             // ML features — Volume profile
             "vpDistToPocATR", "vpAbovePoc", "vpVAWidth", "vpInValueArea",
             "vpDistToVAH_ATR", "vpDistToVAL_ATR",
@@ -1007,8 +1042,6 @@ class BacktestEngine: ObservableObject {
                 "\(f?.tfAlignment ?? 0)",
                 "\(f?.momentumAlignment ?? 0)",
                 "\(f?.structureAlignment ?? 0)",
-                "\(f?.scoreSum ?? 0)",
-                "\(f?.scoreDivergence ?? 0)",
                 // Temporal
                 "\(f?.dayOfWeek ?? 0)",
                 "\(f?.barsSinceRegimeChange ?? 0)",
