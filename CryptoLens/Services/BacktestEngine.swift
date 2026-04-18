@@ -1123,23 +1123,6 @@ class BacktestEngine: ObservableObject {
                 "\(f?.fearGreedZone ?? 0)",
                 String(format: "%.6f", f?.ethBtcRatio ?? 0),
                 String(format: "%.4f", f?.ethBtcDelta6 ?? 0),
-                // Volume profile
-                String(format: "%.4f", f?.vpDistToPocATR ?? 0),
-                "\(f?.vpAbovePoc == true ? 1 : 0)",
-                String(format: "%.4f", f?.vpVAWidth ?? 0),
-                "\(f?.vpInValueArea == true ? 1 : 0)",
-                String(format: "%.4f", f?.vpDistToVAH_ATR ?? 0),
-                String(format: "%.4f", f?.vpDistToVAL_ATR ?? 0),
-                // 1-bar deltas + acceleration
-                String(format: "%.4f", f?.hRsiDelta1 ?? 0),
-                String(format: "%.6f", f?.hMacdHistDelta1 ?? 0),
-                String(format: "%.4f", f?.dRsiDelta1 ?? 0),
-                String(format: "%.4f", f?.hRsiAccel ?? 0),
-                String(format: "%.6f", f?.hMacdAccel ?? 0),
-                String(format: "%.4f", f?.dAdxAccel ?? 0),
-                // Time-of-day
-                "\(f?.hourBucket ?? 0)",
-                "\(f?.isWeekend == true ? 1 : 0)",
                 // Stock features
                 String(format: "%.2f", f?.fiftyTwoWeekPct ?? 50),
                 String(format: "%.4f", f?.distToFiftyTwoHigh ?? 0),
@@ -1157,6 +1140,23 @@ class BacktestEngine: ObservableObject {
                 String(format: "%.4f", f?.oiPriceInteraction ?? 0),
                 String(format: "%.6f", f?.fundingSlope ?? 0),
                 String(format: "%.4f", f?.bodyWickRatio ?? 0.5),
+                // Volume profile
+                String(format: "%.4f", f?.vpDistToPocATR ?? 0),
+                "\(f?.vpAbovePoc == true ? 1 : 0)",
+                String(format: "%.4f", f?.vpVAWidth ?? 0),
+                "\(f?.vpInValueArea == true ? 1 : 0)",
+                String(format: "%.4f", f?.vpDistToVAH_ATR ?? 0),
+                String(format: "%.4f", f?.vpDistToVAL_ATR ?? 0),
+                // 1-bar deltas + acceleration
+                String(format: "%.4f", f?.hRsiDelta1 ?? 0),
+                String(format: "%.6f", f?.hMacdHistDelta1 ?? 0),
+                String(format: "%.4f", f?.dRsiDelta1 ?? 0),
+                String(format: "%.4f", f?.hRsiAccel ?? 0),
+                String(format: "%.6f", f?.hMacdAccel ?? 0),
+                String(format: "%.4f", f?.dAdxAccel ?? 0),
+                // Time-of-day
+                "\(f?.hourBucket ?? 0)",
+                "\(f?.isWeekend == true ? 1 : 0)",
                 // Trade outcome
                 outcome, String(format: "%.4f", pnl), "\(bars)",
                 String(format: "%.4f", maxFav), String(format: "%.4f", maxAdv),

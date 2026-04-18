@@ -51,6 +51,7 @@
 		471CE5CDEF743E4519BED335 /* StockSentiment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AE84F39420DD84DD31D5AD2 /* StockSentiment.swift */; };
 		47D438CE90710F3741D9FA74 /* PriceAlert.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7202C20B67FFB645DBDABA14 /* PriceAlert.swift */; };
 		49248B7514292C369167B8DB /* Candle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 049DFBBCC9A22BB296B0D816 /* Candle.swift */; };
+		4954BEB815CD43297C32047B /* dark_pool_history.json in Resources */ = {isa = PBXBuildFile; fileRef = 2E0C76F764DF28200D232422 /* dark_pool_history.json */; };
 		4F88BD36B63AF59B583C0C72 /* CrossAssetContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9412F953130DE07CB5684628 /* CrossAssetContext.swift */; };
 		50ACB2B9121558062213C207 /* EconomicCalendarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8165A07DFF6E9010BBFA1091 /* EconomicCalendarService.swift */; };
 		52D9347C7ADB28DF90D6E1E3 /* InfoTooltip.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE089BD3A094D186E3B2F2F /* InfoTooltip.swift */; };
@@ -182,6 +183,7 @@
 		269A7170910D8B8931CD2333 /* MarketScopeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketScopeWidget.swift; sourceTree = "<group>"; };
 		29ADC5116EA585594CD2E515 /* CoinInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinInfo.swift; sourceTree = "<group>"; };
 		2BDD8D7D8E1CE4C82A4E3CDF /* MarketStructure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketStructure.swift; sourceTree = "<group>"; };
+		2E0C76F764DF28200D232422 /* dark_pool_history.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = dark_pool_history.json; sourceTree = "<group>"; };
 		2F38502C13543C7C5271A47D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		303EF4C61079D31610E22F9C /* Tooltips.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tooltips.swift; sourceTree = "<group>"; };
 		312DE29A86DEB38F755C0596 /* VolumeProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeProfile.swift; sourceTree = "<group>"; };
@@ -303,6 +305,7 @@
 			isa = PBXGroup;
 			children = (
 				2F38502C13543C7C5271A47D /* Assets.xcassets */,
+				2E0C76F764DF28200D232422 /* dark_pool_history.json */,
 				CCFC097BC3FB8E0896B3124E /* earnings_history.json */,
 			);
 			path = Resources;
@@ -615,6 +618,7 @@
 			files = (
 				C317573E9EB9CEF6C0FBBF55 /* Assets.xcassets in Resources */,
 				83EDB93987BCB93AB298D2FD /* crypto_calibration.json in Resources */,
+				4954BEB815CD43297C32047B /* dark_pool_history.json in Resources */,
 				A9E54069F13E82A67E316153 /* earnings_history.json in Resources */,
 				AC62B5F303E538AFBAF11C45 /* stock_calibration.json in Resources */,
 			);
