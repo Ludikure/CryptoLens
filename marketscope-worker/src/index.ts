@@ -1302,13 +1302,21 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   const ML_THRESHOLD = 0.70; // top-bucket only — [0.70, 0.85) had 73.1% actual win rate in WF validation
   // Notifications fire only at these hours in USER LOCAL TIME, and at most once per (device, symbol)
   // in the 5h cooldown window (covers the 6h gap between adjacent target hours).
-  const NOTIFY_COOLDOWN_SEC = 5 * 60 * 60;
-  const NOTIFY_HOURS = [9, 15, 21];  // 9am, 3pm, 9pm
-  const NOTIFY_TZ = 'America/New_York'; // change if user is in a different timezone
-  const userHour = Number(new Date().toLocaleString('en-US', {
+  const NOTIFY_COOLDOWN_SEC = 3.5 * 60 * 60;
+  const CRYPTO_NOTIFY_HOURS = [8, 12, 16, 20];  // 8am, 12pm, 4pm, 8pm + 11:30pm (handled separately)
+  const STOCK_NOTIFY_HOURS = [8, 12, 16];            // 8am, 12pm, 4pm
+  const NOTIFY_TZ = 'America/New_York';
+  const now = new Date();
+  const userHour = Number(now.toLocaleString('en-US', {
     timeZone: NOTIFY_TZ, hour: '2-digit', hour12: false,
   }));
-  const inNotifyWindow = NOTIFY_HOURS.includes(userHour);
+  const userDay = Number(now.toLocaleString('en-US', {
+    timeZone: NOTIFY_TZ, weekday: 'short',
+  }).charAt(0) === 'S' ? 0 : 1); // 0 = weekend, 1 = weekday
+  const isWeekday = !['Sat', 'Sun'].includes(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, weekday: 'short' }));
+  const userMinute = Number(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, minute: '2-digit' }));
+  const inCryptoNotifyWindow = CRYPTO_NOTIFY_HOURS.includes(userHour) || (userHour === 23 && userMinute >= 30 && userMinute <= 31);
+  const inStockNotifyWindow = STOCK_NOTIFY_HOURS.includes(userHour) && isWeekday;
 
   // Fetch Fear & Greed index (global, once per cron run)
   let fearGreedIndex = 50, fearGreedZone = 0;
@@ -1689,10 +1697,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
       newProbs[symbol] = mlProb;
 
-      // ML quality gate — fire only at 9am/3pm/9pm user-local AND when ML >= threshold AND
-      // we haven't notified for this (device, symbol) in the cooldown window.
+      // ML quality gate — fire at scheduled hours AND when ML >= threshold AND cooldown passed.
       const inWatchlist = config.symbols.includes(symbol);
-      if (inWatchlist && inNotifyWindow && mlProb >= ML_THRESHOLD) {
+      const inWindow = isCrypto ? inCryptoNotifyWindow : inStockNotifyWindow;
+      if (inWatchlist && inWindow && mlProb >= ML_THRESHOLD) {
         const cooldownKey = `notif:${deviceId}:${symbol}`;
         const lastFired = await env.ALERTS.get(cooldownKey);
         if (!lastFired) {

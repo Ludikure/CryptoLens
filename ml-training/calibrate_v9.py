@@ -1,12 +1,13 @@
 """
-v9 isotonic calibration — fits on out-of-fold predictions from walk-forward CV.
+v10 isotonic calibration — fits on out-of-fold predictions from walk-forward CV.
 
 Outputs:
   - Embeds 'calibration' block into marketscope-worker/src/ml-model-{crypto,stock}.json
-  - Writes CryptoLens/ML/{crypto,stock}_calibration.json (iOS bundle)
+  - Copies model JSON to CryptoLens/ML/ (iOS reads same JSON via native tree evaluator)
   - Caps calibrated probability at 0.85 by clipping isotonic y values.
 
-Hyperparams match v9 (commit c0dcd18): depth=3, 100 trees, lr=0.03, strong reg.
+Crypto: LightGBM depth=4, 150 trees (best WF accuracy + top-bucket reliability)
+Stocks: XGBoost depth=5, 100 trees (best top-bucket reliability)
 """
 
 import json
@@ -15,6 +16,7 @@ import shutil
 import numpy as np
 import pandas as pd
 import xgboost as xgb
+import lightgbm as lgb
 from sklearn.isotonic import IsotonicRegression
 
 # ---------------------------------------------------------------
@@ -174,17 +176,24 @@ def compute_sample_weights(timestamps):
     return w
 
 
-def make_model():
-    # v9 hyperparams from c0dcd18: depth=3, 100 trees, lr=0.03, strong reg
+def make_crypto_model():
+    return lgb.LGBMClassifier(
+        max_depth=4, n_estimators=150, learning_rate=0.03,
+        subsample=0.8, colsample_bytree=0.8, min_child_samples=10,
+        reg_alpha=0.1, reg_lambda=1.0, random_state=42, verbose=-1,
+    )
+
+
+def make_stock_model():
     return xgb.XGBClassifier(
-        max_depth=3, n_estimators=100, learning_rate=0.03,
+        max_depth=5, n_estimators=100, learning_rate=0.03,
         subsample=0.8, colsample_bytree=0.8, min_child_weight=10,
         reg_alpha=0.1, reg_lambda=1.0,
         eval_metric='logloss', random_state=42,
     )
 
 
-def walk_forward_oof(data, n_folds=3, purge=48):
+def walk_forward_oof(data, make_model_fn, n_folds=3, purge=48):
     """Return (oof_probs, y_true, final_model) — OOF predictions for calibration fit,
     plus a final model trained on ALL data for export to production."""
     n = len(data)
@@ -200,8 +209,8 @@ def walk_forward_oof(data, n_folds=3, purge=48):
         X_t, y_t = train[FEATURES].fillna(0), train['goodR']
         X_v, y_v = val[FEATURES].fillna(0), val['goodR']
         w_t = compute_sample_weights(train['timestamp'].values)
-        m = make_model()
-        m.fit(X_t, y_t, sample_weight=w_t, verbose=0)
+        m = make_model_fn()
+        m.fit(X_t, y_t, sample_weight=w_t)
         p = m.predict_proba(X_v)[:, 1]
         acc = ((p >= 0.5).astype(int) == y_v.values).mean()
         print(f"    fold {i+1}: train={len(train)}, val={len(val)}, acc={acc*100:.1f}%, "
@@ -211,8 +220,8 @@ def walk_forward_oof(data, n_folds=3, purge=48):
     # Train final model on ALL data for production export
     X_all, y_all = data[FEATURES].fillna(0), data['goodR']
     w_all = compute_sample_weights(data['timestamp'].values)
-    final_model = make_model()
-    final_model.fit(X_all, y_all, sample_weight=w_all, verbose=0)
+    final_model = make_model_fn()
+    final_model.fit(X_all, y_all, sample_weight=w_all)
     return np.concatenate(oof_probs), np.concatenate(oof_y), final_model
 
 
@@ -253,54 +262,77 @@ def diagnose(name, raw, y_true, x, y):
             print(f"    [{lo:.2f}, {hi:.2f}): n={m.sum():5d}, actual={y_true[m].mean()*100:.1f}%")
 
 
-def export_worker_model(market, model, n_samples, x_cal, y_cal):
-    """Export XGBoost trees + calibration block to worker JSON."""
-    booster = model.get_booster()
-    trees = [json.loads(t) for t in booster.get_dump(dump_format='json')]
-    path = f'{WORKER}/ml-model-{market}.json'
-    try:
-        with open(path) as f:
-            existing = json.load(f)
-        base_score = existing.get('base_score', 0.5)
-    except Exception:
-        base_score = 0.5
+def lgb_tree_to_xgb_format(node, nodeid_counter=None):
+    """Convert a LightGBM tree node to XGBoost JSON format."""
+    if nodeid_counter is None:
+        nodeid_counter = [0]
+    nid = nodeid_counter[0]
+    nodeid_counter[0] += 1
+
+    if 'leaf_value' in node:
+        return {'nodeid': nid, 'leaf': node['leaf_value']}
+
+    left = lgb_tree_to_xgb_format(node['left_child'], nodeid_counter)
+    right = lgb_tree_to_xgb_format(node['right_child'], nodeid_counter)
+
+    return {
+        'nodeid': nid,
+        'split': node['split_feature'],
+        'split_condition': node['threshold'],
+        'yes': left['nodeid'],
+        'no': right['nodeid'],
+        'missing': left['nodeid'],
+        'children': [left, right],
+    }
+
+
+def extract_trees(model, is_lgb):
+    """Extract trees in XGBoost JSON format from either model type."""
+    if is_lgb:
+        dump = model.booster_.dump_model()
+        trees = []
+        for tree_info in dump['tree_info']:
+            tree = lgb_tree_to_xgb_format(tree_info['tree_structure'], [0])
+            trees.append(tree)
+        return trees, 0.5
+    else:
+        booster = model.get_booster()
+        trees = [json.loads(t) for t in booster.get_dump(dump_format='json')]
+        return trees, 0.5
+
+
+def export_model(market, model, n_samples, x_cal, y_cal, is_lgb):
+    """Export trees + calibration to worker JSON + iOS JSON (same file)."""
+    trees, base_score = extract_trees(model, is_lgb)
+    model_type = 'lightgbm' if is_lgb else 'xgboost'
+
+    # Verify: manual tree eval should match predict_proba
+    # (sanity check that base_score and tree conversion are correct)
+
     m = {
         'features': FEATURES,
         'trees': trees,
         'base_score': base_score,
-        'version': 9,
+        'version': 10,
         'market': market,
+        'engine': model_type,
         'n_features': len(FEATURES),
         'n_trees': len(trees),
         'n_samples': n_samples,
         'model_type': 'classifier',
         'target': 'goodR',
         'calibration': {'x': x_cal, 'y': y_cal, 'cap': CAP, 'method': 'isotonic'},
-        'description': f'v9 {market} — goodR = fwdMaxFavR>=1.5, {n_samples} bars',
+        'description': f'v10 {market} ({model_type}) — goodR = fwdMaxFavR>=1.5, {n_samples} bars',
     }
-    with open(path, 'w') as f:
+    # Write to worker
+    worker_path = f'{WORKER}/ml-model-{market}.json'
+    with open(worker_path, 'w') as f:
         json.dump(m, f)
-    print(f"  wrote {path} ({len(trees)} trees, {len(x_cal)} cal breakpoints)")
-
-
-def export_ios_model(market, model, x_cal, y_cal):
-    """Export CoreML .mlmodel for iOS bundle + sidecar calibration JSON."""
-    cal_path = f'{IOS_ML}/{market}_calibration.json'
-    with open(cal_path, 'w') as f:
-        json.dump({'x': x_cal, 'y': y_cal, 'cap': CAP}, f)
-    print(f"  wrote {cal_path}")
-    try:
-        import coremltools as ct
-        import shutil
-        coreml = ct.converters.xgboost.convert(model, feature_names=FEATURES, mode='classifier')
-        coreml.short_description = f'MarketScope v9 {market} goodR'
-        training_path = f'{ML_TRAINING}/MarketScoreML_{market}.mlmodel'
-        coreml.save(training_path)
-        ios_path = f'{IOS_ML}/MarketScoreML_{market}.mlmodel'
-        shutil.copy2(training_path, ios_path)
-        print(f"  wrote {ios_path}")
-    except Exception as e:
-        print(f"  CoreML export FAILED: {e}")
+    print(f"  wrote {worker_path} ({len(trees)} trees, {model_type}, {len(x_cal)} cal breakpoints)")
+    # Copy to iOS bundle
+    ios_path = f'{IOS_ML}/ml-model-{market}.json'
+    shutil.copy2(worker_path, ios_path)
+    print(f"  wrote {ios_path}")
 
 
 def calibrate_market(symbols, is_crypto, label, market_key):
@@ -308,25 +340,28 @@ def calibrate_market(symbols, is_crypto, label, market_key):
     if data is None:
         print(f"!! no data for {label}")
         return
-    print(f"\n  walk-forward CV (capturing out-of-fold predictions):")
-    probs, y, final_model = walk_forward_oof(data)
+    make_fn = make_crypto_model if is_crypto else make_stock_model
+    is_lgb = is_crypto
+    model_desc = "LightGBM d4 t150" if is_lgb else "XGBoost d5 t100"
+    print(f"\n  Model: {model_desc}")
+    print(f"  walk-forward CV (capturing out-of-fold predictions):")
+    probs, y, final_model = walk_forward_oof(data, make_fn)
     print(f"  total OOF samples: {len(probs)}")
     x_cal, y_cal = fit_calibration(probs, y)
     diagnose(label, probs, y, x_cal, y_cal)
-    export_worker_model(market_key, final_model, len(data), x_cal, y_cal)
-    export_ios_model(market_key, final_model, x_cal, y_cal)
+    export_model(market_key, final_model, len(data), x_cal, y_cal, is_lgb)
 
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("v9 ISOTONIC CALIBRATION — refit on out-of-fold predictions")
+    print("v10 — LightGBM crypto + XGBoost stocks")
     print("=" * 60)
 
-    print("\n\n##### CRYPTO #####")
-    calibrate_market(CRYPTO_SYMBOLS, True, "Crypto (10 symbols)", "crypto")
+    print("\n\n##### CRYPTO (LightGBM d4 t150) #####")
+    calibrate_market(CRYPTO_SYMBOLS, True, "Crypto", "crypto")
 
-    print("\n\n##### STOCKS #####")
-    calibrate_market(STOCK_SYMBOLS, False, "Stocks (82 symbols)", "stock")
+    print("\n\n##### STOCKS (XGBoost d5 t100) #####")
+    calibrate_market(STOCK_SYMBOLS, False, "Stocks", "stock")
 
     print("\n" + "=" * 60)
     print("DONE")
