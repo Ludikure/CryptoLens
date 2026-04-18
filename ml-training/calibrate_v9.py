@@ -262,7 +262,7 @@ def diagnose(name, raw, y_true, x, y):
             print(f"    [{lo:.2f}, {hi:.2f}): n={m.sum():5d}, actual={y_true[m].mean()*100:.1f}%")
 
 
-def lgb_tree_to_xgb_format(node, nodeid_counter=None):
+def lgb_tree_to_xgb_format(node, feature_names, nodeid_counter=None):
     """Convert a LightGBM tree node to XGBoost JSON format."""
     if nodeid_counter is None:
         nodeid_counter = [0]
@@ -272,12 +272,15 @@ def lgb_tree_to_xgb_format(node, nodeid_counter=None):
     if 'leaf_value' in node:
         return {'nodeid': nid, 'leaf': node['leaf_value']}
 
-    left = lgb_tree_to_xgb_format(node['left_child'], nodeid_counter)
-    right = lgb_tree_to_xgb_format(node['right_child'], nodeid_counter)
+    left = lgb_tree_to_xgb_format(node['left_child'], feature_names, nodeid_counter)
+    right = lgb_tree_to_xgb_format(node['right_child'], feature_names, nodeid_counter)
+
+    feat_idx = node['split_feature']
+    feat_name = feature_names[feat_idx] if isinstance(feat_idx, int) else feat_idx
 
     return {
         'nodeid': nid,
-        'split': node['split_feature'],
+        'split': feat_name,
         'split_condition': node['threshold'],
         'yes': left['nodeid'],
         'no': right['nodeid'],
@@ -290,9 +293,10 @@ def extract_trees(model, is_lgb):
     """Extract trees in XGBoost JSON format from either model type."""
     if is_lgb:
         dump = model.booster_.dump_model()
+        feature_names = dump.get('feature_names', FEATURES)
         trees = []
         for tree_info in dump['tree_info']:
-            tree = lgb_tree_to_xgb_format(tree_info['tree_structure'], [0])
+            tree = lgb_tree_to_xgb_format(tree_info['tree_structure'], feature_names, [0])
             trees.append(tree)
         return trees, 0.5
     else:
