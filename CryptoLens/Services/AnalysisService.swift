@@ -257,7 +257,7 @@ class AnalysisService: ObservableObject {
         error = nil
 
         do {
-            let (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market)
+            let (tf1, tf2, tf3, fullDailyCandles) = try await fetchAndCompute(symbol: symbol, market: market)
             if market == .crypto { ConnectionStatus.shared.binance = .ok }
             else { ConnectionStatus.shared.yahooFinance = .ok }
             // Determine if enrichment (slow-changing data) needs refresh
@@ -518,7 +518,7 @@ class AnalysisService: ObservableObject {
                dRsiDelta1: _dRsiDelta1,
                hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel,
                basisPct: _basisPct,
-               spyCandles: spyDailyCandles, dailyCandles: tf1.candles,
+               spyCandles: spyDailyCandles, dailyCandles: fullDailyCandles,
                darkPool: _darkPool,
                oiPriceInteraction: _oiPriceInteraction, fundingSlope: _fundingSlope,
                bodyWickRatio: _bodyWickRatio)
@@ -652,7 +652,7 @@ class AnalysisService: ObservableObject {
                 crossAsset = nil
             }
 
-            var (tf1, tf2, tf3) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
+            var (tf1, tf2, tf3, fullDailyCandles2) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
 
             // ML win probability for the AI prompt — use same snapshot as refresh path
             let prevFG = resultsBySymbol[symbol]?.fearGreed?.value
@@ -676,7 +676,7 @@ class AnalysisService: ObservableObject {
                hMacdAccel: snap2.map { ((tf2.macd?.histogram ?? 0) - $0.hMacdHist) - $0.hMacdD1 } ?? 0,
                dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0,
                basisPct: _basisPct2,
-               spyCandles: spyDailyCandles, dailyCandles: tf1.candles,
+               spyCandles: spyDailyCandles, dailyCandles: fullDailyCandles2,
                darkPool: market == .stock ? await fetchDarkPool(symbol: symbol) : nil,
                oiPriceInteraction: {
                    guard market == .crypto, let d = earlyDerivData else { return 0.0 }
@@ -1279,7 +1279,7 @@ class AnalysisService: ObservableObject {
 
     // MARK: - Fetch + compute for any market
 
-    private func fetchAndCompute(symbol: String, market: Market, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesData? = nil) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult) {
+    private func fetchAndCompute(symbol: String, market: Market, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesData? = nil) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult, [Candle]) {
         let tfs = market.timeframes
 
         switch market {
@@ -1293,20 +1293,21 @@ class AnalysisService: ObservableObject {
                 let candles4H = try await c2
                 let priceRising = candles4H.count >= 2 && (candles4H.last?.close ?? 0) > candles4H[candles4H.count - 2].close
                 derivCtx = DerivativesContext.from(data: d, priceRising: priceRising)
-                let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset, derivatives: derivCtx)
+                let dailyCandles = try await c1
+                let r1 = IndicatorEngine.computeAll(candles: dailyCandles, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset, derivatives: derivCtx)
                 let r2 = IndicatorEngine.computeAll(candles: candles4H, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
                 let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
-                return (r1, r2, r3)
+                return (r1, r2, r3, dailyCandles)
             }
-            let r1 = IndicatorEngine.computeAll(candles: try await c1, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset)
+            let dailyCandles = try await c1
+            let r1 = IndicatorEngine.computeAll(candles: dailyCandles, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset)
             let r2 = IndicatorEngine.computeAll(candles: try await c2, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
             let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
-            return (r1, r2, r3)
+            return (r1, r2, r3, dailyCandles)
 
         case .stock:
-            // Yahoo primary (unlimited). 4H aggregated from 1H candles.
             async let c1 = yahoo.fetchCandles(symbol: symbol, interval: tfs[0].interval)
-            async let c1h = yahoo.fetchCandles(symbol: symbol, interval: "1h")  // For 4H aggregation
+            async let c1h = yahoo.fetchCandles(symbol: symbol, interval: "1h")
             async let c3 = yahoo.fetchCandles(symbol: symbol, interval: tfs[2].interval)
             let daily = try await c1
             let hourly = try await c1h
@@ -1318,7 +1319,7 @@ class AnalysisService: ObservableObject {
             let r1 = IndicatorEngine.computeAll(candles: daily, timeframe: tfs[0].interval, label: tfs[0].label, market: market)
             let r2 = IndicatorEngine.computeAll(candles: fourH, timeframe: "4h", label: "4H (Bias)", market: market)
             let r3 = IndicatorEngine.computeAll(candles: entry, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
-            return (r1, r2, r3)
+            return (r1, r2, r3, daily)
         }
     }
 

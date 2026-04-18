@@ -1515,6 +1515,51 @@ async function checkDeviceScores(env: Env, deviceId: string) {
             }
           } catch {}
         }
+      } else {
+        // Stock: fetch 1H from Yahoo, aggregate to 4H
+        const cacheKey1H = `candles:${symbol}:1h`;
+        const cached1H = await env.ALERTS.get(cacheKey1H);
+        if (cached1H) {
+          oneHCandles = JSON.parse(cached1H);
+        } else {
+          try {
+            const resp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1h&range=6mo`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+            if (resp.ok) {
+              const data = await resp.json() as any;
+              const r = data?.chart?.result?.[0];
+              if (r?.timestamp) {
+                const ts = r.timestamp;
+                const q = r.indicators.quote[0];
+                const parsed: FullCandle[] = [];
+                for (let i = 0; i < ts.length; i++) {
+                  if (q.open?.[i] != null && q.close?.[i] != null) {
+                    parsed.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
+                  }
+                }
+                oneHCandles = dropInProgress(parsed, '1h');
+                await env.ALERTS.put(cacheKey1H, JSON.stringify(oneHCandles), { expirationTtl: 300 });
+              }
+            }
+          } catch {}
+        }
+        // Aggregate 1H → 4H
+        if (oneHCandles.length > 0) {
+          const grouped: Record<number, FullCandle[]> = {};
+          for (const c of oneHCandles) {
+            const bucket = Math.floor(c.time / (4 * 3600 * 1000)) * (4 * 3600 * 1000);
+            if (!grouped[bucket]) grouped[bucket] = [];
+            grouped[bucket].push(c);
+          }
+          fourHCandles = Object.keys(grouped).sort().map(k => {
+            const bars = grouped[+k];
+            return {
+              time: +k, open: bars[0].open, high: Math.max(...bars.map(b => b.high)),
+              low: Math.min(...bars.map(b => b.low)), close: bars[bars.length - 1].close,
+              volume: bars.reduce((s, b) => s + b.volume, 0),
+            };
+          });
+          fourHCandles = dropInProgress(fourHCandles, '4h');
+        }
       }
 
       // Fetch live derivatives for crypto (funding + top trader + taker + OI + basis)
@@ -1713,7 +1758,7 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
     return dropInProgress(candles, '1d');
   } else {
     const resp = await fetch(
-      `${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=2y`,
+      `${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=1y`,
       { headers: { 'User-Agent': 'Mozilla/5.0' } }
     );
     if (!resp.ok) return [];

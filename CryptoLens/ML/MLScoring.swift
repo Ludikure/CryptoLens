@@ -1,47 +1,103 @@
-import CoreML
+import Foundation
 
-/// ML scoring using v9 dual XGBoost models. Returns a single calibrated goodR probability
-/// (direction-agnostic "will there be a >=1.5 ATR favorable move within 24H"). The LLM
-/// determines direction from candles and indicators.
+/// ML scoring using native XGBoost tree evaluation — same JSON format as the worker.
+/// Reads ml-model-{crypto,stock}.json (trees + embedded calibration).
+/// Replaces CoreML to eliminate conversion loss and ensure iOS/worker parity.
 enum MLScoring {
-    private static let cryptoModel: MLModel? = loadModel("MarketScoreML_crypto")
-    private static let stockModel: MLModel?  = loadModel("MarketScoreML_stock")
+    private static let cryptoModel = loadModel("ml-model-crypto")
+    private static let stockModel  = loadModel("ml-model-stock")
 
-    private static func loadModel(_ name: String) -> MLModel? {
-        guard let url = Bundle.main.url(forResource: name, withExtension: "mlmodelc") else {
+    private struct TreeModel {
+        let trees: [TreeNode]
+        let baseScore: Double
+        let calibrationX: [Double]
+        let calibrationY: [Double]
+        let cap: Double
+    }
+
+    private struct TreeNode {
+        let nodeid: Int
+        let split: String?
+        let splitCondition: Double?
+        let yes: Int?
+        let no: Int?
+        let leaf: Double?
+        let children: [TreeNode]
+    }
+
+    private static func loadModel(_ name: String) -> TreeModel? {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let treesRaw = json["trees"] as? [[String: Any]]
+        else {
             #if DEBUG
-            print("[MLScoring] \(name).mlmodelc not found in bundle")
+            print("[MLScoring] \(name).json not found in bundle")
             #endif
             return nil
         }
-        return try? MLModel(contentsOf: url)
+        let baseScore = json["base_score"] as? Double ?? 0.5
+        let cal = json["calibration"] as? [String: Any]
+        let calX = cal?["x"] as? [Double] ?? []
+        let calY = cal?["y"] as? [Double] ?? []
+        let cap = cal?["cap"] as? Double ?? 0.85
+        let trees = treesRaw.map { parseNode($0) }
+        return TreeModel(trees: trees, baseScore: baseScore,
+                         calibrationX: calX, calibrationY: calY, cap: cap)
     }
 
-    /// Predict calibrated probability of a >=1.5 ATR favorable move within 24h.
+    private static func parseNode(_ dict: [String: Any]) -> TreeNode {
+        let children = (dict["children"] as? [[String: Any]])?.map { parseNode($0) } ?? []
+        return TreeNode(
+            nodeid: dict["nodeid"] as? Int ?? 0,
+            split: dict["split"] as? String,
+            splitCondition: dict["split_condition"] as? Double,
+            yes: dict["yes"] as? Int,
+            no: dict["no"] as? Int,
+            leaf: dict["leaf"] as? Double,
+            children: children
+        )
+    }
+
+    private static func evaluateTree(_ node: TreeNode, _ input: [String: Double]) -> Double {
+        if let leaf = node.leaf { return leaf }
+        guard let split = node.split, let cond = node.splitCondition else { return 0 }
+        let val = input[split] ?? 0
+        let goLeft = val < cond
+        let targetId = goLeft ? node.yes : node.no
+        guard let targetId, let next = node.children.first(where: { $0.nodeid == targetId }) else { return 0 }
+        return evaluateTree(next, input)
+    }
+
+    private static func sigmoid(_ x: Double) -> Double { 1.0 / (1.0 + exp(-x)) }
+
+    private static func calibrate(_ rawProb: Double, _ model: TreeModel) -> Double {
+        let x = model.calibrationX, y = model.calibrationY
+        guard x.count >= 2, x.count == y.count else { return rawProb }
+        if rawProb <= x[0] { return y[0] }
+        if rawProb >= x[x.count - 1] { return y[y.count - 1] }
+        var lo = 0, hi = x.count - 1
+        while lo < hi - 1 {
+            let mid = (lo + hi) / 2
+            if x[mid] <= rawProb { lo = mid } else { hi = mid }
+        }
+        let t = (rawProb - x[lo]) / (x[hi] - x[lo])
+        return max(0, min(model.cap, y[lo] + t * (y[hi] - y[lo])))
+    }
+
     static func predict(features f: MLFeatures) -> Double? {
         let model = f.isCrypto ? cryptoModel : stockModel
         guard let model else { return nil }
         let input = buildFeatureDict(f)
-        let nsInput = input.mapValues { NSNumber(value: $0) as NSObject }
-        do {
-            let provider = try MLDictionaryFeatureProvider(dictionary: nsInput)
-            let output = try model.prediction(from: provider)
-            guard let fv = output.featureValue(for: "classProbability") else { return nil }
-            let probs = fv.dictionaryValue
-            guard let n = probs[Int64(1)] ?? probs[1] ?? probs["1"] else { return nil }
-            return MLCalibration.calibrate(n.doubleValue, isCrypto: f.isCrypto)
-        } catch {
-            #if DEBUG
-            print("[MLScoring] prediction threw: \(error)")
-            #endif
-            return nil
-        }
+        let baseLogit = log(model.baseScore / (1 - model.baseScore))
+        var sum = baseLogit
+        for tree in model.trees { sum += evaluateTree(tree, input) }
+        guard sum.isFinite else { return 0.5 }
+        return calibrate(sigmoid(sum), model)
     }
 
     private static func buildFeatureDict(_ f: MLFeatures) -> [String: Double] {
-        var input: [String: Double] = [:]
-
-        let daily: [String: Double] = [
+        [
             "dRsi": f.dRsi, "dMacdHist": f.dMacdHist, "dAdx": f.dAdx,
             "dAdxBullish": f.dAdxBullish ? 1 : 0, "dEmaCross": Double(f.dEmaCross),
             "dStackBull": f.dStackBull ? 1 : 0, "dStackBear": f.dStackBear ? 1 : 0,
@@ -52,10 +108,6 @@ enum MLScoring {
             "dBBPercentB": f.dBBPercentB, "dBBSqueeze": f.dBBSqueeze ? 1 : 0,
             "dBBBandwidth": f.dBBBandwidth, "dVolumeRatio": f.dVolumeRatio,
             "dAboveVwap": f.dAboveVwap ? 1 : 0,
-        ]
-        input.merge(daily) { _, new in new }
-
-        let fourH: [String: Double] = [
             "hRsi": f.hRsi, "hMacdHist": f.hMacdHist, "hAdx": f.hAdx,
             "hAdxBullish": f.hAdxBullish ? 1 : 0, "hEmaCross": Double(f.hEmaCross),
             "hStackBull": f.hStackBull ? 1 : 0, "hStackBear": f.hStackBear ? 1 : 0,
@@ -66,10 +118,6 @@ enum MLScoring {
             "hBBPercentB": f.hBBPercentB, "hBBSqueeze": f.hBBSqueeze ? 1 : 0,
             "hBBBandwidth": f.hBBBandwidth, "hVolumeRatio": f.hVolumeRatio,
             "hAboveVwap": f.hAboveVwap ? 1 : 0,
-        ]
-        input.merge(fourH) { _, new in new }
-
-        let entry: [String: Double] = [
             "eRsi": f.eRsi, "eEmaCross": Double(f.eEmaCross),
             "eStochK": f.eStochK, "eMacdHist": f.eMacdHist,
             "fundingSignal": Double(f.fundingSignal), "oiSignal": Double(f.oiSignal),
@@ -81,10 +129,6 @@ enum MLScoring {
             "last3Green": f.last3Green ? 1 : 0, "last3Red": f.last3Red ? 1 : 0,
             "last3VolIncreasing": f.last3VolIncreasing ? 1 : 0,
             "obvRising": f.obvRising ? 1 : 0, "adLineAccumulation": f.adLineAccumulation ? 1 : 0,
-        ]
-        input.merge(entry) { _, new in new }
-
-        let context: [String: Double] = [
             "atrPercent": f.atrPercent, "atrPercentile": f.atrPercentile,
             "tfAlignment": Double(f.tfAlignment), "momentumAlignment": Double(f.momentumAlignment),
             "structureAlignment": Double(f.structureAlignment),
@@ -94,14 +138,8 @@ enum MLScoring {
             "dRsiDelta": f.dRsiDelta, "dAdxDelta": f.dAdxDelta,
             "hRsiDelta": f.hRsiDelta, "hAdxDelta": f.hAdxDelta,
             "hMacdHistDelta": f.hMacdHistDelta,
-            "fearGreedIndex": f.fearGreedIndex,
-            "fearGreedZone": Double(f.fearGreedZone),
-            "ethBtcRatio": f.ethBtcRatio,
-            "ethBtcDelta6": f.ethBtcDelta6,
-        ]
-        input.merge(context) { _, new in new }
-
-        let phaseA: [String: Double] = [
+            "fearGreedIndex": f.fearGreedIndex, "fearGreedZone": Double(f.fearGreedZone),
+            "ethBtcRatio": f.ethBtcRatio, "ethBtcDelta6": f.ethBtcDelta6,
             "vpDistToPocATR": f.vpDistToPocATR, "vpAbovePoc": f.vpAbovePoc ? 1 : 0,
             "vpVAWidth": f.vpVAWidth, "vpInValueArea": f.vpInValueArea ? 1 : 0,
             "vpDistToVAH_ATR": f.vpDistToVAH_ATR, "vpDistToVAL_ATR": f.vpDistToVAL_ATR,
@@ -116,21 +154,9 @@ enum MLScoring {
             "relStrengthVsSpy": f.relStrengthVsSpy, "beta": f.beta,
             "vixLevelCode": Double(f.vixLevelCode), "isMarketHours": f.isMarketHours ? 1 : 0,
             "earningsProximity": f.earningsProximity,
-            "shortVolumeRatio": f.shortVolumeRatio,
-            "shortVolumeZScore": f.shortVolumeZScore,
+            "shortVolumeRatio": f.shortVolumeRatio, "shortVolumeZScore": f.shortVolumeZScore,
             "oiPriceInteraction": f.oiPriceInteraction,
-            "fundingSlope": f.fundingSlope,
-            "bodyWickRatio": f.bodyWickRatio,
+            "fundingSlope": f.fundingSlope, "bodyWickRatio": f.bodyWickRatio,
         ]
-        input.merge(phaseA) { _, new in new }
-
-        let computed: [String: Double] = [
-            "volWeightedRsi": f.dRsi * f.dVolumeRatio,
-            "hVolWeightedRsi": f.hRsi * f.hVolumeRatio,
-            "atrExpansionRate": 0,
-        ]
-        input.merge(computed) { _, new in new }
-
-        return input
     }
 }
