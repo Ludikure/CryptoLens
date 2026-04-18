@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -218,7 +218,7 @@
 		712D5923C993CB356F7E558C /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
 		714F80BAAC4263133724FD5B /* AIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvider.swift; sourceTree = "<group>"; };
 		7202C20B67FFB645DBDABA14 /* PriceAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceAlert.swift; sourceTree = "<group>"; };
-		726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MarketScopeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = MarketScopeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		73C4840E1BE2BA2B2ABB66C9 /* MarketScopeWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MarketScopeWidget.entitlements; sourceTree = "<group>"; };
 		751F6418841B0076E433CBE6 /* PositioningSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningSnapshot.swift; sourceTree = "<group>"; };
 		7733BFEB69A3031C96882AD8 /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
@@ -277,7 +277,7 @@
 		DE62F3218DFF4127E5AD290A /* CandleCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandleCache.swift; sourceTree = "<group>"; };
 		E1F914DCCFEF6DC98E3DC2C0 /* HistoricalDerivativesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoricalDerivativesService.swift; sourceTree = "<group>"; };
 		E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerDiagnostic.swift; sourceTree = "<group>"; };
-		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E687573C82B61768A3DA2604 /* AnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisService.swift; sourceTree = "<group>"; };
 		EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeSetup.swift; sourceTree = "<group>"; };
 		EC50FD5E89801E8670B98C86 /* FearGreedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FearGreedView.swift; sourceTree = "<group>"; };
@@ -586,7 +586,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					184F1203E8466CCEFB5FAB44 = {
 						DevelopmentTeam = 6AS729C9FR;
@@ -608,6 +608,7 @@
 			);
 			mainGroup = 6B2F66AD008C4C14684E2941;
 			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -815,7 +816,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = 6AS729C9FR;
@@ -836,7 +837,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_EMIT_LOC_STRINGS_RESOURCES = YES;
@@ -881,7 +881,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 21;
+				CURRENT_PROJECT_VERSION = 22;
 				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = 6AS729C9FR;
@@ -909,7 +909,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_EMIT_LOC_STRINGS_RESOURCES = YES;
