@@ -75,6 +75,9 @@ export interface FullFeatures {
     oiPriceInteraction: number; fundingSlope: number;
     // Candle structure (1)
     bodyWickRatio: number;
+    // Cross-market breadth & macro momentum (4)
+    relStrengthVsSector: number; vixTermStructure: number;
+    dxyMomentum: number; iwmSpyRatio: number;
     // Computed features (4)
     volWeightedRsi: number; hVolWeightedRsi: number;
     atrExpansionRate: number; fundingSlope: number;
@@ -524,6 +527,26 @@ function extractFeatures(candles: Candle[], isCrypto: boolean): TimeframeFeature
 // Master: compute all 51 features from 3 timeframes
 // ============================================================
 
+const SECTOR_ETF_MAP: Record<string, string[]> = {
+    XLK: ['AAPL', 'MSFT', 'NVDA', 'AMD', 'ORCL', 'ADBE', 'INTC', 'CSCO', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL', 'CRM', 'NFLX'],
+    XLF: ['JPM', 'GS', 'MS', 'BAC', 'WFC', 'BLK', 'SCHW', 'MA', 'V', 'SQ'],
+    XLE: ['XOM', 'OXY', 'FANG', 'CVX', 'SLB'],
+    XLV: ['UNH', 'LLY', 'ABBV', 'JNJ', 'PFE', 'MRK', 'TMO', 'REGN', 'VRTX', 'GILD', 'BIIB'],
+    XLY: ['TSLA', 'HD', 'DIS', 'NKE', 'SBUX', 'MCD', 'WMT', 'COST', 'AMZN', 'ROKU', 'SHOP', 'PLTR', 'SNAP', 'COIN', 'RBLX', 'BYND', 'GME'],
+    XLI: ['CAT', 'DE', 'X', 'BA', 'LMT', 'RTX', 'GD', 'UNP', 'FDX', 'DAL'],
+    XLC: ['T', 'VZ', 'CMCSA', 'GOOGL', 'META'],
+    XLRE: ['SPG', 'O'],
+};
+const ETF_SET = new Set(['SPY', 'QQQ', 'IWM', 'XLE', 'XLF', 'XLK', 'XLV', 'XLY', 'XLI', 'XLC', 'XLRE', 'GLD', 'TLT']);
+
+export function sectorETFForSymbol(symbol: string): string | null {
+    if (ETF_SET.has(symbol)) return null;
+    for (const [etf, symbols] of Object.entries(SECTOR_ETF_MAP)) {
+        if (symbols.includes(symbol)) return etf;
+    }
+    return null;
+}
+
 export interface DerivativesSignals {
     fundingSignal: number; oiSignal: number; takerSignal: number;
     crowdingSignal: number; derivativesCombined: number;
@@ -625,7 +648,11 @@ export function computeAllFeatures(
     sentiment?: SentimentSignals,
     prevSnapshot?: PreviousSnapshot,
     spyCandles: Candle[] = [],
-    darkPool?: { ratio: number; zscore: number }
+    darkPool?: { ratio: number; zscore: number },
+    iwmCandles: Candle[] = [],
+    sectorETFCandles: Candle[] = [],
+    dxyCandles: Candle[] = [],
+    vix3mPrice: number = 0,
 ): FullFeatures {
     const daily = extractFeatures(dailyCandles, isCrypto);
     const fourH = fourHCandles.length >= 210 ? extractFeatures(fourHCandles, isCrypto) : null;
@@ -855,6 +882,31 @@ export function computeAllFeatures(
                 if (range > 0) { sum += Math.abs(c.close - c.open) / range; count++; }
             }
             return count > 0 ? sum / count : 0.5;
+        })(),
+        // Cross-market breadth & macro momentum
+        relStrengthVsSector: (() => {
+            if (isCrypto || sectorETFCandles.length < 6 || dailyCandles.length < 6) return 0;
+            const stockRet = (dailyCandles[dailyCandles.length - 1].close - dailyCandles[dailyCandles.length - 6].close) / dailyCandles[dailyCandles.length - 6].close * 100;
+            const sectorRet = (sectorETFCandles[sectorETFCandles.length - 1].close - sectorETFCandles[sectorETFCandles.length - 6].close) / sectorETFCandles[sectorETFCandles.length - 6].close * 100;
+            return stockRet - sectorRet;
+        })(),
+        vixTermStructure: (() => {
+            const vixVal = macro.vix;
+            if (!vix3mPrice || vix3mPrice <= 0) return 1.0;
+            return vixVal / vix3mPrice;
+        })(),
+        dxyMomentum: (() => {
+            if (dxyCandles.length < 6) return 0;
+            const current = dxyCandles[dxyCandles.length - 1].close;
+            const fiveDaysAgo = dxyCandles[dxyCandles.length - 6].close;
+            if (fiveDaysAgo <= 0) return 0;
+            return (current - fiveDaysAgo) / fiveDaysAgo * 100;
+        })(),
+        iwmSpyRatio: (() => {
+            if (iwmCandles.length < 6 || spyCandles.length < 6) return 0;
+            const iwmRet = (iwmCandles[iwmCandles.length - 1].close - iwmCandles[iwmCandles.length - 6].close) / iwmCandles[iwmCandles.length - 6].close * 100;
+            const spyRet = (spyCandles[spyCandles.length - 1].close - spyCandles[spyCandles.length - 6].close) / spyCandles[spyCandles.length - 6].close * 100;
+            return iwmRet - spyRet;
         })(),
         // Computed features
         volWeightedRsi: daily.rsi * daily.volumeRatio,

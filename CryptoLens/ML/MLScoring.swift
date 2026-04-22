@@ -157,6 +157,10 @@ enum MLScoring {
             "shortVolumeRatio": f.shortVolumeRatio, "shortVolumeZScore": f.shortVolumeZScore,
             "oiPriceInteraction": f.oiPriceInteraction,
             "fundingSlope": f.fundingSlope, "bodyWickRatio": f.bodyWickRatio,
+            "relStrengthVsSector": f.relStrengthVsSector,
+            "vixTermStructure": f.vixTermStructure,
+            "dxyMomentum": f.dxyMomentum,
+            "iwmSpyRatio": f.iwmSpyRatio,
         ]
     }
 }

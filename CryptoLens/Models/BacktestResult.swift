@@ -143,6 +143,11 @@ struct MLFeatures: Codable {
     let fundingSlope: Double       // linear slope of last 4 funding rates — acceleration
     // Candle structure
     let bodyWickRatio: Double      // avg(body/range) over last 5 bars — conviction vs indecision
+    // Cross-market breadth & macro momentum
+    let relStrengthVsSector: Double // stock 5-day return minus sector ETF 5-day return
+    let vixTermStructure: Double   // VIX / VIX3M ratio (>1 = backwardation, <1 = contango)
+    let dxyMomentum: Double        // DXY 5-day rate of change %
+    let iwmSpyRatio: Double        // IWM vs SPY 5-day relative return (breadth)
 }
 
 struct BacktestDataPoint: Codable {

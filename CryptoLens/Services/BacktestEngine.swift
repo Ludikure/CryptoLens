@@ -168,14 +168,41 @@ class BacktestEngine: ObservableObject {
 
             // Fetch SPY candles for stock relative strength + beta
             var spyCandles = [Candle]()
+            var iwmCandles = [Candle]()
             if !isCrypto {
                 statusMessage = "Fetching SPY..."
                 spyCandles = (try? await CandleCache.loadOrFetch(
                     symbol: "SPY", interval: "1d", startDate: fetchStart, endDate: endDate,
                     fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
                         symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+                statusMessage = "Fetching IWM..."
+                iwmCandles = (try? await CandleCache.loadOrFetch(
+                    symbol: "IWM", interval: "1d", startDate: fetchStart, endDate: endDate,
+                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
             }
             var spyIdx = 0
+            var iwmIdx = 0
+
+            // Fetch VIX3M for term structure ratio
+            statusMessage = "Fetching VIX3M..."
+            let vix3mCandles = (try? await CandleCache.loadOrFetch(
+                symbol: "^VIX3M", interval: "1d", startDate: fetchStart, endDate: endDate,
+                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+
+            // Fetch sector ETF candles for relStrengthVsSector
+            var sectorETFCandles = [String: [Candle]]()
+            if !isCrypto {
+                if let sectorETF = Self.sectorETF(for: symbol) {
+                    statusMessage = "Fetching \(sectorETF)..."
+                    sectorETFCandles[sectorETF] = (try? await CandleCache.loadOrFetch(
+                        symbol: sectorETF, interval: "1d", startDate: fetchStart, endDate: endDate,
+                        fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                            symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+                }
+            }
+            var sectorIdx = 0
 
             statusMessage = "Running walk-forward..."
 
@@ -213,6 +240,12 @@ class BacktestEngine: ObservableObject {
                 while oneHIdx < oneHCandles.count && oneHCandles[oneHIdx].time <= evalTime { oneHIdx += 1 }
                 while ethBtcIdx < ethBtcCandles.count && ethBtcCandles[ethBtcIdx].time <= evalTime { ethBtcIdx += 1 }
                 while spyIdx < spyCandles.count && spyCandles[spyIdx].time <= evalTime { spyIdx += 1 }
+                while iwmIdx < iwmCandles.count && iwmCandles[iwmIdx].time <= evalTime { iwmIdx += 1 }
+                let sectorETFName = Self.sectorETF(for: symbol)
+                let sectorCandles = sectorETFName.flatMap { sectorETFCandles[$0] } ?? []
+                if sectorCandles.count > 0 {
+                    while sectorIdx < sectorCandles.count && sectorCandles[sectorIdx].time <= evalTime { sectorIdx += 1 }
+                }
 
                 guard dailyIdx >= 210, i + 1 >= 210, oneHIdx >= 30 else { continue }
 
@@ -725,6 +758,36 @@ class BacktestEngine: ObservableObject {
                         }
                         return count > 0 ? sum / Double(count) : 0.5
                     }(),
+                    // Relative strength vs sector ETF
+                    relStrengthVsSector: {
+                        guard !isCrypto, sectorIdx >= 6, dailyIdx >= 6, !sectorCandles.isEmpty else { return 0.0 }
+                        let stockReturn = (dailyCandles[dailyIdx - 1].close - dailyCandles[dailyIdx - 6].close) / dailyCandles[dailyIdx - 6].close * 100
+                        let sectorReturn = (sectorCandles[sectorIdx - 1].close - sectorCandles[max(0, sectorIdx - 6)].close) / sectorCandles[max(0, sectorIdx - 6)].close * 100
+                        return stockReturn - sectorReturn
+                    }(),
+                    // VIX term structure
+                    vixTermStructure: {
+                        let vixVal = vixValue ?? 20
+                        let vix3mVal = vix3mCandles.last(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate })?.close
+                        guard let v3m = vix3mVal, v3m > 0 else { return 1.0 }
+                        return vixVal / v3m
+                    }(),
+                    // DXY 5-day momentum
+                    dxyMomentum: {
+                        guard let currentIdx = dxyCandles.lastIndex(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate }),
+                              currentIdx >= 5 else { return 0.0 }
+                        let current = dxyCandles[currentIdx].close
+                        let fiveDaysAgo = dxyCandles[currentIdx - 5].close
+                        guard fiveDaysAgo > 0 else { return 0.0 }
+                        return (current - fiveDaysAgo) / fiveDaysAgo * 100
+                    }(),
+                    // IWM vs SPY relative return (breadth)
+                    iwmSpyRatio: {
+                        guard iwmIdx >= 6, spyIdx >= 6 else { return 0.0 }
+                        let iwmReturn = (iwmCandles[iwmIdx - 1].close - iwmCandles[max(0, iwmIdx - 6)].close) / iwmCandles[max(0, iwmIdx - 6)].close * 100
+                        let spyReturn = (spyCandles[spyIdx - 1].close - spyCandles[max(0, spyIdx - 6)].close) / spyCandles[max(0, spyIdx - 6)].close * 100
+                        return iwmReturn - spyReturn
+                    }(),
                 )
 
                 // Update 1-bar delta tracking for acceleration
@@ -868,6 +931,26 @@ class BacktestEngine: ObservableObject {
     ]
     static let allSymbols = stockSymbols + cryptoSymbols
 
+    /// Map stock symbols to their sector ETFs for relative strength computation.
+    static func sectorETF(for symbol: String) -> String? {
+        let etfs: Set<String> = ["SPY", "QQQ", "IWM", "XLE", "XLF", "XLK", "XLV", "XLY", "XLI", "XLC", "XLRE", "GLD", "TLT"]
+        if etfs.contains(symbol) { return nil }
+        let mapping: [String: [String]] = [
+            "XLK": ["AAPL", "MSFT", "NVDA", "AMD", "ORCL", "ADBE", "INTC", "CSCO", "AVGO", "QCOM", "MU", "AMAT", "LRCX", "MRVL", "CRM", "NFLX"],
+            "XLF": ["JPM", "GS", "MS", "BAC", "WFC", "BLK", "SCHW", "MA", "V", "SQ"],
+            "XLE": ["XOM", "OXY", "FANG", "CVX", "SLB"],
+            "XLV": ["UNH", "LLY", "ABBV", "JNJ", "PFE", "MRK", "TMO", "REGN", "VRTX", "GILD", "BIIB"],
+            "XLY": ["TSLA", "HD", "DIS", "NKE", "SBUX", "MCD", "WMT", "COST", "AMZN", "ROKU", "SHOP", "PLTR", "SNAP", "COIN", "RBLX", "BYND", "GME"],
+            "XLI": ["CAT", "DE", "X", "BA", "LMT", "RTX", "GD", "UNP", "FDX", "DAL"],
+            "XLC": ["T", "VZ", "CMCSA", "GOOGL", "META"],
+            "XLRE": ["SPG", "O"],
+        ]
+        for (etf, symbols) in mapping {
+            if symbols.contains(symbol) { return etf }
+        }
+        return nil
+    }
+
     /// Crypto start date: Jan 1 2020 (derivatives data begins ~2020 on Binance).
     private static let cryptoStartDate: Date = {
         var c = DateComponents(); c.year = 2020; c.month = 1; c.day = 1
@@ -1006,6 +1089,8 @@ class BacktestEngine: ObservableObject {
             // ML features — Earnings + Dark pool
             "earningsProximity", "shortVolumeRatio", "shortVolumeZScore",
             "oiPriceInteraction", "fundingSlope", "bodyWickRatio",
+            // ML features — Cross-market breadth & macro momentum
+            "relStrengthVsSector", "vixTermStructure", "dxyMomentum", "iwmSpyRatio",
             // ML features — Volume profile
             "vpDistToPocATR", "vpAbovePoc", "vpVAWidth", "vpInValueArea",
             "vpDistToVAH_ATR", "vpDistToVAL_ATR",
@@ -1140,6 +1225,11 @@ class BacktestEngine: ObservableObject {
                 String(format: "%.4f", f?.oiPriceInteraction ?? 0),
                 String(format: "%.6f", f?.fundingSlope ?? 0),
                 String(format: "%.4f", f?.bodyWickRatio ?? 0.5),
+                // Cross-market breadth & macro momentum
+                String(format: "%.4f", f?.relStrengthVsSector ?? 0),
+                String(format: "%.4f", f?.vixTermStructure ?? 1.0),
+                String(format: "%.4f", f?.dxyMomentum ?? 0),
+                String(format: "%.4f", f?.iwmSpyRatio ?? 0),
                 // Volume profile
                 String(format: "%.4f", f?.vpDistToPocATR ?? 0),
                 "\(f?.vpAbovePoc == true ? 1 : 0)",

@@ -3,7 +3,7 @@
 
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
 import { mlPredict, buildMLInput } from './ml-predict';
-import { computeAllFeatures, type Candle as FullCandle, type FullFeatures } from './scoring-full';
+import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -1392,6 +1392,83 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     } catch {}
   }
 
+  // Fetch IWM candles for breadth ratio
+  let iwmCandles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] = [];
+  if (hasStocks) {
+    try {
+      const iwmResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/IWM?interval=1d&range=1mo`);
+      if (iwmResp.ok) {
+        const iwmData = await iwmResp.json() as any;
+        const result = iwmData?.chart?.result?.[0];
+        const ts = result?.timestamp || [];
+        const q = result?.indicators?.quote?.[0] || {};
+        for (let i = 0; i < ts.length; i++) {
+          if (q.open?.[i] != null && q.close?.[i] != null) {
+            iwmCandles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Fetch VIX3M for term structure ratio
+  let vix3mPrice = 0;
+  try {
+    const vix3mResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/%5EVIX3M?interval=1d&range=5d`);
+    if (vix3mResp.ok) {
+      const vix3mData = await vix3mResp.json() as any;
+      const closes = vix3mData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+      if (closes?.length) vix3mPrice = closes[closes.length - 1] ?? 0;
+    }
+  } catch {}
+
+  // Fetch DXY candles for momentum (full 1mo for 5-day lookback)
+  let dxyCandles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] = [];
+  try {
+    const dxyResp2 = await fetch(`${YAHOO_BASE}/v8/finance/chart/DX-Y.NYB?interval=1d&range=1mo`);
+    if (dxyResp2.ok) {
+      const dxyData2 = await dxyResp2.json() as any;
+      const result = dxyData2?.chart?.result?.[0];
+      const ts = result?.timestamp || [];
+      const q = result?.indicators?.quote?.[0] || {};
+      for (let i = 0; i < ts.length; i++) {
+        if (q.open?.[i] != null && q.close?.[i] != null) {
+          dxyCandles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
+        }
+      }
+    }
+  } catch {}
+
+  // Fetch sector ETF candles for relative strength
+  const sectorETFCandlesMap: Record<string, { time: number; open: number; high: number; low: number; close: number; volume: number }[]> = {};
+  if (hasStocks) {
+    const neededETFs = new Set<string>();
+    for (const s of config.symbols) {
+      if (!s.endsWith('USDT')) {
+        const etf = sectorETFForSymbol(s);
+        if (etf) neededETFs.add(etf);
+      }
+    }
+    for (const etf of neededETFs) {
+      try {
+        const etfResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${etf}?interval=1d&range=1mo`);
+        if (etfResp.ok) {
+          const etfData = await etfResp.json() as any;
+          const result = etfData?.chart?.result?.[0];
+          const ts = result?.timestamp || [];
+          const q = result?.indicators?.quote?.[0] || {};
+          const candles: typeof iwmCandles = [];
+          for (let i = 0; i < ts.length; i++) {
+            if (q.open?.[i] != null && q.close?.[i] != null) {
+              candles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
+            }
+          }
+          sectorETFCandlesMap[etf] = candles;
+        }
+      } catch {}
+    }
+  }
+
   // Fetch FINRA dark pool data (once per day, cached in KV)
   let darkPoolData: Record<string, { ratio: number; zscore: number }> = {};
   if (hasStocks) {
@@ -1677,7 +1754,9 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
       // Compute all 80 features
       const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
-      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol], spyCandles, isCrypto ? undefined : darkPoolData[symbol]);
+      const sectorETF = isCrypto ? null : sectorETFForSymbol(symbol);
+      const sectorCandles = sectorETF ? (sectorETFCandlesMap[sectorETF] || []) as FullCandle[] : [];
+      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol], spyCandles, isCrypto ? undefined : darkPoolData[symbol], iwmCandles as FullCandle[], sectorCandles, dxyCandles as FullCandle[], vix3mPrice);
 
       // Save snapshot for next cron's rate-of-change deltas + acceleration
       const ps = prevSnapshots[symbol];

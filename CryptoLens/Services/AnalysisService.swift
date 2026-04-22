@@ -62,6 +62,11 @@ class AnalysisService: ObservableObject {
     /// Regime tracking for barsSinceRegimeChange
     private var lastRegime: [String: (code: Int, since: Date)] = [:]
     private var spyDailyCandles: [Candle] = []
+    private var iwmDailyCandles: [Candle] = []
+    private var dxyDailyCandles: [Candle] = []
+    private var sectorETFCandles: [String: [Candle]] = [:]
+    private var sectorETFLastFetch: [String: Date] = [:]
+    private var vix3mPrice: Double = 0
     private var spyLastFetch: Date = .distantPast
     private var darkPoolCache: [String: (ratio: Double, zscore: Double)] = [:]
     private var darkPoolLastFetch: Date = .distantPast
@@ -460,6 +465,7 @@ class AnalysisService: ObservableObject {
             var _darkPool: (ratio: Double, zscore: Double)? = nil
             if market == .stock {
                 await refreshSPYCandles()
+                await refreshSectorETFCandles(for: symbol)
                 _darkPool = await fetchDarkPool(symbol: symbol)
             }
 
@@ -518,7 +524,12 @@ class AnalysisService: ObservableObject {
                dRsiDelta1: _dRsiDelta1,
                hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel,
                basisPct: _basisPct,
-               spyCandles: spyDailyCandles, dailyCandles: fullDailyCandles,
+               spyCandles: spyDailyCandles,
+               iwmCandles: iwmDailyCandles,
+               dailyCandles: fullDailyCandles,
+               sectorETFCandles: BacktestEngine.sectorETF(for: symbol).flatMap { sectorETFCandles[$0] } ?? [],
+               dxyCandles: dxyDailyCandles,
+               vix3mPrice: vix3mPrice,
                darkPool: _darkPool,
                oiPriceInteraction: _oiPriceInteraction, fundingSlope: _fundingSlope,
                bodyWickRatio: _bodyWickRatio)
@@ -676,7 +687,12 @@ class AnalysisService: ObservableObject {
                hMacdAccel: snap2.map { ((tf2.macd?.histogram ?? 0) - $0.hMacdHist) - $0.hMacdD1 } ?? 0,
                dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0,
                basisPct: _basisPct2,
-               spyCandles: spyDailyCandles, dailyCandles: fullDailyCandles2,
+               spyCandles: spyDailyCandles,
+               iwmCandles: iwmDailyCandles,
+               dailyCandles: fullDailyCandles2,
+               sectorETFCandles: BacktestEngine.sectorETF(for: symbol).flatMap { sectorETFCandles[$0] } ?? [],
+               dxyCandles: dxyDailyCandles,
+               vix3mPrice: vix3mPrice,
                darkPool: market == .stock ? await fetchDarkPool(symbol: symbol) : nil,
                oiPriceInteraction: {
                    guard market == .crypto, let d = earlyDerivData else { return 0.0 }
@@ -1008,6 +1024,27 @@ class AnalysisService: ObservableObject {
             spyDailyCandles = candles
             spyLastFetch = Date()
         }
+        // IWM for breadth ratio
+        if let iwm = try? await yahoo.fetchCandles(symbol: "IWM", interval: "1d"), iwm.count >= 6 {
+            iwmDailyCandles = iwm
+        }
+        // VIX3M for term structure
+        if let vix3m = try? await yahoo.fetchCandles(symbol: "%5EVIX3M", interval: "1d"), let last = vix3m.last {
+            vix3mPrice = last.close
+        }
+        // DXY for momentum
+        if let dxy = try? await yahoo.fetchCandles(symbol: "DX-Y.NYB", interval: "1d"), dxy.count >= 6 {
+            dxyDailyCandles = dxy
+        }
+    }
+
+    private func refreshSectorETFCandles(for symbol: String) async {
+        guard let etf = BacktestEngine.sectorETF(for: symbol) else { return }
+        if let lastFetch = sectorETFLastFetch[etf], Date().timeIntervalSince(lastFetch) < 300 { return }
+        if let candles = try? await yahoo.fetchCandles(symbol: etf, interval: "1d"), candles.count >= 6 {
+            sectorETFCandles[etf] = candles
+            sectorETFLastFetch[etf] = Date()
+        }
     }
 
     private func buildSPYContext() async -> String? {
@@ -1061,7 +1098,11 @@ class AnalysisService: ObservableObject {
                                  dAdxAccel: Double = 0,
                                  basisPct: Double = 0,
                                  spyCandles: [Candle] = [],
+                                 iwmCandles: [Candle] = [],
                                  dailyCandles: [Candle] = [],
+                                 sectorETFCandles: [Candle] = [],
+                                 dxyCandles: [Candle] = [],
+                                 vix3mPrice: Double = 0,
                                  darkPool: (ratio: Double, zscore: Double)? = nil,
                                  oiPriceInteraction: Double = 0,
                                  fundingSlope: Double = 0,
@@ -1274,6 +1315,31 @@ class AnalysisService: ObservableObject {
             oiPriceInteraction: oiPriceInteraction,
             fundingSlope: fundingSlope,
             bodyWickRatio: bodyWickRatio,
+            // Cross-market breadth & macro momentum
+            relStrengthVsSector: {
+                guard !isCrypto, sectorETFCandles.count >= 6, dailyCandles.count >= 6 else { return 0.0 }
+                let stockRet = (dailyCandles[dailyCandles.count - 1].close - dailyCandles[dailyCandles.count - 6].close) / dailyCandles[dailyCandles.count - 6].close * 100
+                let sectorRet = (sectorETFCandles[sectorETFCandles.count - 1].close - sectorETFCandles[sectorETFCandles.count - 6].close) / sectorETFCandles[sectorETFCandles.count - 6].close * 100
+                return stockRet - sectorRet
+            }(),
+            vixTermStructure: {
+                let vix = vixValue ?? 20
+                guard vix3mPrice > 0 else { return 1.0 }
+                return vix / vix3mPrice
+            }(),
+            dxyMomentum: {
+                guard dxyCandles.count >= 6 else { return 0.0 }
+                let current = dxyCandles[dxyCandles.count - 1].close
+                let fiveDaysAgo = dxyCandles[dxyCandles.count - 6].close
+                guard fiveDaysAgo > 0 else { return 0.0 }
+                return (current - fiveDaysAgo) / fiveDaysAgo * 100
+            }(),
+            iwmSpyRatio: {
+                guard iwmCandles.count >= 6, spyCandles.count >= 6 else { return 0.0 }
+                let iwmRet = (iwmCandles[iwmCandles.count - 1].close - iwmCandles[iwmCandles.count - 6].close) / iwmCandles[iwmCandles.count - 6].close * 100
+                let spyRet = (spyCandles[spyCandles.count - 1].close - spyCandles[spyCandles.count - 6].close) / spyCandles[spyCandles.count - 6].close * 100
+                return iwmRet - spyRet
+            }(),
         )
     }
 

@@ -55,8 +55,9 @@ FEATURES = [
     'earningsProximity',
     'shortVolumeRatio', 'shortVolumeZScore',
     'oiPriceInteraction', 'fundingSlope', 'bodyWickRatio',
+    'relStrengthVsSector', 'vixTermStructure', 'dxyMomentum', 'iwmSpyRatio',
 ]
-assert len(FEATURES) == 107, f"expected 107 features, got {len(FEATURES)}"
+assert len(FEATURES) == 111, f"expected 111 features, got {len(FEATURES)}"
 
 DOWNLOADS = '/Volumes/External/Downloads'
 REPO = '/Users/bojanmihovilovic/CryptoLens'
