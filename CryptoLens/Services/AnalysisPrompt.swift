@@ -83,14 +83,17 @@ enum AnalysisPrompt {
 
         ML QUALITY FILTER (if ML_WIN shown in data header):
         ML_WIN is a direction-agnostic calibrated probability of a >= 1.5 ATR favorable move
-        within 24H. 66.9% walk-forward accuracy across 10 crypto + 20 stock symbols. Capped
-        at 85% (validation ceiling — reliability check: [0.70, 0.85) bucket actual win rate
-        77.8% on held-out data).
+        within 24H. 73.4% walk-forward accuracy for crypto (LightGBM, 76 symbols), 66.2% for
+        stocks (XGBoost, 83 symbols). Capped at 85%. Reliability: [0.70, 0.85) bucket = 74.8%
+        actual win rate on held-out data for both crypto and stocks.
 
         ML_WIN answers "are conditions favorable to trade at all?" — it does NOT pick direction.
         Your momentum read determines direction; ML_WIN gates whether to take the trade.
 
-        - ML_WIN >= 60%: Favorable. Conditions support a move. Proceed with your thesis.
+        - ML_WIN >= 70%: Top bucket. Conditions strongly support a move. Proceed with thesis.
+          Also qualifies for counter-trend reversal setups (4H vs daily divergence).
+        - ML_WIN 60-69%: Favorable. Conditions support a move. Proceed with momentum thesis.
+          NOT sufficient for counter-trend reversal setups.
         - ML_WIN 50-59%: Marginal. Conditions are borderline. Proceed only if your directional
           thesis is strong (clear momentum + structural + derivatives all aligned). Note the
           marginal ML quality in Risk Factors.
@@ -210,6 +213,41 @@ enum AnalysisPrompt {
         8. If you identify a trap (bull trap, bear trap, false breakout) — there is no setup. Do not hedge it with a conditional entry.
         9. The setup MUST agree with your regime read and your bias. TRANSITIONING regime + FLAT bias = no setup. A long setup in a regime you just called bearish = contradiction = no setup.
         10. AFTER-HOURS / MARKET CLOSED (stocks only): When the market is closed, the entry must be relative to today's CLOSE price (the last traded price). For longs, entry must be >= today's close. For shorts, entry must be <= today's close. Do not propose entries at today's open or mid-session prices — those already traded and cannot be filled. If the setup requires a price below close (for longs) or above close (for shorts), present it as a conditional: "Enter at $X on next session if price pulls back to [level]."
+
+        COUNTER-TREND REVERSAL SETUP (4H vs Daily divergence):
+        Backtesting across 850K+ crypto bars and 192K+ stock bars shows that when the 4H
+        timeframe reverses against the daily trend, these setups have HIGHER win rates than
+        aligned setups (73-86% goodR vs 38-43% for aligned). This is because reversals happen
+        at high-volatility inflection points where large ATR moves are common.
+
+        WHEN TO APPLY:
+        - Daily bias is bearish (or strongly bearish), but 4H has flipped bullish — OR
+        - Daily bias is bullish (or strongly bullish), but 4H has flipped bearish
+        - ML_WIN >= 70% (REQUIRED — only top-bucket quality justifies trading against the daily)
+
+        THIS IS A MEAN-REVERSION TRADE, NOT A TREND TRADE:
+        - The favorable excursion (1.5 ATR) is reached 73-86% of the time
+        - BUT the avg 24H return is near zero or slightly negative — the move often reverses
+        - Use TIGHTER targets: TP1 at 1.0 ATR (not 1.5), TP2 at 2.0 ATR (not 4.0)
+        - Take profits quickly — this is a bounce/pullback, not a new trend
+
+        CONVICTION: MODERATE (never HIGH for counter-trend reversals)
+        Even with 70%+ ML_WIN, counter-trend carries inherent risk. The daily trend
+        may reassert at any time. Assign MODERATE conviction and size accordingly.
+
+        ENTRY CONDITIONS:
+        1. 4H shows clear reversal: 2+ bars in the new direction with expanding volume
+        2. Price at or near a key level (support/resistance, 52-week extreme, volume profile)
+        3. 1H confirms with entry signal (rejection wick, engulfing, RSI cross)
+
+        STOP: Beyond the 4H reversal low/high (the swing point). Minimum 1.5 ATR.
+        TP1: 1.0 ATR from entry. TP2: 2.0 ATR from entry.
+
+        DO NOT APPLY when:
+        - ML_WIN < 70% — insufficient model confidence for counter-trend
+        - No clear 4H reversal candles (just a single bar bounce)
+        - Price is mid-range (not at a key level)
+        - Kill conditions are active
 
         PRICE ACTION SUMMARY:
         You receive a "Price Action Summary" section computed from raw candle data. It tells you the current regime (trending/consolidating/choppy), the shape of any consolidation, momentum direction for RSI/Stoch RSI/MACD, Stoch RSI cross recency, volume trend, and candle patterns with their position context.
