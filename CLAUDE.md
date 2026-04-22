@@ -6,7 +6,7 @@ MarketScope is an iOS app for multi-timeframe technical analysis of crypto and s
 
 - **Bundle ID:** `com.ludikure.CryptoLens`
 - **App Store name:** MarketScope
-- **Version:** 1.2 (build 21)
+- **Version:** 1.2 (build 22)
 - **Deployment target:** iOS 17.0
 - **Xcode:** 16.0
 - **Project generator:** XcodeGen (`project.yml`)
@@ -20,6 +20,9 @@ xcodebuild -project MarketScope.xcodeproj -scheme MarketScope -destination 'gene
 
 # Generate project from project.yml (if changed — required after adding/removing files)
 xcodegen generate
+
+# Build + install on simulator
+xcodebuild -project MarketScope.xcodeproj -scheme MarketScope -destination 'platform=iOS Simulator,id=<DEVICE_ID>' install DSTROOT=/tmp/MarketScope.dst && xcrun simctl install <DEVICE_ID> /tmp/MarketScope.dst/Applications/MarketScope.app
 ```
 
 No tests exist. No package manager dependencies (no SPM, CocoaPods, or Carthage).
@@ -35,8 +38,9 @@ Views/          → SwiftUI views (charts, indicators, alerts, settings, outcome
 Models/         → Data models (Candle, AnalysisResult, TradeSetup, TradeOutcome, etc.)
 Indicators/     → Technical indicator computation (RSI, MACD, Bollinger, ADX series, etc.)
 Analysis/       → Price action & positioning analyzers
+ML/             → ML model JSONs + native tree evaluator (MLScoring.swift)
 Utils/          → Constants, formatters, helpers, ViewHelpers (shared UI functions), MarketHours
-Resources/      → Assets.xcassets
+Resources/      → Assets.xcassets, earnings_history.json, dark_pool_history.json
 ```
 
 ### Cloudflare Worker (`marketscope-worker/`)
@@ -50,9 +54,9 @@ TypeScript worker that proxies API calls, handles auth, push notifications (APNs
 - **`AlertsStore`** and **`FavoritesStore`** are `@MainActor` — all mutations must happen on main thread. `AlertsStore` has `processPendingBackgroundAlerts()` for bridging background-triggered alerts.
 - **`Constants.customStocks`** and its accessors (`stock(for:)`, `asset(for:)`) are `@MainActor`.
 - **Symbol selection** is unified in `AnalysisService.switchToSymbol()` — both `ContentView` and `FavoritePillsView` delegate to it. It handles cancellation of in-flight requests.
-- **Indicator computation** happens in `IndicatorEngine.computeAll()` — pure functions, no side effects. Includes full MACD/ADX/volume ratio series for chart sub-panels. **In-progress candle is dropped at the top of `computeAll`** (if `last.time + interval > now`) so live price ticks don't mutate indicators between refreshes. Same logic mirrored in `marketscope-worker/src/index.ts` via `dropInProgress()`.
+- **Indicator computation** happens in `IndicatorEngine.computeAll()` — pure functions, no side effects. Includes full MACD/ADX/volume ratio series for chart sub-panels. **In-progress candle is dropped at the top of `computeAll`** (if `last.time + interval > now`) so live price ticks don't mutate indicators between refreshes. Same logic mirrored in `marketscope-worker/src/index.ts` via `dropInProgress()`. **Chart candles are trimmed to last 50** in `computeAll` — use `fullDailyCandles` (returned from `fetchAndCompute`) for ML features, not `tf1.candles`.
 - **`AnalysisHistoryStore`** serializes all disk I/O on a dedicated `DispatchQueue`.
-- **`OutcomeTracker`** tracks trade setup outcomes (entry/SL/TP hits, max excursions) and FLAT/kill outcomes (false conservatism detection). Persists to `~/Library/Caches/trade_outcomes/`.
+- **`OutcomeTracker`** tracks trade setup outcomes (entry/SL/TP hits, max excursions) and FLAT/kill outcomes (false conservatism detection). Persists to `~/Library/Caches/trade_outcomes/`. Syncs resolved outcomes to D1 via `/outcomes` endpoint.
 - **Cache:** `AnalysisService` caches results per-symbol in memory (`resultsBySymbol`) and on disk (`~/Library/Caches/analyses/`). `loadCache` is `nonisolated` to avoid blocking main thread.
 
 ### Pre-Computed Flags (Swift → LLM)
@@ -96,6 +100,7 @@ The app pre-computes authoritative flags passed to the LLM in the `PRE-COMPUTED 
 | Finnhub | Market status, analyst recs, earnings | `FinnhubProvider` (class) |
 | FRED (via worker) | Macro data (rates, yields) | `MacroDataService` (@MainActor) |
 | FairEconomy | Economic calendar (client-side) | `EconomicCalendarService` (class) |
+| FINRA | Dark pool short sale volume (daily) | `DarkPoolData` (enum, bundled) + worker cron |
 
 ### Navigation
 
@@ -138,17 +143,27 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 
 ### Overview
 
-v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
+v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
 
-- **Features:** 101 (stripped from 105: removed dailyScore, fourHScore, scoreSum, scoreDivergence — 0-6 tree splits each, noise-level; removed daysToEarnings, daysSinceEarnings, isEarningsWeek — 0 splits, no signal)
-- **Crypto model:** 76 symbols (56 pre-2021 + 20 post-2021), 141,742 bars, **72.6% WF accuracy**
-- **Stock model:** 43 symbols (mega-cap + growth + cyclicals + energy + biotech + REITs + financials + ETFs), 47,829 bars, **66.4% WF accuracy**
+- **Crypto model:** LightGBM depth=4, 150 trees — 76 symbols, 141,786 bars, **73.4% WF accuracy**
+- **Stock model:** XGBoost depth=5, 100 trees — 83 symbols (82 configured, 2 missing CSVs), 96,301 bars, **66.2% WF accuracy**
+- **Features:** 107
 - **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
-- **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x), hyperparams `depth=3, n_estimators=100, lr=0.03, reg_alpha=0.1, reg_lambda=1.0`
-- **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85. Top-bucket reliability: crypto [0.70, 0.85) = 73.1% actual on 8,834 samples; stocks [0.70, 0.85) = 75.1% on 10,901 samples.
-- **Abandoned experiments:** v10 signed models (goodR_long/short) — identical top-bucket, crypto-short too sparse (9 samples), stock-short saturates at 0.43. Earnings calendar features (3) — 0 tree splits, no signal. Score-derived features (4) — noise-level splits, create unnecessary ScoringFunction→ML dependency.
+- **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x)
+- **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85.
+- **Inference:** Native Swift tree evaluator reads same JSON as worker (no CoreML — eliminated 6pp conversion loss). Both iOS and worker use identical tree evaluation logic on identical model JSONs.
 
-### Feature Groups (101 total)
+### Calibrated Reliability
+
+| Predicted Range | Crypto Actual | Samples | Stock Actual | Samples |
+|----------------|---------------|---------|--------------|---------|
+| < 30% | 25.7% | 12,810 | 27.0% | 551 |
+| 30-50% | 37.4% | 21,323 | 39.3% | 30,923 |
+| 50-60% | 56.2% | 11,550 | 54.6% | 1,113 |
+| 60-70% | 64.0% | 11,325 | 64.6% | 4,383 |
+| 70-85% | 74.8% | 8,332 | 74.8% | 19,528 |
+
+### Feature Groups (107 total)
 
 | Group | Count | Source |
 |-------|-------|--------|
@@ -172,75 +187,101 @@ v9 dual XGBoost binary classifiers (crypto / stock) predicting direction-agnosti
 | Acceleration | 3 | Delta of deltas |
 | Time-of-day | 2 | hourBucket (crypto sessions), isWeekend |
 | Stock features | 9 | fiftyTwoWeekPct, gap analysis, relStrengthVsSpy, beta, vixLevelCode, isMarketHours |
-| Computed | 4 | volWeightedRsi, hVolWeightedRsi, atrExpansionRate, fundingSlope |
+| Earnings proximity | 1 | `earningsProximity` = exp(-daysToNearest/7) from bundled JSON |
+| Dark pool | 2 | FINRA RegSHO shortVolumeRatio + 20-day Z-score |
+| Derivatives interactions | 2 | oiPriceInteraction (OI×price), fundingSlope (last 4 rates) |
+| Candle structure | 1 | bodyWickRatio (avg body/range over 5 bars) |
 
 ### Files
 
 | File | Purpose |
 |------|---------|
-| `Models/BacktestResult.swift` | `MLFeatures` struct (101 fields), `BacktestDataPoint` |
-| `ML/MLScoring.swift` | CoreML inference; `predict(features:)` returns calibrated goodR |
-| `ML/MLCalibration.swift` | Isotonic calibration; 2 maps loaded from bundle JSONs |
-| `ML/MarketScoreML_{crypto,stock}.mlmodel` | 2 CoreML models |
-| `ML/{crypto,stock}_calibration.json` | iOS sidecar calibration maps |
+| `Models/BacktestResult.swift` | `MLFeatures` struct (107 fields), `BacktestDataPoint` |
+| `ML/MLScoring.swift` | Native XGBoost/LightGBM tree evaluator; reads same JSON as worker |
+| `ML/ml-model-{crypto,stock}.json` | Model JSONs (trees + embedded calibration), shared with worker |
 | `Services/BacktestEngine.swift` | Backtest loop, feature extraction, CSV export, batch export |
-| `Services/AnalysisService.swift` | `buildMLFeatures()` for live predictions; stores `mlWinProbability` on `IndicatorResult` |
+| `Services/AnalysisService.swift` | `buildMLFeatures()` for live predictions; `fetchAndCompute()` returns full daily candles |
+| `Services/DarkPoolData.swift` | Loads bundled `dark_pool_history.json` for backtester lookups |
+| `Services/EarningsCalendar.swift` | Stock earnings date lookup from bundled JSON |
 | `Services/FearGreedService.swift` | Historical Fear & Greed from Alternative.me |
+| `Resources/dark_pool_history.json` | FINRA RegSHO data, 85 symbols × 1,579 days (from `finra_dark_pool.py`) |
+| `Resources/earnings_history.json` | Earnings dates for 73 stocks + 9 ETFs (from `earnings_backfill.py`) |
 | `marketscope-worker/src/ml-predict.ts` | Worker `mlPredict()` evaluates tree JSONs, applies embedded calibration |
-| `marketscope-worker/src/ml-model-{crypto,stock}.json` | 2 worker model JSONs (trees + calibration block) |
-| `marketscope-worker/src/scoring-full.ts` | Worker 101-feature computation (Wilder ADX/ATR, 4H-ATR-normalized volume profile, %-scale BB bandwidth, ported ScoringFunction for tfAlignment — must match `IndicatorEngine` to stay in training distribution) |
-| `Services/EarningsCalendar.swift` | Stock earnings date lookup from bundled JSON (not used in ML — 0 tree splits — but available for future use) |
-| `Resources/earnings_history.json` | Bundled earnings dates for 39 stocks, 2020-2026 (from yfinance via `ml-training/earnings_backfill.py`) |
-| `ml-training/calibrate_v9.py` | Training + isotonic calibration script — trains 2 models, exports CoreML + worker JSON |
-| `ml-training/train_signed_v10.py` | Abandoned signed-model experiment (kept as reference) |
+| `marketscope-worker/src/ml-model-{crypto,stock}.json` | Worker model JSONs (same files as iOS) |
+| `marketscope-worker/src/scoring-full.ts` | Worker 107-feature computation |
+| `ml-training/calibrate_v9.py` | Training script — LightGBM crypto + XGBoost stocks, exports unified JSON |
+| `ml-training/model_comparison.py` | Hyperparameter comparison (XGBoost d3-5 × t100-200 + LightGBM) |
+| `ml-training/finra_dark_pool.py` | Downloads FINRA RegSHO daily files, computes short volume Z-scores |
+| `ml-training/earnings_backfill.py` | Downloads historical earnings via yfinance |
 
 ### ML in Live Predictions
 
 - `AnalysisService.buildMLFeatures()` constructs `MLFeatures` from live indicator data
+- **Full daily candles** (250 from Yahoo, 300 from Binance) passed via `fetchAndCompute()` return value — not `tf1.candles` (which is trimmed to 50 for chart display)
+- SPY daily candles cached (5min staleness) for stock beta + relStrengthVsSpy
+- Dark pool fetched from worker `/darkpool` endpoint (1hr cache)
 - Rate-of-change deltas computed from `prevMLSnapshots` (stored per-symbol between refreshes)
+- Funding rate history tracked in `fundingHistory` dict for slope computation
 - Basis fetched from Binance `/fapi/v1/premiumIndex`
 - Fear & Greed from CoinGecko (already fetched for sentiment)
 - ETH/BTC from Binance ETHBTC candles
-- Previous 1-bar deltas stored for acceleration computation
-- Regime changes tracked via `lastRegime` dict
+- Earnings proximity from bundled `EarningsCalendar`
 
 ### Worker ML Scoring (Cron)
 
 - Runs every minute via `scheduled()` handler
-- Fetches candles (in-progress dropped via `dropInProgress()`), computes all 101 features via `scoring-full.ts`
-- Fetches live: VIX/DXY (Yahoo), Fear & Greed (Alternative.me), ETH/BTC (Binance, 1-bar 4H delta), funding rate + OI + L/S + taker + basis (Binance fapi)
-- Rate-of-change + acceleration from KV-persisted snapshots
-- Volume profile computed via TypeScript port of `VolumeProfile.swift`, ATR-normalized by 4H ATR (matches training)
+- Fetches candles (in-progress dropped via `dropInProgress()`), computes all 107 features via `scoring-full.ts`
+- **Stocks:** fetches 1H candles from Yahoo (`range=6mo`), aggregates to 4H (~216 bars, above 210 threshold)
+- **Crypto:** fetches 4H + 1H directly from Binance
+- Fetches SPY daily candles (`range=6mo`) for stock beta/relStrengthVsSpy
+- Fetches FINRA dark pool data daily, stores in KV with rolling 20-day history for Z-score
+- Fetches live: VIX/DXY (Yahoo), Fear & Greed (Alternative.me), ETH/BTC (Binance), derivatives (Binance fapi)
+- Rate-of-change + acceleration + funding slope from KV-persisted snapshots
 - Archives derivatives to D1 every 4H for future training
 - Writes calibrated goodR probability to `score_history.ml_probability` per cron per symbol
-- Notifications: fires when ML_WIN >= 0.70 (top-bucket only, 73% actual win rate), at hours 9/15/21 `America/New_York`, with 5h KV-backed cooldown per (device, symbol). Max 3 notifications/day/symbol.
+
+### Notifications
+
+| | Crypto | Stocks |
+|---|---|---|
+| Hours (ET) | 8am, 12pm, 4pm, 8pm, 11:30pm | 8am, 12pm, 4pm |
+| Days | Every day | Weekdays only |
+| Threshold | ML >= 70% | ML >= 70% |
+| Cooldown | 3.5 hours per (device, symbol) | 3.5 hours per (device, symbol) |
 
 ### Backtest & Training
 
 - `BacktestEngine` runs walk-forward eval on historical candles
 - Fetches from D1 archive first, falls back to Binance/Yahoo/TwelveData
 - Crypto clamped to Jan 2020 start (derivatives coverage)
-- Exports CSV with all 101 features + forward returns + trade outcomes
+- Exports CSV with all 107 features + forward returns + trade outcomes
 - Batch export: separate "Crypto Only" / "Stocks Only" buttons
 - 3-second delay between stock symbols to avoid rate limiting
-- Training: `calibrate_v9.py` with purged time-series CV, daily downsampling, sample weighting
+- Training: `calibrate_v9.py` with LightGBM (crypto) + XGBoost (stocks), purged time-series CV, daily downsampling, sample weighting
 
 ### Backtester Symbols
 
 - **Crypto (76):** 56 pre-2021 (BTC, ETH, BCH, XRP, LTC, TRX, ETC, LINK, XLM, ADA, XMR, DASH, ZEC, XTZ, BNB, ATOM, ONT, IOTA, BAT, VET, NEO, QTUM, IOST, THETA, ALGO, ZIL, KNC, ZRX, COMP, DOGE, KAVA, BAND, RLC, SNX, DOT, YFI, CRV, TRB, RUNE, SUSHI, EGLD, SOL, ICX, STORJ, UNI, AVAX, ENJ, KSM, NEAR, AAVE, FIL, RSR, BEL, AXS, SKL, GRT) + 20 post-2021 (SAND, MANA, HBAR, MATIC, ICP, DYDX, GALA, IMX, GMT, APE, INJ, LDO, APT, ARB, SUI, PENDLE, SEI, TIA, JUP, PEPE)
-- **Stocks (44):** Mega-cap (AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, JPM, UNH, HD, MA, ABBV, V, AMD, NFLX, BA, XOM, CRM, LLY, DIS) + Growth (PLTR, ROKU, SHOP) + Short-interest (BYND, GME) + Cyclicals (CAT, DE, X) + Energy (OXY, FANG) + Biotech (REGN, VRTX, GILD, BIIB) + REITs (SPG, O) + Financial (GS) + ETFs (SPY, QQQ, IWM, XLE, XLF)
+- **Stocks (85):** Mega-cap tech (AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, CRM, NFLX, AMD, ORCL, ADBE, INTC, CSCO) + Semis (AVGO, QCOM, MU, AMAT, LRCX, MRVL) + Growth (PLTR, ROKU, SHOP, SQ, SNAP, COIN, RBLX) + Meme (BYND, GME) + Financials (JPM, GS, MS, BAC, WFC, BLK, SCHW) + Healthcare (UNH, LLY, ABBV, JNJ, PFE, MRK, TMO) + Biotech (REGN, VRTX, GILD, BIIB) + Consumer (HD, MA, V, DIS, NKE, SBUX, MCD, WMT, COST) + Cyclicals (CAT, DE, X, BA) + Energy (XOM, OXY, FANG, CVX, SLB) + Defense (LMT, RTX, GD) + Transport (UNP, FDX, DAL) + Telecom (T, VZ, CMCSA) + REITs (SPG, O) + ETFs (SPY, QQQ, IWM, XLE, XLF, XLK, XLV, GLD, TLT)
 
 ### Worker/iOS Feature Parity
 
-After the 2026-04-16 port audit + scoring port, most features are synced:
+After v10 sync (2026-04-18): iOS and worker use the same native tree evaluator on the same JSON model files. Worker now fetches stock 1H/4H candles from Yahoo. Remaining ~2-3pp score gap from minor indicator computation differences:
 
-**Fixed:** ADX (Wilder smoothing), ATR (Wilder + 4H source), BB bandwidth (×100), atrPercent (4H), volume profile ATR normalization (4H), ethBtcDelta6 (1-bar), ScoringFunction ported faithfully to TypeScript (`computeScore` in `scoring-full.ts` matches iOS's `ScoringFunction.score()`), score-derived features removed (no longer a divergence source).
-
-**Remaining minor gaps:**
-- `dStructBull/Bear` — both sides use EMA stack as proxy (consistent approximation; iOS's MarketStructure.analyze not ported but both sides approximate the same way)
-- `oiSignal` — worker has no prev-OI state tracking (`oiChangePct=0` always)
+- `dStructBull/Bear` — both sides use EMA stack as proxy
 - `hAboveVwap` — VWAP session-anchoring differs subtly
+- `hVolumeRatio` — worker returns 0 for stocks (not computed in `extractFeatures`)
 - Volume profile POC/VA binning has small residual differences
+- `relStrengthVsSpy` — worker doesn't compute (SPY candles available but not used in `computeAllFeatures`)
+- `earningsProximity` — worker defaults to 0 (no earnings calendar data)
+
+### Model Comparison Results (v10)
+
+Tested 10 configurations (7 XGBoost + 3 LightGBM). All within 72.9-73.4% crypto, 66.0-66.5% stocks. Selected:
+- Crypto: LGB d4 t150 — best WF accuracy (73.4%) + top-bucket reliability (78.7%)
+- Stocks: XGB d5 t100 — best top-bucket reliability (77.0%)
+
+Deeper models (d5) and more trees (t200) showed diminishing returns. LightGBM d4 = d5 accuracy, confirming d4 captures all useful interactions.
 
 ## Known Remaining Issues (Low Severity)
 
@@ -249,5 +290,6 @@ After the 2026-04-16 port audit + scoring port, most features are synced:
 - Missing App Group entitlement on main app target (widget can't share data)
 - `aps-environment` hardcoded to `development` in entitlements
 - Worker: APNs tries sandbox first then production (doubles latency); JWT not cached per cron; cron processes devices sequentially
-- Worker VIX/DXY hardcoded default as fallback (low importance features)
-- Some stock ML features default in live (relStrengthVsSpy, beta, gapFilled — would need SPY candle fetch + intraday tracking)
+- CoreML .mlmodel files still in bundle (unused — can be removed to reduce app size)
+- MLCalibration.swift still in project (unused — calibration embedded in model JSON)
+- `ml-training/calibrate_v9.py` name is stale (actually trains v10 models)

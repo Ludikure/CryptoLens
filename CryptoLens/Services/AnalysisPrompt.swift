@@ -917,11 +917,19 @@ enum AnalysisPrompt {
         let releasedEvents = economicEvents.filter { $0.isRecentlyReleased }
         let upcomingEvents = economicEvents.filter { $0.isUpcoming }
 
+        let etFormatter: DateFormatter = {
+            let df = DateFormatter()
+            df.dateFormat = "MMM d, h:mm a"
+            df.timeZone = TimeZone(identifier: "America/New_York")
+            df.locale = Locale(identifier: "en_US_POSIX")
+            return df
+        }()
+
         if !releasedEvents.isEmpty {
             lines.append("")
             lines.append("=== RECENTLY RELEASED ECONOMIC DATA ===")
             for event in releasedEvents {
-                var line = "✅ \(event.title) (\(event.country)) — Released \(event.date.formatted(date: .abbreviated, time: .shortened))"
+                var line = "✅ \(event.title) (\(event.country)) — Released \(etFormatter.string(from: event.date)) ET"
                 if let actual = event.actual, !actual.isEmpty {
                     line += " | Actual: \(actual)"
                     if let forecast = event.forecast, !forecast.isEmpty { line += " vs Exp: \(forecast)" }
@@ -940,7 +948,7 @@ enum AnalysisPrompt {
             lines.append("")
             lines.append("=== UPCOMING ECONOMIC EVENTS ===")
             for event in upcomingEvents {
-                var line = "\(event.title) (\(event.country)) — \(event.date.formatted(date: .abbreviated, time: .shortened))"
+                var line = "\(event.title) (\(event.country)) — \(etFormatter.string(from: event.date)) ET"
                 if let forecast = event.forecast, !forecast.isEmpty { line += " | Exp: \(forecast)" }
                 if let prev = event.previous, !prev.isEmpty { line += " | Prev: \(prev)" }
                 let hoursAway = event.date.timeIntervalSinceNow / 3600
