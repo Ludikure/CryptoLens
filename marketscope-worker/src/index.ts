@@ -1536,10 +1536,16 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
   const newSnapshots: typeof prevSnapshots = {};
 
-  // Always process these crypto symbols for D1 archiving, even if not in watchlist
+  // Always process these crypto symbols for D1 archiving, even if not in watchlist.
+  // Top 30 by futures volume — covers the majority of training bars and ensures
+  // derivatives features (funding, OI, taker, basis) have real data for backtesting.
   const ARCHIVE_CRYPTO = [
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT',
     'LINKUSDT', 'AVAXUSDT', 'DOTUSDT', 'NEARUSDT',
+    'DOGEUSDT', 'LTCUSDT', 'ETCUSDT', 'MATICUSDT', 'ATOMUSDT',
+    'UNIUSDT', 'AAVEUSDT', 'FILUSDT', 'TRXUSDT', 'VETUSDT',
+    'INJUSDT', 'RUNEUSDT', 'APTUSDT', 'ARBUSDT', 'SUIUSDT',
+    'SUSHIUSDT', 'PEPEUSDT', 'PENDLEUSDT', 'TIAUSDT', 'JUPUSDT',
   ];
   const allSymbols = [...new Set([...config.symbols, ...ARCHIVE_CRYPTO])];
 
