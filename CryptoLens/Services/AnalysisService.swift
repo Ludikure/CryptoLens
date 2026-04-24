@@ -912,8 +912,10 @@ class AnalysisService: ObservableObject {
             // Outcome tracking: register new setups (skip stocks outside market hours)
             let shouldTrack = market == .crypto || MarketHours.isMarketOpen()
             if shouldTrack {
+                let mlProb = result.daily.mlWinProbability
                 for setup in tradeSetups {
-                    OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id)
+                    OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id,
+                                                  mlProbability: mlProb)
                 }
             }
             // Track FLAT/kill outcomes
@@ -1020,20 +1022,23 @@ class AnalysisService: ObservableObject {
 
     private func refreshSPYCandles() async {
         guard Date().timeIntervalSince(spyLastFetch) > 300 else { return }
-        if let candles = try? await yahoo.fetchCandles(symbol: "SPY", interval: "1d"), candles.count >= 60 {
+
+        async let spyFetch = yahoo.fetchCandles(symbol: "SPY", interval: "1d")
+        async let iwmFetch = yahoo.fetchCandles(symbol: "IWM", interval: "1d")
+        async let vix3mFetch = yahoo.fetchCandles(symbol: "%5EVIX3M", interval: "1d")
+        async let dxyFetch = yahoo.fetchCandles(symbol: "DX-Y.NYB", interval: "1d")
+
+        if let candles = try? await spyFetch, candles.count >= 60 {
             spyDailyCandles = candles
             spyLastFetch = Date()
         }
-        // IWM for breadth ratio
-        if let iwm = try? await yahoo.fetchCandles(symbol: "IWM", interval: "1d"), iwm.count >= 6 {
+        if let iwm = try? await iwmFetch, iwm.count >= 6 {
             iwmDailyCandles = iwm
         }
-        // VIX3M for term structure
-        if let vix3m = try? await yahoo.fetchCandles(symbol: "%5EVIX3M", interval: "1d"), let last = vix3m.last {
+        if let vix3m = try? await vix3mFetch, let last = vix3m.last {
             vix3mPrice = last.close
         }
-        // DXY for momentum
-        if let dxy = try? await yahoo.fetchCandles(symbol: "DX-Y.NYB", interval: "1d"), dxy.count >= 6 {
+        if let dxy = try? await dxyFetch, dxy.count >= 6 {
             dxyDailyCandles = dxy
         }
     }

@@ -72,6 +72,7 @@ struct MarketScopeApp: App {
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)
                     PushService.syncWatchlist(favoritesStore.orderedFavorites)
                     alertsStore.syncFromServer()
+                    Task { await OutcomeTracker.restoreFromServer() }
                     // Show What's New after splash dismisses
                     if WhatsNewManager.shouldShow {
                         Task {

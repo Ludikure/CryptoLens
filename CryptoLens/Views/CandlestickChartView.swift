@@ -104,6 +104,9 @@ struct CandlestickChartView: View {
         }
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Candlestick chart for \(currentResult.label)")
+        .accessibilityValue("\(candles.count) candles, latest price \(candles.last.map { Formatters.formatPrice($0.close) } ?? "N/A")")
     }
 }
 
@@ -566,6 +569,9 @@ private struct CandlestickCanvas: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(Color(.systemGray3), lineWidth: 0.5)
         )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title) indicator")
+        .accessibilityValue(series.first?.0.last.map { String(format: "%.1f", $0) } ?? "N/A")
     }
 
     private var macdPanel: some View {

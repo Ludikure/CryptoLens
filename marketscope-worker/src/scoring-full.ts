@@ -78,9 +78,9 @@ export interface FullFeatures {
     // Cross-market breadth & macro momentum (4)
     relStrengthVsSector: number; vixTermStructure: number;
     dxyMomentum: number; iwmSpyRatio: number;
-    // Computed features (4)
+    // Computed features (3)
     volWeightedRsi: number; hVolWeightedRsi: number;
-    atrExpansionRate: number; fundingSlope: number;
+    atrExpansionRate: number;
 }
 
 // ============================================================

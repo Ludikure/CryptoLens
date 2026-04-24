@@ -1257,6 +1257,9 @@ enum AnalysisPrompt {
                             let rr = reward / risk
                             let atrDist = reward / max(atr, 0.0001)
                             guard rr >= tp2MinRR && rr <= tp2RRBand.1 && atrDist >= tp2ATRBand.0 && atrDist <= tp2ATRBand.1 else { return nil }
+                            // TP2 must be at least 0.5 ATR beyond TP1
+                            let distFromTP1 = abs(level.price - (tp1?.price ?? entry.price))
+                            guard distFromTP1 / max(atr, 0.0001) >= 0.5 else { return nil }
                             if let t1 = tp1 {
                                 guard effectiveDirection == "SHORT" ? level.price < t1.price : level.price > t1.price else { return nil }
                             }

@@ -120,7 +120,8 @@ enum OutcomeTracker {
     }
 
     /// Register a new setup for tracking.
-    static func registerSetup(_ setup: TradeSetup, symbol: String, analysisId: UUID) {
+    static func registerSetup(_ setup: TradeSetup, symbol: String, analysisId: UUID,
+                              mlProbability: Double? = nil, conviction: String? = nil) {
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
             var tracked = loadTrackedSetups(url: url)
@@ -128,7 +129,8 @@ enum OutcomeTracker {
             // Don't duplicate
             guard !tracked.contains(where: { $0.setup.id == setup.id }) else { return }
 
-            tracked.insert(TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId), at: 0)
+            tracked.insert(TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
+                                        mlProbability: mlProbability, conviction: conviction), at: 0)
 
             // Cap at 50 per symbol
             if tracked.count > 50 { tracked = Array(tracked.prefix(50)) }
@@ -164,6 +166,8 @@ enum OutcomeTracker {
                         "tp2": t.setup.tp2 as Any,
                         "outcome": t.outcome.result,
                         "pnlPercent": 0,
+                        "mlProb": t.mlProbability ?? 0,
+                        "conviction": t.conviction ?? "",
                     ]
                     request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
                     _ = try? await URLSession.shared.data(for: request)
@@ -286,6 +290,61 @@ enum OutcomeTracker {
         }
     }
 
+    // MARK: - Restore from Server
+
+    /// Fetch resolved outcomes from D1 and merge into local cache.
+    /// Call on app launch when local cache is empty.
+    static func restoreFromServer() async {
+        // Only restore if local cache is empty
+        let dir = outcomeDir
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        let hasSetups = files.contains { $0.lastPathComponent.hasPrefix("setups_") }
+        guard !hasSetups else { return }
+
+        guard let url = URL(string: "\(PushService.workerURL)/outcomes") else { return }
+        await PushService.ensureAuth()
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        PushService.addAuthHeaders(&request)
+
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { return }
+
+        ioQueue.async {
+            for item in json {
+                guard let symbol = item["symbol"] as? String,
+                      let direction = item["direction"] as? String,
+                      let entry = item["entry"] as? Double,
+                      let stopLoss = item["stopLoss"] as? Double,
+                      let tp1 = item["tp1"] as? Double
+                else { continue }
+
+                let tp2 = item["tp2"] as? Double
+                let setup = TradeSetup(direction: direction, entry: entry, stopLoss: stopLoss, tp1: tp1, tp2: tp2)
+                let mlProb = item["mlProb"] as? Double
+                let conviction = item["conviction"] as? String
+
+                let fileURL = dir.appendingPathComponent("setups_\(symbol).json")
+                var tracked = loadTrackedSetups(url: fileURL)
+                var ts = TrackedSetup(setup: setup, symbol: symbol, analysisId: UUID(),
+                                       mlProbability: mlProb, conviction: conviction)
+                ts.synced = true
+
+                // Restore outcome state
+                if let outcome = item["outcome"] as? String {
+                    if outcome == "tp1_win" { ts.outcome.entryHit = true; ts.outcome.tp1Hit = true }
+                    else if outcome == "tp2_win" { ts.outcome.entryHit = true; ts.outcome.tp1Hit = true; ts.outcome.tp2Hit = true }
+                    else if outcome == "loss" { ts.outcome.entryHit = true; ts.outcome.stopHit = true }
+                }
+
+                tracked.insert(ts, at: 0)
+                save(tracked, to: fileURL)
+            }
+        }
+    }
+
     // MARK: - Persistence
 
     private static func loadTrackedSetups(url: URL) -> [TrackedSetup] {
@@ -315,10 +374,18 @@ struct TrackedSetup: Codable, Identifiable {
     var outcome: TradeOutcome
     let killsAtGeneration: KillSnapshot?
     var synced: Bool
+    let mlProbability: Double?
+    let conviction: String?
 
     var id: UUID { setup.id }
 
-    init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil) {
+    private enum CodingKeys: String, CodingKey {
+        case setup, symbol, analysisId, timestamp, outcome,
+             killsAtGeneration, synced, mlProbability, conviction
+    }
+
+    init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil,
+         mlProbability: Double? = nil, conviction: String? = nil) {
         self.setup = setup
         self.symbol = symbol
         self.analysisId = analysisId
@@ -326,6 +393,8 @@ struct TrackedSetup: Codable, Identifiable {
         self.outcome = TradeOutcome()
         self.killsAtGeneration = killSnapshot
         self.synced = false
+        self.mlProbability = mlProbability
+        self.conviction = conviction
     }
 
     init(from decoder: Decoder) throws {
@@ -337,6 +406,21 @@ struct TrackedSetup: Codable, Identifiable {
         outcome = try c.decode(TradeOutcome.self, forKey: .outcome)
         killsAtGeneration = try c.decodeIfPresent(KillSnapshot.self, forKey: .killsAtGeneration)
         synced = (try? c.decode(Bool.self, forKey: .synced)) ?? false
+        mlProbability = try c.decodeIfPresent(Double.self, forKey: .mlProbability)
+        conviction = try c.decodeIfPresent(String.self, forKey: .conviction)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(setup, forKey: .setup)
+        try c.encode(symbol, forKey: .symbol)
+        try c.encode(analysisId, forKey: .analysisId)
+        try c.encode(timestamp, forKey: .timestamp)
+        try c.encode(outcome, forKey: .outcome)
+        try c.encodeIfPresent(killsAtGeneration, forKey: .killsAtGeneration)
+        try c.encode(synced, forKey: .synced)
+        try c.encodeIfPresent(mlProbability, forKey: .mlProbability)
+        try c.encodeIfPresent(conviction, forKey: .conviction)
     }
 }
 
