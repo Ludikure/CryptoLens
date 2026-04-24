@@ -3,6 +3,29 @@ import Foundation
 /// Shared prompt construction and response parsing for all AI providers.
 enum AnalysisPrompt {
 
+    private struct TaggedLevel {
+        let price: Double
+        let type: String
+        let proximity: String
+        let atrDistance: Double
+        let strength: Double    // 0-5, composite quality
+        let freshness: Double   // 0-1, recency
+        let candlesAgo: Int     // raw recency (0 for non-structure)
+        let isStructural: Bool  // true for MarketStructure levels
+    }
+
+    private static func computeClearance(entryPrice: Double, targetPrice: Double, allLevels: [TaggedLevel]) -> Double {
+        let lo = min(entryPrice, targetPrice)
+        let hi = max(entryPrice, targetPrice)
+        var obstacleSum = 0.0
+        for level in allLevels {
+            if level.price > lo && level.price < hi {
+                obstacleSum += level.strength * 0.15
+            }
+        }
+        return max(0.0, 1.0 - obstacleSum)
+    }
+
     static func systemPrompt(market: Market = .crypto, params: ScoringParams? = nil) -> String {
         _ = params  // retained for API compatibility; thresholds no longer drive prompt text
         let tf = market == .crypto
@@ -354,7 +377,7 @@ enum AnalysisPrompt {
         MACRO RISK: The macro event proximity is pre-computed as `Macro Risk` in the PRE-COMPUTED FLAGS section. If IMMINENT, conviction cannot exceed LOW (no trade). If NEARBY, conviction cannot exceed MODERATE. If UPCOMING or ON_HORIZON, flag in Risk Factors but do not suppress conviction.
 
         TAGGED LEVELS: Levels in the TAGGED LEVELS section are pre-computed with proximity (IN_PLAY / NEARBY / DISTANT) and ATR distance. IN_PLAY levels are the only candidates for primary entries. NEARBY levels may be used for conditional/wait entries. DISTANT levels are targets only — never propose them as entries.
-        CANDIDATE SETUPS: If pre-computed candidate setups are provided, use the exact R:R values shown — do not recalculate. Select the best candidate based on signal quality, exhaustion signals, and confluence. If no candidate is marked Viable (R:R >= 1.0), there is no setup. You may adjust entry price slightly based on the current candle pattern (e.g., entry at the wick rejection rather than the level itself), but do not recalculate R:R — state that the entry is adjusted and the pre-computed R:R is approximate.
+        CANDIDATE SETUPS: Each candidate provides a validated TP1 (R:R 1.0-2.5) and TP2 (R:R 1.8-4.0), selected by quality scoring from structural levels. If targets show "(ATR target)" they are computed from volatility when no suitable structure existed — valid but note it. Targets marked "COUNTER-TREND" use tighter bands (TP1 R:R 0.8-1.5, TP2 R:R 1.3-2.5). If Viable: false, do NOT propose a trade.
         CANDLE CLOSE TIMESTAMPS: Use the pre-computed Next 4H Close and Next Daily Close timestamps for the "Next decision point" line. Do not calculate candle close times yourself.
         KILLS CLEARING: If Kills Clearing flags are present, mention them in the Prerequisites section of the watching output. Do not analyze raw data to determine if kills are clearing — use the pre-computed flags.
         DATA QUALITY: If a DATA QUALITY section is present in the payload, some data sources failed. Mention missing data in Risk Factors. If candle data is flagged as stale, note it prominently — price levels may have shifted. Do not fabricate values for missing data sources. Reduce conviction by one level if 2+ enrichment sources are missing.
@@ -1051,37 +1074,35 @@ enum AnalysisPrompt {
            let atr = indicators.count > 2 ? indicators[2].atr?.atr : indicators[1].atr?.atr {
 
             // Build structured level array (used for both text output and R:R)
-            struct TaggedLevel {
-                let price: Double
-                let type: String
-                let proximity: String
-                let atrDistance: Double
-            }
-
             var allLevels = [TaggedLevel]()
 
             for ind in indicators {
                 let prefix = ind.label
+                let srStrength: Double = prefix.contains("Daily") ? 2.5 : prefix.contains("4H") ? 2.0 : 1.5
                 for s in ind.supportResistance.supports {
                     let dist = abs(currentPrice - s) / max(atr, 0.0001)
                     allLevels.append(TaggedLevel(price: s, type: "\(prefix) support",
-                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
+                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist,
+                        strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false))
                 }
                 for r in ind.supportResistance.resistances {
                     let dist = abs(currentPrice - r) / max(atr, 0.0001)
                     allLevels.append(TaggedLevel(price: r, type: "\(prefix) resistance",
-                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
+                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist,
+                        strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false))
                 }
                 if let vwap = ind.vwap?.vwap {
                     let dist = abs(currentPrice - vwap) / max(atr, 0.0001)
                     allLevels.append(TaggedLevel(price: vwap, type: "\(prefix) VWAP",
-                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
+                        proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist,
+                        strength: 2.0, freshness: 0.5, candlesAgo: 0, isStructural: false))
                 }
                 if let vp = ind.volumeProfile {
                     for (label, price) in [("POC", vp.poc), ("VAH", vp.valueAreaHigh), ("VAL", vp.valueAreaLow)] {
                         let dist = abs(currentPrice - price) / max(atr, 0.0001)
                         allLevels.append(TaggedLevel(price: price, type: "\(prefix) \(label)",
-                            proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist))
+                            proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT", atrDistance: dist,
+                            strength: label == "POC" ? 3.5 : 3.0, freshness: 1.0, candlesAgo: 0, isStructural: false))
                     }
                 }
             }
@@ -1089,32 +1110,59 @@ enum AnalysisPrompt {
             // Add MarketStructure levels with test count metadata
             for ind in indicators {
                 if let ms = ind.marketStructure {
+                    let tfWeight: Double = ind.label.contains("Daily") ? 1.5 : ind.label.contains("4H") ? 1.0 : 0.5
                     for level in ms.levelTests {
                         let dist = abs(currentPrice - level.price) / max(atr, 0.0001)
-                        let freshness = level.candlesAgo <= 3 ? "fresh" : (level.candlesAgo <= 10 ? "recent" : "old")
+                        let freshnessText = level.candlesAgo <= 3 ? "fresh" : (level.candlesAgo <= 10 ? "recent" : "old")
+                        let levelStrength = min(Double(min(level.tests, 5)) * tfWeight, 5.0)
+                        let levelFreshness: Double = level.candlesAgo <= 3 ? 1.0 : level.candlesAgo <= 10 ? 0.5 : 0.0
                         allLevels.append(TaggedLevel(
                             price: level.price,
-                            type: "\(ind.label) structure (\(level.tests)× tested, \(freshness))",
+                            type: "\(ind.label) structure (\(level.tests)× tested, \(freshnessText))",
                             proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT",
-                            atrDistance: dist
+                            atrDistance: dist,
+                            strength: levelStrength, freshness: levelFreshness,
+                            candlesAgo: level.candlesAgo, isStructural: true
                         ))
                     }
                 }
             }
 
-            // Deduplicate levels within 0.1%
-            var uniqueLevels = [TaggedLevel]()
-            for level in allLevels {
-                let isDuplicate = uniqueLevels.contains { abs($0.price - level.price) / max(level.price, 1) < 0.001 }
-                if !isDuplicate { uniqueLevels.append(level) }
+            // Confluence clustering: merge levels within 0.3 ATR
+            var clustered = [TaggedLevel]()
+            let sortedLevels = allLevels.sorted { $0.price < $1.price }
+            var used = Set<Int>()
+            for i in sortedLevels.indices where !used.contains(i) {
+                var clusterIndices = [i]
+                for j in (i + 1)..<sortedLevels.count where !used.contains(j) {
+                    if abs(sortedLevels[j].price - sortedLevels[i].price) / max(atr, 0.0001) <= 0.3 {
+                        clusterIndices.append(j)
+                    } else { break }
+                }
+                clusterIndices.forEach { used.insert($0) }
+                let members = clusterIndices.map { sortedLevels[$0] }
+                let anchor = members.max(by: { $0.strength < $1.strength })!
+                let totalStrength = min(members.reduce(0.0) { $0 + $1.strength }, 5.0)
+                let bestFreshness = members.map(\.freshness).max() ?? 0
+                let minCandlesAgo = members.map(\.candlesAgo).min() ?? 0
+                let anyStructural = members.contains { $0.isStructural }
+                let typeStr = members.count == 1 ? anchor.type : members.map(\.type).joined(separator: " + ")
+                let dist = abs(currentPrice - anchor.price) / max(atr, 0.0001)
+                clustered.append(TaggedLevel(
+                    price: anchor.price, type: typeStr,
+                    proximity: dist <= 1.0 ? "IN_PLAY" : dist <= 2.0 ? "NEARBY" : "DISTANT",
+                    atrDistance: dist, strength: totalStrength, freshness: bestFreshness,
+                    candlesAgo: minCandlesAgo, isStructural: anyStructural
+                ))
             }
+            let uniqueLevels = clustered
 
             // Output tagged levels
             if !uniqueLevels.isEmpty {
                 lines.append("")
                 lines.append("=== TAGGED LEVELS ===")
                 for level in uniqueLevels.prefix(15) {
-                    lines.append("\(Formatters.formatPrice(level.price)) (\(level.type)) [\(level.proximity), \(String(format: "%.1f", level.atrDistance))x ATR]")
+                    lines.append("\(Formatters.formatPrice(level.price)) (\(level.type)) [\(level.proximity), \(String(format: "%.1f", level.atrDistance))x ATR, str=\(String(format: "%.1f", level.strength))]")
                 }
             }
 
@@ -1127,8 +1175,10 @@ enum AnalysisPrompt {
                 let fourHBullish4 = indicators[1].bias.contains("Bullish")
                 let aligned4 = (dailyBearish4 && fourHBearish4) || (dailyBullish4 && fourHBullish4)
                 let direction4 = dailyBearish4 ? "SHORT" : (dailyBullish4 ? "LONG" : "")
+                let isCounterTrend = !aligned4 && !direction4.isEmpty
 
-                if aligned4 && !direction4.isEmpty {
+                if !direction4.isEmpty {
+                    let effectiveDirection = direction4
                     let entryLevels = uniqueLevels.filter { $0.proximity == "IN_PLAY" }
                     var candidates = [String]()
 
@@ -1139,7 +1189,7 @@ enum AnalysisPrompt {
                     for entry in entryLevels {
                         // Stop at swing invalidation point
                         let stop: Double
-                        if direction4 == "SHORT" {
+                        if effectiveDirection == "SHORT" {
                             if let swingHigh = h1Structure?.swingHighs.first ?? h4Structure?.swingHighs.first {
                                 stop = swingHigh + atr * 0.3
                             } else {
@@ -1159,7 +1209,7 @@ enum AnalysisPrompt {
                         var adjustedStop = stop
                         let minStopDist = atr * 2.0
                         if abs(entry.price - adjustedStop) < minStopDist {
-                            adjustedStop = direction4 == "SHORT" ? entry.price + minStopDist : entry.price - minStopDist
+                            adjustedStop = effectiveDirection == "SHORT" ? entry.price + minStopDist : entry.price - minStopDist
                         }
                         let risk = abs(entry.price - adjustedStop)
                         guard risk > 0 else { continue }
@@ -1171,26 +1221,88 @@ enum AnalysisPrompt {
                         let suggestedQty = riskDollars / risk
                         let qtyStr = suggestedQty >= 1 ? String(format: "%.0f", suggestedQty) : String(format: "%.4f", suggestedQty)
 
-                        let validTargets: [TaggedLevel]
-                        if direction4 == "SHORT" {
-                            validTargets = uniqueLevels.filter { $0.price < entry.price }.sorted { $0.price > $1.price }
+                        // R:R bands
+                        let tp1RRBand: (Double, Double) = isCounterTrend ? (0.8, 1.5) : (1.0, 2.5)
+                        let tp2RRBand: (Double, Double) = isCounterTrend ? (1.3, 2.5) : (1.3, 4.0)
+                        let tp1ATRBand: (Double, Double) = isCounterTrend ? (0.5, 2.0) : (0.8, 3.0)
+                        let tp2ATRBand: (Double, Double) = isCounterTrend ? (1.0, 3.5) : (1.5, 5.0)
+                        let idealTP1RR = isCounterTrend ? 1.0 : 1.5
+                        let idealTP2RR = isCounterTrend ? 1.8 : 2.5
+
+                        let directionalLevels: [TaggedLevel]
+                        if effectiveDirection == "SHORT" {
+                            directionalLevels = uniqueLevels.filter { $0.price < entry.price }
                         } else {
-                            validTargets = uniqueLevels.filter { $0.price > entry.price }.sorted { $0.price < $1.price }
+                            directionalLevels = uniqueLevels.filter { $0.price > entry.price }
                         }
 
-                        let targetLines = validTargets.prefix(3).map { t -> String in
-                            let reward = abs(t.price - entry.price)
+                        // Layer 1+2: filter by band, score by quality
+                        func tp1Score(_ level: TaggedLevel) -> Double? {
+                            let reward = abs(level.price - entry.price)
                             let rr = reward / risk
-                            return "\(Formatters.formatPrice(t.price)) (\(t.type)) R:R=\(String(format: "%.2f", rr))"
+                            let atrDist = reward / max(atr, 0.0001)
+                            guard rr >= tp1RRBand.0 && rr <= tp1RRBand.1 && atrDist >= tp1ATRBand.0 && atrDist <= tp1ATRBand.1 else { return nil }
+                            let rrFit = max(0, 1.0 - abs(rr - idealTP1RR) / idealTP1RR)
+                            let clearance = Self.computeClearance(entryPrice: entry.price, targetPrice: level.price, allLevels: uniqueLevels)
+                            return 1.5 * level.strength + 1.0 * rrFit + 1.0 * clearance + 0.5 * level.freshness
                         }
 
-                        let viable = validTargets.prefix(3).contains { abs($0.price - entry.price) / risk >= 1.0 }
+                        let tp1 = directionalLevels.compactMap { l in tp1Score(l).map { (l, $0) } }.max(by: { $0.1 < $1.1 })?.0
+
+                        let tp1RR = tp1.map { abs($0.price - entry.price) / risk } ?? 0
+                        let tp2MinRR = max(tp2RRBand.0, tp1RR + 0.3)
+
+                        func tp2Score(_ level: TaggedLevel) -> Double? {
+                            let reward = abs(level.price - entry.price)
+                            let rr = reward / risk
+                            let atrDist = reward / max(atr, 0.0001)
+                            guard rr >= tp2MinRR && rr <= tp2RRBand.1 && atrDist >= tp2ATRBand.0 && atrDist <= tp2ATRBand.1 else { return nil }
+                            if let t1 = tp1 {
+                                guard effectiveDirection == "SHORT" ? level.price < t1.price : level.price > t1.price else { return nil }
+                            }
+                            let rrFit = max(0, 1.0 - abs(rr - idealTP2RR) / idealTP2RR)
+                            let clearance = Self.computeClearance(entryPrice: tp1?.price ?? entry.price, targetPrice: level.price, allLevels: uniqueLevels)
+                            return 1.5 * level.strength + 1.0 * rrFit + 1.0 * clearance + 0.5 * level.freshness
+                        }
+
+                        let tp2 = directionalLevels.compactMap { l in tp2Score(l).map { (l, $0) } }.max(by: { $0.1 < $1.1 })?.0
+
+                        // Layer 3: ATR fallback with snap-to-level
+                        func atrFallback(_ multiplier: Double, _ label: String) -> (price: Double, type: String) {
+                            let fp = effectiveDirection == "SHORT" ? entry.price - atr * multiplier : entry.price + atr * multiplier
+                            if let nearest = uniqueLevels.min(by: { abs($0.price - fp) < abs($1.price - fp) }),
+                               abs(nearest.price - fp) / max(atr, 0.0001) <= 0.5 {
+                                return (nearest.price, "ATR target (\(label)) → \(nearest.type)")
+                            }
+                            return (fp, "ATR target (\(label))")
+                        }
+
+                        let finalTP1Price: Double
+                        let finalTP1Type: String
+                        if let t1 = tp1 { finalTP1Price = t1.price; finalTP1Type = t1.type }
+                        else { let fb = atrFallback(1.5, "1.5× ATR"); finalTP1Price = fb.price; finalTP1Type = fb.type }
+
+                        let finalTP2Price: Double
+                        let finalTP2Type: String
+                        if let t2 = tp2 { finalTP2Price = t2.price; finalTP2Type = t2.type }
+                        else { let fb = atrFallback(2.5, "2.5× ATR"); finalTP2Price = fb.price; finalTP2Type = fb.type }
+
+                        let finalTP1RR = abs(finalTP1Price - entry.price) / risk
+                        let finalTP2RR = abs(finalTP2Price - entry.price) / risk
+
+                        let targetLines = [
+                            "\(Formatters.formatPrice(finalTP1Price)) (\(finalTP1Type)) R:R=\(String(format: "%.2f", finalTP1RR))",
+                            "\(Formatters.formatPrice(finalTP2Price)) (\(finalTP2Type)) R:R=\(String(format: "%.2f", finalTP2RR))"
+                        ]
+                        let viable = finalTP1RR >= (isCounterTrend ? 0.8 : 1.0)
+
+                        let setupLabel = isCounterTrend ? "COUNTER-TREND" : "TREND"
 
                         candidates.append(
-                            "Entry \(Formatters.formatPrice(entry.price)) (\(entry.type)) | " +
+                            "[\(setupLabel)] Entry \(Formatters.formatPrice(entry.price)) (\(entry.type)) | " +
                             "Stop \(Formatters.formatPrice(adjustedStop)) | " +
                             "Risk \(Formatters.formatPrice(risk)) (\(qtyStr) units @ \(Formatters.formatPrice(riskDollars)) risk) | " +
-                            "Targets: \(targetLines.joined(separator: ", ")) | " +
+                            "TP1: \(targetLines[0]) | TP2: \(targetLines[1]) | " +
                             "Viable: \(viable)"
                         )
                     }
