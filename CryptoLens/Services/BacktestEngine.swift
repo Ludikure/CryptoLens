@@ -1,5 +1,19 @@
 import Foundation
 
+/// Pre-fetched data shared across all symbols in a batch export run.
+struct SharedBacktestData {
+    let vixCandles: [Candle]
+    let dxyCandles: [Candle]
+    let dxyCloses: [Double]
+    let dxyEma20List: [Double]
+    let vix3mCandles: [Candle]
+    let spyCandles: [Candle]
+    let iwmCandles: [Candle]
+    let fearGreedHistory: [Date: Int]
+    let ethBtcCandles: [Candle]
+    let sectorETFCandles: [String: [Candle]]
+}
+
 @MainActor
 class BacktestEngine: ObservableObject {
     @Published var isRunning = false
@@ -42,7 +56,7 @@ class BacktestEngine: ObservableObject {
         return candles.isEmpty ? nil : candles
     }
 
-    func run(symbol: String, startDate: Date, endDate: Date) async {
+    func run(symbol: String, startDate: Date, endDate: Date, sharedData: SharedBacktestData? = nil) async {
         isRunning = true
         progress = 0
         statusMessage = "Fetching historical data..."
@@ -146,55 +160,83 @@ class BacktestEngine: ObservableObject {
             var fearGreedHistory = [Date: Int]()
             var ethBtcCandles = [Candle]()
             if isCrypto {
-                statusMessage = "Fetching Fear & Greed index..."
-                fearGreedHistory = await FearGreedService.fetchHistory()
-                statusMessage = "Fetching ETH/BTC..."
-                ethBtcCandles = (try? await binance.fetchHistoricalCandles(
-                    symbol: "ETHBTC", interval: "4h", startDate: fetchStart, endDate: endDate)) ?? []
+                if let shared = sharedData {
+                    fearGreedHistory = shared.fearGreedHistory
+                    ethBtcCandles = shared.ethBtcCandles
+                } else {
+                    statusMessage = "Fetching Fear & Greed index..."
+                    fearGreedHistory = await FearGreedService.fetchHistory()
+                    statusMessage = "Fetching ETH/BTC..."
+                    ethBtcCandles = (try? await binance.fetchHistoricalCandles(
+                        symbol: "ETHBTC", interval: "4h", startDate: fetchStart, endDate: endDate)) ?? []
+                }
             }
 
             // Fetch macro candles (VIX + DXY) for ML features
-            statusMessage = "Fetching VIX/DXY..."
-            let vixCandles = (try? await CandleCache.loadOrFetch(
-                symbol: "^VIX", interval: "1d", startDate: fetchStart, endDate: endDate,
-                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
-                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
-            let dxyCandles = (try? await CandleCache.loadOrFetch(
-                symbol: "DX-Y.NYB", interval: "1d", startDate: fetchStart, endDate: endDate,
-                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
-                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
-            let dxyCloses = dxyCandles.map(\.close)
-            let dxyEma20List = MovingAverages.computeEMA(values: dxyCloses, period: 20)
+            let vixCandles: [Candle]
+            let dxyCandles: [Candle]
+            let dxyCloses: [Double]
+            let dxyEma20List: [Double]
+            if let shared = sharedData {
+                vixCandles = shared.vixCandles
+                dxyCandles = shared.dxyCandles
+                dxyCloses = shared.dxyCloses
+                dxyEma20List = shared.dxyEma20List
+            } else {
+                statusMessage = "Fetching VIX/DXY..."
+                vixCandles = (try? await CandleCache.loadOrFetch(
+                    symbol: "^VIX", interval: "1d", startDate: fetchStart, endDate: endDate,
+                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+                dxyCandles = (try? await CandleCache.loadOrFetch(
+                    symbol: "DX-Y.NYB", interval: "1d", startDate: fetchStart, endDate: endDate,
+                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+                dxyCloses = dxyCandles.map(\.close)
+                dxyEma20List = MovingAverages.computeEMA(values: dxyCloses, period: 20)
+            }
 
             // Fetch SPY candles for stock relative strength + beta
             var spyCandles = [Candle]()
             var iwmCandles = [Candle]()
             if !isCrypto {
-                statusMessage = "Fetching SPY..."
-                spyCandles = (try? await CandleCache.loadOrFetch(
-                    symbol: "SPY", interval: "1d", startDate: fetchStart, endDate: endDate,
-                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
-                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
-                statusMessage = "Fetching IWM..."
-                iwmCandles = (try? await CandleCache.loadOrFetch(
-                    symbol: "IWM", interval: "1d", startDate: fetchStart, endDate: endDate,
-                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
-                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+                if let shared = sharedData {
+                    spyCandles = shared.spyCandles
+                    iwmCandles = shared.iwmCandles
+                } else {
+                    statusMessage = "Fetching SPY..."
+                    spyCandles = (try? await CandleCache.loadOrFetch(
+                        symbol: "SPY", interval: "1d", startDate: fetchStart, endDate: endDate,
+                        fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                            symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+                    statusMessage = "Fetching IWM..."
+                    iwmCandles = (try? await CandleCache.loadOrFetch(
+                        symbol: "IWM", interval: "1d", startDate: fetchStart, endDate: endDate,
+                        fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                            symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+                }
             }
             var spyIdx = 0
             var iwmIdx = 0
 
             // Fetch VIX3M for term structure ratio
-            statusMessage = "Fetching VIX3M..."
-            let vix3mCandles = (try? await CandleCache.loadOrFetch(
-                symbol: "^VIX3M", interval: "1d", startDate: fetchStart, endDate: endDate,
-                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
-                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+            let vix3mCandles: [Candle]
+            if let shared = sharedData {
+                vix3mCandles = shared.vix3mCandles
+            } else {
+                statusMessage = "Fetching VIX3M..."
+                vix3mCandles = (try? await CandleCache.loadOrFetch(
+                    symbol: "^VIX3M", interval: "1d", startDate: fetchStart, endDate: endDate,
+                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+            }
 
             // Fetch sector ETF candles for relStrengthVsSector
             var sectorETFCandles = [String: [Candle]]()
             if !isCrypto {
-                if let sectorETF = Self.sectorETF(for: symbol) {
+                if let shared = sharedData {
+                    sectorETFCandles = shared.sectorETFCandles
+                } else if let sectorETF = Self.sectorETF(for: symbol) {
                     statusMessage = "Fetching \(sectorETF)..."
                     sectorETFCandles[sectorETF] = (try? await CandleCache.loadOrFetch(
                         symbol: sectorETF, interval: "1d", startDate: fetchStart, endDate: endDate,
@@ -958,6 +1000,85 @@ class BacktestEngine: ObservableObject {
     }()
 
 
+    /// Pre-fetch all shared data once for batch export (VIX, DXY, SPY, IWM, VIX3M, Fear & Greed, ETH/BTC, sector ETFs).
+    func preloadSharedData(startDate: Date, endDate: Date, hasCrypto: Bool, hasStocks: Bool, stockSymbols: [String]) async -> SharedBacktestData {
+        let warmupDays: TimeInterval = 220 * 86400
+        let fetchStart = startDate.addingTimeInterval(-warmupDays)
+
+        // VIX (all symbols)
+        let vixCandles = (try? await CandleCache.loadOrFetch(
+            symbol: "^VIX", interval: "1d", startDate: fetchStart, endDate: endDate,
+            fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+
+        // DXY (all symbols)
+        let dxyCandles = (try? await CandleCache.loadOrFetch(
+            symbol: "DX-Y.NYB", interval: "1d", startDate: fetchStart, endDate: endDate,
+            fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+        let dxyCloses = dxyCandles.map(\.close)
+        let dxyEma20List = MovingAverages.computeEMA(values: dxyCloses, period: 20)
+
+        // VIX3M (all symbols)
+        let vix3mCandles = (try? await CandleCache.loadOrFetch(
+            symbol: "^VIX3M", interval: "1d", startDate: fetchStart, endDate: endDate,
+            fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+
+        // SPY + IWM (stocks only)
+        var spyCandles = [Candle]()
+        var iwmCandles = [Candle]()
+        if hasStocks {
+            spyCandles = (try? await CandleCache.loadOrFetch(
+                symbol: "SPY", interval: "1d", startDate: fetchStart, endDate: endDate,
+                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+            iwmCandles = (try? await CandleCache.loadOrFetch(
+                symbol: "IWM", interval: "1d", startDate: fetchStart, endDate: endDate,
+                fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                    symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+        }
+
+        // Fear & Greed + ETH/BTC (crypto only)
+        var fearGreedHistory = [Date: Int]()
+        var ethBtcCandles = [Candle]()
+        if hasCrypto {
+            fearGreedHistory = await FearGreedService.fetchHistory()
+            ethBtcCandles = (try? await binance.fetchHistoricalCandles(
+                symbol: "ETHBTC", interval: "4h", startDate: fetchStart, endDate: endDate)) ?? []
+        }
+
+        // Sector ETFs (unique set from all stock symbols)
+        var sectorETFCandles = [String: [Candle]]()
+        if hasStocks {
+            var uniqueSectorETFs = Set<String>()
+            for sym in stockSymbols {
+                if let etf = Self.sectorETF(for: sym) {
+                    uniqueSectorETFs.insert(etf)
+                }
+            }
+            for etf in uniqueSectorETFs {
+                sectorETFCandles[etf] = (try? await CandleCache.loadOrFetch(
+                    symbol: etf, interval: "1d", startDate: fetchStart, endDate: endDate,
+                    fetcher: { s, i, sd, ed in try await self.yahoo.fetchHistoricalCandles(
+                        symbol: s, interval: i, startDate: sd, endDate: ed) })) ?? []
+            }
+        }
+
+        return SharedBacktestData(
+            vixCandles: vixCandles,
+            dxyCandles: dxyCandles,
+            dxyCloses: dxyCloses,
+            dxyEma20List: dxyEma20List,
+            vix3mCandles: vix3mCandles,
+            spyCandles: spyCandles,
+            iwmCandles: iwmCandles,
+            fearGreedHistory: fearGreedHistory,
+            ethBtcCandles: ethBtcCandles,
+            sectorETFCandles: sectorETFCandles
+        )
+    }
+
     /// Run backtests on given symbols, auto-export CSVs to Documents.
     func batchExport(symbols: [String], startDate: Date, endDate: Date) async {
         batchComplete = false
@@ -968,18 +1089,33 @@ class BacktestEngine: ObservableObject {
         #if DEBUG
         print("[Batch] Export directory: \(exportDir.path)")
         #endif
+
+        // Pre-fetch all shared data once
+        let hasCrypto = symbols.contains { $0.hasSuffix("USDT") }
+        let hasStocks = symbols.contains { !$0.hasSuffix("USDT") }
+        batchProgress = "Pre-fetching shared data..."
+        let preloadStart = CFAbsoluteTimeGetCurrent()
+        let shared = await preloadSharedData(
+            startDate: hasCrypto ? Self.cryptoStartDate : startDate,
+            endDate: endDate,
+            hasCrypto: hasCrypto,
+            hasStocks: hasStocks,
+            stockSymbols: symbols.filter { !$0.hasSuffix("USDT") })
+        let preloadElapsed = CFAbsoluteTimeGetCurrent() - preloadStart
+        print("[Batch] Shared data loaded in \(String(format: "%.1f", preloadElapsed))s")
+
         var exported = 0
         for (idx, sym) in symbols.enumerated() {
             batchProgress = "[\(idx + 1)/\(symbols.count)] \(sym)..."
             let isCrypto = sym.hasSuffix("USDT")
             let symStart = isCrypto ? max(startDate, Self.cryptoStartDate) : startDate
 
-            // Delay between stock symbols to avoid Yahoo/TwelveData rate limits
+            // Reduced delay for stocks (only per-symbol candles may hit Yahoo on archive miss)
             if !isCrypto && idx > 0 {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
 
-            await run(symbol: sym, startDate: symStart, endDate: endDate)
+            await run(symbol: sym, startDate: symStart, endDate: endDate, sharedData: shared)
 
             if let csv = exportCSV() {
                 let fileURL = exportDir.appendingPathComponent("\(sym).csv")
