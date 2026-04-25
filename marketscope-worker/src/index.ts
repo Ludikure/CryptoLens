@@ -958,14 +958,14 @@ export default {
         await env.DB.prepare(
           `INSERT INTO trade_outcomes
            (device_id, symbol, direction, entry_price, stop_loss, tp1, tp2,
-            ml_probability, daily_score, four_h_score, conviction, outcome, pnl_percent, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ml_probability, daily_score, four_h_score, conviction, outcome, pnl_percent, notes, model_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
           deviceId, body.symbol, body.direction, body.entry, body.stopLoss || 0,
           body.tp1 || 0, body.tp2 || null, body.mlProb || null,
           body.dailyScore || null, body.fourHScore || null,
           body.conviction || null, body.outcome || null,
-          body.pnlPercent || null, body.notes || null
+          body.pnlPercent || null, body.notes || null, body.modelVersion || null
         ).run();
         return json({ ok: true });
       } catch {
@@ -991,6 +991,13 @@ export default {
       let query = 'SELECT * FROM trade_outcomes WHERE device_id = ?';
       const params: any[] = [deviceId];
       if (symbol) { query += ' AND symbol = ?'; params.push(symbol); }
+      if (url.searchParams.get('model_version')) {
+        query += ' AND model_version = ?';
+        params.push(parseInt(url.searchParams.get('model_version')!));
+      }
+      if (url.searchParams.get('resolved') === 'true') {
+        query += " AND outcome IS NOT NULL AND outcome NOT IN ('open', 'not_triggered')";
+      }
       query += ' ORDER BY opened_at DESC LIMIT 100';
       const rows = await env.DB.prepare(query).bind(...params).all();
       return json(rows.results);

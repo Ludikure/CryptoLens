@@ -121,7 +121,8 @@ enum OutcomeTracker {
 
     /// Register a new setup for tracking.
     static func registerSetup(_ setup: TradeSetup, symbol: String, analysisId: UUID,
-                              mlProbability: Double? = nil, conviction: String? = nil) {
+                              mlProbability: Double? = nil, conviction: String? = nil,
+                              modelVersion: Int = 10) {
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
             var tracked = loadTrackedSetups(url: url)
@@ -130,7 +131,8 @@ enum OutcomeTracker {
             guard !tracked.contains(where: { $0.setup.id == setup.id }) else { return }
 
             tracked.insert(TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
-                                        mlProbability: mlProbability, conviction: conviction), at: 0)
+                                        mlProbability: mlProbability, conviction: conviction,
+                                        modelVersion: modelVersion), at: 0)
 
             // Cap at 50 per symbol
             if tracked.count > 50 { tracked = Array(tracked.prefix(50)) }
@@ -168,6 +170,7 @@ enum OutcomeTracker {
                         "pnlPercent": 0,
                         "mlProb": t.mlProbability ?? 0,
                         "conviction": t.conviction ?? "",
+                        "modelVersion": t.modelVersion,
                     ]
                     request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
                     _ = try? await URLSession.shared.data(for: request)
@@ -376,16 +379,17 @@ struct TrackedSetup: Codable, Identifiable {
     var synced: Bool
     let mlProbability: Double?
     let conviction: String?
+    let modelVersion: Int
 
     var id: UUID { setup.id }
 
     private enum CodingKeys: String, CodingKey {
         case setup, symbol, analysisId, timestamp, outcome,
-             killsAtGeneration, synced, mlProbability, conviction
+             killsAtGeneration, synced, mlProbability, conviction, modelVersion
     }
 
     init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil,
-         mlProbability: Double? = nil, conviction: String? = nil) {
+         mlProbability: Double? = nil, conviction: String? = nil, modelVersion: Int = 10) {
         self.setup = setup
         self.symbol = symbol
         self.analysisId = analysisId
@@ -395,6 +399,7 @@ struct TrackedSetup: Codable, Identifiable {
         self.synced = false
         self.mlProbability = mlProbability
         self.conviction = conviction
+        self.modelVersion = modelVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -408,6 +413,7 @@ struct TrackedSetup: Codable, Identifiable {
         synced = (try? c.decode(Bool.self, forKey: .synced)) ?? false
         mlProbability = try c.decodeIfPresent(Double.self, forKey: .mlProbability)
         conviction = try c.decodeIfPresent(String.self, forKey: .conviction)
+        modelVersion = try c.decodeIfPresent(Int.self, forKey: .modelVersion) ?? 10
     }
 
     func encode(to encoder: Encoder) throws {
@@ -421,6 +427,7 @@ struct TrackedSetup: Codable, Identifiable {
         try c.encode(synced, forKey: .synced)
         try c.encodeIfPresent(mlProbability, forKey: .mlProbability)
         try c.encodeIfPresent(conviction, forKey: .conviction)
+        try c.encodeIfPresent(modelVersion, forKey: .modelVersion)
     }
 }
 

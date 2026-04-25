@@ -862,6 +862,25 @@ class AnalysisService: ObservableObject {
             }
             #endif
 
+            // Fetch resolved outcome history for this symbol
+            var outcomeHistory: [(direction: String, entry: Double, outcome: String, mlProb: Double?, conviction: String?)] = []
+            if let outUrl = URL(string: "\(PushService.workerURL)/outcomes?symbol=\(symbol)&model_version=10&resolved=true") {
+                var outReq = URLRequest(url: outUrl)
+                outReq.timeoutInterval = 5
+                PushService.addAuthHeaders(&outReq)
+                if let (outData, outResp) = try? await URLSession.shared.data(for: outReq),
+                   (outResp as? HTTPURLResponse)?.statusCode == 200,
+                   let results = try? JSONSerialization.jsonObject(with: outData) as? [[String: Any]] {
+                    outcomeHistory = results.compactMap { r in
+                        guard let dir = r["direction"] as? String,
+                              let entry = r["entry_price"] as? Double,
+                              let outcome = r["outcome"] as? String else { return nil }
+                        return (dir, entry, outcome, r["ml_probability"] as? Double, r["conviction"] as? String)
+                    }
+                    if outcomeHistory.count > 10 { outcomeHistory = Array(outcomeHistory.prefix(10)) }
+                }
+            }
+
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
             if let provider = aiProvider {
@@ -882,7 +901,8 @@ class AnalysisService: ObservableObject {
                     spyContext: spyContext,
                     spotPressure: spotPressure,
                     dataQuality: dataQuality,
-                    crossAsset: crossAsset
+                    crossAsset: crossAsset,
+                    outcomeHistory: outcomeHistory
                 )
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown

@@ -129,6 +129,13 @@ enum AnalysisPrompt {
         If ML_WIN is not in the data header, ignore this section and judge setup quality
         from your own analysis of indicators.
 
+        OUTCOME HISTORY (if provided):
+        Recent trade outcomes for this specific symbol are shown. Use them to:
+        - Adjust directional confidence (if LONGs are winning 5/5, LONG conviction increases)
+        - Flag recurring failure patterns (if SHORTs keep stopping out, require extra evidence)
+        - Note ML accuracy (if setups with ML>70% are winning at expected rate, trust the ML more)
+        Do NOT refuse a setup solely because the last one lost — one loss is noise, a pattern of losses is signal.
+
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
 
@@ -482,7 +489,8 @@ enum AnalysisPrompt {
                                 weeklyContext: String? = nil, spyContext: String? = nil,
                                 spotPressure: SpotPressure? = nil,
                                 dataQuality: DataQuality? = nil,
-                                crossAsset: CrossAssetContext? = nil) -> String {
+                                crossAsset: CrossAssetContext? = nil,
+                                outcomeHistory: [(direction: String, entry: Double, outcome: String, mlProb: Double?, conviction: String?)] = []) -> String {
         var lines = ["Symbol: \(symbol)"]
 
         // Data quality gate — warn about missing/stale data
@@ -767,6 +775,29 @@ enum AnalysisPrompt {
             let isoFormatter = ISO8601DateFormatter()
             lines.append("Next 4H Close: \(isoFormatter.string(from: nextFourHClose))")
             lines.append("Next Daily Close: \(isoFormatter.string(from: dailyClose))")
+        }
+
+        // Outcome history
+        if outcomeHistory.count >= 3 {
+            lines.append("")
+            lines.append("=== RECENT OUTCOME HISTORY (\(symbol)) ===")
+            let wins = outcomeHistory.filter { $0.outcome.contains("win") }.count
+            let losses = outcomeHistory.filter { $0.outcome == "loss" }.count
+            let total = wins + losses
+            let winRate = total > 0 ? Double(wins) / Double(total) * 100 : 0
+            let longs = outcomeHistory.filter { $0.direction == "LONG" }
+            let shorts = outcomeHistory.filter { $0.direction == "SHORT" }
+            let longWins = longs.filter { $0.outcome.contains("win") }.count
+            let shortWins = shorts.filter { $0.outcome.contains("win") }.count
+            lines.append("Last \(total) resolved: \(wins)W / \(losses)L (\(String(format: "%.0f", winRate))% win rate)")
+            if !longs.isEmpty { lines.append("  LONG: \(longWins)/\(longs.count) won") }
+            if !shorts.isEmpty { lines.append("  SHORT: \(shortWins)/\(shorts.count) won") }
+            lines.append("Recent:")
+            for o in outcomeHistory.prefix(3) {
+                let mlStr = o.mlProb.map { " ML:\(String(format: "%.0f", $0 * 100))%" } ?? ""
+                lines.append("  \(o.direction) \(Formatters.formatPrice(o.entry)) → \(o.outcome)\(mlStr)")
+            }
+            lines.append("Use this history to calibrate confidence. Patterns of losses in one direction = require extra evidence.")
         }
 
         if let s = sentiment {
