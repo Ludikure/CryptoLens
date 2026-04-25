@@ -759,7 +759,8 @@ export function computeAllFeatures(
         // Volume profile — POC/VA computed on daily candles, but ATR-normalized distances
         // use 4H ATR (matches iOS BacktestEngine lines 557-572 that produced the training CSVs).
         ...(() => {
-            const vp = computeVolumeProfile(dailyCandles, atrVal);
+            const vpCandles = dailyCandles.slice(-30); // Match iOS: last 30 daily candles
+            const vp = computeVolumeProfile(vpCandles, atrVal);
             const normAtr = fourHAtr;
             if (!vp || normAtr <= 0) return { vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1, vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0 };
             return {
