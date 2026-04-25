@@ -96,6 +96,8 @@ enum MLScoring {
         return calibrate(sigmoid(sum), model)
     }
 
+    static func dumpFeatureDict(_ f: MLFeatures) -> [String: Double] { buildFeatureDict(f) }
+
     private static func buildFeatureDict(_ f: MLFeatures) -> [String: Double] {
         [
             "dRsi": f.dRsi, "dMacdHist": f.dMacdHist, "dAdx": f.dAdx,

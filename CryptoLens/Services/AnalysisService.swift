@@ -534,6 +534,16 @@ class AnalysisService: ObservableObject {
                oiPriceInteraction: _oiPriceInteraction, fundingSlope: _fundingSlope,
                bodyWickRatio: _bodyWickRatio)
             tf1ML.mlWinProbability = MLScoring.predict(features: mlFeatures)
+            #if DEBUG
+            if symbol == "BTCUSDT" || symbol == "ETHUSDT" {
+                let dict = MLScoring.dumpFeatureDict(mlFeatures)
+                if let data = try? JSONSerialization.data(withJSONObject: dict, options: .sortedKeys),
+                   let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("\(symbol.lowercased())_features.json") {
+                    try? data.write(to: url)
+                    NSLog("[ML-DUMP] Wrote %@ features, mlWin=%.4f", symbol, tf1ML.mlWinProbability ?? -1)
+                }
+            }
+            #endif
 
             let prevResult = resultsBySymbol[symbol]
             let result = AnalysisResult(

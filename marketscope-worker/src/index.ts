@@ -153,7 +153,7 @@ export default {
     }
 
     // All endpoints (except /register, /bls/actuals) require valid auth token
-    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/history' && path !== '/darkpool' && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
+    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/history' && path !== '/darkpool' && !path.startsWith('/debug') && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       // Check D1 first, then KV fallback
       const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();
@@ -881,6 +881,14 @@ export default {
       }
     }
 
+    // === Debug: dump cron features ===
+    if (path === '/debug/features') {
+      const sym = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
+      const raw = await env.ALERTS.get(`debug:${sym.toLowerCase()}_features`);
+      if (raw) return json(JSON.parse(raw));
+      return json({ error: 'No debug data yet' });
+    }
+
     // === Dark Pool (FINRA RegSHO short sale volume) ===
     if (path === '/darkpool') {
       const symbol = url.searchParams.get('symbol')?.toUpperCase();
@@ -1350,12 +1358,18 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
   // Fetch VIX + DXY (once per cron run, cached)
   let vixValue = 20, dxyAboveEma20 = 0;
+  // Try cached VIX first (in case fetch fails)
+  const cachedVix = await env.ALERTS.get('cache:vix_value');
+  if (cachedVix) vixValue = parseFloat(cachedVix);
   try {
     const vixResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/%5EVIX?interval=1d&range=5d`);
     if (vixResp.ok) {
       const vixData = await vixResp.json() as any;
-      const closes = vixData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
-      if (closes?.length) vixValue = closes[closes.length - 1] ?? 20;
+      const closes = vixData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter((v: any) => v != null);
+      if (closes?.length) {
+        vixValue = closes[closes.length - 1];
+        await env.ALERTS.put('cache:vix_value', String(vixValue), { expirationTtl: 3600 });
+      }
     }
   } catch {}
   try {
@@ -1658,6 +1672,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       // Hoisted so the sentiment object below can read them outside the isCrypto block
       let basisPct = 0, largeBuyVol = 0, largeSellVol = 0;
       if (isCrypto) {
+        // Read previous OI for change tracking
+        const prevOIKey = `prev_oi:${symbol}`;
+        const prevOIStr = await env.ALERTS.get(prevOIKey);
+        const prevOI = prevOIStr ? parseFloat(prevOIStr) : 0;
         const FAPI = 'https://fapi.binance.com';
         let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0;
         let openInterest = 0, markPrice = 0, indexPrice = 0, longPct = 0, takerRatio = 0;
@@ -1688,6 +1706,15 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           const r = await fetch(`${FAPI}/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=1`);
           if (r.ok) { const d = await r.json() as any[]; if (d.length) openInterest = parseFloat(d[0].sumOpenInterest); }
         } catch {}
+
+        // Compute OI change and store current OI for next run
+        let oiChangePct = 0;
+        if (prevOI > 0 && openInterest > 0) {
+          oiChangePct = (openInterest - prevOI) / prevOI * 100;
+        }
+        if (openInterest > 0) {
+          await env.ALERTS.put(prevOIKey, String(openInterest), { expirationTtl: 86400 });
+        }
 
         // Global L/S ratio
         try {
@@ -1732,6 +1759,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
         // Build derivative signals
         derivSignals.fundingRateRaw = fundingRate;
+        derivSignals.oiChangePct = oiChangePct;
         derivSignals.longPctRaw = longPct || 50;
         derivSignals.takerRatioRaw = takerRatio || 1.0;
         if (fundingRate > 0.03) derivSignals.fundingSignal = -1;
@@ -1740,6 +1768,14 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         else if (takerRatio < 0.9) derivSignals.takerSignal = -1;
         if (longPct > 60) derivSignals.crowdingSignal = -1;
         else if (longPct < 40) derivSignals.crowdingSignal = 1;
+        // OI signal (matches iOS DerivativesContext logic)
+        const priceRising = candles.length >= 2 && candles[candles.length - 1].close > candles[candles.length - 2].close;
+        const oiUp = oiChangePct > 1.0;
+        const oiDown = oiChangePct < -1.0;
+        if (oiUp && priceRising) derivSignals.oiSignal = 1;
+        else if (oiUp && !priceRising) derivSignals.oiSignal = -1;
+        else if (oiDown && priceRising) derivSignals.oiSignal = -1;
+        else if (oiDown && !priceRising) derivSignals.oiSignal = 1;
         derivSignals.derivativesCombined = Math.max(-3, Math.min(3,
           derivSignals.fundingSignal + derivSignals.oiSignal + derivSignals.takerSignal + derivSignals.crowdingSignal));
 
@@ -1781,6 +1817,11 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       // v9 single-model: direction-agnostic goodR probability
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
       newProbs[symbol] = mlProb;
+
+      // Debug: dump features for comparison with iOS
+      if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') {
+        await env.ALERTS.put(`debug:${symbol.toLowerCase()}_features`, JSON.stringify(features), { expirationTtl: 3600 });
+      }
 
       // ML quality gate — fire at scheduled hours AND when ML >= threshold AND cooldown passed.
       const inWatchlist = config.symbols.includes(symbol);
