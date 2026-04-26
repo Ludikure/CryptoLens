@@ -10,10 +10,11 @@ struct PriceHeaderView: View {
     }
 
     var body: some View {
-        VStack(spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(Formatters.formatPrice(result.daily.price))
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
+        VStack(spacing: 6) {
+            Text(Formatters.formatPrice(result.daily.price))
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+
+            HStack(spacing: 8) {
                 if let change = change24h {
                     Text(Formatters.formatPercent(change))
                         .font(.subheadline)
