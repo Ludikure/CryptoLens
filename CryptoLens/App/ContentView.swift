@@ -246,23 +246,29 @@ struct ChartTabContent: View {
         })
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
-        // Active trade banner
-        if let active = activeSetups.first {
+        // Active trade banners (all open trades)
+        ForEach(activeSetups, id: \.id) { active in
             let currentPrice = result.daily.price
             let pnl = active.setup.direction == "LONG"
                 ? (currentPrice - active.setup.entry) / active.setup.entry * 100
                 : (active.setup.entry - currentPrice) / active.setup.entry * 100
-            let distToTP1 = abs(active.setup.tp1 - currentPrice)
+            let nextTarget = active.outcome.tp1Hit ? (active.setup.tp2 ?? active.setup.tp1) : active.setup.tp1
+            let distToTarget = abs(nextTarget - currentPrice)
+            let targetLabel = active.outcome.tp1Hit ? "TP2" : "TP1"
+            let held = Int(Date().timeIntervalSince(active.outcome.entryHitTime ?? active.timestamp) / 3600)
 
-            HStack {
+            HStack(spacing: 6) {
                 Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
-                Text("\(active.setup.direction) from \(Formatters.formatPrice(active.setup.entry))")
+                Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
                     .font(.caption)
                 Spacer()
                 Text(String(format: "%+.1f%%", pnl))
                     .font(.caption.bold())
                     .foregroundStyle(pnl >= 0 ? .green : .red)
-                Text("TP1 \(Formatters.formatPrice(distToTP1)) away")
+                Text("\(targetLabel) \(Formatters.formatPrice(distToTarget)) away")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("\(held)h")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
