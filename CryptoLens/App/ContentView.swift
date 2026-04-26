@@ -111,6 +111,7 @@ struct ChartTabContent: View {
     @EnvironmentObject var favorites: FavoritesStore
     @State private var biasChanges: [String] = []
     @State private var activeSetups: [TrackedSetup] = []
+    @State private var tradesExpanded = false
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
@@ -246,36 +247,78 @@ struct ChartTabContent: View {
         })
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
-        // Active trade banners (all open trades)
-        ForEach(activeSetups, id: \.id) { active in
-            let currentPrice = result.daily.price
-            let pnl = active.setup.direction == "LONG"
-                ? (currentPrice - active.setup.entry) / active.setup.entry * 100
-                : (active.setup.entry - currentPrice) / active.setup.entry * 100
-            let nextTarget = active.outcome.tp1Hit ? (active.setup.tp2 ?? active.setup.tp1) : active.setup.tp1
-            let distToTarget = abs(nextTarget - currentPrice)
-            let targetLabel = active.outcome.tp1Hit ? "TP2" : "TP1"
-            let held = Int(Date().timeIntervalSince(active.outcome.entryHitTime ?? active.timestamp) / 3600)
+        // Active trades (collapsible)
+        if !activeSetups.isEmpty {
+            VStack(spacing: 4) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) { tradesExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Active Trades")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundStyle(.secondary)
+                        Text("\(activeSetups.count)")
+                            .font(.caption2)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.2))
+                            .foregroundStyle(.blue)
+                            .clipShape(Capsule())
+                        Spacer()
+                        // Summary PnL when collapsed
+                        if !tradesExpanded {
+                            let totalPnl = activeSetups.reduce(0.0) { sum, a in
+                                let p = a.setup.direction == "LONG"
+                                    ? (result.daily.price - a.setup.entry) / a.setup.entry * 100
+                                    : (a.setup.entry - result.daily.price) / a.setup.entry * 100
+                                return sum + p
+                            }
+                            Text(String(format: "%+.1f%%", totalPnl))
+                                .font(.caption.bold())
+                                .foregroundStyle(totalPnl >= 0 ? .green : .red)
+                        }
+                        Image(systemName: tradesExpanded ? "chevron.up" : "chevron.down")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
 
-            HStack(spacing: 6) {
-                Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
-                Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
-                    .font(.caption)
-                Spacer()
-                Text(String(format: "%+.1f%%", pnl))
-                    .font(.caption.bold())
-                    .foregroundStyle(pnl >= 0 ? .green : .red)
-                Text("\(targetLabel) \(Formatters.formatPrice(distToTarget)) away")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text("\(held)h")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if tradesExpanded {
+                    ForEach(activeSetups, id: \.id) { active in
+                        let currentPrice = result.daily.price
+                        let pnl = active.setup.direction == "LONG"
+                            ? (currentPrice - active.setup.entry) / active.setup.entry * 100
+                            : (active.setup.entry - currentPrice) / active.setup.entry * 100
+                        let nextTarget = active.outcome.tp1Hit ? (active.setup.tp2 ?? active.setup.tp1) : active.setup.tp1
+                        let distToTarget = abs(nextTarget - currentPrice)
+                        let targetLabel = active.outcome.tp1Hit ? "TP2" : "TP1"
+                        let held = Int(Date().timeIntervalSince(active.outcome.entryHitTime ?? active.timestamp) / 3600)
+
+                        HStack(spacing: 6) {
+                            Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
+                            Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
+                                .font(.caption)
+                            Spacer()
+                            Text(String(format: "%+.1f%%", pnl))
+                                .font(.caption.bold())
+                                .foregroundStyle(pnl >= 0 ? .green : .red)
+                            Text("\(targetLabel) \(Formatters.formatPrice(distToTarget)) away")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Text("\(held)h")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(6)
+                        .background(Color(.systemGray6))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                }
             }
-            .padding(8)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 4)
         }
 
         if !result.tf1.candles.isEmpty {
