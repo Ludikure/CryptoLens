@@ -6,7 +6,7 @@ MarketScope is an iOS app for multi-timeframe technical analysis of crypto and s
 
 - **Bundle ID:** `com.ludikure.CryptoLens`
 - **App Store name:** MarketScope
-- **Version:** 1.2 (build 22)
+- **Version:** 1.2 (build 23)
 - **Deployment target:** iOS 17.0
 - **Xcode:** 16.0
 - **Project generator:** XcodeGen (`project.yml`)
@@ -145,9 +145,9 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 
 v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
 
-- **Crypto model:** LightGBM depth=4, 150 trees — 76 symbols, 141,786 bars, **73.4% WF accuracy**
-- **Stock model:** XGBoost depth=5, 100 trees — 83 symbols (82 configured, 2 missing CSVs), 96,301 bars, **66.2% WF accuracy**
-- **Features:** 107
+- **Crypto model:** LightGBM depth=4, 150 trees — 76 symbols, 141,816 bars, **73.4% WF accuracy**
+- **Stock model:** XGBoost depth=5, 100 trees — 83 symbols, 96,609 bars, **66.1% WF accuracy**, top bucket **76.2%**
+- **Features:** 111
 - **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
 - **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x)
 - **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85.
@@ -157,13 +157,13 @@ v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — pr
 
 | Predicted Range | Crypto Actual | Samples | Stock Actual | Samples |
 |----------------|---------------|---------|--------------|---------|
-| < 30% | 25.7% | 12,810 | 27.0% | 551 |
-| 30-50% | 37.4% | 21,323 | 39.3% | 30,923 |
-| 50-60% | 56.2% | 11,550 | 54.6% | 1,113 |
-| 60-70% | 64.0% | 11,325 | 64.6% | 4,383 |
-| 70-85% | 74.8% | 8,332 | 74.8% | 19,528 |
+| < 30% | 24.7% | 11,889 | 16.9% | 154 |
+| 30-50% | 37.4% | 22,204 | 39.2% | 31,718 |
+| 50-60% | 56.5% | 12,307 | 53.8% | 973 |
+| 60-70% | 64.3% | 10,748 | 65.3% | 6,096 |
+| 70-85% | 74.8% | 8,264 | 76.2% | 18,550 |
 
-### Feature Groups (107 total)
+### Feature Groups (111 total)
 
 | Group | Count | Source |
 |-------|-------|--------|
@@ -191,6 +191,7 @@ v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — pr
 | Dark pool | 2 | FINRA RegSHO shortVolumeRatio + 20-day Z-score |
 | Derivatives interactions | 2 | oiPriceInteraction (OI×price), fundingSlope (last 4 rates) |
 | Candle structure | 1 | bodyWickRatio (avg body/range over 5 bars) |
+| Cross-market breadth | 4 | relStrengthVsSector, vixTermStructure, dxyMomentum, iwmSpyRatio |
 
 ### Files
 
@@ -208,7 +209,7 @@ v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — pr
 | `Resources/earnings_history.json` | Earnings dates for 73 stocks + 9 ETFs (from `earnings_backfill.py`) |
 | `marketscope-worker/src/ml-predict.ts` | Worker `mlPredict()` evaluates tree JSONs, applies embedded calibration |
 | `marketscope-worker/src/ml-model-{crypto,stock}.json` | Worker model JSONs (same files as iOS) |
-| `marketscope-worker/src/scoring-full.ts` | Worker 107-feature computation |
+| `marketscope-worker/src/scoring-full.ts` | Worker 111-feature computation (sector ETF mapping, VP from last 30 candles) |
 | `ml-training/calibrate_v9.py` | Training script — LightGBM crypto + XGBoost stocks, exports unified JSON |
 | `ml-training/model_comparison.py` | Hyperparameter comparison (XGBoost d3-5 × t100-200 + LightGBM) |
 | `ml-training/finra_dark_pool.py` | Downloads FINRA RegSHO daily files, computes short volume Z-scores |
@@ -266,13 +267,15 @@ v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — pr
 
 ### Worker/iOS Feature Parity
 
-After v10 sync (2026-04-18): iOS and worker use the same native tree evaluator on the same JSON model files. Worker now fetches stock 1H/4H candles from Yahoo. Remaining ~2-3pp score gap from minor indicator computation differences:
+After v10 sync (2026-04-25): iOS and worker use the same native tree evaluator on the same JSON model files. Worker fetches stock 1H/4H candles from Yahoo. Major fixes applied:
+- VP now uses last 30 daily candles on both sides (was 250 on worker, causing 5+ ATR divergence)
+- Worker tracks previous OI via KV for oiChangePct + oiSignal (was always 0)
+- VIX cached in KV with 1h TTL fallback (was defaulting to 20 on fetch failure)
+- Worker fetches IWM, VIX3M, DXY, sector ETF candles for new features
 
-- `dStructBull/Bear` — both sides use EMA stack as proxy
+Remaining minor gaps (~2-3pp):
+- `dStructBull/Bear` — both sides use EMA stack as proxy (iOS has full swing analysis)
 - `hAboveVwap` — VWAP session-anchoring differs subtly
-- `hVolumeRatio` — worker returns 0 for stocks (not computed in `extractFeatures`)
-- Volume profile POC/VA binning has small residual differences
-- `relStrengthVsSpy` — worker doesn't compute (SPY candles available but not used in `computeAllFeatures`)
 - `earningsProximity` — worker defaults to 0 (no earnings calendar data)
 
 ### Model Comparison Results (v10)
@@ -283,13 +286,39 @@ Tested 10 configurations (7 XGBoost + 3 LightGBM). All within 72.9-73.4% crypto,
 
 Deeper models (d5) and more trees (t200) showed diminishing returns. LightGBM d4 = d5 accuracy, confirming d4 captures all useful interactions.
 
+## UI Enhancements (2026-04-25)
+
+- **Setup overlay on chart**: Entry (cyan), SL (red), TP1/TP2 (green) lines drawn on candlestick chart
+- **Analysis summary card**: Compact direction/entry/SL/TP/ML card above AI markdown
+- **ML Win badges**: Each favorite pill shows ML probability percentage
+- **Active trade banner**: Unrealized PnL and distance to TP1 for tracked trades
+- **Symbol swipe**: Horizontal swipe on price header switches favorite symbols
+- **Win/loss streak**: `5W 2L` indicator below candle momentum pills
+- **Regime badge**: TRENDING/RANGING/TRANSITIONING capsule on price header
+- **Event countdown**: Live countdown timer to next high-impact economic event
+
+## Outcome Feedback Loop
+
+The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist with model_version = 10). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column.
+
+## Target Selection System
+
+Three-layer quality scoring for TP1/TP2 selection (replaced naive "nearest 3 levels"):
+- **Layer 1**: Hard R:R/ATR band constraints (TP1 1.0-2.5, TP2 1.8-4.0)
+- **Layer 2**: Quality scoring (1.5×strength + rrFit + clearance + freshness)
+- **Layer 3**: ATR fallback with snap-to-nearest-level
+- Level confluence: levels within 0.3 ATR merged into reinforcing clusters
+- Weighted clearance: obstacles penalized by their strength
+- Counter-trend: tighter bands (TP1 0.8-1.5, TP2 1.3-2.5) when 4H opposes daily
+
+## Counter-Trend Reversal Setup
+
+Backtesting (850K+ crypto, 192K+ stock bars) shows counter-trend setups (4H reverses vs daily) have 73-86% goodR vs 38-43% for aligned. Prompt allows counter-trend reversal when ML_WIN >= 70%, with tighter targets (TP1 1.0 ATR, TP2 2.0 ATR) and MODERATE conviction cap.
+
 ## Known Remaining Issues (Low Severity)
 
 - No certificate pinning on network calls
-- Missing accessibility labels on charts and several interactive elements
 - Missing App Group entitlement on main app target (widget can't share data)
-- `aps-environment` hardcoded to `development` in entitlements
 - Worker: APNs tries sandbox first then production (doubles latency); JWT not cached per cron; cron processes devices sequentially
-- CoreML .mlmodel files still in bundle (unused — can be removed to reduce app size)
-- MLCalibration.swift still in project (unused — calibration embedded in model JSON)
 - `ml-training/calibrate_v9.py` name is stale (actually trains v10 models)
+- Backtester optimized (shared data pre-fetch) but still slow for 161 symbols (~2-3 hours)
