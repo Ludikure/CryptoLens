@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CandlestickChartView: View {
     let results: [IndicatorResult]  // [tf1, tf2, tf3]
+    var activeSetup: TradeSetup? = nil
     @State private var selectedTab = 0
     @AppStorage("chart_show_ema") private var showEMA = true
     @AppStorage("chart_show_sr") private var showSR = true
@@ -93,7 +94,8 @@ struct CandlestickChartView: View {
                     adxSeries: showADX ? currentResult.adxSeries : [],
                     plusDISeries: showADX ? currentResult.plusDISeries : [],
                     minusDISeries: showADX ? currentResult.minusDISeries : [],
-                    volumeRatioSeries: showVolOsc ? currentResult.volumeRatioSeries : []
+                    volumeRatioSeries: showVolOsc ? currentResult.volumeRatioSeries : [],
+                    activeSetup: activeSetup
                 )
             } else {
                 Text("No candle data")
@@ -132,6 +134,7 @@ private struct CandlestickCanvas: View {
     let plusDISeries: [Double]
     let minusDISeries: [Double]
     let volumeRatioSeries: [Double]
+    var activeSetup: TradeSetup? = nil
 
     @State private var selectedIndex: Int?
     @State private var scrubMode = false
@@ -242,6 +245,22 @@ private struct CandlestickCanvas: View {
                     }
                     for level in visRes {
                         drawSRLine(context: &context, value: level, height: chartH, width: totalWidth, color: .red)
+                    }
+
+                    // Trade setup lines (Entry/SL/TP)
+                    if let setup = activeSetup {
+                        if setup.entry >= priceMin && setup.entry <= priceMax {
+                            drawSetupLine(context: &context, value: setup.entry, label: "Entry", height: chartH, width: totalWidth, color: .cyan, dashed: false)
+                        }
+                        if setup.stopLoss >= priceMin && setup.stopLoss <= priceMax {
+                            drawSetupLine(context: &context, value: setup.stopLoss, label: "SL", height: chartH, width: totalWidth, color: .red, dashed: false)
+                        }
+                        if setup.tp1 >= priceMin && setup.tp1 <= priceMax {
+                            drawSetupLine(context: &context, value: setup.tp1, label: "TP1", height: chartH, width: totalWidth, color: .green, dashed: false)
+                        }
+                        if let tp2 = setup.tp2, tp2 >= priceMin && tp2 <= priceMax {
+                            drawSetupLine(context: &context, value: tp2, label: "TP2", height: chartH, width: totalWidth, color: .green, dashed: true)
+                        }
                     }
 
                     // EMA polylines
@@ -392,6 +411,20 @@ private struct CandlestickCanvas: View {
         context.draw(
             Text(Formatters.formatPrice(value)).font(.system(size: 7)).foregroundColor(color.opacity(0.85)),
             at: CGPoint(x: width - 4, y: y - 8), anchor: .trailing
+        )
+    }
+
+    private func drawSetupLine(context: inout GraphicsContext, value: Double, label: String, height: CGFloat, width: CGFloat, color: Color, dashed: Bool) {
+        let y = priceY(value, height: height)
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: y))
+        path.addLine(to: CGPoint(x: width, y: y))
+        let style = dashed ? StrokeStyle(lineWidth: 0.8, dash: [5, 3]) : StrokeStyle(lineWidth: 0.8)
+        context.stroke(path, with: .color(color.opacity(0.8)), style: style)
+        // Label on left side
+        context.draw(
+            Text("\(label) \(Formatters.formatPrice(value))").font(.system(size: 7, weight: .semibold)).foregroundColor(color),
+            at: CGPoint(x: 4, y: y - 8), anchor: .topLeading
         )
     }
 

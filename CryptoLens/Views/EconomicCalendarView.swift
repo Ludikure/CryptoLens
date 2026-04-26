@@ -3,10 +3,41 @@ import SwiftUI
 struct EconomicCalendarView: View {
     let events: [EconomicEvent]
 
+    private var nextHighImpactEvent: EconomicEvent? {
+        events.first { $0.isUpcoming && $0.isHighImpact }
+    }
+
+    private func countdownText(for event: EconomicEvent, now: Date) -> String {
+        let seconds = event.date.timeIntervalSince(now)
+        if seconds < 0 { return "NOW" }
+        if seconds < 5 * 60 { return "IMMINENT" }
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+        if hours >= 1 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(minutes)m"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label("Economic Calendar", systemImage: "calendar.badge.exclamationmark")
                 .font(.subheadline).fontWeight(.semibold).foregroundStyle(.secondary)
+
+            if let nextEvent = nextHighImpactEvent {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    let text = countdownText(for: nextEvent, now: context.date)
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                        Text("\(nextEvent.title) in \(text)")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    .foregroundStyle(.orange)
+                    .padding(.vertical, 2)
+                }
+            }
 
             if events.isEmpty {
                 Text("No high-impact events this week")
@@ -49,12 +80,12 @@ struct EconomicCalendarView: View {
 
                         Spacer()
 
-                        // Date/time
+                        // Date/time (ET)
                         VStack(alignment: .trailing, spacing: 1) {
                             Text(event.date.formatted(date: .abbreviated, time: .omitted))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
-                            Text(event.date.formatted(date: .omitted, time: .shortened))
+                            Text(Self.etTimeFormatter.string(from: event.date))
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
@@ -74,6 +105,13 @@ struct EconomicCalendarView: View {
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
+
+    private static let etTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a 'ET'"
+        f.timeZone = TimeZone(identifier: "America/New_York")
+        return f
+    }()
 
     private func impactColor(_ impact: String) -> Color {
         switch impact {

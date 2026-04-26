@@ -108,10 +108,24 @@ struct ContentView: View {
 
 struct ChartTabContent: View {
     @EnvironmentObject var service: AnalysisService
+    @EnvironmentObject var favorites: FavoritesStore
     @State private var biasChanges: [String] = []
+    @State private var activeSetups: [TrackedSetup] = []
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
+    }
+
+    private func switchToAdjacentFavorite(offset: Int) {
+        let list = favorites.orderedFavorites
+        guard !list.isEmpty else { return }
+        let current = selectedSymbol
+        if let idx = list.firstIndex(of: current) {
+            let newIdx = (idx + offset + list.count) % list.count
+            service.switchToSymbol(list[newIdx])
+        } else {
+            service.switchToSymbol(list[0])
+        }
     }
 
     private func recomputeBiasChanges() {
@@ -182,9 +196,14 @@ struct ChartTabContent: View {
                 await service.selectSymbol(Constants.allCoins[0].id)
             }
             recomputeBiasChanges()
+            activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
         }
         .onChange(of: service.currentResult?.timestamp) {
             recomputeBiasChanges()
+            activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
+        }
+        .onChange(of: service.currentSymbol) {
+            activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
         }
     }
 
@@ -220,11 +239,41 @@ struct ChartTabContent: View {
             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
         }
 
-        PriceHeaderView(result: result)
+        PriceHeaderView(result: result, onSwipeLeft: {
+            switchToAdjacentFavorite(offset: 1)
+        }, onSwipeRight: {
+            switchToAdjacentFavorite(offset: -1)
+        })
             .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
+        // Active trade banner
+        if let active = activeSetups.first {
+            let currentPrice = result.daily.price
+            let pnl = active.setup.direction == "LONG"
+                ? (currentPrice - active.setup.entry) / active.setup.entry * 100
+                : (active.setup.entry - currentPrice) / active.setup.entry * 100
+            let distToTP1 = abs(active.setup.tp1 - currentPrice)
+
+            HStack {
+                Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
+                Text("\(active.setup.direction) from \(Formatters.formatPrice(active.setup.entry))")
+                    .font(.caption)
+                Spacer()
+                Text(String(format: "%+.1f%%", pnl))
+                    .font(.caption.bold())
+                    .foregroundStyle(pnl >= 0 ? .green : .red)
+                Text("TP1 \(Formatters.formatPrice(distToTP1)) away")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(8)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
+        }
+
         if !result.tf1.candles.isEmpty {
-            CandlestickChartView(results: [result.tf1, result.tf2, result.tf3])
+            CandlestickChartView(results: [result.tf1, result.tf2, result.tf3], activeSetup: result.tradeSetups.first)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
@@ -395,6 +444,50 @@ struct AITabContent: View {
 
     @ViewBuilder
     private func aiContent(_ result: AnalysisResult) -> some View {
+        // Setup summary card
+        if let setup = result.tradeSetups.first {
+            HStack(spacing: 12) {
+                Text(setup.direction)
+                    .font(.caption.bold())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(setup.direction == "LONG" ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
+                    .foregroundStyle(setup.direction == "LONG" ? .green : .red)
+                    .clipShape(Capsule())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text("Entry \(Formatters.formatPrice(setup.entry))")
+                            .font(.caption)
+                        Spacer()
+                        if let ml = result.daily.mlWinProbability {
+                            Text("ML \(Int(ml * 100))%")
+                                .font(.caption.bold())
+                                .foregroundStyle(ml >= 0.7 ? .green : ml >= 0.5 ? .primary : .gray)
+                        }
+                    }
+                    HStack {
+                        Text("SL \(Formatters.formatPrice(setup.stopLoss))")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                        Text("TP1 \(Formatters.formatPrice(setup.tp1)) (\(String(format: "%.1f", setup.rrTP1))R)")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                        if let tp2 = setup.tp2, let rr2 = setup.rrTP2 {
+                            Text("TP2 \(Formatters.formatPrice(tp2)) (\(String(format: "%.1f", rr2))R)")
+                                .font(.caption2)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal)
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+        }
+
         ClaudeAnalysisView(markdown: result.claudeAnalysis, aiLoadingPhase: service.aiLoadingPhase, isStale: service.isAIStale, analysisTimestamp: result.analysisTimestamp, onRunAnalysis: {
             Task { await service.runFullAnalysis(symbol: selectedSymbol) }
         })

@@ -12,6 +12,16 @@ enum OutcomeTracker {
         return dir
     }
 
+    // MARK: - Active Setups Query
+
+    /// Returns setups that have been entered but not yet resolved (entry hit, not stopped/TP'd).
+    static func activeSetups(symbol: String) -> [TrackedSetup] {
+        return ioQueue.sync {
+            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
+            return loadTrackedSetups(url: url).filter { $0.outcome.entryHit && !$0.outcome.resolved }
+        }
+    }
+
     // MARK: - Trade Setup Outcomes (#1b)
 
     /// Called during each refresh cycle with current price and recent candles.

@@ -28,14 +28,22 @@ struct FavoritePillsView: View {
                                     selectSymbol(asset.id)
                                 }
                             } label: {
-                                Text(asset.ticker)
-                                    .font(.caption)
-                                    .fontWeight(isSelected ? .semibold : .regular)
-                                    .lineLimit(1)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .foregroundStyle(isSelected ? .white : .primary)
-                                    .background(isSelected ? Color.accentColor : Color(.systemGray5), in: Capsule())
+                                HStack(spacing: 3) {
+                                    Text(asset.ticker)
+                                        .font(.caption)
+                                        .fontWeight(isSelected ? .semibold : .regular)
+                                    if let mlProb = service.resultsBySymbol[asset.id]?.tf1.mlWinProbability {
+                                        Text("\(Int(mlProb * 100))")
+                                            .font(.caption2)
+                                            .fontWeight(.medium)
+                                            .foregroundStyle(mlProbColor(mlProb, isSelected: isSelected))
+                                    }
+                                }
+                                .lineLimit(1)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .foregroundStyle(isSelected ? .white : .primary)
+                                .background(isSelected ? Color.accentColor : Color(.systemGray5), in: Capsule())
                             }
                             .id(asset.id)
                         }
@@ -54,5 +62,11 @@ struct FavoritePillsView: View {
 
     private func selectSymbol(_ symbol: String) {
         service.switchToSymbol(symbol)
+    }
+
+    private func mlProbColor(_ prob: Double, isSelected: Bool) -> Color {
+        if prob >= 0.70 { return .green }
+        if prob < 0.50 { return .gray }
+        return isSelected ? .white : .primary
     }
 }
