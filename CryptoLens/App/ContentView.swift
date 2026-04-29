@@ -288,32 +288,65 @@ struct ChartTabContent: View {
                 if tradesExpanded {
                     ForEach(activeSetups, id: \.id) { active in
                         let currentPrice = result.daily.price
-                        let pnl = active.setup.direction == "LONG"
-                            ? (currentPrice - active.setup.entry) / active.setup.entry * 100
-                            : (active.setup.entry - currentPrice) / active.setup.entry * 100
-                        let nextTarget = active.outcome.tp1Hit ? (active.setup.tp2 ?? active.setup.tp1) : active.setup.tp1
-                        let distToTarget = abs(nextTarget - currentPrice)
-                        let targetLabel = active.outcome.tp1Hit ? "TP2" : "TP1"
-                        let held = Int(Date().timeIntervalSince(active.outcome.entryHitTime ?? active.timestamp) / 3600)
 
-                        HStack(spacing: 6) {
-                            Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
-                            Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
-                                .font(.caption)
-                            Spacer()
-                            Text(String(format: "%+.1f%%", pnl))
-                                .font(.caption.bold())
-                                .foregroundStyle(pnl >= 0 ? .green : .red)
-                            Text("\(targetLabel) \(Formatters.formatPrice(distToTarget)) away")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Text("\(held)h")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                        if active.outcome.state == .pending {
+                            // Pending conditional setup
+                            let distToEntry = abs(active.setup.entry - currentPrice)
+                            HStack(spacing: 6) {
+                                Circle().fill(Color.blue).frame(width: 8)
+                                Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
+                                    .font(.caption)
+                                Text("PENDING")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .foregroundStyle(.blue)
+                                    .background(Color.blue.opacity(0.2), in: Capsule())
+                                Spacer()
+                                Text("\(Formatters.formatPrice(distToEntry)) away")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(6)
+                            .background(Color(.systemGray6))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        } else {
+                            // Active trade
+                            let pnl = active.setup.direction == "LONG"
+                                ? (currentPrice - active.setup.entry) / active.setup.entry * 100
+                                : (active.setup.entry - currentPrice) / active.setup.entry * 100
+                            let nextTarget = active.outcome.tp1Hit ? (active.setup.tp2 ?? active.setup.tp1) : active.setup.tp1
+                            let distToTarget = abs(nextTarget - currentPrice)
+                            let targetLabel = active.outcome.tp1Hit ? "TP2" : "TP1"
+                            let held = Int(Date().timeIntervalSince(active.outcome.entryHitTime ?? active.timestamp) / 3600)
+
+                            HStack(spacing: 6) {
+                                Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
+                                Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
+                                    .font(.caption)
+                                if active.outcome.breakevenActivated {
+                                    Text("BE")
+                                        .font(.system(size: 8, weight: .bold))
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 1)
+                                        .foregroundStyle(.orange)
+                                        .background(Color.orange.opacity(0.2), in: Capsule())
+                                }
+                                Spacer()
+                                Text(String(format: "%+.1f%%", pnl))
+                                    .font(.caption.bold())
+                                    .foregroundStyle(pnl >= 0 ? .green : .red)
+                                Text("\(targetLabel) \(Formatters.formatPrice(distToTarget)) away")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                Text("\(held)h")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(6)
+                            .background(Color(.systemGray6))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
-                        .padding(6)
-                        .background(Color(.systemGray6))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
                     }
                 }
             }
@@ -445,6 +478,9 @@ struct AITabContent: View {
     @EnvironmentObject var service: AnalysisService
     @Binding var showHistory: Bool
     @State private var historyCount: Int = 0
+    @AppStorage("accountSize") private var accountSize: Double = 25000
+    @AppStorage("riskPercent") private var riskPercent: Double = 2.0
+    @AppStorage("contractSize") private var contractSize: Double = 0.01
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
@@ -493,8 +529,16 @@ struct AITabContent: View {
 
     @ViewBuilder
     private func aiContent(_ result: AnalysisResult) -> some View {
-        // Setup summary card
+        // Setup summary card with position sizing
         if let setup = result.tradeSetups.first {
+            let risk = setup.risk
+            let riskDollars = accountSize > 0 && riskPercent > 0 ? accountSize * riskPercent / 100.0 : 500.0
+            let positionSize = risk > 0 ? riskDollars / risk : 0  // in base units (e.g. BTC)
+            let totalContracts = contractSize > 0 ? Int(positionSize / contractSize) : 0
+            let partialAt1R = totalContracts / 2        // 50% off at +1.0 R:R
+            let atTP1 = totalContracts / 4              // 25% at TP1
+            let runner = totalContracts - partialAt1R - atTP1  // remainder to TP2
+
             HStack(spacing: 12) {
                 Text(setup.direction)
                     .font(.caption.bold())
@@ -527,6 +571,31 @@ struct AITabContent: View {
                                 .font(.caption2)
                                 .foregroundStyle(.green)
                         }
+                    }
+                    // Position sizing
+                    if totalContracts > 0 {
+                        HStack(spacing: 0) {
+                            Text("\(totalContracts) contracts")
+                                .fontWeight(.semibold)
+                            Text(" \u{2022} ")
+                                .foregroundStyle(.secondary)
+                            Text("\(partialAt1R)")
+                                .foregroundStyle(.orange)
+                            Text("@1R ")
+                                .foregroundStyle(.secondary)
+                            Text("\(atTP1)")
+                                .foregroundStyle(.green)
+                            Text("@TP1 ")
+                                .foregroundStyle(.secondary)
+                            Text("\(runner)")
+                                .foregroundStyle(.blue)
+                            Text(" run")
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.caption2)
+                        Text("Risk \(Formatters.formatPrice(riskDollars)) (\(String(format: "%.1f", riskPercent))%)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }

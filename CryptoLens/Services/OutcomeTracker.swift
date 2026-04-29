@@ -14,20 +14,24 @@ enum OutcomeTracker {
 
     // MARK: - Active Setups Query
 
-    /// Returns setups that have been entered but not yet resolved (entry hit, not stopped/TP'd).
+    /// Returns setups that are active (entered) or pending (conditional, waiting for trigger).
     static func activeSetups(symbol: String) -> [TrackedSetup] {
         return ioQueue.sync {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-            return loadTrackedSetups(url: url).filter { $0.outcome.entryHit && !$0.outcome.resolved }
+            return loadTrackedSetups(url: url).filter {
+                ($0.outcome.state == .active && $0.outcome.entryHit && !$0.outcome.isCounted) ||
+                $0.outcome.state == .pending
+            }
         }
     }
 
-    // MARK: - Trade Setup Outcomes (#1b)
+    // MARK: - Trade Setup Outcomes
 
     /// Called during each refresh cycle with current price and recent candles.
-    /// Scans ALL candles to catch every wick between refreshes.
+    /// `cachedResult` is the latest AnalysisResult for this symbol (from resultsBySymbol).
     static func trackSetupOutcomes(symbol: String, currentPrice: Double,
-                                    recentCandles: [Candle] = []) {
+                                    recentCandles: [Candle] = [],
+                                    cachedResult: AnalysisResult? = nil) {
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
             var tracked = loadTrackedSetups(url: url)
@@ -39,19 +43,72 @@ enum OutcomeTracker {
             checkPoints.append(PricePoint(open: currentPrice, high: currentPrice, low: currentPrice, time: Date()))
 
             for i in tracked.indices {
-                guard !tracked[i].outcome.resolved else { continue }
+                let state = tracked[i].outcome.state
 
+                // Skip resolved, invalidated, expired
+                if state == .invalidated || state == .expired { continue }
+                if state == .active && tracked[i].outcome.isCounted { continue }
+
+                // --- PENDING state: check timeout and entry trigger ---
+                if state == .pending {
+                    // Timeout check (12h)
+                    if let expires = tracked[i].outcome.pendingExpiresAt, Date() > expires {
+                        tracked[i].outcome.state = .expired
+                        tracked[i].outcome.reEvalResult = ReEvalResult(
+                            direction: "", mlWin: nil, killsActive: false,
+                            validated: false, reason: "Pending window expired (12h)")
+                        changed = true
+                        continue
+                    }
+
+                    // Check if entry price was touched
+                    let setup = tracked[i].setup
+                    let isLong = setup.direction == "LONG"
+                    let entryTouched = checkPoints.filter { $0.time >= tracked[i].timestamp }.contains { point in
+                        isLong ? point.low <= setup.entry : point.high >= setup.entry
+                    }
+
+                    if entryTouched {
+                        // Run lightweight re-evaluation
+                        let evalResult = reEvaluate(original: tracked[i], cachedResult: cachedResult)
+                        tracked[i].outcome.reEvalResult = evalResult
+
+                        if evalResult.validated {
+                            tracked[i].outcome.state = .active
+                            tracked[i].outcome.entryHit = true
+                            tracked[i].outcome.entryHitTime = Date()
+                        } else {
+                            tracked[i].outcome.state = .invalidated
+                        }
+                        changed = true
+                    }
+                    continue
+                }
+
+                // --- ACTIVE state: normal outcome tracking ---
                 let setup = tracked[i].setup
                 let isLong = setup.direction == "LONG"
                 let setupTime = tracked[i].timestamp
-                // If TP1 was already hit (from previous refresh), stop is at breakeven
-                var activeStop = tracked[i].outcome.tp1Hit ? setup.entry : setup.stopLoss
+                let risk = setup.risk
 
-                // Only check candles AFTER setup was registered
+                // Determine active stop level based on management state
+                var activeStop: Double
+                if tracked[i].outcome.breakevenActivated {
+                    activeStop = setup.entry
+                } else if let entryTime = tracked[i].outcome.entryHitTime,
+                          Date().timeIntervalSince(entryTime) > 6 * 3600,
+                          risk > 0,
+                          tracked[i].outcome.maxFavorable / risk < 0.5 {
+                    let tightenedRisk = risk * 0.7
+                    activeStop = isLong ? setup.entry - tightenedRisk : setup.entry + tightenedRisk
+                } else {
+                    activeStop = setup.stopLoss
+                }
+
                 let relevantPoints = checkPoints.filter { $0.time >= setupTime }
 
                 for point in relevantPoints {
-                    // Check entry hit
+                    // Check entry hit (for market setups that weren't auto-entered)
                     if !tracked[i].outcome.entryHit {
                         let entryHit = isLong ? point.low <= setup.entry : point.high >= setup.entry
                         if entryHit {
@@ -78,14 +135,24 @@ enum OutcomeTracker {
                     }
 
                     // Once resolved, only track excursions
-                    if tracked[i].outcome.resolved { continue }
+                    if tracked[i].outcome.isCounted { continue }
+
+                    // Check breakeven activation: price reached +1.0 R:R from entry
+                    if !tracked[i].outcome.breakevenActivated && risk > 0 {
+                        let favorableRR = favorable / risk
+                        if favorableRR >= 1.0 {
+                            tracked[i].outcome.breakevenActivated = true
+                            tracked[i].outcome.partialTaken = true
+                            activeStop = setup.entry
+                            changed = true
+                        }
+                    }
 
                     // Check stop and TP1 with open-proximity heuristic
                     let stopHit = isLong ? point.low <= activeStop : point.high >= activeStop
                     let tp1Hit = isLong ? point.high >= setup.tp1 : point.low <= setup.tp1
 
                     if stopHit && tp1Hit && !tracked[i].outcome.tp1Hit {
-                        // Same-candle ambiguity: closer to open hits first
                         let distToStop = abs(point.open - activeStop)
                         let distToTP1 = abs(point.open - setup.tp1)
                         if distToStop <= distToTP1 {
@@ -94,7 +161,6 @@ enum OutcomeTracker {
                             changed = true; break
                         } else {
                             tracked[i].outcome.tp1Hit = true
-                            activeStop = setup.entry  // Move stop to breakeven
                             changed = true
                         }
                     } else if stopHit {
@@ -103,7 +169,6 @@ enum OutcomeTracker {
                         changed = true; break
                     } else if tp1Hit && !tracked[i].outcome.tp1Hit {
                         tracked[i].outcome.tp1Hit = true
-                        activeStop = setup.entry  // Move stop to breakeven
                         changed = true
                     }
 
@@ -119,18 +184,95 @@ enum OutcomeTracker {
                 }
             }
 
-            // Expire setups older than 7 days that never triggered
+            // Expire old pending setups and untriggered active setups (7 days)
             let cutoff = Date().addingTimeInterval(-7 * 86400)
             let before = tracked.count
-            tracked.removeAll { !$0.outcome.entryHit && $0.timestamp < cutoff }
+            tracked.removeAll { !$0.outcome.entryHit && $0.outcome.state == .active && $0.timestamp < cutoff }
             if tracked.count != before { changed = true }
 
             if changed { save(tracked, to: url) }
         }
     }
 
-    /// Register a new setup for tracking.
+    // MARK: - Lightweight Re-Evaluation
+
+    /// Compare the original setup against cached analysis data.
+    /// No LLM call — uses ML score, kill conditions, and direction from the latest refresh.
+    private static func reEvaluate(original: TrackedSetup,
+                                    cachedResult: AnalysisResult?) -> ReEvalResult {
+        // If no cached result (symbol not currently selected), conservative invalidation
+        guard let result = cachedResult else {
+            return ReEvalResult(direction: "", mlWin: nil, killsActive: false,
+                                validated: false,
+                                reason: "No cached data — symbol not active")
+        }
+
+        let newDirection = result.tradeSetups.first?.direction ?? "FLAT"
+        let newMLWin = result.daily.mlWinProbability
+        let originalML = original.mlProbability ?? 0
+
+        // Check 1: Direction agreement
+        if newDirection != original.setup.direction && newDirection != "FLAT" {
+            return ReEvalResult(direction: newDirection, mlWin: newMLWin,
+                                killsActive: false, validated: false,
+                                reason: "Direction changed: \(original.setup.direction) → \(newDirection)")
+        }
+
+        // Check 2: Latest analysis produced no setup (FLAT)
+        if result.tradeSetups.isEmpty && !result.claudeAnalysis.isEmpty {
+            let hasNoSetup = result.claudeAnalysis.contains("NO SETUP") ||
+                             result.claudeAnalysis.contains("BLOCKED")
+            if hasNoSetup {
+                return ReEvalResult(direction: "FLAT", mlWin: newMLWin,
+                                    killsActive: false, validated: false,
+                                    reason: "Latest analysis: no setup proposed")
+            }
+        }
+
+        // Check 3: Kill conditions active
+        let killDurKey = "killDur_\(original.symbol)"
+        let durState = UserDefaults.standard.dictionary(forKey: killDurKey) as? [String: Int] ?? [:]
+        let killsActive = (durState["divergence"] ?? 0) > 0 ||
+                          (durState["volume"] ?? 0) > 0 ||
+                          (durState["funding"] ?? 0) > 0
+        if killsActive {
+            var reasons = [String]()
+            if (durState["divergence"] ?? 0) > 0 { reasons.append("divergence") }
+            if (durState["volume"] ?? 0) > 0 { reasons.append("counter-volume") }
+            if (durState["funding"] ?? 0) > 0 { reasons.append("funding flip") }
+            return ReEvalResult(direction: newDirection, mlWin: newMLWin,
+                                killsActive: true, validated: false,
+                                reason: "Kill conditions active: \(reasons.joined(separator: ", "))")
+        }
+
+        // Check 4: ML score drift
+        if let ml = newMLWin {
+            if ml < 0.50 {
+                return ReEvalResult(direction: newDirection, mlWin: ml,
+                                    killsActive: false, validated: false,
+                                    reason: "ML_WIN below 50% (\(Int(ml * 100))%)")
+            }
+            if originalML > 0 {
+                let drift = originalML - ml
+                if drift > 0.15 {
+                    return ReEvalResult(direction: newDirection, mlWin: ml,
+                                        killsActive: false, validated: false,
+                                        reason: "ML_WIN dropped \(Int(drift * 100))pp (\(Int(originalML * 100))% → \(Int(ml * 100))%)")
+                }
+            }
+        }
+
+        // All checks passed
+        return ReEvalResult(direction: newDirection, mlWin: newMLWin,
+                            killsActive: false, validated: true,
+                            reason: "Re-eval confirmed: \(original.setup.direction), ML \(newMLWin.map { "\(Int($0 * 100))%" } ?? "n/a")")
+    }
+
+    // MARK: - Registration
+
+    /// Register a new setup for tracking. Classifies as market or conditional.
     static func registerSetup(_ setup: TradeSetup, symbol: String, analysisId: UUID,
+                              currentPrice: Double = 0,
                               mlProbability: Double? = nil, conviction: String? = nil,
                               modelVersion: Int = 10) {
         ioQueue.async {
@@ -140,9 +282,22 @@ enum OutcomeTracker {
             // Don't duplicate
             guard !tracked.contains(where: { $0.setup.id == setup.id }) else { return }
 
-            tracked.insert(TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
-                                        mlProbability: mlProbability, conviction: conviction,
-                                        modelVersion: modelVersion), at: 0)
+            let setupType = currentPrice > 0
+                ? SetupType.classify(entry: setup.entry, currentPrice: currentPrice, reasoning: setup.reasoning)
+                : .market  // Fallback if no price provided
+
+            var ts = TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
+                                   mlProbability: mlProbability, conviction: conviction,
+                                   modelVersion: modelVersion, setupType: setupType)
+
+            if setupType == .conditional {
+                ts.outcome.state = .pending
+                ts.outcome.pendingExpiresAt = Date().addingTimeInterval(12 * 3600)
+            } else {
+                ts.outcome.state = .active
+            }
+
+            tracked.insert(ts, at: 0)
 
             // Cap at 50 per symbol
             if tracked.count > 50 { tracked = Array(tracked.prefix(50)) }
@@ -156,7 +311,7 @@ enum OutcomeTracker {
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
             let tracked = loadTrackedSetups(url: url)
-            let resolved = tracked.filter { $0.outcome.resolved && !$0.synced }
+            let resolved = tracked.filter { $0.outcome.isCounted && !$0.synced }
 
             guard !resolved.isEmpty else { return }
 
@@ -198,7 +353,7 @@ enum OutcomeTracker {
         }
     }
 
-    // MARK: - FLAT/Kill Outcomes (#1c)
+    // MARK: - FLAT/Kill Outcomes
 
     /// Register a FLAT or kill-blocked outcome for tracking.
     static func registerFlatOutcome(symbol: String, price: Double, reason: String) {
@@ -246,7 +401,7 @@ enum OutcomeTracker {
         }
     }
 
-    // MARK: - Stats (#1d)
+    // MARK: - Stats
 
     /// Compute outcome statistics for dashboard.
     static func stats(symbol: String? = nil) -> OutcomeStats {
@@ -268,30 +423,56 @@ enum OutcomeTracker {
                 }
             }
 
-            let resolved = allSetups.filter { $0.outcome.resolved }
-            let wins = resolved.filter { $0.outcome.tp1Hit && !$0.outcome.stopHit }
-            let losses = resolved.filter { $0.outcome.stopHit && !$0.outcome.tp1Hit }
+            // Only count setups that reached ACTIVE state
+            let counted = allSetups.filter { $0.outcome.state == .active }
+            let resolved = counted.filter { $0.outcome.isCounted }
+            let wins = resolved.filter { $0.outcome.tp1Hit }
+            let losses = resolved.filter { $0.outcome.stopHit && !$0.outcome.tp1Hit && !$0.outcome.partialTaken }
+            let partialBE = resolved.filter { $0.outcome.stopHit && !$0.outcome.tp1Hit && $0.outcome.partialTaken }
+
+            let pending = allSetups.filter { $0.outcome.state == .pending }
+            let invalidated = allSetups.filter { $0.outcome.state == .invalidated }
+            let expired = allSetups.filter { $0.outcome.state == .expired }
 
             let evaluatedFlats = allFlats.filter { $0.falseFlat != nil }
             let falseFlats = evaluatedFlats.filter { $0.falseFlat == true }
 
-            // Average R:R achieved
+            // Average R:R achieved (on counted setups only)
             var avgRRAchieved: Double = 0
             if !resolved.isEmpty {
                 let rrValues = resolved.compactMap { tracked -> Double? in
                     let s = tracked.setup
                     guard s.risk > 0, tracked.outcome.entryHit else { return nil }
-                    let favorable = tracked.outcome.maxFavorable
-                    return favorable / s.risk
+                    return tracked.outcome.maxFavorable / s.risk
                 }
                 if !rrValues.isEmpty { avgRRAchieved = rrValues.reduce(0, +) / Double(rrValues.count) }
             }
 
+            // Group invalidation reasons
+            var invalidReasons: [String: Int] = [:]
+            for inv in invalidated {
+                let reason = inv.outcome.reEvalResult?.reason ?? "unknown"
+                let category: String
+                if reason.contains("Direction") { category = "direction" }
+                else if reason.contains("ML_WIN") { category = "ml_drift" }
+                else if reason.contains("Kill") || reason.contains("kill") { category = "kills" }
+                else if reason.contains("No cached") { category = "no_data" }
+                else if reason.contains("no setup") { category = "flat" }
+                else { category = "other" }
+                invalidReasons[category, default: 0] += 1
+            }
+
             return OutcomeStats(
-                totalSetups: allSetups.count,
+                generatedSetups: allSetups.count,
+                countedSetups: counted.count,
                 resolvedSetups: resolved.count,
                 wins: wins.count,
                 losses: losses.count,
+                partialBE: partialBE.count,
+                pendingSetups: pending.count,
+                invalidatedSetups: invalidated.count,
+                expiredSetups: expired.count,
+                invalidReasons: invalidReasons,
                 winRate: resolved.isEmpty ? 0 : Double(wins.count) / Double(resolved.count) * 100,
                 avgRRAchieved: avgRRAchieved,
                 totalFlats: allFlats.count,
@@ -306,9 +487,7 @@ enum OutcomeTracker {
     // MARK: - Restore from Server
 
     /// Fetch resolved outcomes from D1 and merge into local cache.
-    /// Call on app launch when local cache is empty.
     static func restoreFromServer() async {
-        // Only restore if local cache is empty
         let dir = outcomeDir
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         let hasSetups = files.contains { $0.lastPathComponent.hasPrefix("setups_") }
@@ -345,7 +524,7 @@ enum OutcomeTracker {
                                        mlProbability: mlProb, conviction: conviction)
                 ts.synced = true
 
-                // Restore outcome state
+                // Restore outcome state — these are already resolved
                 if let outcome = item["outcome"] as? String {
                     if outcome == "tp1_win" { ts.outcome.entryHit = true; ts.outcome.tp1Hit = true }
                     else if outcome == "tp2_win" { ts.outcome.entryHit = true; ts.outcome.tp1Hit = true; ts.outcome.tp2Hit = true }
@@ -390,16 +569,18 @@ struct TrackedSetup: Codable, Identifiable {
     let mlProbability: Double?
     let conviction: String?
     let modelVersion: Int
+    let setupType: SetupType
 
     var id: UUID { setup.id }
 
     private enum CodingKeys: String, CodingKey {
         case setup, symbol, analysisId, timestamp, outcome,
-             killsAtGeneration, synced, mlProbability, conviction, modelVersion
+             killsAtGeneration, synced, mlProbability, conviction, modelVersion, setupType
     }
 
     init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil,
-         mlProbability: Double? = nil, conviction: String? = nil, modelVersion: Int = 10) {
+         mlProbability: Double? = nil, conviction: String? = nil, modelVersion: Int = 10,
+         setupType: SetupType = .market) {
         self.setup = setup
         self.symbol = symbol
         self.analysisId = analysisId
@@ -410,6 +591,7 @@ struct TrackedSetup: Codable, Identifiable {
         self.mlProbability = mlProbability
         self.conviction = conviction
         self.modelVersion = modelVersion
+        self.setupType = setupType
     }
 
     init(from decoder: Decoder) throws {
@@ -424,6 +606,7 @@ struct TrackedSetup: Codable, Identifiable {
         mlProbability = try c.decodeIfPresent(Double.self, forKey: .mlProbability)
         conviction = try c.decodeIfPresent(String.self, forKey: .conviction)
         modelVersion = try c.decodeIfPresent(Int.self, forKey: .modelVersion) ?? 10
+        setupType = (try? c.decode(SetupType.self, forKey: .setupType)) ?? .market
     }
 
     func encode(to encoder: Encoder) throws {
@@ -438,14 +621,21 @@ struct TrackedSetup: Codable, Identifiable {
         try c.encodeIfPresent(mlProbability, forKey: .mlProbability)
         try c.encodeIfPresent(conviction, forKey: .conviction)
         try c.encodeIfPresent(modelVersion, forKey: .modelVersion)
+        try c.encode(setupType, forKey: .setupType)
     }
 }
 
 struct OutcomeStats {
-    let totalSetups: Int
+    let generatedSetups: Int      // Total emitted by LLM
+    let countedSetups: Int        // Reached ACTIVE state
     let resolvedSetups: Int
     let wins: Int
     let losses: Int
+    let partialBE: Int
+    let pendingSetups: Int
+    let invalidatedSetups: Int
+    let expiredSetups: Int
+    let invalidReasons: [String: Int]
     let winRate: Double
     let avgRRAchieved: Double
     let totalFlats: Int

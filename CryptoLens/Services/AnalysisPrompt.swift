@@ -349,6 +349,13 @@ enum AnalysisPrompt {
         Conviction: HIGH / MODERATE / MODERATE-LOW (ML: XX%)
         Hold window: up to 72h. Re-evaluate at [next Daily close] if not triggered.
         One line: what makes it work. One line: what kills it.
+
+        **Trade Management** (include after the setup table):
+        1. At +1.0 R:R: take 50% partial, move stop to breakeven on remainder.
+        2. At TP1: take another 25%, trail stop 1.0 ATR below last swing low (longs) / above swing high (shorts).
+        3. Runner targets TP2.
+        4. If price hasn't moved +0.5 R:R within 6 hours, tighten stop to 70% of original distance.
+
         If bias is FLAT, ML_WIN < 50%, or conviction is LOW:
         "NO SETUP — [specific reason]." Skip the table entirely.
 

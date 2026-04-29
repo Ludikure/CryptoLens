@@ -10,6 +10,7 @@ struct SettingsView: View {
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
+    @AppStorage("contractSize") private var contractSize: Double = 0.01
 
     var body: some View {
         NavigationStack {
@@ -124,7 +125,17 @@ struct SettingsView: View {
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                     }
+                    HStack {
+                        Text("Contract Size")
+                        Spacer()
+                        TextField("Size", value: $contractSize, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
                     Text("Max risk: \(Formatters.formatPrice(accountSize * riskPercent / 100)) per trade")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Contract: \(String(format: "%g", contractSize)) units (e.g. 0.01 = nano BTC)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

@@ -579,7 +579,7 @@ class AnalysisService: ObservableObject {
             } else {
                 outcomeCandles = (try? await yahoo.fetchCandles(symbol: symbol, interval: "15m")) ?? result.h1.candles
             }
-            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles)
+            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles, cachedResult: result)
             OutcomeTracker.trackFlatOutcomes(symbol: symbol, currentPrice: result.daily.price)
             OutcomeTracker.syncResolvedOutcomes(symbol: symbol)
             saveCache(result)
@@ -945,6 +945,7 @@ class AnalysisService: ObservableObject {
                 let mlProb = result.daily.mlWinProbability
                 for setup in tradeSetups {
                     OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id,
+                                                  currentPrice: result.daily.price,
                                                   mlProbability: mlProb)
                 }
             }

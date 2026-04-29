@@ -1,5 +1,46 @@
 import Foundation
 
+// MARK: - Setup Classification
+
+enum SetupType: String, Codable {
+    case market      // Enter at current price immediately
+    case conditional // Wait for price to reach entry, then re-evaluate
+
+    /// Classify a setup based on entry distance and reasoning text.
+    static func classify(entry: Double, currentPrice: Double, reasoning: String) -> SetupType {
+        let distPct = abs(entry - currentPrice) / currentPrice
+        if distPct > 0.003 { return .conditional }
+
+        let lower = reasoning.lowercased()
+        let conditionalKeywords = ["wait for", "close above", "close below", "confirms",
+                                    "breakout", "rejection", "retest"]
+        if conditionalKeywords.contains(where: { lower.contains($0) }) { return .conditional }
+
+        return .market
+    }
+}
+
+// MARK: - Setup State Machine
+
+enum SetupState: String, Codable {
+    case pending       // Conditional, waiting for entry trigger
+    case active        // Entry confirmed, tracking normally
+    case invalidated   // Re-eval failed, not counted in stats
+    case expired       // 12h timeout, not counted in stats
+}
+
+// MARK: - Re-Evaluation Result
+
+struct ReEvalResult: Codable {
+    let direction: String       // Direction from latest analysis
+    let mlWin: Double?          // Current ML_WIN
+    let killsActive: Bool       // Kill conditions active now
+    let validated: Bool         // Did re-eval confirm the setup?
+    let reason: String          // Human-readable explanation
+}
+
+// MARK: - Trade Setup
+
 struct TradeSetup: Codable, Identifiable {
     let id: UUID
     let direction: String      // "LONG" or "SHORT"
@@ -90,6 +131,8 @@ struct TradeSetup: Codable, Identifiable {
     }
 }
 
+// MARK: - Trade Outcome
+
 /// Tracks what happened after a setup was generated.
 struct TradeOutcome: Codable {
     var entryHit: Bool
@@ -100,22 +143,75 @@ struct TradeOutcome: Codable {
     var maxFavorable: Double
     var maxAdverse: Double
     var outcomeTime: Date?
-    var resolved: Bool { stopHit || tp1Hit }
+
+    // Trade management milestones
+    var breakevenActivated: Bool   // Stop moved to entry after +1.0 R:R
+    var partialTaken: Bool         // Partial exit at +1.0 R:R
+
+    // Setup state machine
+    var state: SetupState
+    var pendingExpiresAt: Date?    // 12h after creation for conditional setups
+    var reEvalResult: ReEvalResult?
+
+    var resolved: Bool {
+        state == .invalidated || state == .expired ||
+        stopHit || tp2Hit || (tp1Hit && stopHit)
+    }
+
+    /// Whether this setup should be counted in win/loss statistics.
+    var isCounted: Bool {
+        state == .active && (stopHit || tp1Hit || tp2Hit)
+    }
 
     init() {
         entryHit = false; entryHitTime = nil; stopHit = false
         tp1Hit = false; tp2Hit = false
         maxFavorable = 0; maxAdverse = 0; outcomeTime = nil
+        breakevenActivated = false; partialTaken = false
+        state = .active; pendingExpiresAt = nil; reEvalResult = nil
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        entryHit = try c.decode(Bool.self, forKey: .entryHit)
+        entryHitTime = try c.decodeIfPresent(Date.self, forKey: .entryHitTime)
+        stopHit = try c.decode(Bool.self, forKey: .stopHit)
+        tp1Hit = try c.decode(Bool.self, forKey: .tp1Hit)
+        tp2Hit = try c.decode(Bool.self, forKey: .tp2Hit)
+        maxFavorable = try c.decode(Double.self, forKey: .maxFavorable)
+        maxAdverse = try c.decode(Double.self, forKey: .maxAdverse)
+        outcomeTime = try c.decodeIfPresent(Date.self, forKey: .outcomeTime)
+        breakevenActivated = (try? c.decode(Bool.self, forKey: .breakevenActivated)) ?? false
+        partialTaken = (try? c.decode(Bool.self, forKey: .partialTaken)) ?? false
+        state = (try? c.decode(SetupState.self, forKey: .state)) ?? .active
+        pendingExpiresAt = try? c.decodeIfPresent(Date.self, forKey: .pendingExpiresAt)
+        reEvalResult = try? c.decodeIfPresent(ReEvalResult.self, forKey: .reEvalResult)
     }
 
     var result: String {
+        if state == .invalidated { return "invalidated" }
+        if state == .expired { return "expired" }
+        if state == .pending { return "pending" }
         if !entryHit { return "not_triggered" }
-        if stopHit { return "loss" }
         if tp2Hit { return "tp2_win" }
+        if tp1Hit && stopHit { return "tp1_win" }  // Runner stopped at BE after TP1
+        if stopHit && partialTaken { return "partial_be" }  // Partial taken, runner stopped at BE
+        if stopHit { return "loss" }
         if tp1Hit { return "tp1_win" }
         return "open"
     }
+
+    /// Human-readable management status for live trades
+    var managementStatus: String {
+        if state == .pending { return "Pending entry" }
+        if !entryHit { return "Waiting for entry" }
+        if partialTaken && !resolved { return "Partial taken, trailing" }
+        if breakevenActivated && !resolved { return "BE active" }
+        return "Tracking"
+    }
 }
+
+// MARK: - FLAT Outcome
 
 /// Tracks FLAT/kill outcomes to detect false conservatism.
 struct FlatOutcome: Codable {

@@ -13,20 +13,60 @@ struct OutcomeDashboardView: View {
                 if !liveSetups.isEmpty {
                     Section("Live Trades") {
                         ForEach(liveSetups, id: \.id) { tracked in
-                            liveTradeRow(tracked)
+                            if tracked.outcome.state == .pending {
+                                pendingTradeRow(tracked)
+                            } else {
+                                liveTradeRow(tracked)
+                            }
                         }
                     }
                 }
 
-                // Setup performance
+                // Setup performance — generated vs counted
                 Section("Trade Setups") {
-                    statRow("Total Generated", value: "\(stats.totalSetups)")
+                    statRow("Generated", value: "\(stats.generatedSetups)")
+                    statRow("Counted", value: "\(stats.countedSetups)",
+                            color: .primary)
                     statRow("Resolved", value: "\(stats.resolvedSetups)")
                     statRow("Win Rate", value: String(format: "%.0f%%", stats.winRate),
                             color: stats.winRate >= 50 ? .green : .red)
                     statRow("Wins / Losses", value: "\(stats.wins) / \(stats.losses)")
+                    if stats.partialBE > 0 {
+                        statRow("Partial BE", value: "\(stats.partialBE)",
+                                color: .orange)
+                    }
                     statRow("Avg R:R Achieved", value: String(format: "%.1f", stats.avgRRAchieved),
                             color: stats.avgRRAchieved >= 1.5 ? .green : .orange)
+                }
+
+                // Setup filtering (pending/invalidated/expired)
+                if stats.pendingSetups > 0 || stats.invalidatedSetups > 0 || stats.expiredSetups > 0 {
+                    Section("Setup Filtering") {
+                        if stats.pendingSetups > 0 {
+                            statRow("Pending", value: "\(stats.pendingSetups)",
+                                    color: .blue)
+                        }
+                        if stats.invalidatedSetups > 0 {
+                            statRow("Invalidated", value: "\(stats.invalidatedSetups)",
+                                    color: .orange)
+                            // Breakdown by reason
+                            ForEach(stats.invalidReasons.sorted(by: { $0.value > $1.value }), id: \.key) { reason, count in
+                                HStack {
+                                    Text("  \(reasonLabel(reason))")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text("\(count)")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        if stats.expiredSetups > 0 {
+                            statRow("Expired (12h timeout)", value: "\(stats.expiredSetups)",
+                                    color: .secondary)
+                        }
+                    }
                 }
 
                 // FLAT/Kill tracking
@@ -83,6 +123,17 @@ struct OutcomeDashboardView: View {
         .font(.subheadline)
     }
 
+    private func reasonLabel(_ key: String) -> String {
+        switch key {
+        case "direction": return "Direction changed"
+        case "ml_drift": return "ML score dropped"
+        case "kills": return "Kill conditions"
+        case "no_data": return "No cached data"
+        case "flat": return "Analysis went FLAT"
+        default: return key.capitalized
+        }
+    }
+
     private func recentSetupRow(_ tracked: TrackedSetup) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -90,11 +141,28 @@ struct OutcomeDashboardView: View {
                 Text(tracked.setup.direction)
                     .font(.caption2).fontWeight(.bold)
                     .foregroundStyle(tracked.setup.direction == "LONG" ? .green : .red)
+                if tracked.setupType == .conditional {
+                    Text("COND")
+                        .font(.system(size: 8, weight: .bold))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .foregroundStyle(.purple)
+                        .background(Color.purple.opacity(0.15), in: Capsule())
+                }
                 Spacer()
                 Text(tracked.outcome.result)
                     .font(.caption2).fontWeight(.semibold)
                     .foregroundStyle(outcomeColor(tracked.outcome.result))
             }
+
+            // Show invalidation reason if applicable
+            if tracked.outcome.state == .invalidated,
+               let reason = tracked.outcome.reEvalResult?.reason {
+                Text(reason)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+
             HStack(spacing: 12) {
                 Text("Entry: \(Formatters.formatPrice(tracked.setup.entry))")
                 Text("SL: \(Formatters.formatPrice(tracked.setup.stopLoss))")
@@ -125,6 +193,47 @@ struct OutcomeDashboardView: View {
             live.append(contentsOf: OutcomeTracker.activeSetups(symbol: sym))
         }
         liveSetups = live.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private func pendingTradeRow(_ tracked: TrackedSetup) -> some View {
+        let currentPrice = service.resultsBySymbol[tracked.symbol]?.tf1.price ?? tracked.setup.entry
+        let distToEntry = abs(tracked.setup.entry - currentPrice)
+        let timeRemaining: String = {
+            guard let expires = tracked.outcome.pendingExpiresAt else { return "" }
+            let remaining = expires.timeIntervalSinceNow
+            if remaining <= 0 { return "expiring" }
+            let hours = Int(remaining / 3600)
+            let mins = Int((remaining.truncatingRemainder(dividingBy: 3600)) / 60)
+            return hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m"
+        }()
+
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(tracked.symbol).font(.caption).fontWeight(.bold)
+                Text(tracked.setup.direction)
+                    .font(.caption2).fontWeight(.bold)
+                    .foregroundStyle(tracked.setup.direction == "LONG" ? .green : .red)
+                Text("PENDING")
+                    .font(.system(size: 8, weight: .bold))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .foregroundStyle(.blue)
+                    .background(Color.blue.opacity(0.2), in: Capsule())
+                Spacer()
+                if !timeRemaining.isEmpty {
+                    Text(timeRemaining)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            HStack(spacing: 12) {
+                Text("Entry: \(Formatters.formatPrice(tracked.setup.entry))")
+                Text("\(Formatters.formatPrice(distToEntry)) away")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption2)
+        }
+        .padding(.vertical, 2)
     }
 
     private func liveTradeRow(_ tracked: TrackedSetup) -> some View {
@@ -168,6 +277,16 @@ struct OutcomeDashboardView: View {
                     .foregroundStyle(.red)
             }
             .font(.caption2)
+            // Management status
+            if tracked.outcome.breakevenActivated {
+                HStack(spacing: 6) {
+                    Image(systemName: tracked.outcome.partialTaken ? "checkmark.circle.fill" : "shield.fill")
+                        .foregroundStyle(.orange)
+                    Text(tracked.outcome.managementStatus)
+                        .foregroundStyle(.orange)
+                }
+                .font(.caption2)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -177,20 +296,24 @@ struct OutcomeDashboardView: View {
         MarketScope Outcome Tracking
 
         Trade Setups:
-        • Total: \(s.totalSetups) | Resolved: \(s.resolvedSetups)
-        • Win Rate: \(String(format: "%.0f%%", s.winRate))
-        • Wins: \(s.wins) | Losses: \(s.losses)
-        • Avg R:R Achieved: \(String(format: "%.1f", s.avgRRAchieved))
+        \u{2022} Generated: \(s.generatedSetups) | Counted: \(s.countedSetups)
+        \u{2022} Resolved: \(s.resolvedSetups) | Win Rate: \(String(format: "%.0f%%", s.winRate))
+        \u{2022} Wins: \(s.wins) | Losses: \(s.losses)\(s.partialBE > 0 ? " | Partial BE: \(s.partialBE)" : "")
+        \u{2022} Avg R:R Achieved: \(String(format: "%.1f", s.avgRRAchieved))
+        \u{2022} Invalidated: \(s.invalidatedSetups) | Expired: \(s.expiredSetups)
 
         FLAT / Kill Decisions:
-        • Total: \(s.totalFlats) | Evaluated: \(s.evaluatedFlats)
-        • False FLATs: \(s.falseFlats) (\(String(format: "%.0f%%", s.falseFlatRate)))
+        \u{2022} Total: \(s.totalFlats) | Evaluated: \(s.evaluatedFlats)
+        \u{2022} False FLATs: \(s.falseFlats) (\(String(format: "%.0f%%", s.falseFlatRate)))
         """
     }
 
     private func outcomeColor(_ result: String) -> Color {
         switch result {
         case "tp1_win", "tp2_win": return .green
+        case "partial_be": return .orange
+        case "invalidated": return .orange
+        case "expired", "pending": return .secondary
         case "loss": return .red
         case "open": return .blue
         default: return .secondary
