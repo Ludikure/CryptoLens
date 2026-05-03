@@ -165,6 +165,43 @@ enum AnalysisPrompt {
         If ML_WIN is not in the data header, ignore this section and judge setup quality
         from your own analysis of indicators.
 
+        CONVICTION CALIBRATION (rule-based, not vibes — apply mechanically):
+
+        HIGH conviction requires ALL of:
+          ☐ Multi-timeframe alignment: Daily AND 4H biases agree, same direction
+          ☐ Structural confluence: 3+ of {EMA stack aligned, market structure HH/HL or LL/LH,
+            S/R confluence at entry, volume confirms move, vol regime not exhausted}
+          ☐ ML_WIN >= 70% (or ML_WIN absent and indicators all aligned)
+          ☐ No active kill conditions (ANY_KILLED = false)
+          ☐ Macro Risk = ON_HORIZON or absent (not IMMINENT, NEARBY, or UPCOMING)
+          ☐ News (if present) does not contradict the thesis
+          ☐ Failure mode is specific (not "could go the other way")
+
+        MODERATE conviction requires:
+          ☐ At least 4H bias matches your direction
+          ☐ 2 pieces of structural confluence
+          ☐ ML_WIN >= 60% (or absent + reasonable indicator alignment)
+          ☐ No active kill conditions
+          ☐ Macro Risk <= NEARBY
+          ☐ Failure mode is specific
+
+        Downgrade ONE level if:
+          - 2+ data sources are missing/stale (DATA QUALITY flag)
+          - Counter-trend reversal setup (cap at MODERATE regardless)
+          - Setup is at a worn level (4+ prior tests)
+
+        LOW conviction OR FLAT (= "no trade") if:
+          - Multi-TF biases disagree
+          - Only 1 piece of confluence
+          - ML_WIN < 50%
+          - Any kill condition active
+          - Macro Risk = IMMINENT
+          - Failure mode is generic
+          → Output "NO SETUP — [specific reason]". Skip Step 4.
+
+        Apply these mechanically. If a HIGH criterion fails, you cannot output HIGH — even if
+        the setup "feels" strong. The point of rules is to override gut.
+
         OUTCOME HISTORY (if provided):
         Recent trade outcomes for this specific symbol are shown. Use them to:
         - Adjust directional confidence (if LONGs are winning 5/5, LONG conviction increases)
@@ -357,10 +394,8 @@ enum AnalysisPrompt {
           bias. Direction confidence requires structural confluence: multi-timeframe alignment, S/R
           positioning, volume confirmation, vol regime, exhaustion or continuation signals.
           Continuation and reversal carry the same evidentiary burden — neither is the default.
-        - ML_WIN captures non-linear feature interactions (derivatives + momentum + volatility
-          combinations) that predict whether a big move will happen. It does not predict direction.
-          When ML_WIN < 50%, the ML is usually right about conditions being unfavorable — trust it
-          over your thesis.
+        - When ML_WIN < 50%, trust the ML over your thesis (the ML sees feature interactions
+          you can't articulate). Document what's likely unfavorable but don't propose a trade.
 
         OUTPUT FORMAT (follow this structure exactly):
 
@@ -415,6 +450,21 @@ enum AnalysisPrompt {
         ```
         If no valid setup, output empty array: `[]`
         Use actual prices from the data. This JSON is machine-parsed to create alerts.
+
+        SELF-CHECK BEFORE FINALIZING (run mentally, do not output):
+        1. Does Bias reference SPECIFIC structural evidence by name (multi-TF alignment / S/R level
+           with price / volume confirmation / regime / exhaustion or continuation signal), not vague
+           "momentum looks bullish"?
+        2. Did you write a SPECIFIC failure mode ("RSI divergence must confirm with volume" /
+           "needs to break $X with conviction"), not generic ("could go down")?
+        3. Does the conviction grade pass the rule-based calibration above (count the checkboxes),
+           not based on feel?
+        4. If news was provided, did you reference it explicitly in the Bias?
+        5. If DATA QUALITY flagged missing/stale sources, did you reduce conviction one level
+           and mention in Risk Factors?
+        6. Are entry/SL/TP prices actual numbers from the TAGGED LEVELS or candle data, not made-up?
+        7. Is the Next decision point in ET with both time AND price-condition components?
+        If any check fails, fix the output before submitting.
 
         IMPORTANT RULES:
         - ONLY reference indicator values, levels, and data points explicitly present in this payload. If a data field is not provided, state "data unavailable" — never estimate or infer missing values.
