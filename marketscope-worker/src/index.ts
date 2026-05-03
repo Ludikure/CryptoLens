@@ -510,22 +510,33 @@ export default {
       const config = endpointMap[endpoint];
       if (!config) return json({ error: 'Unknown Finnhub endpoint' }, 404);
 
-      const cacheKey = `cache:fh:${endpoint}:${symbol}`;
-      const cached = await env.ALERTS.get(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached);
+      // Optional from/to passthrough for endpoints that support date ranges (e.g., insider).
+      // Keeps existing per-endpoint defaults (earnings/news) but lets callers override or add ranges.
+      const fromParam = url.searchParams.get('from');
+      const toParam = url.searchParams.get('to');
+      const dateRangeStr = (fromParam && /^\d{4}-\d{2}-\d{2}$/.test(fromParam)) && (toParam && /^\d{4}-\d{2}-\d{2}$/.test(toParam))
+        ? `&from=${fromParam}&to=${toParam}`
+        : '';
+      // Per-endpoint cache key includes from/to so different ranges don't collide.
+      const rangeCacheKey = dateRangeStr ? `:${fromParam}:${toParam}` : '';
+      const fullCacheKey = `cache:fh:${endpoint}:${symbol}${rangeCacheKey}`;
+      const cachedRange = await env.ALERTS.get(fullCacheKey);
+      if (cachedRange) {
+        const parsed = JSON.parse(cachedRange);
         if (Date.now() - parsed.timestamp < config.ttl) return json(parsed.data);
       }
 
       try {
-        const finnhubUrl = `${FINNHUB_BASE}${config.path}?symbol=${symbol}${config.params || ''}`;
+        // dateRangeStr (if provided) overrides config.params for endpoints that don't have hardcoded dates.
+        const paramsToUse = dateRangeStr || (config.params || '');
+        const finnhubUrl = `${FINNHUB_BASE}${config.path}?symbol=${symbol}${paramsToUse}`;
         const resp = await fetch(finnhubUrl, {
           headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY },
         });
         if (!resp.ok) return json({ error: `Finnhub ${resp.status}` }, 502);
         const data = await resp.json();
         const kvTtl = Math.max(Math.ceil(config.ttl / 1000), 60);
-        await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: kvTtl });
+        await env.ALERTS.put(fullCacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: kvTtl });
         return json(data);
       } catch {
         return json({ error: 'Finnhub fetch failed' }, 502);
