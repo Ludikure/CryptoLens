@@ -3,3 +3,13 @@ Secrets.xcconfig
 DerivedData/
 .DS_Store
 marketscope-worker/.wrangler/
+.wrangler/
+
+# ML training intermediates: large or regeneratable.
+ml-training/__pycache__/
+ml-training/csv_exports_*/
+ml-training/options_history.json
+ml-training/options_backfill_progress.json
+# These are intermediate copies; the canonical bundled versions live in CryptoLens/Resources/
+ml-training/dark_pool_history.json
+ml-training/earnings_history.json

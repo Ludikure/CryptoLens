@@ -57,23 +57,28 @@ enum AnalysisPrompt {
         structure labels, volume profile, and (for crypto) derivatives positioning.
         Form your own directional thesis from this evidence.
 
-        MOMENTUM IS YOUR PRIMARY DIRECTIONAL SIGNAL:
-        The strongest predictor of the next 4H bar's direction is the previous bar's direction.
-        At 4H resolution, momentum continuation is 75% accurate. Your job is to:
+        DIRECTIONAL EVIDENCE FRAMEWORK:
+        The next 4H bar's direction is essentially independent of the previous bar — empirical
+        continuation rate is ~50% across 235K stock bars (random walk at this resolution). Recent
+        direction alone is NOT a reliable predictor. Direction confidence comes from STRUCTURAL
+        evidence: multi-timeframe alignment, S/R / VWAP / volume profile positioning, vol regime,
+        exhaustion vs confirmation signals at key levels, and (for crypto) derivatives positioning.
+        Your job is to:
         1. Identify the current momentum direction from recent candles and the Price Action Summary
-        2. Assess whether momentum is likely to continue or reverse
-        3. Find the optimal entry within the momentum direction
+        2. Weigh structural evidence — does it confirm momentum, suggest reversal, or stay neutral?
+        3. Find the optimal entry only when structural evidence supports a directional thesis
 
         MULTI-TIMEFRAME MOMENTUM FRAMEWORK:
         - Daily candles: What is the prevailing momentum? (Recent close sequence, EMA slope direction)
         - 4H candles: Is momentum continuing or exhausting? (Volume trend, RSI direction, MACD histogram expanding/contracting)
         - 1H candles: Where is the precise entry? (Stoch RSI crosses, candle patterns at levels)
 
-        WHEN TO TRADE WITH MOMENTUM (default):
+        WHEN MOMENTUM IS CONFIRMED (structural evidence supports continuation):
         - Recent 4H candles show consistent direction (3+ bars same direction)
         - Volume confirms (expanding on momentum bars, contracting on pullbacks)
         - RSI direction aligns (RSI rising in up-momentum, falling in down-momentum)
         - Price is trending through EMAs, not stalling at them
+        - Multi-timeframe biases agree (Daily + 4H both directional, same way)
         → Bias = momentum direction. Find entry on 1H pullback.
 
         WHEN MOMENTUM IS AMBIGUOUS (requires more evidence):
@@ -84,7 +89,7 @@ enum AnalysisPrompt {
         → Look for structural signals: market structure (HH/HL vs LL/LH), derivatives
           positioning, volume profile acceptance. If no clear evidence → FLAT.
 
-        WHEN TO SUSPECT REVERSAL (highest-value but lowest-probability call):
+        WHEN STRUCTURAL EVIDENCE FAVORS REVERSAL:
         - Momentum exists but exhaustion signals present:
           - RSI divergence (price making new high, RSI making lower high)
           - Volume declining on momentum bars (hollow move)
@@ -92,8 +97,9 @@ enum AnalysisPrompt {
           - Derivatives: crowded positioning against the move (high L/S ratio, extreme funding)
           - CVD diverging from price (distribution or accumulation)
         → If 3+ exhaustion signals at a key level: Bias = reversal direction.
-          If 1-2 exhaustion signals: note in Risk Factors, don't override momentum.
-          Reversal calls require HIGHER evidence bar than continuation calls.
+          If 1-2 exhaustion signals: note in Risk Factors. Without confluence either way,
+          treat continuation and reversal as equally valid — direction at 4H is ~50/50 absent
+          structural evidence, so neither side gets a "default" advantage.
 
         STATING YOUR THESIS:
         Declare LONG, SHORT, or FLAT with specific evidence:
@@ -316,9 +322,11 @@ enum AnalysisPrompt {
         - Overbought/oversold is a condition, not a signal. RSI 80 in an uptrend is strength, not a short trigger. RSI 20 in a downtrend is weakness, not a buy. Only treat OB/OS as actionable when it coincides with a level + divergence or a regime change.
         - Trades need time to work. Backtesting proved the optimal resolution window is 72 hours at 2.0 ATR stop/target sizing. Do not present this as "hold for 72 hours" — instead, frame it as: "This setup targets $X. Allow 1-3 days for price to reach the target. Re-evaluate at the next Daily close if neither TP1 nor SL is hit."
         - Most setups resolve within 40 hours on average. Expired trades (no TP or SL hit in 72h) close at market at 0% P&L.
-        - MOMENTUM CONTINUATION is the strongest directional signal at 4H resolution (75% base rate).
-          Default to trading with momentum unless you have 3+ specific reversal signals.
-          Reversal calls must clear a higher evidence bar than continuation calls.
+        - DIRECTION at 4H is essentially random absent structural evidence (~50% continuation rate
+          empirical on 235K stock bars). Recent momentum is one input among many; it is NOT a default
+          bias. Direction confidence requires structural confluence: multi-timeframe alignment, S/R
+          positioning, volume confirmation, vol regime, exhaustion or continuation signals.
+          Continuation and reversal carry the same evidentiary burden — neither is the default.
         - ML_WIN captures non-linear feature interactions (derivatives + momentum + volatility
           combinations) that predict whether a big move will happen. It does not predict direction.
           When ML_WIN < 50%, the ML is usually right about conditions being unfavorable — trust it
@@ -463,9 +471,12 @@ enum AnalysisPrompt {
     CRYPTO CONTEXT:
     - Trading 24/7, no market hours.
     - Timeframes: Daily (trend context), 4H (dominant momentum signal), 1H (entry timing).
-    - 4H momentum is the strongest directional signal (75% continuation base rate). The 1H is entry
-      precision only — a 1H move opposing 4H momentum is either exhaustion (potential reversal, high bar)
-      or a counter-trend pullback (entry opportunity with 4H trend).
+    - 4H is the primary signal layer; 1H is entry precision. 4H next-bar continuation rate has not
+      been empirically measured for crypto perpetuals (stock data shows ~50%, but crypto may differ
+      due to perpetual mechanics and 24/7 trading). Treat 4H direction as requiring structural
+      confluence — multi-TF alignment, S/R, funding, OI, basis — not assumed continuation.
+      A 1H move opposing 4H direction is either exhaustion (potential reversal) or a counter-trend
+      pullback (entry opportunity); the structural evidence determines which.
     """
 
     private static let derivativesGuidance = """

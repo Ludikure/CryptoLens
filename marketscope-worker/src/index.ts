@@ -1672,6 +1672,16 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           });
           fourHCandles = dropInProgress(fourHCandles, '4h');
         }
+        // Archive stock 4H + 1H to D1 (matches what's already done for crypto at line ~1610).
+        // Without these, the BacktestEngine archive becomes stale at the recent end and forces a
+        // Yahoo-merge fallback on every backtest run. archiveCandlesToD1 takes the most recent 100
+        // bars per call, so over time the rolling window stays fresh without spamming D1.
+        if (fourHCandles.length > 0) {
+          archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
+        }
+        if (oneHCandles.length > 0) {
+          archiveCandlesToD1(env, symbol, '1h', oneHCandles).catch(() => {});
+        }
       }
 
       // Fetch live derivatives for crypto (funding + top trader + taker + OI + basis)
@@ -1805,7 +1815,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
       const sectorETF = isCrypto ? null : sectorETFForSymbol(symbol);
       const sectorCandles = sectorETF ? (sectorETFCandlesMap[sectorETF] || []) as FullCandle[] : [];
-      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol], spyCandles, isCrypto ? undefined : darkPoolData[symbol], iwmCandles as FullCandle[], sectorCandles, dxyCandles as FullCandle[], vix3mPrice);
+      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol], spyCandles, isCrypto ? undefined : darkPoolData[symbol], iwmCandles as FullCandle[], sectorCandles, dxyCandles as FullCandle[], vix3mPrice, symbol);
 
       // Save snapshot for next cron's rate-of-change deltas + acceleration
       const ps = prevSnapshots[symbol];

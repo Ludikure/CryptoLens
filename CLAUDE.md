@@ -112,7 +112,7 @@ The AI system prompt (`AnalysisPrompt.swift`) is momentum-based with ML directio
 
 1. **Step 1 — Regime**: Pre-computed label (TRENDING/RANGING/TRANSITIONING), authoritative
 2. **Step 2 — Playbook**: Per-regime trading rules
-3. **Step 3 — Directional thesis**: LLM reads raw candles/indicators across timeframes and forms its own thesis. Momentum continuation (75% base rate at 4H) is the default; reversal calls require 3+ exhaustion signals at a key level.
+3. **Step 3 — Directional thesis**: LLM reads raw candles/indicators across timeframes and forms its own thesis. 4H next-bar direction is essentially random absent structural evidence (~50% empirical continuation rate on 235K stock bars; crypto unmeasured). Continuation and reversal carry equal evidentiary burden — direction confidence comes from multi-timeframe alignment, S/R confluence, volume/VWAP positioning, and exhaustion signals at key levels, not from "recent direction" alone.
 4. **ML Quality Filter**: `ML_WIN` is a direction-agnostic calibrated probability. `>=60%` favorable, `50–59%` marginal, `<50%` no trade.
 5. **Kill Condition Gate**: Pre-computed kill conditions block setup construction if ANY_KILLED=true.
 6. **Step 4 — Trade Setup**: Level + Signal + Risk. Conviction HIGH/MODERATE/LOW based on evidence quality + ML_WIN.

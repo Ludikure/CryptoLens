@@ -1,8 +1,36 @@
 // Full 80-feature computation for server-side ML predictions.
 // Mirrors Swift IndicatorEngine.computeAll() + BacktestEngine MLFeatures extraction.
 
+import earningsData from './earnings_history.json';
+
 export interface Candle {
     time: number; open: number; high: number; low: number; close: number; volume: number;
+}
+
+// Earnings calendar — bundled JSON, parsed once into Date->ms-epoch sorted arrays per symbol.
+// Mirrors iOS EarningsCalendar.swift.
+const EARNINGS_TS: Record<string, number[]> = (() => {
+    const out: Record<string, number[]> = {};
+    for (const [sym, dates] of Object.entries(earningsData as Record<string, string[]>)) {
+        out[sym] = dates.map(d => Date.parse(d + 'T00:00:00Z')).sort((a, b) => a - b);
+    }
+    return out;
+})();
+
+/** Returns earningsProximity = exp(-min(daysTo, daysSince) / 7), 0 if >=60 days from any earnings.
+ *  Matches iOS BacktestEngine logic (lines 752-756). */
+function earningsProximityFor(symbol: string, atMs: number): number {
+    const ts = EARNINGS_TS[symbol];
+    if (!ts || ts.length === 0) return 0;
+    let next = -1, prev = -1;
+    for (const t of ts) {
+        if (t >= atMs) { next = t; break; }
+        prev = t;
+    }
+    const daysTo = next < 0 ? 60 : Math.min(60, Math.max(0, Math.floor((next - atMs) / 86400000)));
+    const daysSince = prev < 0 ? 60 : Math.min(60, Math.max(0, Math.floor((atMs - prev) / 86400000)));
+    const nearest = Math.min(daysTo, daysSince);
+    return nearest >= 60 ? 0 : Math.exp(-nearest / 7);
 }
 
 export interface FullFeatures {
@@ -278,6 +306,37 @@ function computeVolumeRatio(volumes: number[], period: number = 20): number {
     return avg > 0 ? volumes[volumes.length - 1] / avg : 1.0;
 }
 
+/** Port of iOS MarketStructure.analyze (Indicators/MarketStructure.swift).
+ *  Returns "bullish" / "bearish" / "range" / "expanding" / "contracting" based on last 2 swing highs/lows.
+ *  Used to derive structBull/structBear features (the model trained on iOS-computed values, not EMA stack).
+ *  N-bar pivot lookback=3, requires >= 11 candles. */
+function marketStructureLabel(candles: Candle[], lookback: number = 3): 'bullish' | 'bearish' | 'expanding' | 'contracting' | 'range' | 'insufficient' {
+    if (candles.length < lookback * 2 + 5) return 'insufficient';
+    const swingHighs: number[] = [];
+    const swingLows: number[] = [];
+    for (let i = lookback; i < candles.length - lookback; i++) {
+        const cur = candles[i];
+        let isHi = true, isLo = true;
+        for (let j = i - lookback; j < i; j++) {
+            if (candles[j].high >= cur.high) isHi = false;
+            if (candles[j].low <= cur.low) isLo = false;
+        }
+        if (isHi) for (let j = i + 1; j <= i + lookback; j++) if (candles[j].high >= cur.high) { isHi = false; break; }
+        if (isLo) for (let j = i + 1; j <= i + lookback; j++) if (candles[j].low <= cur.low) { isLo = false; break; }
+        if (isHi) swingHighs.push(cur.high);
+        if (isLo) swingLows.push(cur.low);
+    }
+    if (swingHighs.length < 2 || swingLows.length < 2) return 'insufficient';
+    const h1 = swingHighs[swingHighs.length - 2], h2 = swingHighs[swingHighs.length - 1];
+    const l1 = swingLows[swingLows.length - 2], l2 = swingLows[swingLows.length - 1];
+    const hh = h2 > h1, hl = l2 > l1, lh = h2 < h1, ll = l2 < l1;
+    if (hh && hl) return 'bullish';
+    if (ll && lh) return 'bearish';
+    if (hh && ll) return 'expanding';
+    if (lh && hl) return 'contracting';
+    return 'range';
+}
+
 function computeVWAP(candles: Candle[], period: number = 20): number | null {
     if (candles.length < period) return null;
     const recent = candles.slice(-period);
@@ -455,7 +514,7 @@ interface TimeframeFeatures {
     score: number;
 }
 
-function extractFeatures(candles: Candle[], isCrypto: boolean): TimeframeFeatures {
+function extractFeatures(candles: Candle[], isCrypto: boolean, timeframe: 'daily' | '4h' | '1h' = 'daily'): TimeframeFeatures {
     const closes = candles.map(c => c.close);
     const volumes = candles.map(c => c.volume);
     const price = closes[closes.length - 1];
@@ -499,7 +558,10 @@ function extractFeatures(candles: Candle[], isCrypto: boolean): TimeframeFeature
     const volRatio = computeVolumeRatio(volumes);
 
     // VWAP
-    const vwap = computeVWAP(candles);
+    // Session-anchored VWAP — matches iOS ComputeAll.swift:56-67.
+    // 1H: 24 candles (1 day), 4H: 6 candles (1 day), Daily: 20 candles (~1 month).
+    const vwapSession = timeframe === '1h' ? 24 : timeframe === '4h' ? 6 : 20;
+    const vwap = computeVWAP(candles, vwapSession);
     const aboveVwap = vwap ? (price > vwap ? 1 : 0) : 0;
 
     // EMA20 rising (6-bar slope)
@@ -511,10 +573,15 @@ function extractFeatures(candles: Candle[], isCrypto: boolean): TimeframeFeature
     // Score
     const score = computeScore(candles, isCrypto);
 
+    // Real swing-based market structure (matches iOS MarketStructure.analyze).
+    const structLabel = marketStructureLabel(candles);
+    const structBull = structLabel === 'bullish' ? 1 : 0;
+    const structBear = structLabel === 'bearish' ? 1 : 0;
+
     return {
         rsi, macdHist, adx, adxBullish,
         emaCross, stackBull: stackBull ? 1 : 0, stackBear: stackBear ? 1 : 0,
-        structBull: stackBull ? 1 : 0, structBear: stackBear ? 1 : 0,
+        structBull, structBear,
         stochK: stochRSI.k, stochCross: stochRSI.crossover, macdCross: macdResult.crossover,
         divergence, ema20Rising,
         bbPercentB: bb.percentB, bbSqueeze: bb.squeeze ? 1 : 0, bbBandwidth: bb.bandwidth,
@@ -528,16 +595,23 @@ function extractFeatures(candles: Candle[], isCrypto: boolean): TimeframeFeature
 // ============================================================
 
 const SECTOR_ETF_MAP: Record<string, string[]> = {
-    XLK: ['AAPL', 'MSFT', 'NVDA', 'AMD', 'ORCL', 'ADBE', 'INTC', 'CSCO', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL', 'CRM', 'NFLX'],
-    XLF: ['JPM', 'GS', 'MS', 'BAC', 'WFC', 'BLK', 'SCHW', 'MA', 'V', 'SQ'],
-    XLE: ['XOM', 'OXY', 'FANG', 'CVX', 'SLB'],
-    XLV: ['UNH', 'LLY', 'ABBV', 'JNJ', 'PFE', 'MRK', 'TMO', 'REGN', 'VRTX', 'GILD', 'BIIB'],
-    XLY: ['TSLA', 'HD', 'DIS', 'NKE', 'SBUX', 'MCD', 'WMT', 'COST', 'AMZN', 'ROKU', 'SHOP', 'PLTR', 'SNAP', 'COIN', 'RBLX', 'BYND', 'GME'],
-    XLI: ['CAT', 'DE', 'X', 'BA', 'LMT', 'RTX', 'GD', 'UNP', 'FDX', 'DAL'],
-    XLC: ['T', 'VZ', 'CMCSA', 'GOOGL', 'META'],
-    XLRE: ['SPG', 'O'],
+    XLK: ['AAPL', 'MSFT', 'NVDA', 'AMD', 'ORCL', 'ADBE', 'INTC', 'CSCO', 'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL', 'CRM', 'NFLX',
+          'NOW', 'INTU', 'CRWD', 'PANW', 'FTNT', 'SNOW', 'DDOG', 'NET', 'ZS', 'WDAY', 'TEAM', 'MDB',
+          'TXN', 'KLAC', 'ON', 'MCHP'],
+    XLF: ['JPM', 'GS', 'MS', 'BAC', 'WFC', 'BLK', 'SCHW', 'MA', 'V', 'SQ',
+          'AXP', 'C', 'COF', 'USB', 'PNC', 'CME', 'ICE', 'AIG', 'PYPL'],
+    XLE: ['XOM', 'OXY', 'FANG', 'CVX', 'SLB', 'COP', 'EOG', 'PSX', 'VLO'],
+    XLV: ['UNH', 'LLY', 'ABBV', 'JNJ', 'PFE', 'MRK', 'TMO', 'REGN', 'VRTX', 'GILD', 'BIIB',
+          'AMGN', 'BMY', 'ABT', 'MDT', 'DHR', 'ISRG', 'BSX', 'SYK', 'CVS', 'ELV'],
+    XLY: ['TSLA', 'HD', 'DIS', 'NKE', 'SBUX', 'MCD', 'WMT', 'COST', 'AMZN', 'ROKU', 'SHOP', 'PLTR', 'SNAP', 'COIN', 'RBLX', 'BYND', 'GME',
+          'UBER', 'ABNB', 'BKNG', 'DASH', 'F', 'GM',
+          'LOW', 'TGT', 'TJX', 'CMG', 'MAR', 'HLT', 'MGM'],
+    XLI: ['CAT', 'DE', 'X', 'BA', 'LMT', 'RTX', 'GD', 'UNP', 'FDX', 'DAL',
+          'HON', 'MMM', 'GE', 'EMR', 'ETN', 'ITW', 'PH', 'NOC'],
+    XLC: ['T', 'VZ', 'CMCSA', 'GOOGL', 'META', 'TMUS', 'CHTR', 'SPOT'],
+    XLRE: ['SPG', 'O', 'AMT', 'EQIX', 'PLD', 'CCI', 'PSA'],
 };
-const ETF_SET = new Set(['SPY', 'QQQ', 'IWM', 'XLE', 'XLF', 'XLK', 'XLV', 'XLY', 'XLI', 'XLC', 'XLRE', 'GLD', 'TLT']);
+const ETF_SET = new Set(['SPY', 'QQQ', 'IWM', 'DIA', 'XLE', 'XLF', 'XLK', 'XLV', 'XLY', 'XLI', 'XLC', 'XLRE', 'XLP', 'XLU', 'GLD', 'TLT', 'HYG', 'VXX']);
 
 export function sectorETFForSymbol(symbol: string): string | null {
     if (ETF_SET.has(symbol)) return null;
@@ -653,10 +727,11 @@ export function computeAllFeatures(
     sectorETFCandles: Candle[] = [],
     dxyCandles: Candle[] = [],
     vix3mPrice: number = 0,
+    symbol: string = '',
 ): FullFeatures {
-    const daily = extractFeatures(dailyCandles, isCrypto);
-    const fourH = fourHCandles.length >= 210 ? extractFeatures(fourHCandles, isCrypto) : null;
-    const oneH = oneHCandles.length >= 30 ? extractFeatures(oneHCandles, isCrypto) : null;
+    const daily = extractFeatures(dailyCandles, isCrypto, 'daily');
+    const fourH = fourHCandles.length >= 210 ? extractFeatures(fourHCandles, isCrypto, '4h') : null;
+    const oneH = oneHCandles.length >= 30 ? extractFeatures(oneHCandles, isCrypto, '1h') : null;
 
     // atrPercent is from 4H ATR (matches iOS BacktestEngine line 498 which trained the model).
     // atrPercentile stays on daily (iOS BacktestEngine line 499).
@@ -847,8 +922,8 @@ export function computeAllFeatures(
         })(),
         vixLevelCode: macro.vix < 15 ? 0 : macro.vix < 25 ? 1 : macro.vix < 35 ? 2 : 3,
         isMarketHours: 1,
-        // Earnings (not computed on worker — no calendar data; defaults to 0)
-        earningsProximity: 0,
+        // Earnings — computed from bundled earnings_history.json (matches iOS BacktestEngine).
+        earningsProximity: isCrypto ? 0 : earningsProximityFor(symbol, dailyCandles[dailyCandles.length - 1]?.time || Date.now()),
         // Dark pool — passed via darkPool param
         shortVolumeRatio: darkPool?.ratio ?? 0.5,
         shortVolumeZScore: darkPool?.zscore ?? 0,

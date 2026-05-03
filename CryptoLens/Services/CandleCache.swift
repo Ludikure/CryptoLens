@@ -76,9 +76,11 @@ enum CandleCache {
 
         var allCandles = [Candle]()
 
-        // Layer 1: Yahoo — recent 2 years (fast, no rate limit)
-        let twoYearsAgo = Calendar.current.date(byAdding: .year, value: -2, to: endDate)!
-        let yahooStart = max(startDate, twoYearsAgo)
+        // Layer 1: Yahoo — recent ~2 years (fast, no rate limit).
+        // Yahoo's 1H endpoint enforces "within the last 730 days" and REJECTS requests of exactly
+        // 730+ days with "Unprocessable Entity". Using `-2 years` lands at 731 in leap years and
+        // intermittently fails. -720 days gives a 10-day safety margin under the cap.
+        let yahooStart = max(startDate, Calendar.current.date(byAdding: .day, value: -720, to: endDate)!)
         do {
             let yahooCandles = try await yahoo.fetchHistoricalCandles(
                 symbol: symbol, interval: "1h", startDate: yahooStart, endDate: endDate)

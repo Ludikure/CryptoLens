@@ -18,34 +18,45 @@ STOCK_SYMBOLS = [
     # Mega-cap tech
     'AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN',
     'CRM', 'NFLX', 'AMD', 'ORCL', 'ADBE', 'INTC', 'CSCO',
+    # Software / SaaS
+    'NOW', 'INTU', 'CRWD', 'PANW', 'FTNT', 'SNOW', 'DDOG', 'NET', 'ZS', 'WDAY', 'TEAM', 'MDB',
     # Semiconductors
-    'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL',
+    'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL', 'TXN', 'KLAC', 'ON', 'MCHP',
     # High-beta growth
     'PLTR', 'ROKU', 'SHOP', 'SQ', 'SNAP', 'COIN', 'RBLX',
     # High short-interest / meme
     'BYND', 'GME',
+    # Internet / travel / consumer tech
+    'UBER', 'ABNB', 'BKNG', 'DASH', 'PYPL', 'SPOT', 'F', 'GM',
     # Financials
     'JPM', 'GS', 'MS', 'BAC', 'WFC', 'BLK', 'SCHW',
+    'AXP', 'C', 'COF', 'USB', 'PNC', 'CME', 'ICE', 'AIG',
     # Healthcare / pharma
     'UNH', 'LLY', 'ABBV', 'JNJ', 'PFE', 'MRK', 'TMO',
+    'AMGN', 'BMY', 'ABT', 'MDT', 'DHR', 'ISRG', 'BSX', 'SYK', 'CVS', 'ELV',
     # Biotech
     'REGN', 'VRTX', 'GILD', 'BIIB',
     # Consumer
     'HD', 'MA', 'V', 'DIS', 'NKE', 'SBUX', 'MCD', 'WMT', 'COST',
-    # Cyclicals
+    'LOW', 'TGT', 'TJX', 'CMG', 'MAR', 'HLT', 'MGM',
+    # Cyclicals / industrials
     'CAT', 'DE', 'X', 'BA',
+    'HON', 'MMM', 'GE', 'EMR', 'ETN', 'ITW', 'PH',
     # Energy
     'XOM', 'OXY', 'FANG', 'CVX', 'SLB',
+    'COP', 'EOG', 'PSX', 'VLO',
     # Defense / aerospace
-    'LMT', 'RTX', 'GD',
+    'LMT', 'RTX', 'GD', 'NOC',
     # Transport
     'UNP', 'FDX', 'DAL',
     # Telecom / media
-    'T', 'VZ', 'CMCSA',
+    'T', 'VZ', 'CMCSA', 'TMUS', 'CHTR',
     # REITs
     'SPG', 'O',
+    'AMT', 'EQIX', 'PLD', 'CCI', 'PSA',
     # ETFs (no earnings — feature will default to 0)
     'SPY', 'QQQ', 'IWM', 'XLE', 'XLF', 'XLK', 'XLV', 'GLD', 'TLT',
+    'DIA', 'XLY', 'XLP', 'XLI', 'XLU', 'XLC', 'HYG', 'VXX',
 ]
 
 OUTPUT = '/Users/bojanmihovilovic/CryptoLens/ml-training/earnings_history.json'

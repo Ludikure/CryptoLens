@@ -85,7 +85,30 @@ class BacktestEngine: ObservableObject {
             let expectedMin4H = ((ad?.count ?? 0) * fourHPerDay)
             let archiveHit = (ad?.count ?? 0) >= 250 && (a4?.count ?? 0) >= max(250, expectedMin4H)
 
-            if archiveHit, let ad = ad, let a4 = a4 {
+            // Archive freshness check (stocks only — crypto cron keeps 4H archive continuously fresh).
+            // Detects BOTH trailing staleness AND internal gaps. Internal gaps appear when the worker
+            // cron has been auto-archiving recent bars while the middle of the archive is missing
+            // (e.g., old manual upload covered Jan 2019 - May 2024, cron added Feb-May 2026, leaving a
+            // 21-month hole). The previous "last bar within N days" check passed on this case and we
+            // silently fed the model data with a 666-day gap.
+            let stalenessLimit: TimeInterval = 7 * 86400
+            func archiveHasGap(_ candles: [Candle], windowStart: Date, windowEnd: Date) -> Bool {
+                let relevant = candles.filter { $0.time >= windowStart && $0.time <= windowEnd }
+                guard !relevant.isEmpty else { return true }
+                // Trailing gap (data ends before endDate)
+                if windowEnd.timeIntervalSince(relevant.last!.time) > stalenessLimit { return true }
+                // Internal gaps
+                for i in 1..<relevant.count {
+                    if relevant[i].time.timeIntervalSince(relevant[i - 1].time) > stalenessLimit {
+                        return true
+                    }
+                }
+                return false
+            }
+            let archiveStale = !isCrypto && a4 != nil &&
+                archiveHasGap(a4!, windowStart: startDate, windowEnd: endDate)
+
+            if archiveHit && !archiveStale, let ad = ad, let a4 = a4 {
                 dailyCandles = ad
                 fourHCandles = a4
                 oneHCandles = a1 ?? []
@@ -93,6 +116,63 @@ class BacktestEngine: ObservableObject {
                 #if DEBUG
                 print("[Backtest] Using D1 archive: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
                 #endif
+            } else if archiveHit && archiveStale, let ad = ad, let a4 = a4 {
+                // Archive has historical data but has gaps / trailing staleness — fetch Yahoo and merge.
+                statusMessage = "Archive incomplete, fetching Yahoo..."
+                #if DEBUG
+                let lastBarStr = a4.last.map { "\($0.time)" } ?? "nil"
+                print("[Backtest] Archive incomplete for \(symbol): \(a4.count) 4H bars, last \(lastBarStr) — fetching Yahoo")
+                #endif
+
+                CandleCache.clearStitched(symbol: symbol)
+
+                // Daily: Yahoo has decades of history, just re-fetch the full requested range.
+                let yahooDaily = try await yahoo.fetchHistoricalCandles(
+                    symbol: symbol, interval: "1d", startDate: fetchStart, endDate: endDate)
+                dailyCandles = yahooDaily.count > ad.count ? yahooDaily : ad
+
+                // 1H: Yahoo gives ~720 days. Union archive + Yahoo by timestamp (Yahoo wins on collisions).
+                // This fills both trailing AND internal gaps without losing pre-Yahoo-window history.
+                let yahooHourly = try await CandleCache.loadOrFetchStitched(
+                    symbol: symbol, startDate: fetchStart, endDate: endDate,
+                    yahoo: yahoo, alphaVantage: alphaVantage, twelveData: twelveData)
+                var hourlyByTimestamp: [TimeInterval: Candle] = [:]
+                for c in (a1 ?? []) { hourlyByTimestamp[c.time.timeIntervalSince1970] = c }
+                for c in yahooHourly { hourlyByTimestamp[c.time.timeIntervalSince1970] = c }
+                let mergedHourly = hourlyByTimestamp.values.sorted { $0.time < $1.time }
+                fourHCandles = CandleAggregator.aggregate1HTo4H(mergedHourly)
+                oneHCandles = mergedHourly
+
+                let archiveCount = a1?.count ?? 0
+                let netNew = mergedHourly.count - archiveCount
+                statusMessage = "Merged: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(mergedHourly.count) (+\(netNew) net new from Yahoo)"
+                #if DEBUG
+                print("[Backtest] Merged archive + Yahoo for \(symbol): D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(mergedHourly.count), archive=\(archiveCount), yahoo=\(yahooHourly.count), netNew=\(netNew)")
+                #endif
+
+                // Upload the entire Yahoo window to D1 (INSERT OR IGNORE handles duplicates).
+                // We can't reliably "upload only new bars" anymore since gaps are now filled in the middle.
+                if !yahooHourly.isEmpty {
+                    let yahooStart = yahooHourly.first!.time
+                    let new4H = fourHCandles.filter { $0.time >= yahooStart }
+                    // Upload daily covering the full new range (Yahoo's daily fetch).
+                    let chunkSize = 2000
+                    for i in stride(from: 0, to: yahooDaily.count, by: chunkSize) {
+                        let chunk = Array(yahooDaily[i..<min(i + chunkSize, yahooDaily.count)])
+                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "1d", candles: chunk)
+                    }
+                    for i in stride(from: 0, to: new4H.count, by: chunkSize) {
+                        let chunk = Array(new4H[i..<min(i + chunkSize, new4H.count)])
+                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "4h", candles: chunk)
+                    }
+                    for i in stride(from: 0, to: yahooHourly.count, by: chunkSize) {
+                        let chunk = Array(yahooHourly[i..<min(i + chunkSize, yahooHourly.count)])
+                        await Self.uploadCandlesToArchive(symbol: symbol, interval: "1h", candles: chunk)
+                    }
+                    #if DEBUG
+                    print("[Backtest] Uploaded Yahoo window to archive for \(symbol): \(yahooDaily.count) 1D, \(new4H.count) 4H, \(yahooHourly.count) 1H")
+                    #endif
+                }
             } else if isCrypto {
                 statusMessage = "Fetching daily candles (Binance)..."
                 dailyCandles = try await binance.fetchHistoricalCandles(
@@ -942,50 +1022,68 @@ class BacktestEngine: ObservableObject {
         // Mega-cap tech
         "AAPL", "TSLA", "MSFT", "NVDA", "GOOGL", "META", "AMZN",
         "CRM", "NFLX", "AMD", "ORCL", "ADBE", "INTC", "CSCO",
+        // Software / SaaS
+        "NOW", "INTU", "CRWD", "PANW", "FTNT", "SNOW", "DDOG", "NET", "ZS", "WDAY", "TEAM", "MDB",
         // Semiconductors
-        "AVGO", "QCOM", "MU", "AMAT", "LRCX", "MRVL",
+        "AVGO", "QCOM", "MU", "AMAT", "LRCX", "MRVL", "TXN", "KLAC", "ON", "MCHP",
         // High-beta growth
         "PLTR", "ROKU", "SHOP", "SQ", "SNAP", "COIN", "RBLX",
         // High short-interest / meme
         "BYND", "GME",
+        // Internet / travel / consumer tech
+        "UBER", "ABNB", "BKNG", "DASH", "PYPL", "SPOT", "F", "GM",
         // Financials
         "JPM", "GS", "MS", "BAC", "WFC", "BLK", "SCHW",
+        "AXP", "C", "COF", "USB", "PNC", "CME", "ICE", "AIG",
         // Healthcare / pharma
         "UNH", "LLY", "ABBV", "JNJ", "PFE", "MRK", "TMO",
+        "AMGN", "BMY", "ABT", "MDT", "DHR", "ISRG", "BSX", "SYK", "CVS", "ELV",
         // Biotech (catalyst-driven)
         "REGN", "VRTX", "GILD", "BIIB",
         // Consumer
         "HD", "MA", "V", "DIS", "NKE", "SBUX", "MCD", "WMT", "COST",
+        "LOW", "TGT", "TJX", "CMG", "MAR", "HLT", "MGM",
         // Cyclical industrials
         "CAT", "DE", "X", "BA",
+        "HON", "MMM", "GE", "EMR", "ETN", "ITW", "PH",
         // Energy
         "XOM", "OXY", "FANG", "CVX", "SLB",
+        "COP", "EOG", "PSX", "VLO",
         // Defense / aerospace
-        "LMT", "RTX", "GD",
+        "LMT", "RTX", "GD", "NOC",
         // Transport
         "UNP", "FDX", "DAL",
         // Telecom / media
-        "T", "VZ", "CMCSA",
+        "T", "VZ", "CMCSA", "TMUS", "CHTR",
         // REITs (rate-driven)
         "SPG", "O",
+        "AMT", "EQIX", "PLD", "CCI", "PSA",
         // ETFs (no earnings — different regime)
         "SPY", "QQQ", "IWM", "XLE", "XLF", "XLK", "XLV", "GLD", "TLT",
+        "DIA", "XLY", "XLP", "XLI", "XLU", "XLC", "HYG", "VXX",
     ]
     static let allSymbols = stockSymbols + cryptoSymbols
 
     /// Map stock symbols to their sector ETFs for relative strength computation.
     static func sectorETF(for symbol: String) -> String? {
-        let etfs: Set<String> = ["SPY", "QQQ", "IWM", "XLE", "XLF", "XLK", "XLV", "XLY", "XLI", "XLC", "XLRE", "GLD", "TLT"]
+        let etfs: Set<String> = ["SPY", "QQQ", "IWM", "DIA", "XLE", "XLF", "XLK", "XLV", "XLY", "XLI", "XLC", "XLRE", "XLP", "XLU", "GLD", "TLT", "HYG", "VXX"]
         if etfs.contains(symbol) { return nil }
         let mapping: [String: [String]] = [
-            "XLK": ["AAPL", "MSFT", "NVDA", "AMD", "ORCL", "ADBE", "INTC", "CSCO", "AVGO", "QCOM", "MU", "AMAT", "LRCX", "MRVL", "CRM", "NFLX"],
-            "XLF": ["JPM", "GS", "MS", "BAC", "WFC", "BLK", "SCHW", "MA", "V", "SQ"],
-            "XLE": ["XOM", "OXY", "FANG", "CVX", "SLB"],
-            "XLV": ["UNH", "LLY", "ABBV", "JNJ", "PFE", "MRK", "TMO", "REGN", "VRTX", "GILD", "BIIB"],
-            "XLY": ["TSLA", "HD", "DIS", "NKE", "SBUX", "MCD", "WMT", "COST", "AMZN", "ROKU", "SHOP", "PLTR", "SNAP", "COIN", "RBLX", "BYND", "GME"],
-            "XLI": ["CAT", "DE", "X", "BA", "LMT", "RTX", "GD", "UNP", "FDX", "DAL"],
-            "XLC": ["T", "VZ", "CMCSA", "GOOGL", "META"],
-            "XLRE": ["SPG", "O"],
+            "XLK": ["AAPL", "MSFT", "NVDA", "AMD", "ORCL", "ADBE", "INTC", "CSCO", "AVGO", "QCOM", "MU", "AMAT", "LRCX", "MRVL", "CRM", "NFLX",
+                    "NOW", "INTU", "CRWD", "PANW", "FTNT", "SNOW", "DDOG", "NET", "ZS", "WDAY", "TEAM", "MDB",
+                    "TXN", "KLAC", "ON", "MCHP"],
+            "XLF": ["JPM", "GS", "MS", "BAC", "WFC", "BLK", "SCHW", "MA", "V", "SQ",
+                    "AXP", "C", "COF", "USB", "PNC", "CME", "ICE", "AIG", "PYPL"],
+            "XLE": ["XOM", "OXY", "FANG", "CVX", "SLB", "COP", "EOG", "PSX", "VLO"],
+            "XLV": ["UNH", "LLY", "ABBV", "JNJ", "PFE", "MRK", "TMO", "REGN", "VRTX", "GILD", "BIIB",
+                    "AMGN", "BMY", "ABT", "MDT", "DHR", "ISRG", "BSX", "SYK", "CVS", "ELV"],
+            "XLY": ["TSLA", "HD", "DIS", "NKE", "SBUX", "MCD", "WMT", "COST", "AMZN", "ROKU", "SHOP", "PLTR", "SNAP", "COIN", "RBLX", "BYND", "GME",
+                    "UBER", "ABNB", "BKNG", "DASH", "F", "GM",
+                    "LOW", "TGT", "TJX", "CMG", "MAR", "HLT", "MGM"],
+            "XLI": ["CAT", "DE", "X", "BA", "LMT", "RTX", "GD", "UNP", "FDX", "DAL",
+                    "HON", "MMM", "GE", "EMR", "ETN", "ITW", "PH", "NOC"],
+            "XLC": ["T", "VZ", "CMCSA", "GOOGL", "META", "TMUS", "CHTR", "SPOT"],
+            "XLRE": ["SPG", "O", "AMT", "EQIX", "PLD", "CCI", "PSA"],
         ]
         for (etf, symbols) in mapping {
             if symbols.contains(symbol) { return etf }
@@ -1081,13 +1179,17 @@ class BacktestEngine: ObservableObject {
 
     /// Run backtests on given symbols, auto-export CSVs to Documents.
     func batchExport(symbols: [String], startDate: Date, endDate: Date) async {
+        isRunning = true
         batchComplete = false
+        batchProgress = "Starting batch export..."
+        defer { isRunning = false }
         let exportDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
             .appendingPathComponent("ml_exports", isDirectory: true)
         try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
 
         #if DEBUG
         print("[Batch] Export directory: \(exportDir.path)")
+        print("[Batch] Symbols (\(symbols.count)): \(symbols.prefix(5).joined(separator: ", "))...")
         #endif
 
         // Pre-fetch all shared data once
