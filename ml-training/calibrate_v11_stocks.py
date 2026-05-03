@@ -329,7 +329,7 @@ def export_model(market, model, n_samples, x_cal, y_cal, is_lgb):
         'features': FEATURES,
         'trees': trees,
         'base_score': base_score,
-        'version': 11,
+        'version': 12,
         'market': market,
         'engine': model_type,
         'n_features': len(FEATURES),
@@ -338,7 +338,7 @@ def export_model(market, model, n_samples, x_cal, y_cal, is_lgb):
         'model_type': 'classifier',
         'target': 'goodR',
         'calibration': {'x': x_cal, 'y': y_cal, 'cap': CAP, 'method': 'isotonic'},
-        'description': f'v11 {market} ({model_type}) — goodR = fwdMaxFavR>=1.5, {n_samples} bars',
+        'description': f'v12 {market} ({model_type}) — goodR = fwdMaxFavR>=1.5, {n_samples} bars (fresh data, no options)',
     }
     # Write to worker
     worker_path = f'{WORKER}/ml-model-{market}.json'
@@ -370,7 +370,7 @@ def calibrate_market(symbols, is_crypto, label, market_key):
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("v11 — STOCKS ONLY (XGBoost d5 t100)")
+    print("v12 — STOCKS ONLY (XGBoost d5 t100, fresh data, 111 features, no options)")
     print(f"  CSV source: {DOWNLOADS}")
     print(f"  Symbols: {len(STOCK_SYMBOLS)}")
     print("  Crypto model untouched.")
