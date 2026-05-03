@@ -54,8 +54,20 @@ enum AnalysisPrompt {
         STEP 3: DETERMINE YOUR DIRECTIONAL THESIS
 
         Read the raw data across all three timeframes. You have candles, indicators,
-        structure labels, volume profile, and (for crypto) derivatives positioning.
+        structure labels, volume profile, (for crypto) derivatives positioning, and
+        for stocks a "Recent News" block when company headlines were available.
         Form your own directional thesis from this evidence.
+
+        WHEN NEWS IS PRESENT (stocks): explicitly reference it in your thesis. The numbers
+        are downstream of the narrative. Examples that change conviction:
+          - Earnings beat/miss within last 3 days → expect continuation of post-earnings drift
+          - Regulatory / FDA / litigation news → idiosyncratic move, may override technicals
+          - Sector or peer-driven news (e.g., AI selloff, banking stress) → check if this stock
+            is genuinely affected or just sympathetic
+          - Old news (>5 days) is usually priced in — don't double-count
+        If news clearly contradicts the technical thesis (e.g., bearish setup but a strong
+        upgrade just hit), name the conflict and either explain why technicals win or downgrade
+        conviction / call FLAT.
 
         DIRECTIONAL EVIDENCE FRAMEWORK:
         The next 4H bar's direction is essentially independent of the previous bar — empirical
@@ -101,12 +113,30 @@ enum AnalysisPrompt {
           treat continuation and reversal as equally valid — direction at 4H is ~50/50 absent
           structural evidence, so neither side gets a "default" advantage.
 
+        FAILURE-MODE CHECK (mandatory before declaring conviction):
+        Before naming a directional bias, write 2-3 sentences answering:
+        "What would have to be true for this thesis to be wrong?"
+        Concrete examples — pick the ones that apply, don't list generic risks:
+        - The 4H momentum is exhaustion, not continuation — what would confirm that
+          (e.g., volume divergence, RSI rolling, funding flip)?
+        - The S/R level we're trading against has been broken multiple times before
+          — what makes this rejection different?
+        - A scheduled macro/earnings event within 24-48h could reverse the setup.
+        - The ML_WIN may be elevated by features that don't apply to the current
+          regime (e.g., high vol on a kill-conditions-clearing bar).
+        - Multi-timeframe alignment is partial, not full — which timeframe is the weak link?
+        If the failure-mode answer is "a generic move against us" — that means you don't
+        have a specific failure scenario in mind, which means the conviction is not earned.
+        Downgrade conviction one level OR call FLAT.
+
         STATING YOUR THESIS:
         Declare LONG, SHORT, or FLAT with specific evidence:
         "Bias: SHORT — 4H momentum bearish (4 consecutive red bars, expanding volume).
          RSI 38 and falling. Structure LL/LH on 4H. Derivatives confirm: funding +0.04%
          (crowded long), taker flow 0.88 (sellers). 1H showing dead-cat bounce into
-         4H EMA resistance at $67,500. ML_WIN: 63%."
+         4H EMA resistance at $67,500. ML_WIN: 63%.
+         Failure mode: a sharp reversal would require funding to flip negative AND the 1H
+         to break above the 4H EMA with expanding volume — neither is present yet."
 
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
@@ -913,9 +943,15 @@ enum AnalysisPrompt {
             if let beta = si.beta {
                 lines.append("Beta: \(String(format: "%.2f", beta))\(beta > 1.5 ? " — HIGH volatility" : (beta < 0.5 ? " — LOW volatility" : ""))")
             }
-            // Recent news headlines
+            // Recent news headlines — dedicated multi-line block so the LLM can scan dates + sources.
+            // Format per item: "[YYYY-MM-DD | Source] Headline" (set in FinnhubProvider.fetchNews).
             if let news = si.newsHeadlines, !news.isEmpty {
-                lines.append("Recent News: \(news.prefix(3).joined(separator: " | "))")
+                lines.append("")
+                lines.append("Recent News (last ~7d, most-recent first — read for narrative + catalysts):")
+                for item in news.prefix(8) {
+                    lines.append("  - \(item)")
+                }
+                lines.append("")
             }
         }
 

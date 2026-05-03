@@ -155,12 +155,28 @@ class FinnhubProvider {
     }
 
     // MARK: - Company News (top headlines)
+    // Returns formatted strings: "[YYYY-MM-DD | Source] Headline" so the LLM sees recency + source.
 
-    func fetchNews(symbol: String, limit: Int = 5) async -> [String] {
+    func fetchNews(symbol: String, limit: Int = 8) async -> [String] {
         guard let data = await fetchEndpoint("news", symbol: symbol) else { return [] }
         guard let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
 
-        return arr.prefix(limit).compactMap { $0["headline"] as? String }
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(identifier: "UTC")
+
+        return arr.prefix(limit).compactMap { item -> String? in
+            guard let headline = item["headline"] as? String, !headline.isEmpty else { return nil }
+            let source = (item["source"] as? String) ?? "?"
+            var dateStr = ""
+            if let dt = item["datetime"] as? Double {
+                dateStr = df.string(from: Date(timeIntervalSince1970: dt))
+            } else if let dt = item["datetime"] as? Int {
+                dateStr = df.string(from: Date(timeIntervalSince1970: Double(dt)))
+            }
+            return "[\(dateStr) | \(source)] \(headline)"
+        }
     }
 
     // MARK: - Generic Worker Fetch
