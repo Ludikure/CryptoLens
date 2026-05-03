@@ -900,6 +900,117 @@ export default {
       return json({ error: 'No debug data yet' });
     }
 
+    // === One-shot admin: backfill 1 year of derivatives history for a single crypto symbol ===
+    // Only callable from the Mac (X-App-ID gate already filters non-app traffic). Used by
+    // ml-training/backfill_derivatives.py since Binance fapi geo-blocks US IPs but the
+    // Cloudflare worker reaches it fine from non-US edge nodes.
+    if (path === '/debug/backfill-derivatives') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const days = parseInt(url.searchParams.get('days') || '365');
+      const FAPI = 'https://fapi.binance.com';
+      const BUCKET_MS = 4 * 3600 * 1000;
+      const endMs = Date.now();
+      const startMs = endMs - days * 86400 * 1000;
+
+      // Bucket-aligned aggregator: bucketSec → field-map
+      const buckets: Map<number, Record<string, number | null>> = new Map();
+      const get = (ts: number) => {
+        const k = Math.floor(ts / BUCKET_MS) * BUCKET_MS / 1000;  // sec
+        if (!buckets.has(k)) {
+          buckets.set(k, {
+            funding_rate: null, open_interest: null, long_percent: null,
+            taker_ratio: null, top_trader_long_pct: null,
+            taker_buy_vol: null, taker_sell_vol: null,
+          });
+        }
+        return buckets.get(k)!;
+      };
+
+      // 1) Funding rate (8h cadence — average to 4h bucket)
+      const fundingRates: Map<number, number[]> = new Map();
+      let curStart = startMs;
+      while (curStart < endMs) {
+        const r = await fetch(`${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&startTime=${curStart}&limit=1000`);
+        if (!r.ok) break;
+        const data = await r.json() as Array<{ fundingTime: number; fundingRate: string }>;
+        if (!data.length) break;
+        for (const d of data) {
+          const k = Math.floor(d.fundingTime / BUCKET_MS) * BUCKET_MS / 1000;
+          if (!fundingRates.has(k)) fundingRates.set(k, []);
+          fundingRates.get(k)!.push(parseFloat(d.fundingRate));
+        }
+        const lastTs = Math.max(...data.map(d => d.fundingTime));
+        if (lastTs <= curStart) break;
+        curStart = lastTs + 1;
+        if (data.length < 1000) break;
+      }
+      for (const [k, rates] of fundingRates) {
+        get(k * 1000).funding_rate = rates.reduce((a, b) => a + b, 0) / rates.length;
+      }
+
+      // Helper: paginated 4h fetch. Binance /futures/data/* endpoints cap at 30 days per request,
+      // so we walk back in 30-day windows providing explicit startTime + endTime.
+      const WINDOW_DAYS = 29;  // 1 day buffer under the 30-day cap
+      const WINDOW_MS = WINDOW_DAYS * 86400 * 1000;
+      async function paginate4h(path: string): Promise<Array<{ timestamp: number; [k: string]: any }>> {
+        const out: any[] = [];
+        let winEnd = endMs;
+        while (winEnd > startMs) {
+          const winStart = Math.max(startMs, winEnd - WINDOW_MS);
+          const url = `${FAPI}${path}?symbol=${symbol}&period=4h&startTime=${winStart}&endTime=${winEnd}&limit=500`;
+          const r = await fetch(url);
+          if (!r.ok) break;
+          const data = await r.json() as any[];
+          if (data.length) out.push(...data);
+          if (winStart <= startMs) break;
+          winEnd = winStart - 1;
+        }
+        return out;
+      }
+
+      // 2) Open interest history
+      for (const d of await paginate4h('/futures/data/openInterestHist')) {
+        const v = parseFloat(d.sumOpenInterestValue || d.sumOpenInterest || '0');
+        if (v) get(+d.timestamp).open_interest = v;
+      }
+      // 3) Global long/short account ratio
+      for (const d of await paginate4h('/futures/data/globalLongShortAccountRatio')) {
+        const v = parseFloat(d.longAccount || '0');
+        if (v) get(+d.timestamp).long_percent = v * 100;
+      }
+      // 4) Top trader long/short (smart money)
+      for (const d of await paginate4h('/futures/data/topLongShortPositionRatio')) {
+        const v = parseFloat(d.longAccount || '0');
+        if (v) get(+d.timestamp).top_trader_long_pct = v * 100;
+      }
+      // 5) Taker buy/sell ratio + volumes
+      for (const d of await paginate4h('/futures/data/takerlongshortRatio')) {
+        const slot = get(+d.timestamp);
+        slot.taker_ratio = parseFloat(d.buySellRatio || '0') || null;
+        slot.taker_buy_vol = parseFloat(d.buyVol || '0') || null;
+        slot.taker_sell_vol = parseFloat(d.sellVol || '0') || null;
+      }
+
+      // Insert into D1 in batches of 50 (D1 batch limit)
+      let inserted = 0;
+      const entries = Array.from(buckets.entries())
+        .filter(([_, f]) => Object.values(f).some(v => v !== null))
+        .sort((a, b) => a[0] - b[0]);
+      for (let i = 0; i < entries.length; i += 50) {
+        const batch = entries.slice(i, i + 50);
+        try {
+          await env.DB.batch(batch.map(([ts, f]) => env.DB.prepare(
+            'INSERT OR REPLACE INTO derivatives_history (symbol, timestamp, funding_rate, open_interest, long_percent, taker_ratio, top_trader_long_pct, taker_buy_vol, taker_sell_vol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+          ).bind(symbol, ts, f.funding_rate, f.open_interest, f.long_percent, f.taker_ratio, f.top_trader_long_pct, f.taker_buy_vol, f.taker_sell_vol)));
+          inserted += batch.length;
+        } catch (e) {
+          // continue on partial failure
+        }
+      }
+      return json({ symbol, buckets_total: buckets.size, inserted, days });
+    }
+
     // === Dark Pool (FINRA RegSHO short sale volume) ===
     if (path === '/darkpool') {
       const symbol = url.searchParams.get('symbol')?.toUpperCase();
@@ -1074,8 +1185,86 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(checkAllDeviceAlerts(env));
     ctx.waitUntil(checkAllDeviceScores(env));
+    ctx.waitUntil(archiveShortInterest(env));
   },
 };
+
+// === Short Interest Archive ===
+// Daily snapshot of Yahoo's `shortPercentOfFloat` and `shortRatio` (days to cover) per stock.
+// Yahoo updates these values bi-weekly from FINRA filings; one fetch per day per symbol is enough.
+// Idempotent via KV gate (short_arch:last_date) — first cron firing of each UTC day does the work,
+// remaining ~1439 firings of that day skip after a single KV read.
+const ARCHIVE_STOCKS = [
+  // Mirrors STOCK_SYMBOLS in ml-training/calibrate_v11_stocks.py (159 symbols).
+  'AAPL', 'TSLA', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'CRM', 'NFLX', 'AMD',
+  'ORCL', 'ADBE', 'INTC', 'CSCO',
+  'NOW', 'INTU', 'CRWD', 'PANW', 'FTNT', 'SNOW', 'DDOG', 'NET', 'ZS', 'WDAY', 'TEAM', 'MDB',
+  'AVGO', 'QCOM', 'MU', 'AMAT', 'LRCX', 'MRVL', 'TXN', 'KLAC', 'ON', 'MCHP',
+  'PLTR', 'ROKU', 'SHOP', 'SNAP', 'COIN', 'RBLX',
+  'BYND', 'GME',
+  'UBER', 'ABNB', 'BKNG', 'DASH', 'PYPL', 'SPOT', 'F', 'GM',
+  'JPM', 'GS', 'MS', 'BAC', 'WFC', 'BLK', 'SCHW',
+  'AXP', 'C', 'COF', 'USB', 'PNC', 'CME', 'ICE', 'AIG',
+  'UNH', 'LLY', 'ABBV', 'JNJ', 'PFE', 'MRK', 'TMO',
+  'AMGN', 'BMY', 'ABT', 'MDT', 'DHR', 'ISRG', 'BSX', 'SYK', 'CVS', 'ELV',
+  'REGN', 'VRTX', 'GILD', 'BIIB',
+  'HD', 'MA', 'V', 'DIS', 'NKE', 'SBUX', 'MCD', 'WMT', 'COST',
+  'LOW', 'TGT', 'TJX', 'CMG', 'MAR', 'HLT', 'MGM',
+  'CAT', 'DE', 'BA',
+  'HON', 'MMM', 'GE', 'EMR', 'ETN', 'ITW', 'PH',
+  'XOM', 'OXY', 'FANG', 'CVX', 'SLB',
+  'COP', 'EOG', 'PSX', 'VLO',
+  'LMT', 'RTX', 'GD', 'NOC',
+  'UNP', 'FDX', 'DAL',
+  'T', 'VZ', 'CMCSA', 'TMUS', 'CHTR',
+  'SPG', 'O',
+  'AMT', 'EQIX', 'PLD', 'CCI', 'PSA',
+  // ETFs are skipped — short interest doesn't apply meaningfully
+];
+
+async function archiveShortInterest(env: Env) {
+  const today = new Date().toISOString().split('T')[0];
+  const lastDate = await env.ALERTS.get('short_arch:last_date');
+  if (lastDate === today) return;  // already archived today
+
+  const auth = await getYahooCrumb(env);
+  if (!auth) return;
+  const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+  const headers = { 'User-Agent': ua, 'Cookie': auth.cookie };
+  const crumbParam = `&crumb=${encodeURIComponent(auth.crumb)}`;
+
+  // Process in parallel batches of 25 to keep total fetch time well under cron CPU limits.
+  let inserted = 0;
+  for (let i = 0; i < ARCHIVE_STOCKS.length; i += 25) {
+    const batch = ARCHIVE_STOCKS.slice(i, i + 25);
+    const stmts: any[] = [];
+    await Promise.all(batch.map(async (symbol) => {
+      try {
+        const r = await fetch(
+          `${YAHOO_BASE}/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics${crumbParam}`,
+          { headers }
+        );
+        if (!r.ok) return;
+        const data = await r.json() as any;
+        const stats = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics;
+        const shortPct = stats?.shortPercentOfFloat?.raw;
+        const shortRatio = stats?.shortRatio?.raw;
+        if (shortPct == null && shortRatio == null) return;
+        stmts.push(env.DB.prepare(
+          'INSERT OR REPLACE INTO short_interest_history (symbol, date, short_pct_of_float, days_to_cover) VALUES (?, ?, ?, ?)'
+        ).bind(symbol, today, shortPct ?? null, shortRatio ?? null));
+      } catch { /* skip on error */ }
+    }));
+    if (stmts.length) {
+      try {
+        await env.DB.batch(stmts);
+        inserted += stmts.length;
+      } catch { /* partial-failure is OK */ }
+    }
+  }
+  await env.ALERTS.put('short_arch:last_date', today);
+  console.log(`[short_arch] ${today}: ${inserted}/${ARCHIVE_STOCKS.length} symbols archived`);
+}
 
 // === Input Validation ===
 function sanitizeSymbol(input: string | null): string | null {
@@ -1571,13 +1760,21 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   // Always process these crypto symbols for D1 archiving, even if not in watchlist.
   // Top 30 by futures volume — covers the majority of training bars and ensures
   // derivatives features (funding, OI, taker, basis) have real data for backtesting.
+  // Full 76-symbol crypto training universe (matches CRYPTO_SYMBOLS in calibrate_v11_stocks.py).
+  // Cron archives derivatives for ALL of these every 4H regardless of watchlist membership,
+  // so every symbol the model is trained on continues accumulating fresh derivatives history.
   const ARCHIVE_CRYPTO = [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'ADAUSDT',
-    'LINKUSDT', 'AVAXUSDT', 'DOTUSDT', 'NEARUSDT',
-    'DOGEUSDT', 'LTCUSDT', 'ETCUSDT', 'MATICUSDT', 'ATOMUSDT',
-    'UNIUSDT', 'AAVEUSDT', 'FILUSDT', 'TRXUSDT', 'VETUSDT',
-    'INJUSDT', 'RUNEUSDT', 'APTUSDT', 'ARBUSDT', 'SUIUSDT',
-    'SUSHIUSDT', 'PEPEUSDT', 'PENDLEUSDT', 'TIAUSDT', 'JUPUSDT',
+    // Pre-2021
+    'BTCUSDT', 'ETHUSDT', 'BCHUSDT', 'XRPUSDT', 'LTCUSDT', 'TRXUSDT', 'ETCUSDT', 'LINKUSDT', 'XLMUSDT', 'ADAUSDT',
+    'XMRUSDT', 'DASHUSDT', 'ZECUSDT', 'XTZUSDT', 'BNBUSDT', 'ATOMUSDT', 'ONTUSDT', 'IOTAUSDT', 'BATUSDT', 'VETUSDT',
+    'NEOUSDT', 'QTUMUSDT', 'IOSTUSDT', 'THETAUSDT', 'ALGOUSDT', 'ZILUSDT', 'KNCUSDT', 'ZRXUSDT', 'COMPUSDT', 'DOGEUSDT',
+    'KAVAUSDT', 'BANDUSDT', 'RLCUSDT', 'SNXUSDT', 'DOTUSDT', 'YFIUSDT', 'CRVUSDT', 'TRBUSDT', 'RUNEUSDT', 'SUSHIUSDT',
+    'EGLDUSDT', 'SOLUSDT', 'ICXUSDT', 'STORJUSDT', 'UNIUSDT', 'AVAXUSDT', 'ENJUSDT', 'KSMUSDT', 'NEARUSDT', 'AAVEUSDT',
+    'FILUSDT', 'RSRUSDT', 'BELUSDT', 'AXSUSDT', 'SKLUSDT', 'GRTUSDT',
+    // Post-2021
+    'SANDUSDT', 'MANAUSDT', 'HBARUSDT', 'MATICUSDT', 'ICPUSDT', 'DYDXUSDT', 'GALAUSDT',
+    'IMXUSDT', 'GMTUSDT', 'APEUSDT', 'INJUSDT', 'LDOUSDT', 'APTUSDT',
+    'ARBUSDT', 'SUIUSDT', 'PENDLEUSDT', 'SEIUSDT', 'TIAUSDT', 'JUPUSDT', 'PEPEUSDT',
   ];
   const allSymbols = [...new Set([...config.symbols, ...ARCHIVE_CRYPTO])];
 
@@ -1635,6 +1832,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
               const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
               oneHCandles = dropInProgress(parsed, '1h');
               await env.ALERTS.put(cacheKey1H, JSON.stringify(oneHCandles), { expirationTtl: 300 });
+              // Symmetric to the 4H archive call above; without this, crypto 1H archive
+              // falls behind whenever the user stops manually running BacktestEngine
+              // (drifted ~19 days behind by 2026-05-03 before this fix).
+              archiveCandlesToD1(env, symbol, '1h', oneHCandles).catch(() => {});
             }
           } catch {}
         }

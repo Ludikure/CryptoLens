@@ -85,12 +85,14 @@ class BacktestEngine: ObservableObject {
             let expectedMin4H = ((ad?.count ?? 0) * fourHPerDay)
             let archiveHit = (ad?.count ?? 0) >= 250 && (a4?.count ?? 0) >= max(250, expectedMin4H)
 
-            // Archive freshness check (stocks only — crypto cron keeps 4H archive continuously fresh).
-            // Detects BOTH trailing staleness AND internal gaps. Internal gaps appear when the worker
-            // cron has been auto-archiving recent bars while the middle of the archive is missing
-            // (e.g., old manual upload covered Jan 2019 - May 2024, cron added Feb-May 2026, leaving a
-            // 21-month hole). The previous "last bar within N days" check passed on this case and we
-            // silently fed the model data with a 666-day gap.
+            // Archive freshness check. Detects BOTH trailing staleness AND internal gaps.
+            // Internal gaps appear when the worker cron has been auto-archiving recent bars while
+            // the middle of the archive is missing — e.g., on stocks: old manual upload covered
+            // Jan 2019 - May 2024, cron added Feb-May 2026, leaving a 21-month hole; on crypto:
+            // 4H is continuously archived but 1H wasn't (until 2026-05-03 cron fix), so 1H archive
+            // could lag by however long since the last manual BacktestEngine run.
+            // The previous "last bar within N days" check passed on this case and silently fed
+            // the model data with gaps.
             let stalenessLimit: TimeInterval = 7 * 86400
             func archiveHasGap(_ candles: [Candle], windowStart: Date, windowEnd: Date) -> Bool {
                 let relevant = candles.filter { $0.time >= windowStart && $0.time <= windowEnd }
@@ -105,8 +107,13 @@ class BacktestEngine: ObservableObject {
                 }
                 return false
             }
-            let archiveStale = !isCrypto && a4 != nil &&
-                archiveHasGap(a4!, windowStart: startDate, windowEnd: endDate)
+            // Check both 4H and 1H for gaps. Crypto: Binance gives full history so we can refetch;
+            // stocks: Yahoo capped at ~720 days but we union with archive.
+            let stalenessLimit1H: TimeInterval = 7 * 86400
+            let archive4HStale = a4 != nil && archiveHasGap(a4!, windowStart: startDate, windowEnd: endDate)
+            let archive1HStale = a1 != nil && archiveHasGap(a1!, windowStart: startDate, windowEnd: endDate)
+            let _ = stalenessLimit1H  // satisfies unused warning if we tweak threshold later
+            let archiveStale = (archive4HStale || archive1HStale)
 
             if archiveHit && !archiveStale, let ad = ad, let a4 = a4 {
                 dailyCandles = ad
@@ -116,8 +123,10 @@ class BacktestEngine: ObservableObject {
                 #if DEBUG
                 print("[Backtest] Using D1 archive: D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
                 #endif
-            } else if archiveHit && archiveStale, let ad = ad, let a4 = a4 {
-                // Archive has historical data but has gaps / trailing staleness — fetch Yahoo and merge.
+            } else if archiveHit && archiveStale && !isCrypto, let ad = ad, let a4 = a4 {
+                // STOCK stale archive: Yahoo capped at 720 days, so we union archive + Yahoo to
+                // preserve pre-Yahoo-window history. (Crypto falls through to the Binance branch
+                // below — Binance has full history so a clean refetch is simpler than a union.)
                 statusMessage = "Archive incomplete, fetching Yahoo..."
                 #if DEBUG
                 let lastBarStr = a4.last.map { "\($0.time)" } ?? "nil"
@@ -204,11 +213,16 @@ class BacktestEngine: ObservableObject {
                 return
             }
 
-            // Upload candles to D1 archive (awaited so all chunks complete)
+            // Upload candles to D1 archive (awaited so all chunks complete).
+            // Stock-stale path does its own scoped delta upload above; this block handles:
+            //   - !archiveHit: full fetch from Yahoo/Binance (no archive existed)
+            //   - archiveHit && archiveStale && isCrypto: crypto stale archive, full refetch
+            //     happened in the else-if-isCrypto branch — re-upload to heal D1.
             #if DEBUG
-            print("[Backtest] archiveHit=\(archiveHit), D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
+            print("[Backtest] archiveHit=\(archiveHit), archiveStale=\(archiveStale), D=\(dailyCandles.count), 4H=\(fourHCandles.count), 1H=\(oneHCandles.count)")
             #endif
-            if !archiveHit {
+            let needsFullUpload = !archiveHit || (archiveStale && isCrypto)
+            if needsFullUpload {
                 statusMessage = "Uploading to archive..."
                 let chunkSize = 2000
                 for i in stride(from: 0, to: dailyCandles.count, by: chunkSize) {
