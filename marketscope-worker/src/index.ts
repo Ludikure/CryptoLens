@@ -1551,53 +1551,111 @@ async function buildAPNsJWT(env: Env): Promise<string | null> {
 
 // === Server-Side Score Notifications ===
 
+// Crypto symbols processed every cron pass for D1 archive coverage of derivatives,
+// regardless of any device's watchlist. Matches the model's training universe.
+const ARCHIVE_CRYPTO = [
+  // Pre-2021
+  'BTCUSDT', 'ETHUSDT', 'BCHUSDT', 'XRPUSDT', 'LTCUSDT', 'TRXUSDT', 'ETCUSDT', 'LINKUSDT', 'XLMUSDT', 'ADAUSDT',
+  'XMRUSDT', 'DASHUSDT', 'ZECUSDT', 'XTZUSDT', 'BNBUSDT', 'ATOMUSDT', 'ONTUSDT', 'IOTAUSDT', 'BATUSDT', 'VETUSDT',
+  'NEOUSDT', 'QTUMUSDT', 'IOSTUSDT', 'THETAUSDT', 'ALGOUSDT', 'ZILUSDT', 'KNCUSDT', 'ZRXUSDT', 'COMPUSDT', 'DOGEUSDT',
+  'KAVAUSDT', 'BANDUSDT', 'RLCUSDT', 'SNXUSDT', 'DOTUSDT', 'YFIUSDT', 'CRVUSDT', 'TRBUSDT', 'RUNEUSDT', 'SUSHIUSDT',
+  'EGLDUSDT', 'SOLUSDT', 'ICXUSDT', 'STORJUSDT', 'UNIUSDT', 'AVAXUSDT', 'ENJUSDT', 'KSMUSDT', 'NEARUSDT', 'AAVEUSDT',
+  'FILUSDT', 'RSRUSDT', 'BELUSDT', 'AXSUSDT', 'SKLUSDT', 'GRTUSDT',
+  // Post-2021
+  'SANDUSDT', 'MANAUSDT', 'HBARUSDT', 'MATICUSDT', 'ICPUSDT', 'DYDXUSDT', 'GALAUSDT',
+  'IMXUSDT', 'GMTUSDT', 'APEUSDT', 'INJUSDT', 'LDOUSDT', 'APTUSDT',
+  'ARBUSDT', 'SUIUSDT', 'PENDLEUSDT', 'SEIUSDT', 'TIAUSDT', 'JUPUSDT', 'PEPEUSDT',
+];
+
+const ML_THRESHOLD = 0.70;            // top-bucket only — [0.70, 0.85) had 73.1% actual win rate in WF validation
+const NOTIFY_COOLDOWN_SEC = 3.5 * 60 * 60;
+const NOTIFY_TZ = 'America/New_York';
+
+interface SymbolPrediction {
+  symbol: string;
+  isCrypto: boolean;
+  mlProb: number;
+  dailyScore: number;
+}
+
+interface NotifyFlags {
+  inCryptoNotifyWindow: boolean;
+  inStockNotifyWindow: boolean;
+}
+
+function computeNotifyFlags(): NotifyFlags {
+  const CRYPTO_NOTIFY_HOURS = [8, 12, 16, 20]; // 8am, 12pm, 4pm, 8pm + 11:30pm (handled separately)
+  const STOCK_NOTIFY_HOURS = [8, 12, 16];      // 8am, 12pm, 4pm
+  const now = new Date();
+  const userHour = Number(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, hour: '2-digit', hour12: false }));
+  const isWeekday = !['Sat', 'Sun'].includes(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, weekday: 'short' }));
+  const userMinute = Number(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, minute: '2-digit' }));
+  const inCryptoNotifyWindow = CRYPTO_NOTIFY_HOURS.includes(userHour) || (userHour === 23 && userMinute >= 30 && userMinute <= 31);
+  const inStockNotifyWindow = STOCK_NOTIFY_HOURS.includes(userHour) && isWeekday;
+  return { inCryptoNotifyWindow, inStockNotifyWindow };
+}
+
+// Orchestrates the per-cron score pass.
+// Pre-refactor (commit 7148670 and earlier) this function called `checkDeviceScores` once
+// per device, and each device's call independently fetched candles + derivatives + sector
+// ETFs + ran ML for every symbol in (watchlist ∪ ARCHIVE_CRYPTO). Across 13 devices that
+// meant ~13× redundant compute per symbol per cron, pushing single-cron runtime to 2-3
+// minutes — well past the 60s cron interval. Subsequent cron events fired before previous
+// runs finished and the resulting concurrency raced past the cooldown KV (eventually
+// consistent), producing duplicate APNs.
+//
+// Post-refactor: ML compute happens once per symbol (the union across all devices), then
+// each device just reads its watchlist's predictions from an in-memory map and applies
+// per-device gating (notify window + cooldown + score_history write + APN). One full pass
+// finishes in seconds instead of minutes; concurrency is gone, so notifications dedupe
+// naturally without needing atomic D1 cooldowns.
 async function checkAllDeviceScores(env: Env) {
-  // Read all devices with watchlists from D1
-  const devices = await env.DB.prepare(
-    'SELECT DISTINCT device_id FROM watchlist'
-  ).all();
-  for (const row of devices.results) {
+  const watchlistRows = await env.DB.prepare('SELECT device_id, symbol FROM watchlist').all();
+  if (!watchlistRows.results.length) return;
+
+  const watchlistsByDevice = new Map<string, string[]>();
+  for (const row of watchlistRows.results) {
     const deviceId = row.device_id as string;
+    const symbol = row.symbol as string;
+    let list = watchlistsByDevice.get(deviceId);
+    if (!list) { list = []; watchlistsByDevice.set(deviceId, list); }
+    list.push(symbol);
+  }
+
+  const watchlistSymbols = new Set<string>();
+  for (const list of watchlistsByDevice.values()) for (const s of list) watchlistSymbols.add(s);
+  const allSymbols = [...new Set([...watchlistSymbols, ...ARCHIVE_CRYPTO])];
+
+  const predictions = await computeSymbolPredictions(env, allSymbols);
+
+  // Notify-window evaluation in user-local TZ; same for every device since we only
+  // support one TZ (America/New_York) today.
+  const notifyFlags = computeNotifyFlags();
+
+  for (const [deviceId, watchlist] of watchlistsByDevice) {
     try {
-      await checkDeviceScores(env, deviceId);
+      await processDeviceNotifications(env, deviceId, watchlist, predictions, notifyFlags);
     } catch (e) {
       console.log(`[score] device ${deviceId} error: ${e}`);
     }
   }
 }
 
-async function checkDeviceScores(env: Env, deviceId: string) {
-  // Read watchlist from D1
-  const watchlistRows = await env.DB.prepare(
-    'SELECT symbol, crypto_threshold, stock_threshold FROM watchlist WHERE device_id = ?'
-  ).bind(deviceId).all();
-  if (!watchlistRows.results.length) return;
-  const config = {
-    symbols: watchlistRows.results.map(r => r.symbol as string),
-    cryptoThreshold: (watchlistRows.results[0].crypto_threshold as number) || 5,
-    stockThreshold: (watchlistRows.results[0].stock_threshold as number) || 3,
-  };
-
-  const newProbs: Record<string, number> = {};
-  const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
-  const ML_THRESHOLD = 0.70; // top-bucket only — [0.70, 0.85) had 73.1% actual win rate in WF validation
-  // Notifications fire only at these hours in USER LOCAL TIME, and at most once per (device, symbol)
-  // in the 5h cooldown window (covers the 6h gap between adjacent target hours).
-  const NOTIFY_COOLDOWN_SEC = 3.5 * 60 * 60;
-  const CRYPTO_NOTIFY_HOURS = [8, 12, 16, 20];  // 8am, 12pm, 4pm, 8pm + 11:30pm (handled separately)
-  const STOCK_NOTIFY_HOURS = [8, 12, 16];            // 8am, 12pm, 4pm
-  const NOTIFY_TZ = 'America/New_York';
-  const now = new Date();
-  const userHour = Number(now.toLocaleString('en-US', {
-    timeZone: NOTIFY_TZ, hour: '2-digit', hour12: false,
-  }));
-  const userDay = Number(now.toLocaleString('en-US', {
-    timeZone: NOTIFY_TZ, weekday: 'short',
-  }).charAt(0) === 'S' ? 0 : 1); // 0 = weekend, 1 = weekday
-  const isWeekday = !['Sat', 'Sun'].includes(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, weekday: 'short' }));
-  const userMinute = Number(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, minute: '2-digit' }));
-  const inCryptoNotifyWindow = CRYPTO_NOTIFY_HOURS.includes(userHour) || (userHour === 23 && userMinute >= 30 && userMinute <= 31);
-  const inStockNotifyWindow = STOCK_NOTIFY_HOURS.includes(userHour) && isWeekday;
+// Symbol pass: fetches global market data once, then for each symbol computes features +
+// `mlPredict`, writes the per-symbol KV cache used by `/ml-predict`, and returns a Map of
+// predictions consumed by the device pass below. Side-effects beyond the return value:
+//  - `ml_pred:<symbol>` KV write (5-min TTL) — fed to iOS via /ml-predict
+//  - `ml_snapshots` KV write (24h TTL) — feeds next cron's rate-of-change deltas
+//  - `prev_oi:<symbol>` KV write (24h TTL) — for OI delta on next cron
+//  - `derivatives_history` D1 archive every ~4H per symbol
+//  - `candles:<symbol>:<interval>` KV cache + D1 candle archive
+//  - `debug:<symbol>_features` KV write (1h TTL) for parity verification
+async function computeSymbolPredictions(
+  env: Env,
+  allSymbols: string[],
+): Promise<Map<string, SymbolPrediction>> {
+  const predictions = new Map<string, SymbolPrediction>();
+  const hasStocks = allSymbols.some(s => !s.endsWith('USDT'));
 
   // Fetch Fear & Greed index (global, once per cron run)
   let fearGreedIndex = 50, fearGreedZone = 0;
@@ -1669,7 +1727,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
   // Fetch SPY candles once for stock relative strength + beta
   let spyCandles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] = [];
-  const hasStocks = config.symbols.some((s: string) => !s.endsWith('USDT'));
   if (hasStocks) {
     try {
       const spyResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/SPY?interval=1d&range=6mo`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
@@ -1739,11 +1796,11 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     }
   } catch {}
 
-  // Fetch sector ETF candles for relative strength
+  // Fetch sector ETF candles for relative strength. Stocks subset of allSymbols.
   const sectorETFCandlesMap: Record<string, { time: number; open: number; high: number; low: number; close: number; volume: number }[]> = {};
   if (hasStocks) {
     const neededETFs = new Set<string>();
-    for (const s of config.symbols) {
+    for (const s of allSymbols) {
       if (!s.endsWith('USDT')) {
         const etf = sectorETFForSymbol(s);
         if (etf) neededETFs.add(etf);
@@ -1796,7 +1853,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         }
         if (lines.length > 0) {
           // Parse and compute ratios for our symbols
-          const ratios: Record<string, number[]> = {};
           for (const line of lines) {
             const parts = line.split('|');
             if (parts.length < 5) continue;
@@ -1835,27 +1891,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number; fundingHist?: number[] }> =
     prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
   const newSnapshots: typeof prevSnapshots = {};
-
-  // Always process these crypto symbols for D1 archiving, even if not in watchlist.
-  // Top 30 by futures volume — covers the majority of training bars and ensures
-  // derivatives features (funding, OI, taker, basis) have real data for backtesting.
-  // Full 76-symbol crypto training universe (matches CRYPTO_SYMBOLS in calibrate_v11_stocks.py).
-  // Cron archives derivatives for ALL of these every 4H regardless of watchlist membership,
-  // so every symbol the model is trained on continues accumulating fresh derivatives history.
-  const ARCHIVE_CRYPTO = [
-    // Pre-2021
-    'BTCUSDT', 'ETHUSDT', 'BCHUSDT', 'XRPUSDT', 'LTCUSDT', 'TRXUSDT', 'ETCUSDT', 'LINKUSDT', 'XLMUSDT', 'ADAUSDT',
-    'XMRUSDT', 'DASHUSDT', 'ZECUSDT', 'XTZUSDT', 'BNBUSDT', 'ATOMUSDT', 'ONTUSDT', 'IOTAUSDT', 'BATUSDT', 'VETUSDT',
-    'NEOUSDT', 'QTUMUSDT', 'IOSTUSDT', 'THETAUSDT', 'ALGOUSDT', 'ZILUSDT', 'KNCUSDT', 'ZRXUSDT', 'COMPUSDT', 'DOGEUSDT',
-    'KAVAUSDT', 'BANDUSDT', 'RLCUSDT', 'SNXUSDT', 'DOTUSDT', 'YFIUSDT', 'CRVUSDT', 'TRBUSDT', 'RUNEUSDT', 'SUSHIUSDT',
-    'EGLDUSDT', 'SOLUSDT', 'ICXUSDT', 'STORJUSDT', 'UNIUSDT', 'AVAXUSDT', 'ENJUSDT', 'KSMUSDT', 'NEARUSDT', 'AAVEUSDT',
-    'FILUSDT', 'RSRUSDT', 'BELUSDT', 'AXSUSDT', 'SKLUSDT', 'GRTUSDT',
-    // Post-2021
-    'SANDUSDT', 'MANAUSDT', 'HBARUSDT', 'MATICUSDT', 'ICPUSDT', 'DYDXUSDT', 'GALAUSDT',
-    'IMXUSDT', 'GMTUSDT', 'APEUSDT', 'INJUSDT', 'LDOUSDT', 'APTUSDT',
-    'ARBUSDT', 'SUIUSDT', 'PENDLEUSDT', 'SEIUSDT', 'TIAUSDT', 'JUPUSDT', 'PEPEUSDT',
-  ];
-  const allSymbols = [...new Set([...config.symbols, ...ARCHIVE_CRYPTO])];
 
   for (const symbol of allSymbols) {
     try {
@@ -1911,9 +1946,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
               const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
               oneHCandles = dropInProgress(parsed, '1h');
               await env.ALERTS.put(cacheKey1H, JSON.stringify(oneHCandles), { expirationTtl: 300 });
-              // Symmetric to the 4H archive call above; without this, crypto 1H archive
-              // falls behind whenever the user stops manually running BacktestEngine
-              // (drifted ~19 days behind by 2026-05-03 before this fix).
               archiveCandlesToD1(env, symbol, '1h', oneHCandles).catch(() => {});
             }
           } catch {}
@@ -1946,14 +1978,9 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           } catch {}
         }
         // Aggregate 1H → 4H via shared helper (mirrors iOS CandleAggregator.aggregate1HTo4H).
-        // Test coverage: marketscope-worker/test/aggregation.test.ts.
         if (oneHCandles.length > 0) {
           fourHCandles = dropInProgress(aggregate1HTo4H_ET(oneHCandles), '4h');
         }
-        // Archive stock 4H + 1H to D1 (matches what's already done for crypto at line ~1610).
-        // Without these, the BacktestEngine archive becomes stale at the recent end and forces a
-        // Yahoo-merge fallback on every backtest run. archiveCandlesToD1 takes the most recent 100
-        // bars per call, so over time the rolling window stays fresh without spamming D1.
         if (fourHCandles.length > 0) {
           archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
         }
@@ -1964,10 +1991,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
       // Fetch live derivatives for crypto (funding + top trader + taker + OI + basis)
       let derivSignals: any = { fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0 };
-      // Hoisted so the sentiment object below can read them outside the isCrypto block
       let basisPct = 0, largeBuyVol = 0, largeSellVol = 0;
       if (isCrypto) {
-        // Read previous OI for change tracking
         const prevOIKey = `prev_oi:${symbol}`;
         const prevOIStr = await env.ALERTS.get(prevOIKey);
         const prevOI = prevOIStr ? parseFloat(prevOIStr) : 0;
@@ -1975,19 +2000,16 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0;
         let openInterest = 0, markPrice = 0, indexPrice = 0, longPct = 0, takerRatio = 0;
 
-        // Funding rate
         try {
           const r = await fetch(`${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&limit=1`);
           if (r.ok) { const d = await r.json() as any[]; if (d.length) fundingRate = parseFloat(d[0].fundingRate) * 100; }
         } catch {}
 
-        // Top trader L/S position ratio (smart money)
         try {
           const r = await fetch(`${FAPI}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=4h&limit=1`);
           if (r.ok) { const d = await r.json() as any[]; if (d.length) topTraderLongPct = parseFloat(d[0].longAccount) * 100; }
         } catch {}
 
-        // Taker buy/sell volumes
         try {
           const r = await fetch(`${FAPI}/futures/data/takerlongshortRatio?symbol=${symbol}&period=4h&limit=1`);
           if (r.ok) {
@@ -1996,13 +2018,11 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           }
         } catch {}
 
-        // Open interest
         try {
           const r = await fetch(`${FAPI}/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=1`);
           if (r.ok) { const d = await r.json() as any[]; if (d.length) openInterest = parseFloat(d[0].sumOpenInterest); }
         } catch {}
 
-        // Compute OI change and store current OI for next run
         let oiChangePct = 0;
         if (prevOI > 0 && openInterest > 0) {
           oiChangePct = (openInterest - prevOI) / prevOI * 100;
@@ -2011,13 +2031,11 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           await env.ALERTS.put(prevOIKey, String(openInterest), { expirationTtl: 86400 });
         }
 
-        // Global L/S ratio
         try {
           const r = await fetch(`${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=4h&limit=1`);
           if (r.ok) { const d = await r.json() as any[]; if (d.length) longPct = parseFloat(d[0].longAccount) * 100; }
         } catch {}
 
-        // Premium index (basis)
         try {
           const r = await fetch(`${FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`);
           if (r.ok) {
@@ -2027,21 +2045,19 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           }
         } catch {}
 
-        // Large trade detection from aggTrades (smart money flow)
         let largeBuyCount = 0, largeSellCount = 0;
         try {
           const atResp = await fetch(`https://api.binance.com/api/v3/aggTrades?symbol=${symbol}&limit=1000`);
           if (atResp.ok) {
             const trades = await atResp.json() as any[];
-            // Price-adaptive threshold: trades > 0.5 BTC equivalent
             const lastPrice = trades.length > 0 ? parseFloat(trades[trades.length - 1].p) : 1;
-            const threshold = lastPrice * 0.5; // ~$37K for BTC, ~$1K for ETH, scales per asset
+            const threshold = lastPrice * 0.5;
             for (const t of trades) {
               const qty = parseFloat(t.q);
               const price = parseFloat(t.p);
               const notional = qty * price;
               if (notional < threshold) continue;
-              if (t.m) { // maker = true means taker was selling
+              if (t.m) {
                 largeSellVol += notional;
                 largeSellCount++;
               } else {
@@ -2052,7 +2068,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           }
         } catch {}
 
-        // Build derivative signals
         derivSignals.fundingRateRaw = fundingRate;
         derivSignals.oiChangePct = oiChangePct;
         derivSignals.longPctRaw = longPct || 50;
@@ -2063,7 +2078,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         else if (takerRatio < 0.9) derivSignals.takerSignal = -1;
         if (longPct > 60) derivSignals.crowdingSignal = -1;
         else if (longPct < 40) derivSignals.crowdingSignal = 1;
-        // OI signal (matches iOS DerivativesContext logic)
         const priceRising = candles.length >= 2 && candles[candles.length - 1].close > candles[candles.length - 2].close;
         const oiUp = oiChangePct > 1.0;
         const oiDown = oiChangePct < -1.0;
@@ -2074,7 +2088,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         derivSignals.derivativesCombined = Math.max(-3, Math.min(3,
           derivSignals.fundingSignal + derivSignals.oiSignal + derivSignals.takerSignal + derivSignals.crowdingSignal));
 
-        // Archive to D1 (every 4H — check if last archive was >3.5H ago)
+        // Archive to D1 (every 4H)
         const archiveKey = `deriv_archive:${symbol}`;
         const lastArchive = await env.ALERTS.get(archiveKey);
         if (!lastArchive || Date.now() - parseInt(lastArchive) > 3.5 * 3600 * 1000) {
@@ -2089,7 +2103,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       }
       const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
-      // Compute all 80 features
       const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
       const sectorETF = isCrypto ? null : sectorETFForSymbol(symbol);
       const sectorCandles = sectorETF ? (sectorETFCandlesMap[sectorETF] || []) as FullCandle[] : [];
@@ -2111,7 +2124,6 @@ async function checkDeviceScores(env: Env, deviceId: string) {
 
       // v9 single-model: direction-agnostic goodR probability
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
-      newProbs[symbol] = mlProb;
 
       // Per-symbol prediction cache for the /ml-predict endpoint. Symbol-level (not
       // device-level) — the same prediction is valid for any device asking. 5-min TTL so
@@ -2134,23 +2146,12 @@ async function checkDeviceScores(env: Env, deviceId: string) {
         await env.ALERTS.put(`debug:${symbol.toLowerCase()}_features`, JSON.stringify({ features, mlProbability: mlProb }), { expirationTtl: 3600 });
       }
 
-      // ML quality gate — fire at scheduled hours AND when ML >= threshold AND cooldown passed.
-      // Cooldown is keyed by push_token, not device_id, so duplicate device rows pointing
-      // at the same physical device (caused by iOS auth-recovery rotating the device_id)
-      // can't both fire the same notification. The push_token lookup happens once per
-      // checkDeviceScores call further below — we read it lazily here too.
-      const inWatchlist = config.symbols.includes(symbol);
-      const inWindow = isCrypto ? inCryptoNotifyWindow : inStockNotifyWindow;
-      if (inWatchlist && inWindow && mlProb >= ML_THRESHOLD) {
-        const pushTokenForGate = await getPushToken(env, deviceId);
-        if (pushTokenForGate) {
-          const cooldownKey = `notif:${pushTokenForGate}:${symbol}`;
-          const lastFired = await env.ALERTS.get(cooldownKey);
-          if (!lastFired) {
-            triggered.push({ symbol, score: features.dailyScore, mlProb, direction: '' });
-          }
-        }
-      }
+      predictions.set(symbol, {
+        symbol,
+        isCrypto,
+        mlProb,
+        dailyScore: features.dailyScore,
+      });
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);
     }
@@ -2159,22 +2160,51 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   // Save ML snapshots for next cron's rate-of-change deltas
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
 
-  // Log score history to D1
-  for (const [sym, prob] of Object.entries(newProbs)) {
-    const t = triggered.find(t => t.symbol === sym);
-    await env.DB.prepare(
-      'INSERT INTO score_history (device_id, symbol, daily_score, four_h_score, ml_probability, bias, notification_sent) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(deviceId, sym, 0, 0, prob, prob > 0.5 ? 'Bullish' : 'Bearish', t ? 1 : 0).run();
+  return predictions;
+}
+
+// Device pass: reads device's watchlist from the precomputed predictions Map (no fresh
+// candle/derivative fetches), writes per-(device, symbol) score_history, and applies
+// per-device notification gating (notify-window + ML threshold + cooldown). Cooldown
+// is keyed by push_token (not device_id) so duplicate device rows pointing at the same
+// physical phone — created when iOS rotates device_id on auth recovery — share a single
+// suppression window. Cron concurrency is gone after the symbol-pass refactor, so the
+// KV cooldown is sufficient: previous-cron writes are visible by the time the next cron
+// fires (~60s gap >> KV propagation latency).
+async function processDeviceNotifications(
+  env: Env,
+  deviceId: string,
+  watchlist: string[],
+  predictions: Map<string, SymbolPrediction>,
+  notifyFlags: NotifyFlags,
+) {
+  const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
+  const pushToken = await getPushToken(env, deviceId);
+
+  // Notify gate. Records score_history regardless (so the user's history endpoint sees
+  // every cron), but only adds to triggered if the gate passes.
+  for (const symbol of watchlist) {
+    const pred = predictions.get(symbol);
+    if (!pred) continue;
+    const inWindow = pred.isCrypto ? notifyFlags.inCryptoNotifyWindow : notifyFlags.inStockNotifyWindow;
+    if (!inWindow || pred.mlProb < ML_THRESHOLD || !pushToken) continue;
+    const cooldownKey = `notif:${pushToken}:${symbol}`;
+    const lastFired = await env.ALERTS.get(cooldownKey);
+    if (lastFired) continue;
+    triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb, direction: '' });
   }
 
-  // Send push notifications for crossings
-  if (triggered.length === 0) return;
+  // Score history per watchlisted symbol (one row per cron, even if not notified).
+  for (const symbol of watchlist) {
+    const pred = predictions.get(symbol);
+    if (!pred) continue;
+    const wasNotified = triggered.some(t => t.symbol === symbol);
+    await env.DB.prepare(
+      'INSERT INTO score_history (device_id, symbol, daily_score, four_h_score, ml_probability, bias, notification_sent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).bind(deviceId, symbol, 0, 0, pred.mlProb, pred.mlProb > 0.5 ? 'Bullish' : 'Bearish', wasNotified ? 1 : 0).run();
+  }
 
-  // Resolve push_token (D1 first, KV fallback). Cooldown stamp uses the same key the
-  // gate above checked — keyed by push_token so duplicate device rows for the same
-  // physical device share a single suppression window.
-  const pushToken = await getPushToken(env, deviceId);
-  if (!pushToken) return;
+  if (triggered.length === 0 || !pushToken) return;
 
   for (const t of triggered) {
     const ticker = t.symbol.replace('USDT', '');
@@ -2182,10 +2212,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       `${ticker} — Setup conditions favorable (ML ${Math.round(t.mlProb * 100)}%)`,
       `Open the app for the directional analysis.`
     );
-    // Stamp cooldown so this (push_token, symbol) won't fire again for NOTIFY_COOLDOWN_SEC
     await env.ALERTS.put(`notif:${pushToken}:${t.symbol}`, String(Date.now()),
       { expirationTtl: NOTIFY_COOLDOWN_SEC });
-    // Log notification to D1
     await env.DB.prepare(
       'INSERT INTO notifications (device_id, symbol, type, ml_probability, score, direction) VALUES (?, ?, ?, ?, ?, ?)'
     ).bind(deviceId, t.symbol, 'ml_crossing', t.mlProb, t.score, t.direction).run();
