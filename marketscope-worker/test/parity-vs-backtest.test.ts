@@ -69,6 +69,13 @@ interface ParityFixture {
             hRsiD1: number;
             hMacdD1: number;
             dAdxD1: number;
+            dRsiHist7?: number[];
+            dAdxHist7?: number[];
+            hRsiHist7?: number[];
+            hAdxHist7?: number[];
+            hMacdHistHist7?: number[];
+            prevRegimeCode?: number;
+            prevBarsSinceRegimeChange?: number;
         } | null;
         darkPoolRatio: number | null;
         darkPoolZScore: number | null;

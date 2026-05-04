@@ -434,6 +434,11 @@ class BacktestEngine: ObservableObject {
                 else if adxDaily < 20 { regime = "RANGING" }
                 else { regime = "TRANSITIONING" }
 
+                // Snapshot the previous-iteration regime state for parity fixture capture
+                // (consumed at the bottom of the loop, after the in-place update below).
+                let preBarsSinceRegimeChange = barsSinceRegimeChange
+                let preRegimeStr = prevRegime
+
                 // Track regime duration
                 if regime != prevRegime {
                     barsSinceRegimeChange = 0
@@ -946,6 +951,18 @@ class BacktestEngine: ObservableObject {
                     }(),
                 )
 
+                // Snapshot pre-update history/delta state for parity fixture capture below.
+                // The fixture's prevSnapshot must reflect "1 bar ago" semantics — i.e. the
+                // values the worker would have read from KV before evaluating this bar.
+                let preDRsi = dRsiHistory.last
+                let preDAdx = dAdxHistory.last
+                let preHRsi = hRsiHistory.last
+                let preHAdx = hAdxHistory.last
+                let preHMacdHist = hMacdHistHistory.last
+                let preHRsiD1 = prevHRsiDelta1
+                let preHMacdD1 = prevHMacdHistDelta1
+                let preDAdxD1 = prevDAdxDelta1
+
                 // Update 1-bar delta tracking for acceleration
                 let curHRsiDelta1 = hRsiHistory.last.map { (fourHResult.rsi ?? 50) - $0 } ?? 0
                 let curHMacdDelta1 = hMacdHistHistory.last.map { (fourHResult.macd?.histogram ?? 0) - $0 } ?? 0
@@ -1033,18 +1050,42 @@ class BacktestEngine: ObservableObject {
                     }()
                     let ethBtcSlice = Array(ethBtcCandles.prefix(ethBtcIdx))
 
-                    // VIX3M not directly tracked here; default to 0.
-                    let vix3m: Double = 0
+                    // VIX3M lookup mirrors the vixTermStructure feature computation above so
+                    // the fixture's vix3mPrice matches the value BacktestEngine actually used.
+                    let vix3m: Double = vix3mCandles.last(where: { Calendar.current.startOfDay(for: $0.time) <= evalDate })?.close ?? 0
 
-                    let prevSnap: ParityPrevSnapshot? = (dRsiHistory.last != nil) ? ParityPrevSnapshot(
-                        dRsi: dRsiHistory.last ?? 50,
-                        dAdx: dAdxHistory.last ?? 0,
-                        hRsi: hRsiHistory.last ?? 50,
-                        hAdx: hAdxHistory.last ?? 0,
-                        hMacdHist: hMacdHistHistory.last ?? 0,
-                        hRsiD1: prevHRsiDelta1,
-                        hMacdD1: prevHMacdHistDelta1,
-                        dAdxD1: prevDAdxDelta1
+                    // Use pre-update snapshot vars captured above the delta-tracking block.
+                    // dRsiHistory/etc. have already been appended-to and prevHRsiDelta1/etc.
+                    // already advanced — using their current values would be off-by-one.
+                    // 7-bar windows: BacktestEngine computes `*Delta = current - hist[count-7]`
+                    // PRE-append (history.count = i, current bar not yet appended). At fixture
+                    // capture time history is POST-append (count = i+1), so we drop the last
+                    // (current) value and take the prior 7. Returns [] if pre-append count < 7
+                    // (i.e. post-append count < 8) so worker matches iOS's `count >= 7 ? : 0`.
+                    func tail7(_ arr: [Double]) -> [Double] {
+                        return arr.count >= 8 ? Array(arr.suffix(8).dropLast()) : []
+                    }
+                    // preRegimeStr / preBarsSinceRegimeChange are snapshotted before the
+                    // regime-update block (line 437 area), so they reflect the values that
+                    // came out of iteration i-1 — exactly what the worker would read from KV
+                    // before evaluating the current bar.
+                    let prevRegimeCodeVal: Int = preRegimeStr == "TRENDING" ? 2 : preRegimeStr == "TRANSITIONING" ? 1 : 0
+                    let prevSnap: ParityPrevSnapshot? = (preDRsi != nil) ? ParityPrevSnapshot(
+                        dRsi: preDRsi ?? 50,
+                        dAdx: preDAdx ?? 0,
+                        hRsi: preHRsi ?? 50,
+                        hAdx: preHAdx ?? 0,
+                        hMacdHist: preHMacdHist ?? 0,
+                        hRsiD1: preHRsiD1,
+                        hMacdD1: preHMacdD1,
+                        dAdxD1: preDAdxD1,
+                        dRsiHist7: tail7(dRsiHistory),
+                        dAdxHist7: tail7(dAdxHistory),
+                        hRsiHist7: tail7(hRsiHistory),
+                        hAdxHist7: tail7(hAdxHistory),
+                        hMacdHistHist7: tail7(hMacdHistHistory),
+                        prevRegimeCode: prevRegimeCodeVal,
+                        prevBarsSinceRegimeChange: preBarsSinceRegimeChange
                     ) : nil
 
                     let derivFix = ParityDerivSignals(

@@ -83,6 +83,20 @@ struct ParityPrevSnapshot: Codable {
     let hRsiD1: Double
     let hMacdD1: Double
     let dAdxD1: Double
+    /// Rolling 7-bar history windows (oldest-first) used by `*Delta` features which
+    /// look back 7 bars. Worker computes `delta = current - hist[0]`. Empty array if
+    /// fewer than 7 historical bars exist (worker returns 0 to match BacktestEngine).
+    let dRsiHist7: [Double]?
+    let dAdxHist7: [Double]?
+    let hRsiHist7: [Double]?
+    let hAdxHist7: [Double]?
+    let hMacdHistHist7: [Double]?
+    /// Previous bar's regimeCode (0=RANGING, 1=TRANSITIONING, 2=TRENDING) and the
+    /// barsSinceRegimeChange counter as it stood AFTER that previous bar's update.
+    /// Worker increments by 1 if currentRegime == prevRegimeCode, else resets to 0
+    /// (caps at 100). Optional so old fixtures keep loading.
+    let prevRegimeCode: Int?
+    let prevBarsSinceRegimeChange: Int?
 }
 
 struct ParityFixtureExpected: Codable {

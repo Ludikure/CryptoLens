@@ -115,12 +115,21 @@ export interface FullFeatures {
 // Indicator Functions
 // ============================================================
 
+// EMA with SMA seed, matching iOS MovingAverages.computeEMA exactly.
+// iOS returns an array of length `values.length - period + 1`: index 0 is the SMA of the
+// first `period` values, then exponential smoothing for each subsequent point. Seeding from
+// values[0] (the previous implementation) drifted noticeably for long lookbacks like the
+// 200-EMA where the warmup transient never fully decayed across 300 daily bars.
 function emaArray(values: number[], period: number): number[] {
-    if (values.length === 0) return [];
+    if (values.length < period) return [];
     const k = 2 / (period + 1);
-    const result = [values[0]];
-    for (let i = 1; i < values.length; i++) {
-        result.push(values[i] * k + result[i - 1] * (1 - k));
+    let initial = 0;
+    for (let i = 0; i < period; i++) initial += values[i];
+    initial /= period;
+    const result = [initial];
+    for (let i = period; i < values.length; i++) {
+        const prev = result[result.length - 1];
+        result.push((values[i] - prev) * k + prev);
     }
     return result;
 }
@@ -193,11 +202,21 @@ function computeMACD(closes: number[]): { macdLine: number[]; signalLine: number
     const ema26 = emaArray(closes, 26);
     // RAW macd/signal kept full precision so histogram = r2(rawMacd - rawSignal).
     // iOS MACD.swift comment: "from raw values to avoid compounding rounding".
-    const rawMacd = ema12.map((v, i) => v - ema26[i]);
+    // Align trailing: emaArray now returns length closes.length - period + 1, so the two
+    // EMAs have different lengths. Take the trailing minLen from each so equal indices
+    // refer to the same bar (matches MACD.swift lines 10-14).
+    const minLen = Math.min(ema12.length, ema26.length);
+    const ema12Aligned = ema12.slice(ema12.length - minLen);
+    const ema26Aligned = ema26.slice(ema26.length - minLen);
+    const rawMacd = ema12Aligned.map((v, i) => v - ema26Aligned[i]);
     const rawSignal = emaArray(rawMacd, 9);
-    const macdLine = rawMacd.map(r2);
+    // After signal EMA, signalLine has fewer points than rawMacd; trail-align them too so
+    // histogram[i] = rawMacd[macdEnd] - rawSignal[sigEnd] for the same bar.
+    const sigLen = rawSignal.length;
+    const macdTrailed = rawMacd.slice(rawMacd.length - sigLen);
+    const macdLine = macdTrailed.map(r2);
     const signalLine = rawSignal.map(r2);
-    const histogram = rawMacd.map((v, i) => r2(v - rawSignal[i]));
+    const histogram = macdTrailed.map((v, i) => r2(v - rawSignal[i]));
 
     // Crossover: check last 2 bars
     const n = macdLine.length;
@@ -320,27 +339,35 @@ function computeBollingerBands(closes: number[], period: number = 20, stdDev: nu
     const lower = mean - stdDev * std;
     const price = closes[closes.length - 1];
 
-    const bandwidth = mean > 0 ? (upper - lower) / mean : 0;
+    // iOS BollingerBands.swift uses bandwidth in PERCENT units (× 100); both bandwidth and
+    // avgBW must be percent so the squeeze threshold compares like-with-like.
+    const bandwidth = mean > 0 ? ((upper - lower) / mean) * 100 : 0;
     const percentB = upper === lower ? 0.5 : (price - lower) / (upper - lower);
 
-    // Squeeze: bandwidth below 20-period average bandwidth
-    const bbWidths: number[] = [];
-    for (let i = period; i <= closes.length; i++) {
-        const w = closes.slice(i - period, i);
-        const m = w.reduce((a, b) => a + b, 0) / period;
-        const v = w.reduce((a, b) => a + (b - m) ** 2, 0) / period;
-        const s = Math.sqrt(v);
-        bbWidths.push(m > 0 ? (2 * stdDev * s) / m : 0);
+    // Squeeze: bandwidth below average bandwidth of the last 120 bars × 0.5. Matches iOS
+    // BollingerBands.swift lines 17-34. Returns false if fewer than 120 bars are available.
+    let squeeze = false;
+    if (closes.length >= 120) {
+        const bandwidths: number[] = [];
+        for (let i = 0; i < 120; i++) {
+            const idx = closes.length - 120 + i;
+            if (idx >= period) {
+                const w = closes.slice(idx - period + 1, idx + 1);
+                const m = w.reduce((a, b) => a + b, 0) / period;
+                const v = w.reduce((a, b) => a + (b - m) ** 2, 0) / period;
+                const s = Math.sqrt(v);
+                bandwidths.push(m > 0 ? ((2 * stdDev * s) / m) * 100 : 0);
+            }
+        }
+        if (bandwidths.length > 0) {
+            const avgBW = bandwidths.reduce((a, b) => a + b, 0) / bandwidths.length;
+            squeeze = bandwidth < avgBW * 0.5;
+        }
     }
-    const avgBW = bbWidths.length >= 20
-        ? bbWidths.slice(-20).reduce((a, b) => a + b, 0) / 20
-        : bandwidth;
-    const squeeze = bandwidth < avgBW * 0.75;
 
-    // Return bandwidth as percentage (× 100) to match iOS BollingerBands.compute(),
-    // which is what the training data used.
-    // Round to 4dp to match iOS BollingerBands.swift lines 41-42.
-    return { percentB: r4(percentB), squeeze, bandwidth: r4(bandwidth * 100) };
+    // Bandwidth is already percent (× 100 above); just round to 4dp to match iOS
+    // BollingerBands.swift lines 41-42.
+    return { percentB: r4(percentB), squeeze, bandwidth: r4(bandwidth) };
 }
 
 function computeVolumeRatio(volumes: number[], period: number = 20): number {
@@ -394,15 +421,43 @@ function computeVWAP(candles: Candle[], period: number = 20): number | null {
     return cumVol > 0 ? r2(cumPV / cumVol) : null;
 }
 
-function detectDivergence(closes: number[], rsiValues: number[], lookback: number = 14): number {
-    if (closes.length < lookback + 2 || rsiValues.length < lookback + 2) return 0;
-    const n = closes.length;
-    const priceTrend = closes[n - 1] - closes[n - lookback];
-    const rsiTrend = rsiValues[n - 1] - rsiValues[n - lookback];
-    // Bullish divergence: price lower, RSI higher
-    if (priceTrend < 0 && rsiTrend > 5) return 1;
-    // Bearish divergence: price higher, RSI lower
-    if (priceTrend > 0 && rsiTrend < -5) return -1;
+// Port of iOS RSIDivergence.detect (Indicators/RSIDivergence.swift). Looks for swing
+// peaks/troughs in the last `lookback` bars (a point lower than 2 bars on each side
+// for a low, higher for a high) and compares the last two:
+//   bullish = price made a lower low while RSI made a higher low
+//   bearish = price made a higher high while RSI made a lower high
+// Worker previously used a simple slope comparison which produced different signals.
+function detectDivergence(closes: number[], rsiValues: number[], lookback: number = 20): number {
+    if (closes.length < lookback || rsiValues.length < lookback) return 0;
+    const rc = closes.slice(-lookback);
+    const rr = rsiValues.slice(-lookback);
+
+    const priceLows: number[] = [];
+    const rsiAtLows: number[] = [];
+    const priceHighs: number[] = [];
+    const rsiAtHighs: number[] = [];
+
+    for (let i = 2; i < rc.length - 2; i++) {
+        if (rc[i] < rc[i - 1] && rc[i] < rc[i - 2] && rc[i] < rc[i + 1] && rc[i] < rc[i + 2]) {
+            priceLows.push(rc[i]);
+            rsiAtLows.push(rr[i]);
+        }
+        if (rc[i] > rc[i - 1] && rc[i] > rc[i - 2] && rc[i] > rc[i + 1] && rc[i] > rc[i + 2]) {
+            priceHighs.push(rc[i]);
+            rsiAtHighs.push(rr[i]);
+        }
+    }
+
+    if (priceLows.length >= 2 && rsiAtLows.length >= 2
+        && priceLows[priceLows.length - 1] < priceLows[priceLows.length - 2]
+        && rsiAtLows[rsiAtLows.length - 1] > rsiAtLows[rsiAtLows.length - 2]) {
+        return 1;
+    }
+    if (priceHighs.length >= 2 && rsiAtHighs.length >= 2
+        && priceHighs[priceHighs.length - 1] > priceHighs[priceHighs.length - 2]
+        && rsiAtHighs[rsiAtHighs.length - 1] < rsiAtHighs[rsiAtHighs.length - 2]) {
+        return -1;
+    }
     return 0;
 }
 
@@ -557,6 +612,11 @@ interface TimeframeFeatures {
     bbPercentB: number; bbSqueeze: number; bbBandwidth: number;
     volumeRatio: number; aboveVwap: number;
     score: number;
+    /// Last EMA values (2dp-rounded) and VWAP value. Used by computeAllFeatures to recompute
+    /// d/h/eEmaCross and *AboveVwap against the 4H reference price (matches BacktestEngine
+    /// which uses fourHCandles[i].close for all three timeframes' price-position comparisons).
+    e20: number; e50: number; e200: number;
+    vwapValue: number | null;
 }
 
 function extractFeatures(candles: Candle[], isCrypto: boolean, timeframe: 'daily' | '4h' | '1h' = 'daily'): TimeframeFeatures {
@@ -573,6 +633,8 @@ function extractFeatures(candles: Candle[], isCrypto: boolean, timeframe: 'daily
     const e50 = r2(ema50[ema50.length - 1]);
     const e200 = r2(ema200[ema200.length - 1]);
 
+    // BacktestEngine MLFeatures produces a signed -3..+3 sum for d/h/eEmaCross
+    // (lines 576-582, 607-613, 646-650): +1 above, -1 below, summed across e20/e50/e200.
     let emaCross = 0;
     if (price > e20) emaCross++; else emaCross--;
     if (price > e50) emaCross++; else emaCross--;
@@ -633,6 +695,8 @@ function extractFeatures(candles: Candle[], isCrypto: boolean, timeframe: 'daily
         bbPercentB: bb.percentB, bbSqueeze: bb.squeeze ? 1 : 0, bbBandwidth: bb.bandwidth,
         volumeRatio: volRatio, aboveVwap,
         score,
+        e20, e50, e200,
+        vwapValue: vwap ?? null,
     };
 }
 
@@ -684,6 +748,21 @@ export interface PreviousSnapshot {
     dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number;
     hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number;
     fundingHist?: number[];
+    /// 7-bar lookback windows (oldest-first, length 7 when full). Worker computes
+    /// `*Delta = current - hist[0]` to match BacktestEngine's `current - history[count-7]`.
+    /// Empty / undefined when fewer than 7 historical bars have been observed — worker
+    /// returns 0 in that case to match iOS canonical.
+    dRsiHist7?: number[];
+    dAdxHist7?: number[];
+    hRsiHist7?: number[];
+    hAdxHist7?: number[];
+    hMacdHistHist7?: number[];
+    /// Previous bar's regimeCode and barsSinceRegimeChange counter. Worker increments by 1
+    /// when current regime equals previous (capped at 100), resets to 0 when it differs.
+    /// Mirrors BacktestEngine.swift lines 437-443 where these counters are tracked across
+    /// iterations.
+    prevRegimeCode?: number;
+    prevBarsSinceRegimeChange?: number;
 }
 
 export interface MacroSignals {
@@ -820,25 +899,46 @@ export function computeAllFeatures(
     const obvRising = !isCrypto ? (computeOBVTrend(dailyCandles) ? 1 : 0) : 0;
     const adLineAccumulation = !isCrypto ? (computeADLineTrend(dailyCandles) ? 1 : 0) : 0;
 
+    // Recompute d/h/eEmaCross using 4H close as the comparison price (matches BacktestEngine
+    // lines 576-582, 607-613, 646-650). The TimeframeFeatures.emaCross from extractFeatures
+    // uses each timeframe's own last close, which diverges from BacktestEngine when 1H/daily
+    // last-close ≠ 4H last-close (different drop semantics across timeframes).
+    const emaCrossSigned = (e20: number, e50: number, e200: number, p: number): number => {
+        let c = 0;
+        c += p > e20 ? 1 : -1;
+        c += p > e50 ? 1 : -1;
+        c += p > e200 ? 1 : -1;
+        return c;
+    };
+    const dEmaCrossX = emaCrossSigned(daily.e20, daily.e50, daily.e200, fourHPrice);
+    const hEmaCrossX = fourH ? emaCrossSigned(fourH.e20, fourH.e50, fourH.e200, fourHPrice) : 0;
+    const eEmaCrossX = oneH ? emaCrossSigned(oneH.e20, oneH.e50, oneH.e200, fourHPrice) : 0;
+    // Same fix for *AboveVwap: BacktestEngine uses fourHCandles[i].close as the comparison
+    // price (line 603, 643, oneH not exposed). Worker previously used each timeframe's own
+    // last-close which diverged from canonical when timeframes had different drop semantics.
+    const vwapAbove = (vw: number | null, p: number): number => vw !== null ? (p > vw ? 1 : 0) : 0;
+    const dAboveVwapX = vwapAbove(daily.vwapValue, fourHPrice);
+    const hAboveVwapX = fourH ? vwapAbove(fourH.vwapValue, fourHPrice) : 0;
+
     return {
         // Daily
         dRsi: daily.rsi, dMacdHist: daily.macdHist, dAdx: daily.adx, dAdxBullish: daily.adxBullish,
-        dEmaCross: daily.emaCross, dStackBull: daily.stackBull, dStackBear: daily.stackBear,
+        dEmaCross: dEmaCrossX, dStackBull: daily.stackBull, dStackBear: daily.stackBear,
         dStructBull: daily.structBull, dStructBear: daily.structBear,
         dStochK: daily.stochK, dStochCross: daily.stochCross, dMacdCross: daily.macdCross,
         dDivergence: daily.divergence, dEma20Rising: daily.ema20Rising,
         dBBPercentB: daily.bbPercentB, dBBSqueeze: daily.bbSqueeze, dBBBandwidth: daily.bbBandwidth,
-        dVolumeRatio: daily.volumeRatio, dAboveVwap: daily.aboveVwap,
+        dVolumeRatio: daily.volumeRatio, dAboveVwap: dAboveVwapX,
         // 4H
         hRsi: fourH?.rsi ?? 50, hMacdHist: fourH?.macdHist ?? 0, hAdx: fourH?.adx ?? 0, hAdxBullish: fourH?.adxBullish ?? 0,
-        hEmaCross: fourH?.emaCross ?? 0, hStackBull: fourH?.stackBull ?? 0, hStackBear: fourH?.stackBear ?? 0,
+        hEmaCross: hEmaCrossX, hStackBull: fourH?.stackBull ?? 0, hStackBear: fourH?.stackBear ?? 0,
         hStructBull: fourH?.structBull ?? 0, hStructBear: fourH?.structBear ?? 0,
         hStochK: fourH?.stochK ?? 50, hStochCross: fourH?.stochCross ?? 0, hMacdCross: fourH?.macdCross ?? 0,
         hDivergence: fourH?.divergence ?? 0, hEma20Rising: fourH?.ema20Rising ?? 0,
         hBBPercentB: fourH?.bbPercentB ?? 0.5, hBBSqueeze: fourH?.bbSqueeze ?? 0, hBBBandwidth: fourH?.bbBandwidth ?? 0,
-        hVolumeRatio: fourH?.volumeRatio ?? 1.0, hAboveVwap: fourH?.aboveVwap ?? 0,
+        hVolumeRatio: fourH?.volumeRatio ?? 1.0, hAboveVwap: hAboveVwapX,
         // 1H
-        eRsi: oneH?.rsi ?? 50, eEmaCross: oneH?.emaCross ?? 0,
+        eRsi: oneH?.rsi ?? 50, eEmaCross: eEmaCrossX,
         eStochK: oneH?.stochK ?? 50, eMacdHist: oneH?.macdHist ?? 0,
         // Derivatives
         fundingSignal: derivatives.fundingSignal, oiSignal: derivatives.oiSignal,
@@ -878,34 +978,44 @@ export function computeAllFeatures(
             const map: Record<string, number> = { 'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 };
             return map[wdName] ?? 0;
         })(),
-        barsSinceRegimeChange: 0, // would need KV state tracking
         regimeCode: (daily.adx > 25 && (daily.stackBull || daily.stackBear)) ? 2 : daily.adx < 20 ? 0 : 1,
-        // Rate-of-change
-        dRsiDelta: prevSnapshot ? daily.rsi - prevSnapshot.dRsi : 0,
-        dAdxDelta: prevSnapshot ? daily.adx - prevSnapshot.dAdx : 0,
-        hRsiDelta: prevSnapshot ? (fourH?.rsi ?? 50) - prevSnapshot.hRsi : 0,
-        hAdxDelta: prevSnapshot ? (fourH?.adx ?? 0) - prevSnapshot.hAdx : 0,
-        hMacdHistDelta: prevSnapshot ? (fourH?.macdHist ?? 0) - prevSnapshot.hMacdHist : 0,
+        barsSinceRegimeChange: (() => {
+            const cur = (daily.adx > 25 && (daily.stackBull || daily.stackBear)) ? 2 : daily.adx < 20 ? 0 : 1;
+            const prevCode = prevSnapshot?.prevRegimeCode;
+            const prevBars = prevSnapshot?.prevBarsSinceRegimeChange ?? 0;
+            if (prevCode === undefined) return 0;
+            return cur === prevCode ? Math.min(prevBars + 1, 100) : 0;
+        })(),
+        // Rate-of-change — 7-bar lookback to match BacktestEngine `current - history[count-7]`.
+        // hist[0] is the oldest of the 7-element window (= "7 bars ago"). length < 7 → 0.
+        dRsiDelta: prevSnapshot?.dRsiHist7?.length === 7 ? daily.rsi - prevSnapshot.dRsiHist7[0] : 0,
+        dAdxDelta: prevSnapshot?.dAdxHist7?.length === 7 ? daily.adx - prevSnapshot.dAdxHist7[0] : 0,
+        hRsiDelta: prevSnapshot?.hRsiHist7?.length === 7 ? (fourH?.rsi ?? 50) - prevSnapshot.hRsiHist7[0] : 0,
+        hAdxDelta: prevSnapshot?.hAdxHist7?.length === 7 ? (fourH?.adx ?? 0) - prevSnapshot.hAdxHist7[0] : 0,
+        hMacdHistDelta: prevSnapshot?.hMacdHistHist7?.length === 7 ? (fourH?.macdHist ?? 0) - prevSnapshot.hMacdHistHist7[0] : 0,
         // Sentiment
         fearGreedIndex: sentiment?.fearGreedIndex ?? 50,
         fearGreedZone: sentiment?.fearGreedZone ?? 0,
         // Cross-asset crypto
         ethBtcRatio: sentiment?.ethBtcRatio ?? 0,
         ethBtcDelta6: sentiment?.ethBtcDelta6 ?? 0,
-        // Volume profile — POC/VA computed on daily candles, but ATR-normalized distances
-        // use 4H ATR (matches iOS BacktestEngine lines 557-572 that produced the training CSVs).
+        // Volume profile — POC/VA computed on daily candles, ATR-normalized distances use
+        // 4H ATR. Reference price is the 4H close (matches iOS BacktestEngine which evaluates
+        // each bar at the 4H close timestamp; using the daily close here gave the wrong sign
+        // and magnitude for vpAbovePoc / vpDistToPocATR when the 4H bar diverged from daily).
         ...(() => {
             const vpCandles = dailyCandles.slice(-30); // Match iOS: last 30 daily candles
             const vp = computeVolumeProfile(vpCandles, atrVal);
             const normAtr = fourHAtr;
+            const vpPrice = fourHPrice;
             if (!vp || normAtr <= 0) return { vpDistToPocATR: 0, vpAbovePoc: 1, vpVAWidth: 0, vpInValueArea: 1, vpDistToVAH_ATR: 0, vpDistToVAL_ATR: 0 };
             return {
-                vpDistToPocATR: (price - vp.poc) / normAtr,
-                vpAbovePoc: price > vp.poc ? 1 : 0,
-                vpVAWidth: (vp.vah - vp.val) / price * 100,
-                vpInValueArea: (price >= vp.val && price <= vp.vah) ? 1 : 0,
-                vpDistToVAH_ATR: (vp.vah - price) / normAtr,
-                vpDistToVAL_ATR: (price - vp.val) / normAtr,
+                vpDistToPocATR: (vpPrice - vp.poc) / normAtr,
+                vpAbovePoc: vpPrice > vp.poc ? 1 : 0,
+                vpVAWidth: (vp.vah - vp.val) / vpPrice * 100,
+                vpInValueArea: (vpPrice >= vp.val && vpPrice <= vp.vah) ? 1 : 0,
+                vpDistToVAH_ATR: (vp.vah - vpPrice) / normAtr,
+                vpDistToVAL_ATR: (vpPrice - vp.val) / normAtr,
             };
         })(),
         // 1-bar deltas + acceleration
