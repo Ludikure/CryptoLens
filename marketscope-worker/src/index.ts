@@ -2135,13 +2135,20 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       }
 
       // ML quality gate — fire at scheduled hours AND when ML >= threshold AND cooldown passed.
+      // Cooldown is keyed by push_token, not device_id, so duplicate device rows pointing
+      // at the same physical device (caused by iOS auth-recovery rotating the device_id)
+      // can't both fire the same notification. The push_token lookup happens once per
+      // checkDeviceScores call further below — we read it lazily here too.
       const inWatchlist = config.symbols.includes(symbol);
       const inWindow = isCrypto ? inCryptoNotifyWindow : inStockNotifyWindow;
       if (inWatchlist && inWindow && mlProb >= ML_THRESHOLD) {
-        const cooldownKey = `notif:${deviceId}:${symbol}`;
-        const lastFired = await env.ALERTS.get(cooldownKey);
-        if (!lastFired) {
-          triggered.push({ symbol, score: features.dailyScore, mlProb, direction: '' });
+        const pushTokenForGate = await getPushToken(env, deviceId);
+        if (pushTokenForGate) {
+          const cooldownKey = `notif:${pushTokenForGate}:${symbol}`;
+          const lastFired = await env.ALERTS.get(cooldownKey);
+          if (!lastFired) {
+            triggered.push({ symbol, score: features.dailyScore, mlProb, direction: '' });
+          }
         }
       }
     } catch (e) {
@@ -2163,15 +2170,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   // Send push notifications for crossings
   if (triggered.length === 0) return;
 
-  // Get push token from D1 first, then KV fallback
-  const deviceRow = await env.DB.prepare('SELECT push_token FROM devices WHERE device_id = ?').bind(deviceId).first();
-  let pushToken = deviceRow?.push_token as string | null;
-  if (!pushToken) {
-    const deviceData = await env.ALERTS.get(`device:${deviceId}`);
-    if (!deviceData) return;
-    const device = JSON.parse(deviceData);
-    pushToken = device.pushToken || device.token;
-  }
+  // Resolve push_token (D1 first, KV fallback). Cooldown stamp uses the same key the
+  // gate above checked — keyed by push_token so duplicate device rows for the same
+  // physical device share a single suppression window.
+  const pushToken = await getPushToken(env, deviceId);
   if (!pushToken) return;
 
   for (const t of triggered) {
@@ -2180,13 +2182,32 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       `${ticker} — Setup conditions favorable (ML ${Math.round(t.mlProb * 100)}%)`,
       `Open the app for the directional analysis.`
     );
-    // Stamp cooldown so this (device, symbol) won't fire again for NOTIFY_COOLDOWN_SEC
-    await env.ALERTS.put(`notif:${deviceId}:${t.symbol}`, String(Date.now()),
+    // Stamp cooldown so this (push_token, symbol) won't fire again for NOTIFY_COOLDOWN_SEC
+    await env.ALERTS.put(`notif:${pushToken}:${t.symbol}`, String(Date.now()),
       { expirationTtl: NOTIFY_COOLDOWN_SEC });
     // Log notification to D1
     await env.DB.prepare(
       'INSERT INTO notifications (device_id, symbol, type, ml_probability, score, direction) VALUES (?, ?, ?, ?, ?, ?)'
     ).bind(deviceId, t.symbol, 'ml_crossing', t.mlProb, t.score, t.direction).run();
+  }
+}
+
+/// Resolves a device's APNs push token. D1 is authoritative; falls back to the KV blob
+/// from older registration paths. Returns null if neither has a token (device hasn't
+/// finished registration yet). Called twice per `checkDeviceScores` in the worst case
+/// (once per triggering symbol at the gate, once before APN send) — both are short
+/// indexed lookups so no caching needed.
+async function getPushToken(env: Env, deviceId: string): Promise<string | null> {
+  const deviceRow = await env.DB.prepare('SELECT push_token FROM devices WHERE device_id = ?').bind(deviceId).first();
+  const fromDb = (deviceRow?.push_token as string | null) ?? null;
+  if (fromDb) return fromDb;
+  const deviceData = await env.ALERTS.get(`device:${deviceId}`);
+  if (!deviceData) return null;
+  try {
+    const device = JSON.parse(deviceData);
+    return device.pushToken || device.token || null;
+  } catch {
+    return null;
   }
 }
 
