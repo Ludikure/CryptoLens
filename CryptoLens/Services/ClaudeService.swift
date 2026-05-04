@@ -33,7 +33,7 @@ class ClaudeService: AIProvider {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         PushService.addAuthHeaders(&request)
-        request.timeoutInterval = 60  // AI calls can be slow
+        request.timeoutInterval = 120  // matches DeepSeek R1; extended-thinking + grown prompts can take 60s+
 
         // Parse "@thinking-N" suffix from model id. The bare model name goes to the API as-is;
         // the budget is forwarded as a separate field that the worker translates into Anthropic's
