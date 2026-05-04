@@ -8,7 +8,7 @@
       "barsSinceRegimeChange" : 8,
       "basisExtreme" : 0,
       "basisPct" : 0,
-      "beta" : 1.5291266726488684,
+      "beta" : 1.554321724905297,
       "bodyWickRatio" : 0.5295027249943451,
       "crowdingSignal" : 0,
       "dAboveVwap" : 1,
@@ -53,8 +53,8 @@
       "fundingSignal" : 0,
       "fundingSlope" : 0,
       "gapDirectionAligned" : 0,
-      "gapFilled" : 1,
-      "gapPercent" : -0.1944654192165005,
+      "gapFilled" : 0,
+      "gapPercent" : 0.22534531891080642,
       "hAboveVwap" : 1,
       "hAdx" : 14.54,
       "hAdxBullish" : 1,
@@ -84,7 +84,7 @@
       "hourBucket" : 1,
       "isMarketHours" : 1,
       "isWeekend" : 0,
-      "iwmSpyRatio" : 0.22915209875853837,
+      "iwmSpyRatio" : 0.01080350003174646,
       "last3Green" : 0,
       "last3Red" : 0,
       "last3VolIncreasing" : 0,
@@ -95,8 +95,8 @@
       "oiPriceInteraction" : 0,
       "oiSignal" : 0,
       "regimeCode" : 0,
-      "relStrengthVsSector" : 2.1792668193051488,
-      "relStrengthVsSpy" : 2.0232640138561826,
+      "relStrengthVsSector" : 3.9091849820399243,
+      "relStrengthVsSpy" : 2.91877079004416,
       "shortVolumeRatio" : 0.46757,
       "shortVolumeZScore" : -1.0434,
       "structureAlignment" : 0,
@@ -8555,14 +8555,6 @@
         "open" : 278.6600036621094,
         "time" : 1777642200000,
         "volume" : 28910200
-      },
-      {
-        "close" : 280.2300109863281,
-        "high" : 280.5899963378906,
-        "low" : 277.8450012207031,
-        "open" : 278.70001220703125,
-        "time" : 1777901400000,
-        "volume" : 6245280
       }
     ],
     "macroDxyAboveEma20" : 0,
@@ -13029,14 +13021,6 @@
         "open" : 118.61000061035156,
         "time" : 1777642200000,
         "volume" : 13067100
-      },
-      {
-        "close" : 118.69999694824219,
-        "high" : 118.93000030517578,
-        "low" : 118.29000091552734,
-        "open" : 118.3499984741211,
-        "time" : 1777901400000,
-        "volume" : 1560714
       }
     ],
     "sentiment" : {
@@ -15046,14 +15030,6 @@
         "open" : 721.25,
         "time" : 1777642200000,
         "volume" : 42888700
-      },
-      {
-        "close" : 721.5050048828125,
-        "high" : 721.7150268554688,
-        "low" : 719.25,
-        "open" : 720.0700073242188,
-        "time" : 1777901400000,
-        "volume" : 8619768
       }
     ],
     "vix3mPrice" : 20.389999389648438
