@@ -537,7 +537,11 @@ class AnalysisService: ObservableObject {
                darkPool: _darkPool,
                oiPriceInteraction: _oiPriceInteraction, fundingSlope: _fundingSlope,
                bodyWickRatio: _bodyWickRatio)
-            tf1ML.mlWinProbability = MLScoring.predict(features: mlFeatures)
+            // Prefer the worker's cron-cached prediction so in-app ML matches notifications
+            // exactly (both come from the same worker code path on the same KV blob). Local
+            // MLScoring.predict stays as a fallback for fixtures the cron hasn't reached yet
+            // (404) or transient network failures.
+            tf1ML.mlWinProbability = await fetchWorkerMLOrLocal(symbol: symbol, mlFeatures: mlFeatures)
             #if DEBUG
             if ["BTCUSDT", "ETHUSDT", "TSLA", "NVDA"].contains(symbol) {
                 var dict = MLScoring.dumpFeatureDict(mlFeatures)
@@ -736,7 +740,7 @@ class AnalysisService: ObservableObject {
                    for c in candles.suffix(n) { let range = c.high - c.low; if range > 0 { sum += abs(c.close - c.open) / range; count += 1 } }
                    return count > 0 ? sum / Double(count) : 0.5
                }())
-            tf1.mlWinProbability = MLScoring.predict(features: mlFeatures2)
+            tf1.mlWinProbability = await fetchWorkerMLOrLocal(symbol: symbol, mlFeatures: mlFeatures2)
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
@@ -1555,5 +1559,17 @@ class AnalysisService: ObservableObject {
         let type = providerType
         let model = type.models[0].id
         configure(provider: type, apiKey: "", model: model)
+    }
+
+    /// Fetches the worker's cron-cached prediction; falls back to local `MLScoring.predict`
+    /// on 404 (cron hasn't seen this symbol yet) or any network/decode failure. Keeping the
+    /// local path active until cache warm-up means the user never sees a missing ML score.
+    private func fetchWorkerMLOrLocal(symbol: String, mlFeatures: MLFeatures) async -> Double? {
+        do {
+            let prediction = try await WorkerMLService.predict(symbol: symbol)
+            return prediction.probability
+        } catch {
+            return MLScoring.predict(features: mlFeatures)
+        }
     }
 }
