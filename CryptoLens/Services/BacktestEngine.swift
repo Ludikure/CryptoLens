@@ -574,6 +574,11 @@ class BacktestEngine: ObservableObject {
                 }()
 
                 // Extract ML features from indicator results
+                // Snapshot fundingHistory pre-mlf so the parity fixture below sees the
+                // KV-equivalent state (worker reads it from KV before evaluating the bar
+                // and only appends current fr inside its slope computation).
+                let preFundingHistory = fundingHistory
+
                 let mlf = MLFeatures(
                     // Daily core
                     dRsi: dailyResult.rsi ?? 50, dMacdHist: dailyResult.macd?.histogram ?? 0,
@@ -1085,7 +1090,8 @@ class BacktestEngine: ObservableObject {
                         hAdxHist7: tail7(hAdxHistory),
                         hMacdHistHist7: tail7(hMacdHistHistory),
                         prevRegimeCode: prevRegimeCodeVal,
-                        prevBarsSinceRegimeChange: preBarsSinceRegimeChange
+                        prevBarsSinceRegimeChange: preBarsSinceRegimeChange,
+                        fundingHist: preFundingHistory
                     ) : nil
 
                     let derivFix = ParityDerivSignals(
@@ -1143,8 +1149,8 @@ class BacktestEngine: ObservableObject {
                             derivSignals: derivFix,
                             sentiment: sentimentFix,
                             prevSnapshot: prevSnap,
-                            darkPoolRatio: nil,
-                            darkPoolZScore: nil
+                            darkPoolRatio: isCrypto ? nil : DarkPoolData.features(for: symbol, at: evalTime).ratio,
+                            darkPoolZScore: isCrypto ? nil : DarkPoolData.features(for: symbol, at: evalTime).zscore
                         ),
                         expected: ParityFixtureExpected(
                             features: featureDict,

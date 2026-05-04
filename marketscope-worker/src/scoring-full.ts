@@ -1119,8 +1119,12 @@ export function computeAllFeatures(
             return (derivatives.oiChangePct || 0) * pricePct;
         })(),
         fundingSlope: (() => {
-            if (!isCrypto || !prevSnapshot) return 0;
-            const hist = prevSnapshot.fundingHist || [];
+            if (!isCrypto) return 0;
+            // Match BacktestEngine: append current fr to prev history, cap at 4. iOS appends
+            // even with no prev history (single-bar window then), so we always include fr.
+            const fr = derivatives?.fundingRateRaw ?? 0;
+            const prev = prevSnapshot?.fundingHist ?? [];
+            const hist = [...prev, fr].slice(-4);
             if (hist.length < 3) return 0;
             const n = hist.length;
             const xMean = (n - 1) / 2;

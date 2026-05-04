@@ -97,6 +97,10 @@ struct ParityPrevSnapshot: Codable {
     /// (caps at 100). Optional so old fixtures keep loading.
     let prevRegimeCode: Int?
     let prevBarsSinceRegimeChange: Int?
+    /// Funding rate history at the START of the current iteration (i.e. post-update
+    /// from the previous bar). Up to 4 values, oldest-first. Worker appends current
+    /// fundingRateRaw, trims to 4, then computes linear-regression slope. Crypto-only.
+    let fundingHist: [Double]?
 }
 
 struct ParityFixtureExpected: Codable {
