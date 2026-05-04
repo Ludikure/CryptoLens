@@ -356,7 +356,11 @@ class BacktestEngine: ObservableObject {
             statusMessage = "Running walk-forward..."
 
             let evalStartIndex = fourHCandles.firstIndex { $0.time >= startDate } ?? 200
-            let totalBars = fourHCandles.count - evalStartIndex - 6
+            // Loop runs evalStartIndex..<(count-1), so totalBars matches that span. Was -6
+            // when the loop reserved 6 forward bars; the loop now runs to count-1 with
+            // forward-reference clamping inside, leaving the -6 here as stale arithmetic
+            // that pushed `progress` above 1.0 on the final iterations.
+            let totalBars = fourHCandles.count - evalStartIndex - 1
             var points = [BacktestDataPoint]()
 
             #if DEBUG
