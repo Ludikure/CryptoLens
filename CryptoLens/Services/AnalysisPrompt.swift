@@ -129,6 +129,34 @@ enum AnalysisPrompt {
         have a specific failure scenario in mind, which means the conviction is not earned.
         Downgrade conviction one level OR call FLAT.
 
+        BIAS LABEL AUTHORITY (treat as authoritative for direction):
+        The Daily/4H/1H bias labels in the PRE-COMPUTED FLAGS section are computed from
+        holistic structural analysis (HH/HL, EMA stack alignment, multi-indicator confluence,
+        ADX direction). They are more reliable for direction than recent indicator readings on
+        a few candles. Do NOT override a Strong Bullish or Strong Bearish bias label based on:
+        - A few candles showing pullback (RSI dipping, single bearish/bullish candle pattern)
+        - MACD recently crossing the other way
+        - Volume on one or two recent counter-direction bars
+
+        These are normal pullbacks WITHIN the labeled trend, not structural reversals.
+
+        To override a bias label, you need ONE of these structural break signals:
+        1. A 1H or higher closed candle that BREAKS market structure (lower-low against
+           Bullish, higher-high against Bearish), confirmed on the same TF as the label.
+        2. Explicit RSI/MACD divergence sustained across 4+ candles AND volume confirmation.
+        3. The pre-computed PRE-COMPUTED FLAGS section explicitly flags divergence_against_bias
+           or divergence_escalated for this symbol.
+
+        If you cannot point to one of those three, do not call a setup AGAINST the bias label.
+        Either align with the label, or call FLAT.
+
+        Concrete example of what NOT to do:
+        - Bias label says "1H Strong Bullish"
+        - Recent 4 1H candles show pullback (RSI 43 falling, MACD just crossed bearish)
+        - DON'T: "1H momentum bearish, calling SHORT"
+        - DO: "1H pulling back inside Strong Bullish trend; wait for pullback completion
+          to enter LONG, or call FLAT if no clean entry presents"
+
         STATING YOUR THESIS:
         Declare LONG, SHORT, or FLAT with specific evidence:
         "Bias: SHORT — 4H momentum bearish (4 consecutive red bars, expanding volume).
@@ -316,6 +344,12 @@ enum AnalysisPrompt {
         8. If you identify a trap (bull trap, bear trap, false breakout) — there is no setup. Do not hedge it with a conditional entry.
         9. The setup MUST agree with your regime read and your bias. TRANSITIONING regime + FLAT bias = no setup. A long setup in a regime you just called bearish = contradiction = no setup.
         10. AFTER-HOURS / MARKET CLOSED (stocks only): When the market is closed, the entry must be relative to today's CLOSE price (the last traded price). For longs, entry must be >= today's close. For shorts, entry must be <= today's close. Do not propose entries at today's open or mid-session prices — those already traded and cannot be filled. If the setup requires a price below close (for longs) or above close (for shorts), present it as a conditional: "Enter at $X on next session if price pulls back to [level]."
+
+        STOP PLACEMENT (mandatory, applies to ALL setups, not just counter-trend):
+        - **Crypto: minimum 2.0x ATR (4H).** If the structural stop is wider than 2.0 ATR, use the structural level. If tighter, floor at 2.0 ATR. Backtesting on 850K+ bars proved sub-2.0 ATR stops get wicked even when direction is correct — the trade is right but noise shakes you out.
+        - **Stocks: minimum 1.5x ATR (4H).** Lower volatility justifies tighter stops, but still floor at 1.5 ATR.
+        - Never propose a stop tighter than the floor to "improve" the R:R ratio. R:R is a consequence of structure + volatility, not a target. If respecting the floor pushes R:R below 1:1 against your TP1, EITHER widen TP1 to a structural level that gives 1:1, OR call NO SETUP. Do not narrow the stop.
+        - When applying the floor, reason explicitly: "ATR(4H) = $X, 2.0× = $Y. Structural stop at $Z is closer than $Y, so using $Y."
 
         COUNTER-TREND REVERSAL SETUP (4H vs Daily divergence):
         Backtesting across 850K+ crypto bars and 192K+ stock bars shows that when the 4H

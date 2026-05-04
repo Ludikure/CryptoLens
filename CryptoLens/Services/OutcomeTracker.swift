@@ -107,10 +107,29 @@ enum OutcomeTracker {
 
                 let relevantPoints = checkPoints.filter { $0.time >= setupTime }
 
+                let priceAtSetup = tracked[i].priceAtSetup
+
                 for point in relevantPoints {
-                    // Check entry hit (for market setups that weren't auto-entered)
+                    // Check entry hit (for market setups that weren't auto-entered).
+                    // Direction-aware: price must move FROM priceAtSetup TOWARD entry to fire.
+                    // - LONG below setup price (pullback long)  → low <= entry
+                    // - LONG above setup price (breakout long)  → high >= entry
+                    // - SHORT above setup price (pullback short)→ high >= entry
+                    // - SHORT below setup price (breakdown shrt)→ low <= entry
+                    // Without priceAtSetup (legacy setups), fall back to the old direction-only check.
                     if !tracked[i].outcome.entryHit {
-                        let entryHit = isLong ? point.low <= setup.entry : point.high >= setup.entry
+                        let entryHit: Bool
+                        if priceAtSetup > 0 {
+                            if abs(setup.entry - priceAtSetup) / priceAtSetup < 0.001 {
+                                entryHit = true   // market entry (within 0.1%)
+                            } else if setup.entry < priceAtSetup {
+                                entryHit = point.low <= setup.entry  // price must fall to entry
+                            } else {
+                                entryHit = point.high >= setup.entry // price must rise to entry
+                            }
+                        } else {
+                            entryHit = isLong ? point.low <= setup.entry : point.high >= setup.entry
+                        }
                         if entryHit {
                             tracked[i].outcome.entryHit = true
                             tracked[i].outcome.entryHitTime = point.time
@@ -286,9 +305,24 @@ enum OutcomeTracker {
                 ? SetupType.classify(entry: setup.entry, currentPrice: currentPrice, reasoning: setup.reasoning)
                 : .market  // Fallback if no price provided
 
+            // Log breakout/breakdown entries (entry on the "wrong" side of price for a
+            // pullback) so we can track how often the LLM produces these vs pullback entries.
+            if currentPrice > 0 {
+                let isLong = setup.direction == "LONG"
+                let entryAboveCurrent = setup.entry > currentPrice
+                let isBreakoutLong = isLong && entryAboveCurrent
+                let isBreakdownShort = !isLong && !entryAboveCurrent
+                if isBreakoutLong {
+                    print("[OutcomeTracker] Breakout LONG setup for \(symbol): entry $\(setup.entry) > current $\(currentPrice). Price must rise to enter.")
+                } else if isBreakdownShort {
+                    print("[OutcomeTracker] Breakdown SHORT setup for \(symbol): entry $\(setup.entry) < current $\(currentPrice). Price must fall to enter.")
+                }
+            }
+
             var ts = TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
                                    mlProbability: mlProbability, conviction: conviction,
-                                   modelVersion: modelVersion, setupType: setupType)
+                                   modelVersion: modelVersion, setupType: setupType,
+                                   priceAtSetup: currentPrice)
 
             if setupType == .conditional {
                 ts.outcome.state = .pending
@@ -570,17 +604,22 @@ struct TrackedSetup: Codable, Identifiable {
     let conviction: String?
     let modelVersion: Int
     let setupType: SetupType
+    /// Live price at the moment the setup was registered. Used by the tracker to choose
+    /// the correct entry-detection direction (price must move TOWARD entry from this side).
+    /// 0 if missing on legacy stored setups.
+    let priceAtSetup: Double
 
     var id: UUID { setup.id }
 
     private enum CodingKeys: String, CodingKey {
         case setup, symbol, analysisId, timestamp, outcome,
-             killsAtGeneration, synced, mlProbability, conviction, modelVersion, setupType
+             killsAtGeneration, synced, mlProbability, conviction, modelVersion, setupType,
+             priceAtSetup
     }
 
     init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil,
          mlProbability: Double? = nil, conviction: String? = nil, modelVersion: Int = 10,
-         setupType: SetupType = .market) {
+         setupType: SetupType = .market, priceAtSetup: Double = 0) {
         self.setup = setup
         self.symbol = symbol
         self.analysisId = analysisId
@@ -592,6 +631,7 @@ struct TrackedSetup: Codable, Identifiable {
         self.conviction = conviction
         self.modelVersion = modelVersion
         self.setupType = setupType
+        self.priceAtSetup = priceAtSetup
     }
 
     init(from decoder: Decoder) throws {
@@ -607,6 +647,7 @@ struct TrackedSetup: Codable, Identifiable {
         conviction = try c.decodeIfPresent(String.self, forKey: .conviction)
         modelVersion = try c.decodeIfPresent(Int.self, forKey: .modelVersion) ?? 10
         setupType = (try? c.decode(SetupType.self, forKey: .setupType)) ?? .market
+        priceAtSetup = (try? c.decode(Double.self, forKey: .priceAtSetup)) ?? 0
     }
 
     func encode(to encoder: Encoder) throws {

@@ -18,7 +18,10 @@ enum Constants {
     static let yahooBaseURL = "https://query1.finance.yahoo.com"
     static let claudeAPIURL = "https://api.anthropic.com/v1/messages"
     static let claudeAPIVersion = "2023-06-01"
-    static let defaultModel = "claude-sonnet-4-6"
+    // Default: Sonnet 4.6 + extended thinking. Best quality-per-dollar for our rule-based prompt
+    // (checkbox conviction calibration + 7-point self-check). The "@thinking-N" suffix is parsed
+    // by ClaudeService — see AIProvider.swift `models` doc comment.
+    static let defaultModel = "claude-sonnet-4-6@thinking-8000"
     static let haikuModel = "claude-haiku-4-5-20251001"
 
     // MARK: - Crypto

@@ -4,7 +4,10 @@ enum IndicatorEngine {
     /// Drop the most recent candle if it is still in-progress (closeTime > now).
     /// Live ticks would otherwise mutate every indicator on every refresh, causing
     /// score and ML output to flicker between cron/refresh cycles.
-    private static func droppingInProgress(_ candles: [Candle], timeframe: String) -> [Candle] {
+    /// Internal so BacktestEngine fixture-capture can apply the same drop logic to its
+    /// stored candle slices, ensuring fixtures contain only closed bars (matching what
+    /// computeAll() actually consumes).
+    static func droppingInProgress(_ candles: [Candle], timeframe: String) -> [Candle] {
         guard let last = candles.last,
               let intervalSec = intervalSeconds(timeframe) else { return candles }
         let candleClose = last.time.addingTimeInterval(intervalSec)
@@ -28,6 +31,13 @@ enum IndicatorEngine {
 
     static func computeAll(candles rawCandles: [Candle], timeframe: String, label: String, market: Market = .crypto, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesContext? = nil) -> IndicatorResult {
         let candles = droppingInProgress(rawCandles, timeframe: timeframe)
+        // Capture the in-progress candle (if any) for chart display only — never used in indicator math.
+        let inProgressCandle: Candle? = {
+            guard let last = rawCandles.last,
+                  let intervalSec = intervalSeconds(timeframe) else { return nil }
+            let candleClose = last.time.addingTimeInterval(intervalSec)
+            return candleClose > Date() ? last : nil
+        }()
         let closes = candles.map(\.close)
         let highs = candles.map(\.high)
         let lows = candles.map(\.low)
@@ -309,6 +319,7 @@ enum IndicatorEngine {
             gap: gap,
             addv: addv,
             candles: chartCandles,
+            inProgressCandle: inProgressCandle,
             rsiSeries: rsiSeriesData,
             stochKSeries: stochSeries.k,
             stochDSeries: stochSeries.d,

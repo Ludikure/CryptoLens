@@ -12,7 +12,10 @@ class AnalysisService: ObservableObject {
     let economicCalendar = EconomicCalendarService()
     let macroData = MacroDataService()
     private(set) var aiProvider: AIProvider?
-    @Published var providerType: AIProviderType = .claude
+    // Default provider for fresh installs. Existing users keep their UserDefaults("ai_provider")
+    // selection (autoConfigureKey reads it on init). DeepSeek R1's reasoning is well-suited to
+    // our rule-based prompt at ~5x lower cost than Sonnet 4.6 + extended thinking.
+    @Published var providerType: AIProviderType = .deepseek
     private(set) var alertsStore: AlertsStore?
 
     func configure(alertsStore: AlertsStore) {
@@ -86,6 +89,7 @@ class AnalysisService: ObservableObject {
         switch provider {
         case .claude: aiProvider = ClaudeService(apiKey: apiKey, model: model)
         case .gemini: aiProvider = GeminiService(apiKey: apiKey, model: model)
+        case .deepseek: aiProvider = DeepSeekService(apiKey: apiKey, model: model)
         }
     }
 
@@ -535,8 +539,9 @@ class AnalysisService: ObservableObject {
                bodyWickRatio: _bodyWickRatio)
             tf1ML.mlWinProbability = MLScoring.predict(features: mlFeatures)
             #if DEBUG
-            if symbol == "BTCUSDT" || symbol == "ETHUSDT" {
-                let dict = MLScoring.dumpFeatureDict(mlFeatures)
+            if ["BTCUSDT", "ETHUSDT", "TSLA", "NVDA"].contains(symbol) {
+                var dict = MLScoring.dumpFeatureDict(mlFeatures)
+                dict["mlProbability"] = tf1ML.mlWinProbability ?? -1
                 if let data = try? JSONSerialization.data(withJSONObject: dict, options: .sortedKeys),
                    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.appendingPathComponent("\(symbol.lowercased())_features.json") {
                     try? data.write(to: url)
@@ -1281,19 +1286,25 @@ class AnalysisService: ObservableObject {
             // Basis
             basisPct: basisPct,
             basisExtreme: basisPct > 0.5 ? 1 : basisPct < -0.5 ? -1 : 0,
-            // Stock features — computed from live data when available
+            // Stock features — computed from full daily history (dailyCandles), not tf1.candles
+            // (chart-trimmed to 50 bars). Mirrors BacktestEngine which uses 252 bars.
             fiftyTwoWeekPct: {
-                guard !isCrypto, let hi = tf1.candles.map(\.high).max(), let lo = tf1.candles.map(\.low).min(), hi != lo else { return 50.0 }
-                return (tf1.price - lo) / (hi - lo) * 100
+                guard !isCrypto, dailyCandles.count >= 2 else { return 50.0 }
+                let lookback = Array(dailyCandles.suffix(252))
+                let hi = lookback.map(\.high).max() ?? tf1.price
+                let lo = lookback.map(\.low).min() ?? tf1.price
+                return hi != lo ? (tf1.price - lo) / (hi - lo) * 100 : 50.0
             }(),
             distToFiftyTwoHigh: {
-                guard !isCrypto, let hi = tf1.candles.map(\.high).max(), hi > 0 else { return 0.0 }
-                return (hi - tf1.price) / tf1.price * 100
+                guard !isCrypto, dailyCandles.count >= 2 else { return 0.0 }
+                let lookback = Array(dailyCandles.suffix(252))
+                let hi = lookback.map(\.high).max() ?? tf1.price
+                return hi > 0 ? (hi - tf1.price) / tf1.price * 100 : 0.0
             }(),
             gapPercent: {
-                guard !isCrypto, tf1.candles.count >= 2 else { return 0.0 }
-                let prev = tf1.candles[tf1.candles.count - 2].close
-                guard let todayOpen = tf1.candles.last?.open else { return 0.0 }
+                guard !isCrypto, dailyCandles.count >= 2 else { return 0.0 }
+                let prev = dailyCandles[dailyCandles.count - 2].close
+                guard let todayOpen = dailyCandles.last?.open else { return 0.0 }
                 return prev > 0 ? (todayOpen - prev) / prev * 100 : 0
             }(),
             gapFilled: {

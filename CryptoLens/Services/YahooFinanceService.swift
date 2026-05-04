@@ -461,7 +461,11 @@ actor YahooFinanceService {
         switch interval {
         case "1m": return "5d"
         case "5m", "15m": return "60d"
-        case "30m", "60m", "1h": return "60d"
+        // 6mo (~180d) matches worker's 1H fetch range; both implementations need the
+        // same warmup window so 1H indicators (RSI, Stoch RSI, EMA20/50/200) converge to
+        // the same value at the most recent closed bar. The previous 60d gave iOS 1/3 the
+        // warmup of the worker, causing measurable eRsi / eStochK divergence.
+        case "30m", "60m", "1h": return "6mo"
         case "1d": return "1y"
         case "1wk", "1mo": return "5y"
         default: return "60d"

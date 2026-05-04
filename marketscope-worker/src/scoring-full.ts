@@ -136,6 +136,35 @@ function smaArray(values: number[], period: number): number[] {
     return result;
 }
 
+/**
+ * Round to N decimal places, matching iOS `Double.rounded(toPlaces:)` semantics
+ * (banker's rounding via Foundation, but we use round-half-away-from-zero to match
+ * Swift's default `.toNearestOrEven` only matters at exact half — empirically, all
+ * iOS indicator rounding sites use the default rounded() which is half-away-from-zero).
+ *
+ * iOS rounds indicator outputs at fixed precisions to match the values the model was
+ * TRAINED on (BacktestEngine produces these features for CSV training data, then the
+ * model is fit). Worker MUST round to the same precision or live ML inputs differ
+ * from training canonical → diverging predictions.
+ *
+ * iOS rounding map (mirrors CryptoLens/Indicators/*):
+ *   - RSI:               2dp  (RSI.swift)
+ *   - MACD line/sig/hist: 2dp  (MACD.swift)
+ *   - ADX / +DI / -DI:   2dp  (ADX.swift)
+ *   - BB upper/mid/low:  2dp  (BollingerBands.swift)
+ *   - BB %B / bandwidth: 4dp  (BollingerBands.swift)
+ *   - StochRSI K/D:      2dp  (StochasticRSI.swift)
+ *   - VWAP:              2dp  (VWAP.swift)
+ *   - EMA 20/50/200:     2dp  (ComputeAll.swift)
+ *   - volumeRatio:       2dp  (ComputeAll.swift)
+ */
+function r2(x: number): number {
+    return Math.round(x * 100) / 100;
+}
+function r4(x: number): number {
+    return Math.round(x * 10000) / 10000;
+}
+
 function computeRSI(closes: number[], period: number = 14): number[] {
     const rsiValues: number[] = new Array(closes.length).fill(50);
     if (closes.length < period + 1) return rsiValues;
@@ -148,13 +177,13 @@ function computeRSI(closes: number[], period: number = 14): number[] {
     avgGain /= period;
     avgLoss /= period;
 
-    rsiValues[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    rsiValues[period] = r2(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
 
     for (let i = period + 1; i < closes.length; i++) {
         const diff = closes[i] - closes[i - 1];
         avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
         avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
-        rsiValues[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+        rsiValues[i] = r2(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
     }
     return rsiValues;
 }
@@ -162,9 +191,13 @@ function computeRSI(closes: number[], period: number = 14): number[] {
 function computeMACD(closes: number[]): { macdLine: number[]; signalLine: number[]; histogram: number[]; crossover: number } {
     const ema12 = emaArray(closes, 12);
     const ema26 = emaArray(closes, 26);
-    const macdLine = ema12.map((v, i) => v - ema26[i]);
-    const signalLine = emaArray(macdLine, 9);
-    const histogram = macdLine.map((v, i) => v - signalLine[i]);
+    // RAW macd/signal kept full precision so histogram = r2(rawMacd - rawSignal).
+    // iOS MACD.swift comment: "from raw values to avoid compounding rounding".
+    const rawMacd = ema12.map((v, i) => v - ema26[i]);
+    const rawSignal = emaArray(rawMacd, 9);
+    const macdLine = rawMacd.map(r2);
+    const signalLine = rawSignal.map(r2);
+    const histogram = rawMacd.map((v, i) => r2(v - rawSignal[i]));
 
     // Crossover: check last 2 bars
     const n = macdLine.length;
@@ -218,7 +251,8 @@ function computeADX(candles: Candle[], period: number = 14): { adx: number; plus
         adx = (adx * (period - 1) + dxValues[i].dx) / period;
     }
     const last = dxValues[dxValues.length - 1];
-    return { adx, plusDI: last.plusDI, minusDI: last.minusDI };
+    // Round to 2dp to match iOS ADX.swift lines 55-58.
+    return { adx: r2(adx), plusDI: r2(last.plusDI), minusDI: r2(last.minusDI) };
 }
 
 // Mirrors Swift ATR.compute() — Wilder smoothing over full TR series.
@@ -234,7 +268,14 @@ function computeATR(candles: Candle[], period: number = 14): number {
     for (let i = period; i < trs.length; i++) {
         atr = (atr * (period - 1) + trs[i]) / period;
     }
+    // Returns RAW. iOS ATR.swift exposes both rounded `atr` field (2dp) and uses RAW for
+    // atrPercent (4dp). Callers round at the use site to mirror iOS field-level rounding.
     return atr;
+}
+
+/** Helper: caller rounds ATR for VP/feature output. */
+function atrRounded2dp(candles: Candle[], period: number = 14): number {
+    return r2(computeATR(candles, period));
 }
 
 function computeStochRSI(closes: number[], rsiPeriod: number = 14, stochPeriod: number = 14, kSmooth: number = 3, dSmooth: number = 3): { k: number; d: number; crossover: number } {
@@ -263,7 +304,8 @@ function computeStochRSI(closes: number[], rsiPeriod: number = 14, stochPeriod: 
         else if (prevK >= prevD && k < d) crossover = -1;
     }
 
-    return { k, d, crossover };
+    // Round to 2dp to match iOS StochasticRSI.swift line 57.
+    return { k: r2(k), d: r2(d), crossover };
 }
 
 function computeBollingerBands(closes: number[], period: number = 20, stdDev: number = 2): { percentB: number; squeeze: boolean; bandwidth: number } {
@@ -297,13 +339,15 @@ function computeBollingerBands(closes: number[], period: number = 20, stdDev: nu
 
     // Return bandwidth as percentage (× 100) to match iOS BollingerBands.compute(),
     // which is what the training data used.
-    return { percentB, squeeze, bandwidth: bandwidth * 100 };
+    // Round to 4dp to match iOS BollingerBands.swift lines 41-42.
+    return { percentB: r4(percentB), squeeze, bandwidth: r4(bandwidth * 100) };
 }
 
 function computeVolumeRatio(volumes: number[], period: number = 20): number {
     if (volumes.length < period) return 1.0;
     const avg = volumes.slice(-period).reduce((a, b) => a + b, 0) / period;
-    return avg > 0 ? volumes[volumes.length - 1] / avg : 1.0;
+    // Round to 2dp to match iOS ComputeAll.swift line 98.
+    return avg > 0 ? r2(volumes[volumes.length - 1] / avg) : 1.0;
 }
 
 /** Port of iOS MarketStructure.analyze (Indicators/MarketStructure.swift).
@@ -346,7 +390,8 @@ function computeVWAP(candles: Candle[], period: number = 20): number | null {
         cumPV += tp * c.volume;
         cumVol += c.volume;
     }
-    return cumVol > 0 ? cumPV / cumVol : null;
+    // Round to 2dp to match iOS VWAP.swift line 25.
+    return cumVol > 0 ? r2(cumPV / cumVol) : null;
 }
 
 function detectDivergence(closes: number[], rsiValues: number[], lookback: number = 14): number {
@@ -519,13 +564,14 @@ function extractFeatures(candles: Candle[], isCrypto: boolean, timeframe: 'daily
     const volumes = candles.map(c => c.volume);
     const price = closes[closes.length - 1];
 
-    // EMA
+    // EMA — scalars rounded to 2dp to match iOS ComputeAll.swift lines 93-95.
+    // Internal arrays stay full precision (used for trend slope checks below).
     const ema20 = emaArray(closes, 20);
     const ema50 = emaArray(closes, 50);
     const ema200 = emaArray(closes, 200);
-    const e20 = ema20[ema20.length - 1];
-    const e50 = ema50[ema50.length - 1];
-    const e200 = ema200[ema200.length - 1];
+    const e20 = r2(ema20[ema20.length - 1]);
+    const e50 = r2(ema50[ema50.length - 1]);
+    const e200 = r2(ema200[ema200.length - 1]);
 
     let emaCross = 0;
     if (price > e20) emaCross++; else emaCross--;
@@ -737,18 +783,26 @@ export function computeAllFeatures(
     // atrPercentile stays on daily (iOS BacktestEngine line 499).
     const price = dailyCandles[dailyCandles.length - 1]?.close;
     if (!price || price <= 0) return {} as FullFeatures;
-    const atrVal = computeATR(dailyCandles); // still used for daily-scale features (volume profile, etc.)
-    const fourHAtr = fourHCandles.length >= 15 ? computeATR(fourHCandles) : atrVal;
+    // Raw ATRs for atrPercent computation (iOS uses local raw atr at line 18).
+    const atrValRaw = computeATR(dailyCandles);
+    const fourHAtrRaw = fourHCandles.length >= 15 ? computeATR(fourHCandles) : atrValRaw;
+    // 2dp-rounded ATRs for downstream feature-output usage (matches iOS atrVal.atr field
+    // which is rounded — this value cascades into VP bucket sizing).
+    const atrVal = r2(atrValRaw);
+    const fourHAtr = r2(fourHAtrRaw);
     const fourHPrice = fourHCandles[fourHCandles.length - 1]?.close || price;
-    const atrPercent = (fourHAtr / fourHPrice) * 100;
-    const atrPercentile = computeATRPercentile(dailyCandles);
+    // atrPercent: 4dp-rounded, but computed from RAW ATR matching iOS line 18.
+    const atrPercent = r4((fourHAtrRaw / fourHPrice) * 100);
+    // Compute raw atrPercentile (full precision) for volScalar formula, then round for the
+    // feature output (iOS VolatilityRegime line 161 rounds to integer for the feature, but
+    // ComputeAll.swift line 156-159 uses the RAW unrounded percentile for volScalar).
+    const rawAtrPercentile = computeATRPercentile(dailyCandles);
+    const atrPercentile = Math.round(rawAtrPercentile);
 
-    // Vol scalar from daily ATR percentile
-    let volScalar = 1.0;
-    if (atrPercentile > 80) volScalar = 0.75;
-    else if (atrPercentile > 60) volScalar = 0.90;
-    else if (atrPercentile < 20) volScalar = 1.35;
-    else if (atrPercentile < 40) volScalar = 1.15;
+    // Vol scalar — linear interpolation from 0.75 (at 0%) to 1.35 (at 100%), clamped.
+    // Matches iOS ComputeAll.swift line 159: max(0.75, min(1.35, 0.75 + (rawPct/100)*0.6)).
+    // Was a bucketed lookup which produced step-function values that didn't match training.
+    const volScalar = Math.max(0.75, Math.min(1.35, 0.75 + (rawAtrPercentile / 100.0) * 0.6));
 
     // Candle patterns from 4H (or daily fallback)
     const patternCandles = fourHCandles.length >= 3 ? fourHCandles : dailyCandles;
@@ -816,7 +870,14 @@ export function computeAllFeatures(
         structureAlignment: (daily.structBull && (fourH?.structBull ?? 0)) ? 1 :
                             (daily.structBear && (fourH?.structBear ?? 0)) ? -1 : 0,
         // Temporal
-        dayOfWeek: new Date().getDay(),
+        // ET-anchored day-of-week to match iOS Calendar.current and BacktestEngine.
+        // new Date().getDay() returns server-local (UTC in CF Workers) which produces
+        // wrong values around UTC midnight transitions when ET is still on the previous day.
+        dayOfWeek: (() => {
+            const wdName = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date());
+            const map: Record<string, number> = { 'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 };
+            return map[wdName] ?? 0;
+        })(),
         barsSinceRegimeChange: 0, // would need KV state tracking
         regimeCode: (daily.adx > 25 && (daily.stackBull || daily.stackBear)) ? 2 : daily.adx < 20 ? 0 : 1,
         // Rate-of-change
@@ -855,22 +916,34 @@ export function computeAllFeatures(
         hMacdAccel: prevSnapshot?.hMacdD1 !== undefined ? ((fourH?.macdHist ?? 0) - prevSnapshot.hMacdHist) - prevSnapshot.hMacdD1 : 0,
         dAdxAccel: prevSnapshot?.dAdxD1 !== undefined ? (daily.adx - prevSnapshot.dAdx) - prevSnapshot.dAdxD1 : 0,
         // Time-of-day
-        hourBucket: (() => { const h = new Date().getUTCHours(); return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3; })(),
-        isWeekend: new Date().getDay() === 0 || new Date().getDay() === 6 ? 1 : 0,
+        // ET (America/New_York) to match iOS Calendar.current and BacktestEngine training canonical.
+        // Was UTC, which produced different bucket values than the training pipeline.
+        hourBucket: (() => {
+            const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false });
+            const h = parseInt(fmt.format(new Date()).replace(/[^\d]/g, '')) || 0;
+            return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3;
+        })(),
+        isWeekend: (() => {
+            const wdName = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date());
+            return (wdName === 'Sat' || wdName === 'Sun') ? 1 : 0;
+        })(),
         // Basis
         basisPct: sentiment?.basisPct ?? 0,
         basisExtreme: (sentiment?.basisPct ?? 0) > 0.5 ? 1 : (sentiment?.basisPct ?? 0) < -0.5 ? -1 : 0,
-        // Stock features
+        // Stock features — match BacktestEngine line 778 / 785 which require dailyIdx >= 252
+        // (i.e. at least 252 daily bars in the lookback) before computing real 52-week.
+        // Below threshold both default (50 / 0).
         fiftyTwoWeekPct: (() => {
-            if (isCrypto) return 50;
-            const highs = dailyCandles.map(c => c.high);
-            const lows = dailyCandles.map(c => c.low);
-            const hi = Math.max(...highs), lo = Math.min(...lows);
+            if (isCrypto || dailyCandles.length < 252) return 50;
+            const lookback = dailyCandles.slice(-252);
+            const hi = Math.max(...lookback.map(c => c.high));
+            const lo = Math.min(...lookback.map(c => c.low));
             return hi !== lo ? (price - lo) / (hi - lo) * 100 : 50;
         })(),
         distToFiftyTwoHigh: (() => {
-            if (isCrypto) return 0;
-            const hi = Math.max(...dailyCandles.map(c => c.high));
+            if (isCrypto || dailyCandles.length < 252) return 0;
+            const lookback = dailyCandles.slice(-252);
+            const hi = Math.max(...lookback.map(c => c.high));
             return hi > 0 ? (hi - price) / price * 100 : 0;
         })(),
         gapPercent: (() => {

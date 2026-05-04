@@ -4,6 +4,7 @@
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
 import { mlPredict, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
+import { aggregate1HTo4H_ET } from './aggregation';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -30,6 +31,7 @@ export interface Env {
   APNS_BUNDLE_ID: string;
   CLAUDE_API_KEY: string;
   GEMINI_API_KEY: string;
+  DEEPSEEK_API_KEY: string;
   TWELVE_DATA_API_KEY: string;
   TWELVE_DATA_API_KEY_2?: string;
   FINNHUB_API_KEY: string;
@@ -68,13 +70,13 @@ const CORS = {
 };
 
 // Limits
-const RATE_LIMIT_ANALYZE = 10;   // AI calls per device per hour
+const RATE_LIMIT_ANALYZE = 30;   // AI calls per device per hour
 const MAX_ALERTS = 50;           // Max alerts per device
 const MAX_PROMPT_CHARS = 40_000; // Max prompt size (weekly + SPY + spot pressure increase payload)
 const MAX_BODY_BYTES = 256_000;  // Max request body size (256KB)
 const MAX_NOTE_LENGTH = 500;     // Max alert note length
 const DEVICE_ID_REGEX = /^[a-zA-Z0-9-]{1,128}$/;
-const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
+const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'];
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -213,7 +215,7 @@ export default {
       if (limited) return json({ error: 'Rate limited. Max 10 analyses per hour.' }, 429);
 
       try {
-        const body = await request.json() as { model: string; system: string; prompt: string; provider?: string };
+        const body = await request.json() as { model: string; system: string; prompt: string; provider?: string; thinkingBudget?: number };
         if (!body.prompt || !body.system) return json({ error: 'Missing prompt or system' }, 400);
 
         // Validate prompt size
@@ -223,7 +225,44 @@ export default {
 
         const provider = body.provider || 'claude';
 
-        if (provider === 'gemini') {
+        if (provider === 'deepseek') {
+          // DeepSeek (OpenAI-compatible API). Models: deepseek-reasoner (R1) + deepseek-chat (V3).
+          // R1 returns a `reasoning_content` field with its thinking, then `content` with the
+          // final answer — we keep only `content` and normalize to Claude's response shape.
+          if (!env.DEEPSEEK_API_KEY) return json({ error: 'DeepSeek not configured' }, 503);
+          const DEEPSEEK_MODELS = ['deepseek-reasoner', 'deepseek-chat'];
+          const model = DEEPSEEK_MODELS.includes(body.model) ? body.model : 'deepseek-reasoner';
+
+          const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+              model,
+              max_tokens: 8000,  // R1's reasoning + answer can be long
+              temperature: 0,
+              messages: [
+                { role: 'system', content: body.system },
+                { role: 'user', content: body.prompt },
+              ],
+            }),
+          });
+
+          if (!resp.ok) {
+            const code = resp.status;
+            if (code === 429) return json({ error: 'AI service busy. Try again shortly.' }, 429);
+            if (code >= 500) return json({ error: 'AI service temporarily unavailable' }, 502);
+            return json({ error: `AI error (${code})` }, code);
+          }
+
+          const dsResult = await resp.json() as any;
+          const text = dsResult?.choices?.[0]?.message?.content || '';
+          // Normalize to Claude's content envelope so iOS clients parse uniformly.
+          return json({ content: [{ type: 'text', text }] });
+
+        } else if (provider === 'gemini') {
           // Gemini
           if (!env.GEMINI_API_KEY) return json({ error: 'Gemini not configured' }, 503);
           const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro'];
@@ -257,6 +296,22 @@ export default {
           if (!env.CLAUDE_API_KEY) return json({ error: 'AI not configured' }, 503);
           const model = ALLOWED_MODELS.includes(body.model) ? body.model : 'claude-sonnet-4-6';
 
+          // Extended thinking: opt-in via thinkingBudget. Anthropic API requires
+          // budget_tokens >= 1024 and < max_tokens. When enabled we bump max_tokens to
+          // accommodate both thinking budget AND the response budget. temperature must be
+          // 1.0 when thinking is enabled (per Anthropic API requirements).
+          const thinkingBudget = body.thinkingBudget && body.thinkingBudget >= 1024 ? body.thinkingBudget : null;
+          const requestBody: Record<string, unknown> = {
+            model,
+            max_tokens: thinkingBudget ? thinkingBudget + 4000 : 4000,
+            temperature: thinkingBudget ? 1 : 0,
+            system: body.system,
+            messages: [{ role: 'user', content: body.prompt }],
+          };
+          if (thinkingBudget) {
+            requestBody.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+          }
+
           const resp = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: {
@@ -264,13 +319,7 @@ export default {
               'anthropic-version': '2023-06-01',
               'content-type': 'application/json',
             },
-            body: JSON.stringify({
-              model,
-              max_tokens: 4000,
-              temperature: 0,
-              system: body.system,
-              messages: [{ role: 'user', content: body.prompt }],
-            }),
+            body: JSON.stringify(requestBody),
           });
 
           if (!resp.ok) {
@@ -1569,12 +1618,20 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   const cachedVix = await env.ALERTS.get('cache:vix_value');
   if (cachedVix) vixValue = parseFloat(cachedVix);
   try {
-    const vixResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/%5EVIX?interval=1d&range=5d`);
+    const vixResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/%5EVIX?interval=1d&range=5d`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (vixResp.ok) {
       const vixData = await vixResp.json() as any;
-      const closes = vixData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter((v: any) => v != null);
-      if (closes?.length) {
-        vixValue = closes[closes.length - 1];
+      const result = vixData?.chart?.result?.[0];
+      const ts: number[] = result?.timestamp || [];
+      const closes: (number|null)[] = result?.indicators?.quote?.[0]?.close || [];
+      // Build paired (time, close) pairs, then drop in-progress so we use the latest CLOSED
+      // daily VIX (yesterday's close during market hours, today's close after market close).
+      // This matches BacktestEngine's training canonical: closing VIX as of the date.
+      const pairs = ts.map((t, i) => ({ time: t * 1000, close: closes[i] }))
+                      .filter(p => p.close != null) as { time: number; close: number }[];
+      const closedPairs = dropInProgress(pairs, '1d');
+      if (closedPairs.length) {
+        vixValue = closedPairs[closedPairs.length - 1].close;
         await env.ALERTS.put('cache:vix_value', String(vixValue), { expirationTtl: 3600 });
       }
     }
@@ -1598,7 +1655,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   const hasStocks = config.symbols.some((s: string) => !s.endsWith('USDT'));
   if (hasStocks) {
     try {
-      const spyResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/SPY?interval=1d&range=6mo`);
+      const spyResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/SPY?interval=1d&range=6mo`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
       if (spyResp.ok) {
         const spyData = await spyResp.json() as any;
         const result = spyData?.chart?.result?.[0];
@@ -1609,6 +1666,9 @@ async function checkDeviceScores(env: Env, deviceId: string) {
             spyCandles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
           }
         }
+        // Drop in-progress to match TSLA's daily candles (also dropped in fetchScoreCandles).
+        // Without this, beta and relStrength computations correlate misaligned dates.
+        spyCandles = dropInProgress(spyCandles, '1d');
       }
     } catch {}
   }
@@ -1617,7 +1677,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   let iwmCandles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] = [];
   if (hasStocks) {
     try {
-      const iwmResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/IWM?interval=1d&range=1mo`);
+      const iwmResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/IWM?interval=1d&range=1mo`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
       if (iwmResp.ok) {
         const iwmData = await iwmResp.json() as any;
         const result = iwmData?.chart?.result?.[0];
@@ -1628,6 +1688,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
             iwmCandles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
           }
         }
+        iwmCandles = dropInProgress(iwmCandles, '1d');
       }
     } catch {}
   }
@@ -1635,7 +1696,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   // Fetch VIX3M for term structure ratio
   let vix3mPrice = 0;
   try {
-    const vix3mResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/%5EVIX3M?interval=1d&range=5d`);
+    const vix3mResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/%5EVIX3M?interval=1d&range=5d`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (vix3mResp.ok) {
       const vix3mData = await vix3mResp.json() as any;
       const closes = vix3mData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
@@ -1646,7 +1707,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
   // Fetch DXY candles for momentum (full 1mo for 5-day lookback)
   let dxyCandles: { time: number; open: number; high: number; low: number; close: number; volume: number }[] = [];
   try {
-    const dxyResp2 = await fetch(`${YAHOO_BASE}/v8/finance/chart/DX-Y.NYB?interval=1d&range=1mo`);
+    const dxyResp2 = await fetch(`${YAHOO_BASE}/v8/finance/chart/DX-Y.NYB?interval=1d&range=1mo`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     if (dxyResp2.ok) {
       const dxyData2 = await dxyResp2.json() as any;
       const result = dxyData2?.chart?.result?.[0];
@@ -1657,6 +1718,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
           dxyCandles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
         }
       }
+      dxyCandles = dropInProgress(dxyCandles, '1d');
     }
   } catch {}
 
@@ -1672,7 +1734,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
     }
     for (const etf of neededETFs) {
       try {
-        const etfResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${etf}?interval=1d&range=1mo`);
+        const etfResp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${etf}?interval=1d&range=1mo`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (etfResp.ok) {
           const etfData = await etfResp.json() as any;
           const result = etfData?.chart?.result?.[0];
@@ -1684,7 +1746,7 @@ async function checkDeviceScores(env: Env, deviceId: string) {
               candles.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
             }
           }
-          sectorETFCandlesMap[etf] = candles;
+          sectorETFCandlesMap[etf] = dropInProgress(candles, '1d');
         }
       } catch {}
     }
@@ -1866,23 +1928,10 @@ async function checkDeviceScores(env: Env, deviceId: string) {
             }
           } catch {}
         }
-        // Aggregate 1H → 4H
+        // Aggregate 1H → 4H via shared helper (mirrors iOS CandleAggregator.aggregate1HTo4H).
+        // Test coverage: marketscope-worker/test/aggregation.test.ts.
         if (oneHCandles.length > 0) {
-          const grouped: Record<number, FullCandle[]> = {};
-          for (const c of oneHCandles) {
-            const bucket = Math.floor(c.time / (4 * 3600 * 1000)) * (4 * 3600 * 1000);
-            if (!grouped[bucket]) grouped[bucket] = [];
-            grouped[bucket].push(c);
-          }
-          fourHCandles = Object.keys(grouped).sort().map(k => {
-            const bars = grouped[+k];
-            return {
-              time: +k, open: bars[0].open, high: Math.max(...bars.map(b => b.high)),
-              low: Math.min(...bars.map(b => b.low)), close: bars[bars.length - 1].close,
-              volume: bars.reduce((s, b) => s + b.volume, 0),
-            };
-          });
-          fourHCandles = dropInProgress(fourHCandles, '4h');
+          fourHCandles = dropInProgress(aggregate1HTo4H_ET(oneHCandles), '4h');
         }
         // Archive stock 4H + 1H to D1 (matches what's already done for crypto at line ~1610).
         // Without these, the BacktestEngine archive becomes stale at the recent end and forces a
@@ -2048,8 +2097,8 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       newProbs[symbol] = mlProb;
 
       // Debug: dump features for comparison with iOS
-      if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT') {
-        await env.ALERTS.put(`debug:${symbol.toLowerCase()}_features`, JSON.stringify(features), { expirationTtl: 3600 });
+      if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT' || symbol === 'TSLA' || symbol === 'NVDA') {
+        await env.ALERTS.put(`debug:${symbol.toLowerCase()}_features`, JSON.stringify({ features, mlProbability: mlProb }), { expirationTtl: 3600 });
       }
 
       // ML quality gate — fire at scheduled hours AND when ML >= threshold AND cooldown passed.

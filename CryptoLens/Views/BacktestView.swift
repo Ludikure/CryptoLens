@@ -23,6 +23,14 @@ struct BacktestView: View {
                 }
                 .disabled(engine.isRunning)
 
+                #if DEBUG
+                Button(engine.isRunning ? "Running..." : "Capture Parity Fixture") {
+                    Task { await engine.run(symbol: symbol, startDate: startDate, endDate: endDate, captureFixture: true) }
+                }
+                .disabled(engine.isRunning)
+                .foregroundStyle(.purple)
+                #endif
+
                 Button(engine.isRunning ? "Running..." : "Export All") {
                     Task { await engine.runAllAndExport(startDate: startDate, endDate: endDate) }
                 }

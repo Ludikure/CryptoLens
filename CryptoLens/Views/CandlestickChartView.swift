@@ -15,7 +15,17 @@ struct CandlestickChartView: View {
     @State private var showOverlayMenu = false
 
     private var currentResult: IndicatorResult { results[selectedTab] }
-    private var candles: [Candle] { currentResult.candles }
+    /// Closed candles + the in-progress candle appended at the end (when present).
+    /// The canvas uses `liveIndex` to render the trailing bar with a distinct visual style.
+    private var candles: [Candle] {
+        if let live = currentResult.inProgressCandle {
+            return currentResult.candles + [live]
+        }
+        return currentResult.candles
+    }
+    private var liveIndex: Int? {
+        currentResult.inProgressCandle == nil ? nil : currentResult.candles.count
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -77,6 +87,7 @@ struct CandlestickChartView: View {
             if candles.count >= 2 {
                 CandlestickCanvas(
                     candles: candles,
+                    liveIndex: liveIndex,
                     ema20Series: showEMA ? currentResult.ema20Series : [],
                     ema50Series: showEMA ? currentResult.ema50Series : [],
                     ema200Series: showEMA ? currentResult.ema200Series : [],
@@ -116,6 +127,9 @@ struct CandlestickChartView: View {
 
 private struct CandlestickCanvas: View {
     let candles: [Candle]
+    /// Index in `candles` of the in-progress (still forming) bar. Rendered with a hollow
+    /// outline and reduced opacity to signal that the values are not yet final.
+    var liveIndex: Int? = nil
     let ema20Series: [Double]
     let ema50Series: [Double]
     let ema200Series: [Double]
@@ -272,7 +286,10 @@ private struct CandlestickCanvas: View {
                     for (localIdx, candle) in visibleCandles.enumerated() {
                         let x = step * CGFloat(localIdx) + step / 2
                         let isUp = candle.close >= candle.open
-                        let color: Color = isUp ? .green : .red
+                        let baseColor: Color = isUp ? .green : .red
+                        let globalIdx = visibleRange.lowerBound + localIdx
+                        let isLive = (globalIdx == liveIndex)
+                        let color = isLive ? baseColor.opacity(0.6) : baseColor
 
                         // Wick
                         var wick = Path()
@@ -280,11 +297,16 @@ private struct CandlestickCanvas: View {
                         wick.addLine(to: CGPoint(x: x, y: priceY(candle.low, height: chartH)))
                         context.stroke(wick, with: .color(color), lineWidth: 1)
 
-                        // Body
+                        // Body — filled for closed bars, outlined for the in-progress bar.
                         let bodyTop = priceY(max(candle.open, candle.close), height: chartH)
                         let bodyBot = priceY(min(candle.open, candle.close), height: chartH)
                         let bodyH = max(1, bodyBot - bodyTop)
-                        context.fill(Path(CGRect(x: x - candleWidth / 2, y: bodyTop, width: candleWidth, height: bodyH)), with: .color(color))
+                        let bodyRect = CGRect(x: x - candleWidth / 2, y: bodyTop, width: candleWidth, height: bodyH)
+                        if isLive {
+                            context.stroke(Path(bodyRect), with: .color(color), lineWidth: 1.5)
+                        } else {
+                            context.fill(Path(bodyRect), with: .color(color))
+                        }
                     }
 
                     // Pattern annotation on last visible candle

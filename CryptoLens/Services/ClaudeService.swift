@@ -35,11 +35,26 @@ class ClaudeService: AIProvider {
         PushService.addAuthHeaders(&request)
         request.timeoutInterval = 60  // AI calls can be slow
 
-        let body: [String: Any] = [
-            "model": model,
+        // Parse "@thinking-N" suffix from model id. The bare model name goes to the API as-is;
+        // the budget is forwarded as a separate field that the worker translates into Anthropic's
+        // `thinking: { type: "enabled", budget_tokens: N }` parameter.
+        var apiModel = model
+        var thinkingBudget: Int? = nil
+        if let atRange = model.range(of: "@thinking-") {
+            apiModel = String(model[..<atRange.lowerBound])
+            if let budget = Int(model[atRange.upperBound...]) {
+                thinkingBudget = budget
+            }
+        }
+
+        var body: [String: Any] = [
+            "model": apiModel,
             "system": system,
             "prompt": prompt,
         ]
+        if let budget = thinkingBudget {
+            body["thinkingBudget"] = budget
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -54,7 +69,8 @@ class ClaudeService: AIProvider {
         }
         if httpResp.statusCode == 429 {
             await MainActor.run { ConnectionStatus.shared.ai = .error }
-            throw ClaudeError.apiError(429, "Rate limited. Try again in a few minutes.")
+            let detail = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw ClaudeError.apiError(429, detail ?? "Rate limited. Try again in a few minutes.")
         }
         guard (200...299).contains(httpResp.statusCode) else {
             let errBody = String(data: data, encoding: .utf8) ?? "Unknown error"
@@ -62,12 +78,16 @@ class ClaudeService: AIProvider {
             throw ClaudeError.apiError(httpResp.statusCode, errBody)
         }
 
-        // Worker returns the raw Claude API response
+        // Worker returns the raw Claude API response. With extended thinking enabled, the
+        // `content` array contains both `{type: "thinking", thinking: "..."}` blocks AND
+        // `{type: "text", text: "..."}` blocks — pick the text block, ignore thinking.
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]],
-              let first = content.first,
-              let text = first["text"] as? String
+              let content = json["content"] as? [[String: Any]]
         else {
+            throw ClaudeError.decodingError
+        }
+        let textBlock = content.first(where: { ($0["type"] as? String) == "text" }) ?? content.first
+        guard let text = textBlock?["text"] as? String else {
             throw ClaudeError.decodingError
         }
 

@@ -132,6 +132,9 @@ struct IndicatorResult: Identifiable, Codable {
     let gap: GapResult?
     let addv: ADDVResult?
     let candles: [Candle]
+    /// The currently-forming candle (closeTime > now). Excluded from indicator math
+    /// so values stay stable; included on chart so users see the live bar.
+    let inProgressCandle: Candle?
     // Series data for chart sub-panels
     let rsiSeries: [Double]
     let stochKSeries: [Double]
@@ -154,7 +157,7 @@ struct IndicatorResult: Identifiable, Codable {
     var volScalar: Double?
     var mlWinProbability: Double?   // v9 goodR: calibrated P(>= 1.5 ATR favorable move in 24h)
 
-    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil, momentumOverride: String? = nil, biasScore: Int = 0, marketStructure: MarketStructureResult? = nil, volScalar: Double? = nil) {
+    init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], inProgressCandle: Candle? = nil, rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil, momentumOverride: String? = nil, biasScore: Int = 0, marketStructure: MarketStructureResult? = nil, volScalar: Double? = nil) {
         self.id = UUID()
         self.timeframe = timeframe
         self.label = label
@@ -185,6 +188,7 @@ struct IndicatorResult: Identifiable, Codable {
         self.gap = gap
         self.addv = addv
         self.candles = candles
+        self.inProgressCandle = inProgressCandle
         self.rsiSeries = rsiSeries
         self.stochKSeries = stochKSeries
         self.stochDSeries = stochDSeries
@@ -238,6 +242,7 @@ struct IndicatorResult: Identifiable, Codable {
         gap = try container.decodeIfPresent(GapResult.self, forKey: .gap)
         addv = try container.decodeIfPresent(ADDVResult.self, forKey: .addv)
         candles = (try? container.decodeIfPresent([Candle].self, forKey: .candles)) ?? []
+        inProgressCandle = try? container.decodeIfPresent(Candle.self, forKey: .inProgressCandle)
         rsiSeries = (try? container.decodeIfPresent([Double].self, forKey: .rsiSeries)) ?? []
         stochKSeries = (try? container.decodeIfPresent([Double].self, forKey: .stochKSeries)) ?? []
         stochDSeries = (try? container.decodeIfPresent([Double].self, forKey: .stochDSeries)) ?? []

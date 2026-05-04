@@ -56,9 +56,14 @@ class BacktestEngine: ObservableObject {
         return candles.isEmpty ? nil : candles
     }
 
-    func run(symbol: String, startDate: Date, endDate: Date, sharedData: SharedBacktestData? = nil) async {
+    /// Captured at the LAST evaluated bar when `run` is invoked with `captureFixture: true`.
+    /// Read by run()'s tail to write a JSON fixture for worker parity testing.
+    @Published var lastCapturedFixture: ParityFixture? = nil
+
+    func run(symbol: String, startDate: Date, endDate: Date, sharedData: SharedBacktestData? = nil, captureFixture: Bool = false) async {
         isRunning = true
         progress = 0
+        if captureFixture { lastCapturedFixture = nil }
         statusMessage = "Fetching historical data..."
         dataPoints = []
 
@@ -66,7 +71,10 @@ class BacktestEngine: ObservableObject {
         let market: Market = isCrypto ? .crypto : .stock
 
         do {
-            let warmupDays: TimeInterval = 220 * 86400
+            // 365 days ensures single-day backtests (start = end = today) still pass the
+            // 250-bar guard below. 365 calendar days = ~260 trading days for stocks, > 250.
+            // 220 days previously failed for single-day runs and silently left stale CSVs.
+            let warmupDays: TimeInterval = 365 * 86400
             let fetchStart = startDate.addingTimeInterval(-warmupDays)
 
             var dailyCandles: [Candle]
@@ -93,7 +101,12 @@ class BacktestEngine: ObservableObject {
             // could lag by however long since the last manual BacktestEngine run.
             // The previous "last bar within N days" check passed on this case and silently fed
             // the model data with gaps.
-            let stalenessLimit: TimeInterval = 7 * 86400
+            // 1-day threshold — if archive's last bar isn't yesterday-or-newer relative to
+            // the requested endDate, we re-fetch from Yahoo/Binance. The previous 7-day window
+            // accommodated weekend/holiday gaps but caused single-day backtests run on Mondays
+            // to miss the prior Thu/Fri because Friday's archive was 3 days < 7 days old and
+            // considered "fresh."
+            let stalenessLimit: TimeInterval = 1 * 86400
             func archiveHasGap(_ candles: [Candle], windowStart: Date, windowEnd: Date) -> Bool {
                 let relevant = candles.filter { $0.time >= windowStart && $0.time <= windowEnd }
                 guard !relevant.isEmpty else { return true }
@@ -368,7 +381,11 @@ class BacktestEngine: ObservableObject {
             // Funding rate history for slope (last 4 bars)
             var fundingHistory = [Double]()
 
-            for i in evalStartIndex..<(fourHCandles.count - 6) {
+            // Was `- 6` to leave 6 bars of forward data for outcome evaluation. Reduced to `- 1`
+            // so single-day diagnostic runs include features through the last closed bar; trailing
+            // rows have garbage outcome columns when there's <6 bars of forward data, but the
+            // feature columns are still canonical.
+            for i in evalStartIndex..<(fourHCandles.count - 1) {
                 let evalTime = fourHCandles[i].time
 
                 // Advance indices to current eval time (monotonically increasing)
@@ -426,7 +443,10 @@ class BacktestEngine: ObservableObject {
                 }
 
                 let price = fourHCandles[i].close
-                let forward6 = Array(fourHCandles[(i+1)...(i+6)])
+                // Forward 6-bar window for outcome simulation. Clamp to available data so
+                // diagnostic single-day runs don't crash on the trailing rows.
+                let fwdEnd = min(i + 6, fourHCandles.count - 1)
+                let forward6: [Candle] = i + 1 <= fwdEnd ? Array(fourHCandles[(i+1)...fwdEnd]) : []
                 let maxHigh = forward6.map(\.high).max() ?? price
                 let maxLow = forward6.map(\.low).min() ?? price
 
@@ -941,10 +961,13 @@ class BacktestEngine: ObservableObject {
                 hAdxHistory.append(fourHResult.adx?.adx ?? 0)
                 hMacdHistHistory.append(fourHResult.macd?.histogram ?? 0)
 
-                // Continuous forward returns (direction-independent)
-                let p1 = fourHCandles[i + 1].close
-                let p3 = fourHCandles[i + 3].close
-                let p6 = fourHCandles[i + 6].close
+                // Continuous forward returns (direction-independent). For diagnostic single-day
+                // runs the trailing rows may not have 6 bars of forward data; clamp to available
+                // bar (caller can ignore p1/p3/p6 columns on those rows).
+                let lastIdx = fourHCandles.count - 1
+                let p1 = fourHCandles[min(i + 1, lastIdx)].close
+                let p3 = fourHCandles[min(i + 3, lastIdx)].close
+                let p6 = fourHCandles[min(i + 6, lastIdx)].close
                 let fwdUp = (maxHigh - price) / price * 100
                 let fwdDown = (price - maxLow) / price * 100
                 let simATRForR = fourHResult.atr?.atr ?? (price * 0.015)
@@ -985,6 +1008,110 @@ class BacktestEngine: ObservableObject {
                 )
                 points.append(point)
 
+                // Parity fixture capture — only on LAST iteration when caller requested it.
+                // Captures inputs (candle slices + auxiliary state) and outputs (the MLFeatures
+                // dict + ML probability) so the worker test can replay exactly the same scenario.
+                if captureFixture && i == fourHCandles.count - 2 {
+                    // Drop in-progress to match what computeAll() actually consumed (it drops
+                    // internally before computing indicators). Without this, fixture stores
+                    // slices that include the in-progress bar, causing every daily/4H/1H
+                    // indicator to diverge between worker (uses all bars) and iOS canonical
+                    // (used N-1 bars). Worker's production cron also drops before reaching
+                    // computeAllFeatures, so post-drop fixture matches both sides' real inputs.
+                    let dailySlice = IndicatorEngine.droppingInProgress(
+                        Array(dailyCandles[max(0, dailyIdx - 300)..<dailyIdx]), timeframe: "1d")
+                    let fourHSlice = IndicatorEngine.droppingInProgress(
+                        Array(fourHCandles[max(0, i + 1 - 300)...i]), timeframe: "4h")
+                    let oneHSlice = IndicatorEngine.droppingInProgress(
+                        Array(oneHCandles[max(0, oneHIdx - 300)..<oneHIdx]), timeframe: "1h")
+                    let spySlice = Array(spyCandles.prefix(spyIdx))
+                    let iwmSlice = Array(iwmCandles.prefix(iwmIdx))
+                    let sectorSlice = Array(sectorCandles.prefix(sectorIdx))
+                    let dxySlice: [Candle] = {
+                        guard let lastIdx = dxyCandles.lastIndex(where: { $0.time <= evalTime }) else { return [] }
+                        return Array(dxyCandles.prefix(lastIdx + 1))
+                    }()
+                    let ethBtcSlice = Array(ethBtcCandles.prefix(ethBtcIdx))
+
+                    // VIX3M not directly tracked here; default to 0.
+                    let vix3m: Double = 0
+
+                    let prevSnap: ParityPrevSnapshot? = (dRsiHistory.last != nil) ? ParityPrevSnapshot(
+                        dRsi: dRsiHistory.last ?? 50,
+                        dAdx: dAdxHistory.last ?? 0,
+                        hRsi: hRsiHistory.last ?? 50,
+                        hAdx: hAdxHistory.last ?? 0,
+                        hMacdHist: hMacdHistHistory.last ?? 0,
+                        hRsiD1: prevHRsiDelta1,
+                        hMacdD1: prevHMacdHistDelta1,
+                        dAdxD1: prevDAdxDelta1
+                    ) : nil
+
+                    let derivFix = ParityDerivSignals(
+                        fundingSignal: Double(derivCtx?.fundingSignal ?? 0),
+                        oiSignal: Double(derivCtx?.oiSignal ?? 0),
+                        takerSignal: Double(derivCtx?.takerSignal ?? 0),
+                        crowdingSignal: Double(derivCtx?.crowdingSignal ?? 0),
+                        derivativesCombined: Double(derivCtx?.combinedSignal ?? 0),
+                        fundingRateRaw: derivCtx?.fundingRateRaw ?? 0,
+                        oiChangePct: derivCtx?.oiChangePct ?? 0,
+                        takerRatioRaw: derivCtx?.takerRatioRaw ?? 1.0,
+                        longPctRaw: Double(derivCtx?.longPctRaw ?? 50)
+                    )
+
+                    let day = Calendar.current.startOfDay(for: evalTime)
+                    let fgValue = Double(fearGreedHistory[day] ?? 50)
+                    let sentimentFix = ParitySentiment(
+                        fearGreedIndex: fgValue,
+                        fearGreedZone: Double(FearGreedService.zone(for: Int(fgValue))),
+                        ethBtcRatio: ethBtcIdx > 0 ? ethBtcCandles[ethBtcIdx - 1].close : 0,
+                        ethBtcDelta6: {
+                            guard ethBtcIdx >= 7 else { return 0.0 }
+                            let cur = ethBtcCandles[ethBtcIdx - 1].close
+                            let prev = ethBtcCandles[ethBtcIdx - 7].close
+                            guard prev > 0 else { return 0.0 }
+                            return (cur - prev) / prev * 100
+                        }(),
+                        basisPct: 0
+                    )
+
+                    let featureDict = MLScoring.dumpFeatureDict(mlf)
+                    let mlProb = MLScoring.predict(features: mlf) ?? 0.0
+
+                    let isoFmt = ISO8601DateFormatter()
+                    isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                    let evalStr = isoFmt.string(from: evalTime)
+
+                    self.lastCapturedFixture = ParityFixture(
+                        name: "\(symbol) @ \(evalStr)",
+                        symbol: symbol,
+                        isCrypto: isCrypto,
+                        evalTimestampMs: Int64(evalTime.timeIntervalSince1970 * 1000),
+                        inputs: ParityFixtureInputs(
+                            dailyCandles: dailySlice.map(ParityCandle.init),
+                            fourHCandles: fourHSlice.map(ParityCandle.init),
+                            oneHCandles: oneHSlice.map(ParityCandle.init),
+                            spyCandles: spySlice.map(ParityCandle.init),
+                            iwmCandles: iwmSlice.map(ParityCandle.init),
+                            sectorEtfCandles: sectorSlice.map(ParityCandle.init),
+                            dxyCandles: dxySlice.map(ParityCandle.init),
+                            ethBtcCandles: ethBtcSlice.map(ParityCandle.init),
+                            vix3mPrice: vix3m,
+                            macroVix: vixCandles.last(where: { $0.time <= evalTime })?.close ?? 20,
+                            macroDxyAboveEma20: dxyAbove ? 1 : 0,
+                            derivSignals: derivFix,
+                            sentiment: sentimentFix,
+                            prevSnapshot: prevSnap,
+                            darkPoolRatio: nil,
+                            darkPoolZScore: nil
+                        ),
+                        expected: ParityFixtureExpected(
+                            features: featureDict,
+                            mlProbability: mlProb
+                        )
+                    )
+                }
+
                 let progressIdx = i - evalStartIndex
                 if progressIdx % 10 == 0 {
                     progress = Double(progressIdx) / Double(max(1, totalBars))
@@ -1001,6 +1128,44 @@ class BacktestEngine: ObservableObject {
             result?.sweepResults = runSweep(points: points, oneHCandles: oneHCandles)
 
             statusMessage = "Complete: \(points.count) bars evaluated"
+
+            // Parity fixture write — dumps captured fixture to ml_exports/fixtures/.
+            // User copies the file into marketscope-worker/test/fixtures/backtest-canonical/
+            // and commits to git so the worker test can replay this exact scenario.
+            if captureFixture, let fixture = lastCapturedFixture {
+                let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    .appendingPathComponent("ml_exports", isDirectory: true)
+                    .appendingPathComponent("fixtures", isDirectory: true)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let dateFmt = DateFormatter()
+                dateFmt.dateFormat = "yyyy-MM-dd"
+                dateFmt.timeZone = TimeZone(identifier: "UTC")
+                let dateStr = dateFmt.string(from: Date(timeIntervalSince1970: TimeInterval(fixture.evalTimestampMs / 1000)))
+                let fileURL = dir.appendingPathComponent("\(symbol)_\(dateStr).json")
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                if let data = try? encoder.encode(fixture) {
+                    try? data.write(to: fileURL)
+                    #if DEBUG
+                    print("[Backtest] Parity fixture written: \(fileURL.path)")
+                    #endif
+                    statusMessage = "Fixture saved: \(fileURL.lastPathComponent)"
+                }
+            }
+
+            // Single-symbol runs auto-save CSV to ml_exports/ alongside the batch path's
+            // outputs. Lets diagnostic tools read the canonical features without using
+            // the share-sheet workflow. Mirrors batch logic at line ~1236.
+            if let csv = exportCSV() {
+                let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    .appendingPathComponent("ml_exports", isDirectory: true)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let fileURL = dir.appendingPathComponent("\(symbol).csv")
+                try? csv.write(to: fileURL, atomically: true, encoding: .utf8)
+                #if DEBUG
+                print("[Backtest] Single-symbol CSV written: \(fileURL.path)")
+                #endif
+            }
         } catch {
             statusMessage = "Error: \(error.localizedDescription)"
         }
