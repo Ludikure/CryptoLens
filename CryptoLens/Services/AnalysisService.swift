@@ -512,38 +512,38 @@ class AnalysisService: ObservableObject {
                 return count > 0 ? sum / Double(count) : 0.5
             }()
 
-            // ML win probability — computed from Daily + 4H + 1H features
+            // ML win probability — worker is the single source of truth (same prediction
+            // drives notifications). nil on cache miss / network failure; UI handles.
             var tf1ML = tf1
-            let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
-                                                   isCrypto: market == .crypto, derivCtx: derivData.map {
-                DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            }, symbol: symbol, vixValue: macroSnapshot?.vix,
-               fearGreedValue: fearGreed?.value,
-               ethBtcRatio: ethBtcPrice, ethBtcDelta: _ethBtcDelta,
-               dRsiDelta: _dRsiDelta, dAdxDelta: _dAdxDelta,
-               hRsiDelta: _hRsiDelta, hAdxDelta: _hAdxDelta,
-               hMacdHistDelta: _hMacdHistDelta,
-               barsSinceRegimeChange: _barsSinceRegime,
-               hRsiDelta1: _hRsiDelta1, hMacdHistDelta1: _hMacdHistDelta1,
-               dRsiDelta1: _dRsiDelta1,
-               hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel,
-               basisPct: _basisPct,
-               spyCandles: spyDailyCandles,
-               iwmCandles: iwmDailyCandles,
-               dailyCandles: fullDailyCandles,
-               sectorETFCandles: BacktestEngine.sectorETF(for: symbol).flatMap { sectorETFCandles[$0] } ?? [],
-               dxyCandles: dxyDailyCandles,
-               vix3mPrice: vix3mPrice,
-               darkPool: _darkPool,
-               oiPriceInteraction: _oiPriceInteraction, fundingSlope: _fundingSlope,
-               bodyWickRatio: _bodyWickRatio)
-            // Prefer the worker's cron-cached prediction so in-app ML matches notifications
-            // exactly (both come from the same worker code path on the same KV blob). Local
-            // MLScoring.predict stays as a fallback for fixtures the cron hasn't reached yet
-            // (404) or transient network failures.
-            tf1ML.mlWinProbability = await fetchWorkerMLOrLocal(symbol: symbol, mlFeatures: mlFeatures)
+            tf1ML.mlWinProbability = await fetchWorkerML(symbol: symbol)
             #if DEBUG
+            // Local feature dump for parity-vs-canonical investigations only. Constructed in
+            // DEBUG builds so we can compare what the iOS live path would have produced vs
+            // the worker's authoritative value. Production never reaches this branch.
             if ["BTCUSDT", "ETHUSDT", "TSLA", "NVDA"].contains(symbol) {
+                let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
+                                                       isCrypto: market == .crypto, derivCtx: derivData.map {
+                    DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
+                }, symbol: symbol, vixValue: macroSnapshot?.vix,
+                   fearGreedValue: fearGreed?.value,
+                   ethBtcRatio: ethBtcPrice, ethBtcDelta: _ethBtcDelta,
+                   dRsiDelta: _dRsiDelta, dAdxDelta: _dAdxDelta,
+                   hRsiDelta: _hRsiDelta, hAdxDelta: _hAdxDelta,
+                   hMacdHistDelta: _hMacdHistDelta,
+                   barsSinceRegimeChange: _barsSinceRegime,
+                   hRsiDelta1: _hRsiDelta1, hMacdHistDelta1: _hMacdHistDelta1,
+                   dRsiDelta1: _dRsiDelta1,
+                   hRsiAccel: _hRsiAccel, hMacdAccel: _hMacdAccel, dAdxAccel: _dAdxAccel,
+                   basisPct: _basisPct,
+                   spyCandles: spyDailyCandles,
+                   iwmCandles: iwmDailyCandles,
+                   dailyCandles: fullDailyCandles,
+                   sectorETFCandles: BacktestEngine.sectorETF(for: symbol).flatMap { sectorETFCandles[$0] } ?? [],
+                   dxyCandles: dxyDailyCandles,
+                   vix3mPrice: vix3mPrice,
+                   darkPool: _darkPool,
+                   oiPriceInteraction: _oiPriceInteraction, fundingSlope: _fundingSlope,
+                   bodyWickRatio: _bodyWickRatio)
                 var dict = MLScoring.dumpFeatureDict(mlFeatures)
                 dict["mlProbability"] = tf1ML.mlWinProbability ?? -1
                 if let data = try? JSONSerialization.data(withJSONObject: dict, options: .sortedKeys),
@@ -682,65 +682,10 @@ class AnalysisService: ObservableObject {
                 crossAsset = nil
             }
 
-            var (tf1, tf2, tf3, fullDailyCandles2) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
+            var (tf1, tf2, tf3, _) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
 
-            // ML win probability for the AI prompt — use same snapshot as refresh path
-            let prevFG = resultsBySymbol[symbol]?.fearGreed?.value
-            let snap2 = prevMLSnapshots[symbol]
-            let _basisPct2 = market == .crypto ? (try? await binance.fetchPremiumIndex(symbol: symbol)) ?? 0 : 0.0
-            let mlFeatures2 = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
-                                                    isCrypto: market == .crypto, derivCtx: earlyDerivData.map {
-                DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
-            }, symbol: symbol, vixValue: macroSnapshot?.vix, crossAsset: crossAsset,
-               fearGreedValue: prevFG,
-               ethBtcRatio: ethBtcPrice, ethBtcDelta: ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0,
-               dRsiDelta: snap2.map { (tf1.rsi ?? 50) - $0.dRsi } ?? 0,
-               dAdxDelta: snap2.map { (tf1.adx?.adx ?? 0) - $0.dAdx } ?? 0,
-               hRsiDelta: snap2.map { (tf2.rsi ?? 50) - $0.hRsi } ?? 0,
-               hAdxDelta: snap2.map { (tf2.adx?.adx ?? 0) - $0.hAdx } ?? 0,
-               hMacdHistDelta: snap2.map { (tf2.macd?.histogram ?? 0) - $0.hMacdHist } ?? 0,
-               hRsiDelta1: snap2.map { (tf2.rsi ?? 50) - $0.hRsi } ?? 0,
-               hMacdHistDelta1: snap2.map { (tf2.macd?.histogram ?? 0) - $0.hMacdHist } ?? 0,
-               dRsiDelta1: snap2.map { (tf1.rsi ?? 50) - $0.dRsi } ?? 0,
-               hRsiAccel: snap2.map { ((tf2.rsi ?? 50) - $0.hRsi) - $0.hRsiD1 } ?? 0,
-               hMacdAccel: snap2.map { ((tf2.macd?.histogram ?? 0) - $0.hMacdHist) - $0.hMacdD1 } ?? 0,
-               dAdxAccel: snap2.map { ((tf1.adx?.adx ?? 0) - $0.dAdx) - $0.dAdxD1 } ?? 0,
-               basisPct: _basisPct2,
-               spyCandles: spyDailyCandles,
-               iwmCandles: iwmDailyCandles,
-               dailyCandles: fullDailyCandles2,
-               sectorETFCandles: BacktestEngine.sectorETF(for: symbol).flatMap { sectorETFCandles[$0] } ?? [],
-               dxyCandles: dxyDailyCandles,
-               vix3mPrice: vix3mPrice,
-               darkPool: market == .stock ? await fetchDarkPool(symbol: symbol) : nil,
-               oiPriceInteraction: {
-                   guard market == .crypto, let d = earlyDerivData else { return 0.0 }
-                   let oiPct = d.oiChange24h ?? 0
-                   let candles = tf2.candles
-                   guard candles.count >= 2 else { return 0.0 }
-                   let pricePct = (candles.last!.close - candles[candles.count - 2].close) / candles[candles.count - 2].close * 100
-                   return oiPct * pricePct
-               }(),
-               fundingSlope: {
-                   guard market == .crypto else { return 0.0 }
-                   let hist = fundingHistory[symbol] ?? []
-                   guard hist.count >= 3 else { return 0.0 }
-                   let n = Double(hist.count)
-                   let xMean = (n - 1) / 2.0
-                   let yMean = hist.reduce(0, +) / n
-                   var num = 0.0, den = 0.0
-                   for (j, v) in hist.enumerated() { let x = Double(j) - xMean; num += x * (v - yMean); den += x * x }
-                   return den > 0 ? num / den : 0
-               }(),
-               bodyWickRatio: {
-                   let candles = tf2.candles
-                   let n = min(5, candles.count)
-                   guard n > 0 else { return 0.5 }
-                   var sum = 0.0, count = 0
-                   for c in candles.suffix(n) { let range = c.high - c.low; if range > 0 { sum += abs(c.close - c.open) / range; count += 1 } }
-                   return count > 0 ? sum / Double(count) : 0.5
-               }())
-            tf1.mlWinProbability = await fetchWorkerMLOrLocal(symbol: symbol, mlFeatures: mlFeatures2)
+            // ML win probability for the AI prompt — worker is the single source of truth.
+            tf1.mlWinProbability = await fetchWorkerML(symbol: symbol)
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
@@ -1561,15 +1506,18 @@ class AnalysisService: ObservableObject {
         configure(provider: type, apiKey: "", model: model)
     }
 
-    /// Fetches the worker's cron-cached prediction; falls back to local `MLScoring.predict`
-    /// on 404 (cron hasn't seen this symbol yet) or any network/decode failure. Keeping the
-    /// local path active until cache warm-up means the user never sees a missing ML score.
-    private func fetchWorkerMLOrLocal(symbol: String, mlFeatures: MLFeatures) async -> Double? {
+    /// Fetches the worker's cron-cached prediction. Returns nil on cache miss or network
+    /// failure — the UI then shows "—" for ML, matching what would happen if the cron
+    /// hadn't run yet anyway. We deliberately do NOT fall back to local `MLScoring.predict`:
+    /// the live iOS feature-build path drifted slightly from BacktestEngine canonical, so
+    /// a local fallback would display numbers that don't match notifications. Worker is the
+    /// only source of truth for displayed ML.
+    private func fetchWorkerML(symbol: String) async -> Double? {
         do {
             let prediction = try await WorkerMLService.predict(symbol: symbol)
             return prediction.probability
         } catch {
-            return MLScoring.predict(features: mlFeatures)
+            return nil
         }
     }
 }
