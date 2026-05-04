@@ -805,6 +805,23 @@ export default {
     }
 
     // === ML Model Version (R2) ===
+    // === ML Prediction Read (cron-cached) ===
+    // Returns the latest cached ML probability + features for a symbol. Cache is populated
+    // by the per-minute cron via `ml_pred:<symbol>` KV keys (5-min TTL). Symbols drop out
+    // of cache only if no device watchlists them for >5min. Auth-gated via the standard
+    // header check above.
+    if (path === '/ml-predict' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const cached = await env.ALERTS.get(`ml_pred:${symbol}`);
+      if (!cached) {
+        // Cache miss: symbol isn't in any device's watchlist, or cron hasn't completed
+        // its first pass since the symbol was added. iOS falls back to local prediction.
+        return json({ error: 'No cached prediction', symbol }, 404);
+      }
+      return json(JSON.parse(cached));
+    }
+
     if (path === '/ml-models/version') {
       try {
         const cryptoMeta = await env.MODELS.head('crypto/model-v3.json');
@@ -2095,6 +2112,22 @@ async function checkDeviceScores(env: Env, deviceId: string) {
       // v9 single-model: direction-agnostic goodR probability
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
       newProbs[symbol] = mlProb;
+
+      // Per-symbol prediction cache for the /ml-predict endpoint. Symbol-level (not
+      // device-level) — the same prediction is valid for any device asking. 5-min TTL so
+      // a symbol that drops out of every watchlist eventually clears, but the cron's
+      // ~60s cadence keeps watchlisted symbols continuously fresh.
+      await env.ALERTS.put(
+        `ml_pred:${symbol}`,
+        JSON.stringify({
+          symbol,
+          probability: mlProb,
+          features,
+          timestamp: Date.now(),
+          isCrypto,
+        }),
+        { expirationTtl: 300 }
+      );
 
       // Debug: dump features for comparison with iOS
       if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT' || symbol === 'TSLA' || symbol === 'NVDA') {
