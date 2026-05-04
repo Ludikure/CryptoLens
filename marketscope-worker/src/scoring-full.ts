@@ -853,6 +853,10 @@ export function computeAllFeatures(
     dxyCandles: Candle[] = [],
     vix3mPrice: number = 0,
     symbol: string = '',
+    /// Evaluation time in epoch ms. Used for time-of-day buckets and earnings proximity
+    /// lookups so the worker matches iOS BacktestEngine's `evalTime` semantics. Defaults
+    /// to Date.now() (the live cron behaviour).
+    evalTimeMs: number = Date.now(),
 ): FullFeatures {
     const daily = extractFeatures(dailyCandles, isCrypto, 'daily');
     const fourH = fourHCandles.length >= 210 ? extractFeatures(fourHCandles, isCrypto, '4h') : null;
@@ -974,7 +978,7 @@ export function computeAllFeatures(
         // new Date().getDay() returns server-local (UTC in CF Workers) which produces
         // wrong values around UTC midnight transitions when ET is still on the previous day.
         dayOfWeek: (() => {
-            const wdName = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date());
+            const wdName = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date(evalTimeMs));
             const map: Record<string, number> = { 'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 };
             return map[wdName] ?? 0;
         })(),
@@ -1030,11 +1034,11 @@ export function computeAllFeatures(
         // Was UTC, which produced different bucket values than the training pipeline.
         hourBucket: (() => {
             const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false });
-            const h = parseInt(fmt.format(new Date()).replace(/[^\d]/g, '')) || 0;
+            const h = parseInt(fmt.format(new Date(evalTimeMs)).replace(/[^\d]/g, '')) || 0;
             return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3;
         })(),
         isWeekend: (() => {
-            const wdName = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date());
+            const wdName = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date(evalTimeMs));
             return (wdName === 'Sat' || wdName === 'Sun') ? 1 : 0;
         })(),
         // Basis
@@ -1106,7 +1110,7 @@ export function computeAllFeatures(
         vixLevelCode: macro.vix < 15 ? 0 : macro.vix < 25 ? 1 : macro.vix < 35 ? 2 : 3,
         isMarketHours: 1,
         // Earnings — computed from bundled earnings_history.json (matches iOS BacktestEngine).
-        earningsProximity: isCrypto ? 0 : earningsProximityFor(symbol, dailyCandles[dailyCandles.length - 1]?.time || Date.now()),
+        earningsProximity: isCrypto ? 0 : earningsProximityFor(symbol, evalTimeMs),
         // Dark pool — passed via darkPool param
         shortVolumeRatio: darkPool?.ratio ?? 0.5,
         shortVolumeZScore: darkPool?.zscore ?? 0,

@@ -402,8 +402,15 @@ class BacktestEngine: ObservableObject {
 
                 guard dailyIdx >= 210, i + 1 >= 210, oneHIdx >= 30 else { continue }
 
+                // Daily slice for ALL daily-derived features. Drop in-progress to match
+                // production cron: the last raw bar may be today's intraday session, which
+                // would mutate gap/relStrength/beta values throughout the day and produce
+                // training data that no live serving path could reproduce. Live cron always
+                // runs on closed-bar daily, so iOS canonical does the same.
+                let dailySliceForFeatures = IndicatorEngine.droppingInProgress(
+                    Array(dailyCandles[max(0, dailyIdx - 300)..<dailyIdx]), timeframe: "1d")
                 let dailyResult = IndicatorEngine.computeAll(
-                    candles: Array(dailyCandles[max(0, dailyIdx - 300)..<dailyIdx]),
+                    candles: dailySliceForFeatures,
                     timeframe: "1d", label: "Daily (Trend)", market: market)
                 let fourHResult = IndicatorEngine.computeAll(
                     candles: Array(fourHCandles[max(0, i + 1 - 300)...i]),
@@ -411,6 +418,20 @@ class BacktestEngine: ObservableObject {
                 let oneHResult = IndicatorEngine.computeAll(
                     candles: Array(oneHCandles[max(0, oneHIdx - 300)..<oneHIdx]),
                     timeframe: "1h", label: "1H (Entry)", market: market)
+                // Closed-bar slices for cross-asset / gap / beta features. Drop in-progress
+                // on each side so training data uses the same closed-bar references that
+                // live cron will see (cron always drops in-progress before scoring).
+                let dailyClosed = dailySliceForFeatures
+                let dailyClosedCount = dailyClosed.count
+                let spyClosed = IndicatorEngine.droppingInProgress(
+                    Array(spyCandles.prefix(spyIdx)), timeframe: "1d")
+                let spyClosedCount = spyClosed.count
+                let iwmClosed = IndicatorEngine.droppingInProgress(
+                    Array(iwmCandles.prefix(iwmIdx)), timeframe: "1d")
+                let iwmClosedCount = iwmClosed.count
+                let sectorClosed = IndicatorEngine.droppingInProgress(
+                    Array(sectorCandles.prefix(sectorIdx)), timeframe: "1d")
+                let sectorClosedCount = sectorClosed.count
 
                 let dBearish = dailyResult.bias.contains("Bearish")
                 let dBullish = dailyResult.bias.contains("Bullish")
@@ -805,35 +826,35 @@ class BacktestEngine: ObservableObject {
                     basisExtreme: 0,
                     // Stock features
                     fiftyTwoWeekPct: {
-                        guard !isCrypto, dailyIdx >= 252 else { return 50.0 }
-                        let lookback = Array(dailyCandles[max(0, dailyIdx - 252)..<dailyIdx])
+                        guard !isCrypto, dailyClosedCount >= 252 else { return 50.0 }
+                        let lookback = Array(dailyClosed.suffix(252))
                         let high52 = lookback.map(\.high).max() ?? price
                         let low52 = lookback.map(\.low).min() ?? price
                         return high52 != low52 ? (price - low52) / (high52 - low52) * 100 : 50
                     }(),
                     distToFiftyTwoHigh: {
-                        guard !isCrypto, dailyIdx >= 252 else { return 0.0 }
-                        let lookback = Array(dailyCandles[max(0, dailyIdx - 252)..<dailyIdx])
+                        guard !isCrypto, dailyClosedCount >= 252 else { return 0.0 }
+                        let lookback = Array(dailyClosed.suffix(252))
                         let high52 = lookback.map(\.high).max() ?? price
                         return high52 > 0 ? (high52 - price) / price * 100 : 0
                     }(),
                     gapPercent: {
-                        guard !isCrypto, dailyIdx >= 2 else { return 0.0 }
-                        let prevClose = dailyCandles[dailyIdx - 2].close
-                        let todayOpen = dailyCandles[dailyIdx - 1].open
+                        guard !isCrypto, dailyClosedCount >= 2 else { return 0.0 }
+                        let prevClose = dailyClosed[dailyClosedCount - 2].close
+                        let todayOpen = dailyClosed[dailyClosedCount - 1].open
                         return prevClose > 0 ? (todayOpen - prevClose) / prevClose * 100 : 0
                     }(),
                     gapFilled: {
-                        guard !isCrypto, dailyIdx >= 2 else { return false }
-                        let prevClose = dailyCandles[dailyIdx - 2].close
-                        let todayOpen = dailyCandles[dailyIdx - 1].open
+                        guard !isCrypto, dailyClosedCount >= 2 else { return false }
+                        let prevClose = dailyClosed[dailyClosedCount - 2].close
+                        let todayOpen = dailyClosed[dailyClosedCount - 1].open
                         let gapUp = todayOpen > prevClose
                         return gapUp ? fourHCandles[i].low <= prevClose : fourHCandles[i].high >= prevClose
                     }(),
                     gapDirectionAligned: {
-                        guard !isCrypto, dailyIdx >= 2 else { return 0 }
-                        let prevClose = dailyCandles[dailyIdx - 2].close
-                        let todayOpen = dailyCandles[dailyIdx - 1].open
+                        guard !isCrypto, dailyClosedCount >= 2 else { return 0 }
+                        let prevClose = dailyClosed[dailyClosedCount - 2].close
+                        let todayOpen = dailyClosed[dailyClosedCount - 1].open
                         let gapPct = (todayOpen - prevClose) / prevClose * 100
                         guard abs(gapPct) >= 0.3 else { return 0 }
                         let gapBull = gapPct > 0
@@ -841,16 +862,16 @@ class BacktestEngine: ObservableObject {
                         return gapBull == scoreBull ? 1 : -1
                     }(),
                     relStrengthVsSpy: {
-                        guard !isCrypto, spyIdx >= 6, dailyIdx >= 6 else { return 0.0 }
-                        let stockReturn = (dailyCandles[dailyIdx - 1].close - dailyCandles[dailyIdx - 6].close) / dailyCandles[dailyIdx - 6].close * 100
-                        let spyReturn = (spyCandles[spyIdx - 1].close - spyCandles[max(0, spyIdx - 6)].close) / spyCandles[max(0, spyIdx - 6)].close * 100
+                        guard !isCrypto, spyClosedCount >= 6, dailyClosedCount >= 6 else { return 0.0 }
+                        let stockReturn = (dailyClosed[dailyClosedCount - 1].close - dailyClosed[dailyClosedCount - 6].close) / dailyClosed[dailyClosedCount - 6].close * 100
+                        let spyReturn = (spyClosed[spyClosedCount - 1].close - spyClosed[spyClosedCount - 6].close) / spyClosed[spyClosedCount - 6].close * 100
                         return stockReturn - spyReturn
                     }(),
                     beta: {
-                        guard !isCrypto, spyIdx >= 60, dailyIdx >= 60 else { return 1.0 }
+                        guard !isCrypto, spyClosedCount >= 60, dailyClosedCount >= 60 else { return 1.0 }
                         let n = 60
-                        let stockSlice = Array(dailyCandles[max(0, dailyIdx - n)..<dailyIdx])
-                        let spySlice = Array(spyCandles[max(0, spyIdx - n)..<spyIdx])
+                        let stockSlice = Array(dailyClosed.suffix(n))
+                        let spySlice = Array(spyClosed.suffix(n))
                         guard stockSlice.count >= 2, spySlice.count >= 2 else { return 1.0 }
                         let stockReturns = zip(stockSlice.dropFirst(), stockSlice).map { ($0.close - $1.close) / $1.close }
                         let spyReturns = zip(spySlice.dropFirst(), spySlice).map { ($0.close - $1.close) / $1.close }
@@ -926,9 +947,9 @@ class BacktestEngine: ObservableObject {
                     }(),
                     // Relative strength vs sector ETF
                     relStrengthVsSector: {
-                        guard !isCrypto, sectorIdx >= 6, dailyIdx >= 6, !sectorCandles.isEmpty else { return 0.0 }
-                        let stockReturn = (dailyCandles[dailyIdx - 1].close - dailyCandles[dailyIdx - 6].close) / dailyCandles[dailyIdx - 6].close * 100
-                        let sectorReturn = (sectorCandles[sectorIdx - 1].close - sectorCandles[max(0, sectorIdx - 6)].close) / sectorCandles[max(0, sectorIdx - 6)].close * 100
+                        guard !isCrypto, sectorClosedCount >= 6, dailyClosedCount >= 6 else { return 0.0 }
+                        let stockReturn = (dailyClosed[dailyClosedCount - 1].close - dailyClosed[dailyClosedCount - 6].close) / dailyClosed[dailyClosedCount - 6].close * 100
+                        let sectorReturn = (sectorClosed[sectorClosedCount - 1].close - sectorClosed[sectorClosedCount - 6].close) / sectorClosed[sectorClosedCount - 6].close * 100
                         return stockReturn - sectorReturn
                     }(),
                     // VIX term structure
@@ -949,9 +970,9 @@ class BacktestEngine: ObservableObject {
                     }(),
                     // IWM vs SPY relative return (breadth)
                     iwmSpyRatio: {
-                        guard iwmIdx >= 6, spyIdx >= 6 else { return 0.0 }
-                        let iwmReturn = (iwmCandles[iwmIdx - 1].close - iwmCandles[max(0, iwmIdx - 6)].close) / iwmCandles[max(0, iwmIdx - 6)].close * 100
-                        let spyReturn = (spyCandles[spyIdx - 1].close - spyCandles[max(0, spyIdx - 6)].close) / spyCandles[max(0, spyIdx - 6)].close * 100
+                        guard iwmClosedCount >= 6, spyClosedCount >= 6 else { return 0.0 }
+                        let iwmReturn = (iwmClosed[iwmClosedCount - 1].close - iwmClosed[iwmClosedCount - 6].close) / iwmClosed[iwmClosedCount - 6].close * 100
+                        let spyReturn = (spyClosed[spyClosedCount - 1].close - spyClosed[spyClosedCount - 6].close) / spyClosed[spyClosedCount - 6].close * 100
                         return iwmReturn - spyReturn
                     }(),
                 )
@@ -1046,9 +1067,12 @@ class BacktestEngine: ObservableObject {
                         Array(fourHCandles[max(0, i + 1 - 300)...i]), timeframe: "4h")
                     let oneHSlice = IndicatorEngine.droppingInProgress(
                         Array(oneHCandles[max(0, oneHIdx - 300)..<oneHIdx]), timeframe: "1h")
-                    let spySlice = Array(spyCandles.prefix(spyIdx))
-                    let iwmSlice = Array(iwmCandles.prefix(iwmIdx))
-                    let sectorSlice = Array(sectorCandles.prefix(sectorIdx))
+                    // Cross-asset slices match what gap/relStrength/beta features actually
+                    // consumed (post-drop). Worker computes those features from these slices'
+                    // last bar; passing undropped here would re-introduce the lookahead.
+                    let spySlice = spyClosed
+                    let iwmSlice = iwmClosed
+                    let sectorSlice = sectorClosed
                     let dxySlice: [Candle] = {
                         guard let lastIdx = dxyCandles.lastIndex(where: { $0.time <= evalTime }) else { return [] }
                         return Array(dxyCandles.prefix(lastIdx + 1))

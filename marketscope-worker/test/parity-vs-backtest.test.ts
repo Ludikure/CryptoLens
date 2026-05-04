@@ -125,18 +125,13 @@ describe('Worker ↔ BacktestEngine canonical parity', () => {
                 fixture.inputs.dxyCandles,
                 fixture.inputs.vix3mPrice,
                 fixture.symbol,
+                fixture.evalTimestampMs,
             );
 
-            // Skip temporal features that derive from `new Date()`/`now`: they reflect the
-            // moment computeAllFeatures was CALLED, not the bar's eval time. In production
-            // those align (cron runs at eval time). In tests the fixture's evalTime is in
-            // the past, so worker computes "today" while fixture's expected is "eval day".
-            // These are correct in production; we skip them in parity tests.
-            const TEMPORAL_FEATURES = new Set(['dayOfWeek', 'hourBucket', 'isWeekend']);
-
-            // Per-feature parity assertions
+            // Per-feature parity assertions. Temporal features now derive from the fixture's
+            // evalTimestampMs (passed through to computeAllFeatures), so they participate in
+            // parity exactly like the rest.
             for (const key of Object.keys(fixture.expected.features)) {
-                if (TEMPORAL_FEATURES.has(key)) continue;
                 test(`feature ${key}`, () => {
                     const expected = fixture.expected.features[key];
                     const actual = (features as any)[key];
