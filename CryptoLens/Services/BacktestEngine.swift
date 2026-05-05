@@ -1189,7 +1189,11 @@ class BacktestEngine: ObservableObject {
 
                 let progressIdx = i - evalStartIndex
                 if progressIdx % 10 == 0 {
-                    progress = Double(progressIdx) / Double(max(1, totalBars))
+                    // Clamp to [0, 1] defensively. The math at line 363 keeps it in
+                    // [0, 1) by construction, but this guarantees the SwiftUI ProgressView
+                    // never sees an out-of-bounds value if the loop bound and totalBars
+                    // expression drift apart again in the future.
+                    progress = min(1.0, max(0.0, Double(progressIdx) / Double(max(1, totalBars))))
                     statusMessage = "Evaluating bar \(progressIdx)/\(totalBars)..."
                     await Task.yield()
                 }
