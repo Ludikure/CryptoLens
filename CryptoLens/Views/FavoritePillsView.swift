@@ -66,7 +66,10 @@ struct FavoritePillsView: View {
 
     private func mlProbColor(_ prob: Double, isSelected: Bool) -> Color {
         if prob >= 0.70 { return .green }
-        if prob < 0.50 { return .gray }
+        // The selected pill's background is .accentColor (blue); gray text on blue is
+        // unreadable, so swap to a softened white for the low-probability case there
+        // and keep gray only for the unselected case where it sits on systemGray5.
+        if prob < 0.50 { return isSelected ? Color.white.opacity(0.75) : .gray }
         return isSelected ? .white : .primary
     }
 }
