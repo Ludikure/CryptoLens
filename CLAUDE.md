@@ -143,15 +143,16 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 
 ### Overview
 
-v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
+Direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
 
-- **Crypto model:** LightGBM depth=4, 150 trees — 76 symbols, 141,816 bars, **73.4% WF accuracy**
-- **Stock model:** XGBoost depth=5, 100 trees — 83 symbols, 96,609 bars, **66.1% WF accuracy**, top bucket **76.2%**
+- **Crypto model (v10):** LightGBM depth=4, 150 trees — 76 symbols, 141,816 bars, **73.4% WF accuracy**
+- **Stock model (v12, retrained 2026-05-04 on lookahead-corrected data):** XGBoost depth=5, 100 trees — 159 symbols, 246,599 bars, **66.8% WF accuracy**, top bucket **75.5%**
 - **Features:** 111
 - **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
 - **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x)
 - **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85.
-- **Inference:** Native Swift tree evaluator reads same JSON as worker (no CoreML — eliminated 6pp conversion loss). Both iOS and worker use identical tree evaluation logic on identical model JSONs.
+- **Serving architecture (post-Phase 5, 2026-05-04):** Worker is the **single source of truth** for displayed ML and notifications. iOS reads from `/ml-predict?symbol=…` (cron-cached, 5-min KV TTL); local `MLScoring.predict` is retained only for `BacktestEngine` (training canonical). No local fallback in production — UI shows nothing if cache is missing.
+- **Inference:** Native Swift tree evaluator reads same JSON as worker (no CoreML). Worker `mlPredict()` (`marketscope-worker/src/ml-predict.ts`) uses identical tree evaluation logic. Worker↔BacktestEngine parity is asserted at 1e-7 absolute tolerance via `marketscope-worker/test/parity-vs-backtest.test.ts` (345/345 passing as of 2026-05-04).
 
 ### Calibrated Reliability
 
@@ -198,10 +199,12 @@ v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — pr
 | File | Purpose |
 |------|---------|
 | `Models/BacktestResult.swift` | `MLFeatures` struct (107 fields), `BacktestDataPoint` |
-| `ML/MLScoring.swift` | Native XGBoost/LightGBM tree evaluator; reads same JSON as worker |
+| `ML/MLScoring.swift` | Native XGBoost/LightGBM tree evaluator; used by `BacktestEngine` only (live serving goes through worker) |
 | `ML/ml-model-{crypto,stock}.json` | Model JSONs (trees + embedded calibration), shared with worker |
-| `Services/BacktestEngine.swift` | Backtest loop, feature extraction, CSV export, batch export |
-| `Services/AnalysisService.swift` | `buildMLFeatures()` for live predictions; `fetchAndCompute()` returns full daily candles |
+| `Services/BacktestEngine.swift` | Backtest loop, feature extraction, CSV export, batch export, parity-fixture capture |
+| `Services/AnalysisService.swift` | Live analysis pipeline; `fetchWorkerML(symbol:)` reads worker `/ml-predict` for displayed probability |
+| `Services/WorkerMLService.swift` | Thin GET wrapper for `/ml-predict?symbol=…` (auth + 5s timeout + decode) |
+| `Services/ParityFixture.swift` | Codable I/O snapshot used by worker parity tests |
 | `Services/DarkPoolData.swift` | Loads bundled `dark_pool_history.json` for backtester lookups |
 | `Services/EarningsCalendar.swift` | Stock earnings date lookup from bundled JSON |
 | `Services/FearGreedService.swift` | Historical Fear & Greed from Alternative.me |
@@ -210,36 +213,49 @@ v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — pr
 | `marketscope-worker/src/ml-predict.ts` | Worker `mlPredict()` evaluates tree JSONs, applies embedded calibration |
 | `marketscope-worker/src/ml-model-{crypto,stock}.json` | Worker model JSONs (same files as iOS) |
 | `marketscope-worker/src/scoring-full.ts` | Worker 111-feature computation (sector ETF mapping, VP from last 30 candles) |
-| `ml-training/calibrate_v9.py` | Training script — LightGBM crypto + XGBoost stocks, exports unified JSON |
+| `marketscope-worker/test/parity-vs-backtest.test.ts` | 1e-7 fixture-driven worker↔BacktestEngine parity (`npm test`) |
+| `marketscope-worker/test/fixtures/backtest-canonical/*.json` | I/O snapshots produced by `BacktestEngine` "Capture Parity Fixture" button |
+| `ml-training/calibrate_v12_stocks.py` | Active stock training script — XGBoost d5 t100, reads `csv_exports_v12/`, writes both worker + iOS JSONs |
+| `ml-training/calibrate_v11_stocks.py` | Predecessor (kept for reference; same script with `csv_exports_v11/` source) |
+| `ml-training/csv_exports_v12/` | 159-symbol stock CSVs with lookahead-corrected features (2026-05-04 export) |
+| `ml-training/calibrate_v9.py` | Legacy combined crypto+stock script — name is stale (used to bootstrap v10 crypto model) |
 | `ml-training/model_comparison.py` | Hyperparameter comparison (XGBoost d3-5 × t100-200 + LightGBM) |
 | `ml-training/finra_dark_pool.py` | Downloads FINRA RegSHO daily files, computes short volume Z-scores |
 | `ml-training/earnings_backfill.py` | Downloads historical earnings via yfinance |
 
 ### ML in Live Predictions
 
-- `AnalysisService.buildMLFeatures()` constructs `MLFeatures` from live indicator data
-- **Full daily candles** (250 from Yahoo, 300 from Binance) passed via `fetchAndCompute()` return value — not `tf1.candles` (which is trimmed to 50 for chart display)
-- SPY daily candles cached (5min staleness) for stock beta + relStrengthVsSpy
-- Dark pool fetched from worker `/darkpool` endpoint (1hr cache)
-- Rate-of-change deltas computed from `prevMLSnapshots` (stored per-symbol between refreshes)
-- Funding rate history tracked in `fundingHistory` dict for slope computation
-- Basis fetched from Binance `/fapi/v1/premiumIndex`
-- Fear & Greed from CoinGecko (already fetched for sentiment)
-- ETH/BTC from Binance ETHBTC candles
-- Earnings proximity from bundled `EarningsCalendar`
+iOS displays ML by reading `/ml-predict?symbol=…` from the worker (`WorkerMLService.predict`). Returns nil on cache miss (UI shows "—") — there is **no** local fallback in production. `AnalysisService.buildMLFeatures()` is still compiled but only inside `#if DEBUG` for parity-investigation feature dumps.
+
+`BacktestEngine` is the one place still calling `MLScoring.predict` directly — it's the canonical training source whose CSV output the model is fit to.
 
 ### Worker ML Scoring (Cron)
 
-- Runs every minute via `scheduled()` handler
-- Fetches candles (in-progress dropped via `dropInProgress()`), computes all 107 features via `scoring-full.ts`
-- **Stocks:** fetches 1H candles from Yahoo (`range=6mo`), aggregates to 4H (~216 bars, above 210 threshold)
+The cron is split into a **symbol pass** (compute once per symbol, regardless of how many devices watchlist it) and a **device pass** (read predictions from a Map, apply per-device gating, send APNs). Pre-refactor (commit `4b2a3a2` and earlier) the cron iterated devices first and re-ran the entire candle/derivative/feature pipeline for each device, taking 2-3 minutes per pass and triggering concurrent runs that produced duplicate APNs. The per-symbol structure cuts work ~13× and finishes in seconds.
+
+```
+checkAllDeviceScores                                          (orchestrator)
+  └─ computeSymbolPredictions(env, allSymbols)                (symbol pass)
+       writes ml_pred:<symbol>, ml_snapshots, deriv archive,
+       returns Map<symbol, prediction>
+  └─ for each device: processDeviceNotifications(...)         (device pass)
+       reads its watchlist's predictions from Map, writes
+       score_history per (device, symbol), applies notify gate,
+       sends APNs
+```
+
+Per-cron flow (every minute via `scheduled()` handler):
+- Fetches candles (in-progress dropped via `dropInProgress()`), computes all 111 features via `scoring-full.ts`
+- **Stocks:** fetches 1H candles from Yahoo (`range=6mo`), aggregates to 4H via `aggregate1HTo4H_ET` (~216 bars, above 210 threshold)
 - **Crypto:** fetches 4H + 1H directly from Binance
-- Fetches SPY daily candles (`range=6mo`) for stock beta/relStrengthVsSpy
+- Fetches SPY / IWM / VIX3M / DXY / sector ETF candles (closed-bar, `dropInProgress` applied) for stock cross-asset features
 - Fetches FINRA dark pool data daily, stores in KV with rolling 20-day history for Z-score
 - Fetches live: VIX/DXY (Yahoo), Fear & Greed (Alternative.me), ETH/BTC (Binance), derivatives (Binance fapi)
-- Rate-of-change + acceleration + funding slope from KV-persisted snapshots
-- Archives derivatives to D1 every 4H for future training
-- Writes calibrated goodR probability to `score_history.ml_probability` per cron per symbol
+- Rate-of-change + acceleration + funding slope from KV-persisted snapshots (single global blob, not per-device)
+- Archives derivatives to D1 every 4H for future training (`deriv_archive:<symbol>` 4H KV gate)
+- Writes calibrated goodR probability to `score_history.ml_probability` per (device, watchlisted symbol)
+- Writes `ml_pred:<symbol>` KV blob (5-min TTL) with full features dict — read by `/ml-predict` endpoint
+- ARCHIVE_CRYPTO (76 fixed crypto symbols) is processed every cron regardless of watchlist for D1 archive coverage; predictions are computed but no `score_history` row is written for non-watchlisted devices
 
 ### Notifications
 
@@ -248,35 +264,46 @@ v10 dual models predicting direction-agnostic `goodR = fwdMaxFavR >= 1.5` — pr
 | Hours (ET) | 8am, 12pm, 4pm, 8pm, 11:30pm | 8am, 12pm, 4pm |
 | Days | Every day | Weekdays only |
 | Threshold | ML >= 70% | ML >= 70% |
-| Cooldown | 3.5 hours per (device, symbol) | 3.5 hours per (device, symbol) |
+| Cooldown | 3.5 hours per (push_token, symbol) | 3.5 hours per (push_token, symbol) |
+
+Cooldown is keyed by `push_token`, not `device_id` — iOS rotates `device_id` on auth recovery (creates a new D1 row pointing at the same physical device's APNs token), and a `device_id`-keyed cooldown would let both rows fire the same notification. Switching to `push_token` makes the cooldown share across rotated rows.
 
 ### Backtest & Training
 
 - `BacktestEngine` runs walk-forward eval on historical candles
 - Fetches from D1 archive first, falls back to Binance/Yahoo/TwelveData
 - Crypto clamped to Jan 2020 start (derivatives coverage)
-- Exports CSV with all 107 features + forward returns + trade outcomes
+- Exports CSV with all 111 features + forward returns + trade outcomes
 - Batch export: separate "Crypto Only" / "Stocks Only" buttons
-- 3-second delay between stock symbols to avoid rate limiting
-- Training: `calibrate_v9.py` with LightGBM (crypto) + XGBoost (stocks), purged time-series CV, daily downsampling, sample weighting
+- 1-second delay between stock symbols to avoid rate limiting
+- Stock daily features (`gapPercent`, `gapFilled`, `gapDirectionAligned`, `relStrengthVsSpy`, `relStrengthVsSector`, `iwmSpyRatio`, `beta`, `fiftyTwoWeekPct`, `distToFiftyTwoHigh`) read from a **post-drop** daily slice (`dailySliceForFeatures`) — pre-fix these used `dailyCandles[dailyIdx-1]` which pointed at today's in-progress bar, leaking intraday data into training that live cron (which drops in-progress) could never reproduce. Live cross-asset slices (`spyClosed`, `iwmClosed`, `sectorClosed`) are also `dropInProgress`-applied.
+- Active stock training: `ml-training/calibrate_v12_stocks.py` reads `csv_exports_v12/` (159-symbol export from 2026-05-04). Crypto still on v10 (LightGBM, untouched by lookahead fix since features are all-USDT).
 
 ### Backtester Symbols
 
 - **Crypto (76):** 56 pre-2021 (BTC, ETH, BCH, XRP, LTC, TRX, ETC, LINK, XLM, ADA, XMR, DASH, ZEC, XTZ, BNB, ATOM, ONT, IOTA, BAT, VET, NEO, QTUM, IOST, THETA, ALGO, ZIL, KNC, ZRX, COMP, DOGE, KAVA, BAND, RLC, SNX, DOT, YFI, CRV, TRB, RUNE, SUSHI, EGLD, SOL, ICX, STORJ, UNI, AVAX, ENJ, KSM, NEAR, AAVE, FIL, RSR, BEL, AXS, SKL, GRT) + 20 post-2021 (SAND, MANA, HBAR, MATIC, ICP, DYDX, GALA, IMX, GMT, APE, INJ, LDO, APT, ARB, SUI, PENDLE, SEI, TIA, JUP, PEPE)
-- **Stocks (85):** Mega-cap tech (AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, CRM, NFLX, AMD, ORCL, ADBE, INTC, CSCO) + Semis (AVGO, QCOM, MU, AMAT, LRCX, MRVL) + Growth (PLTR, ROKU, SHOP, SQ, SNAP, COIN, RBLX) + Meme (BYND, GME) + Financials (JPM, GS, MS, BAC, WFC, BLK, SCHW) + Healthcare (UNH, LLY, ABBV, JNJ, PFE, MRK, TMO) + Biotech (REGN, VRTX, GILD, BIIB) + Consumer (HD, MA, V, DIS, NKE, SBUX, MCD, WMT, COST) + Cyclicals (CAT, DE, X, BA) + Energy (XOM, OXY, FANG, CVX, SLB) + Defense (LMT, RTX, GD) + Transport (UNP, FDX, DAL) + Telecom (T, VZ, CMCSA) + REITs (SPG, O) + ETFs (SPY, QQQ, IWM, XLE, XLF, XLK, XLV, GLD, TLT)
+- **Stocks (159, expanded from 85):** Mega-cap tech (AAPL, TSLA, MSFT, NVDA, GOOGL, META, AMZN, CRM, NFLX, AMD, ORCL, ADBE, INTC, CSCO) + Software/SaaS (NOW, INTU, CRWD, PANW, FTNT, SNOW, DDOG, NET, ZS, WDAY, TEAM, MDB) + Semis (AVGO, QCOM, MU, AMAT, LRCX, MRVL, TXN, KLAC, ON, MCHP) + Growth (PLTR, ROKU, SHOP, SNAP, COIN, RBLX) + Meme (BYND, GME) + Internet/travel (UBER, ABNB, BKNG, DASH, PYPL, SPOT, F, GM) + Financials (JPM, GS, MS, BAC, WFC, BLK, SCHW, AXP, C, COF, USB, PNC, CME, ICE, AIG) + Healthcare (UNH, LLY, ABBV, JNJ, PFE, MRK, TMO, AMGN, BMY, ABT, MDT, DHR, ISRG, BSX, SYK, CVS, ELV) + Biotech (REGN, VRTX, GILD, BIIB) + Consumer (HD, MA, V, DIS, NKE, SBUX, MCD, WMT, COST, LOW, TGT, TJX, CMG, MAR, HLT, MGM) + Cyclicals (CAT, DE, BA, HON, MMM, GE, EMR, ETN, ITW, PH) + Energy (XOM, OXY, FANG, CVX, SLB, COP, EOG, PSX, VLO) + Defense (LMT, RTX, GD, NOC) + Transport (UNP, FDX, DAL) + Telecom (T, VZ, CMCSA, TMUS, CHTR) + REITs (SPG, O, AMT, EQIX, PLD, CCI, PSA) + ETFs (SPY, QQQ, IWM, XLE, XLF, XLK, XLV, GLD, TLT, DIA, XLY, XLP, XLI, XLU, XLC, HYG, VXX). SQ excluded (Yahoo ticker change), X excluded (acquisition).
 
 ### Worker/iOS Feature Parity
 
-After v10 sync (2026-04-25): iOS and worker use the same native tree evaluator on the same JSON model files. Worker fetches stock 1H/4H candles from Yahoo. Major fixes applied:
-- VP now uses last 30 daily candles on both sides (was 250 on worker, causing 5+ ATR divergence)
-- Worker tracks previous OI via KV for oiChangePct + oiSignal (was always 0)
-- VIX cached in KV with 1h TTL fallback (was defaulting to 20 on fetch failure)
-- Worker fetches IWM, VIX3M, DXY, sector ETF candles for new features
+**Status (2026-05-04): 345/345 tests passing at 1e-7 absolute tolerance.** Three fixtures (BTC, ETH, TSLA), every feature individually asserted. `cd marketscope-worker && npm test` runs the suite; `predeploy` hook on `npx wrangler deploy` runs it too so a failing parity blocks deploy.
 
-Remaining minor gaps (~2-3pp):
-- `dStructBull/Bear` — both sides use EMA stack as proxy (iOS has full swing analysis)
-- `hAboveVwap` — VWAP session-anchoring differs subtly
-- `earningsProximity` — worker defaults to 0 (no earnings calendar data)
+Generation: iOS BacktestView → "Capture Parity Fixture" (DEBUG only) → copies the JSON from sim's `Documents/ml_exports/fixtures/` → user moves to `marketscope-worker/test/fixtures/backtest-canonical/`. Fixtures contain candle slices, derivatives signals, prev snapshots (with 7-bar history windows), `evalTimestampMs`, and the expected feature dict + ML probability.
+
+Fixes landed during the parity push (commits `2ead207`, `e0f6ea1`, `5fe608d`, `732c154`, `c13be74`):
+- Worker EMA seed corrected (was `values[0]`, now SMA of first `period` to match iOS `MovingAverages.computeEMA`)
+- MACD trail-aligned across the two EMAs and the signal line
+- BB squeeze: 120-bar lookback × 0.5 threshold (was 20-bar × 0.75)
+- VP features use the 4H reference price (worker was using daily close)
+- d/h/eEmaCross + d/hAboveVwap recomputed in `computeAllFeatures` against 4H close (matches `BacktestEngine` MLFeatures lines 576/607/646/603/643)
+- RSI divergence ported from iOS `RSIDivergence.detect` peak/trough analysis (worker had a naive slope check)
+- 7-bar Hist windows in `PreviousSnapshot` (`dRsiHist7`, `hRsiHist7`, …) so `*Delta = current - hist[0]` matches BacktestEngine `current - history[count-7]`
+- `barsSinceRegimeChange` increments via `prevSnapshot.prevRegimeCode` + `prevBarsSinceRegimeChange`
+- `fundingSlope` appends current `fundingRateRaw` to prev hist before regression (matches iOS BE lines 895-896)
+- Daily VWAP, AboveVwap, and EmaCross all reference 4H close
+- BacktestEngine fixture-capture off-by-one fix (snapshotted post-update history → was producing `prevSnapshot.hRsi == current_rsi`)
+- Lookahead fix on stock daily features (gap/relStrength/beta/52week now use post-drop daily slices — see `Backtest & Training` section)
+- Worker temporal features (`hourBucket`, `isWeekend`, `dayOfWeek`, `earningsProximity`) use the fixture's `evalTimestampMs` instead of `Date.now()` so tests reproduce iOS canonical at the bar boundary
 
 ### Model Comparison Results (v10)
 
@@ -301,6 +328,10 @@ Deeper models (d5) and more trees (t200) showed diminishing returns. LightGBM d4
 
 The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist with model_version = 10). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column.
 
+## Historical Analysis Sharing (2026-05-04)
+
+`AnalysisHistoryView` → tap a row → `HistoryDetailView` shows the snapshot. Toolbar's right side has a `ShareLink` (`square.and.arrow.up`) that exports plain text mirroring the live-screen share format: symbol/timestamp, price-then/now (with delta if currentPrice is available), bias snapshot, trade setup if any, and the full Claude/Gemini markdown.
+
 ## Target Selection System
 
 Three-layer quality scoring for TP1/TP2 selection (replaced naive "nearest 3 levels"):
@@ -319,6 +350,7 @@ Backtesting (850K+ crypto, 192K+ stock bars) shows counter-trend setups (4H reve
 
 - No certificate pinning on network calls
 - Missing App Group entitlement on main app target (widget can't share data)
-- Worker: APNs tries sandbox first then production (doubles latency); JWT not cached per cron; cron processes devices sequentially
-- `ml-training/calibrate_v9.py` name is stale (actually trains v10 models)
-- Backtester optimized (shared data pre-fetch) but still slow for 161 symbols (~2-3 hours)
+- Worker: APNs tries sandbox first then production (doubles latency); JWT not cached per cron
+- TSLA parity test shows 1pp `mlProbability` drift after the v12 retrain (the 2026-05-04 TSLA fixture was captured under the prior stock model). Feature-level parity is intact (345/345 features at 1e-7); regenerating the fixture closes it.
+- Backtester optimized (shared data pre-fetch) but still slow for 159+76 symbols (~2-3 hours)
+- Crypto model still v10 — eligible for retrain on fresher data (no architectural change needed since lookahead fix was stock-only)
