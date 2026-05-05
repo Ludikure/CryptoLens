@@ -26,6 +26,13 @@ enum Constants {
 
     // MARK: - Crypto
 
+    /// Aligned with Coinbase Advanced perpetuals as of 2026-05-05. Each coin must satisfy
+    /// both: (1) Coinbase has an active perp product, (2) BacktestEngine.cryptoSymbols
+    /// includes it (so ML predictions and feature parity are wired). Removed POL/UNI/APT/
+    /// ARB/OP/FIL/ATOM (no Coinbase perp) and added ZEC/XLM/HBAR/BCH/PEPE (perp + trained).
+    /// PEPE is "1000PEPE PERP" on Coinbase (1 unit = 1000 PEPE tokens) — the underlying
+    /// chart prices and ML signals are on plain PEPEUSDT; only the dollar-quote magnitude
+    /// differs by 1000×.
     static let allCoins: [CoinDefinition] = [
         CoinDefinition(id: "BTCUSDT", geckoId: "bitcoin", name: "Bitcoin", ticker: "BTC", color: .orange),
         CoinDefinition(id: "ETHUSDT", geckoId: "ethereum", name: "Ethereum", ticker: "ETH", color: .indigo),
@@ -36,17 +43,15 @@ enum Constants {
         CoinDefinition(id: "AVAXUSDT", geckoId: "avalanche-2", name: "Avalanche", ticker: "AVAX", color: .red),
         CoinDefinition(id: "LINKUSDT", geckoId: "chainlink", name: "Chainlink", ticker: "LINK", color: .blue),
         CoinDefinition(id: "DOGEUSDT", geckoId: "dogecoin", name: "Dogecoin", ticker: "DOGE", color: .yellow),
-        CoinDefinition(id: "POLUSDT", geckoId: "matic-network", name: "Polygon", ticker: "POL", color: .purple),
         CoinDefinition(id: "NEARUSDT", geckoId: "near", name: "NEAR Protocol", ticker: "NEAR", color: .green),
-        CoinDefinition(id: "UNIUSDT", geckoId: "uniswap", name: "Uniswap", ticker: "UNI", color: .pink),
         CoinDefinition(id: "AAVEUSDT", geckoId: "aave", name: "Aave", ticker: "AAVE", color: .cyan),
-        CoinDefinition(id: "APTUSDT", geckoId: "aptos", name: "Aptos", ticker: "APT", color: .mint),
         CoinDefinition(id: "SUIUSDT", geckoId: "sui", name: "Sui", ticker: "SUI", color: .blue),
-        CoinDefinition(id: "ARBUSDT", geckoId: "arbitrum", name: "Arbitrum", ticker: "ARB", color: .blue),
-        CoinDefinition(id: "OPUSDT", geckoId: "optimism", name: "Optimism", ticker: "OP", color: .red),
-        CoinDefinition(id: "FILUSDT", geckoId: "filecoin", name: "Filecoin", ticker: "FIL", color: .cyan),
         CoinDefinition(id: "LTCUSDT", geckoId: "litecoin", name: "Litecoin", ticker: "LTC", color: .gray),
-        CoinDefinition(id: "ATOMUSDT", geckoId: "cosmos", name: "Cosmos", ticker: "ATOM", color: .indigo),
+        CoinDefinition(id: "BCHUSDT", geckoId: "bitcoin-cash", name: "Bitcoin Cash", ticker: "BCH", color: .green),
+        CoinDefinition(id: "XLMUSDT", geckoId: "stellar", name: "Stellar", ticker: "XLM", color: .mint),
+        CoinDefinition(id: "HBARUSDT", geckoId: "hedera-hashgraph", name: "Hedera", ticker: "HBAR", color: .teal),
+        CoinDefinition(id: "ZECUSDT", geckoId: "zcash", name: "Zcash", ticker: "ZEC", color: .yellow),
+        CoinDefinition(id: "PEPEUSDT", geckoId: "pepe", name: "Pepe", ticker: "PEPE", color: .green),
     ]
 
     // MARK: - Stocks
