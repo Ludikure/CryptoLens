@@ -113,7 +113,12 @@ enum PushService {
 
     /// Call before any authenticated worker request — retries registration if needed.
     static func ensureAuth() async {
-        if authToken != nil { return }
+        if authToken != nil {
+            if ConnectionStatus.shared.workerAuth != .ok {
+                ConnectionStatus.shared.workerAuth = .ok
+            }
+            return
+        }
         guard !isAuthenticating else {
             // Another call is already in-flight; wait briefly and check again
             try? await Task.sleep(nanoseconds: 500_000_000)

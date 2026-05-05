@@ -1252,6 +1252,7 @@ export default {
     ctx.waitUntil(checkAllDeviceAlerts(env));
     ctx.waitUntil(checkAllDeviceScores(env));
     ctx.waitUntil(archiveShortInterest(env));
+    ctx.waitUntil(cleanupStaleDevices(env));
   },
 };
 
@@ -1476,12 +1477,18 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
     const name = alert.symbol.replace('USDT', '');
     const title = `${name} Alert`;
     const body = `${name} hit $${price?.toLocaleString('en-US', { maximumFractionDigits: 2 })} (${alert.condition} $${alert.targetPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })})`;
-    await sendAPNs(env, pushToken, title, body);
+    const result = await sendAPNs(env, pushToken, title, body);
+    if (result === 'unregistered') {
+      await deleteDevice(env, deviceId);
+      return;
+    }
   }
 }
 
 // === APNs ===
-async function sendAPNs(env: Env, deviceToken: string, title: string, body: string) {
+type APNsResult = 'sent' | 'unregistered' | 'failed';
+
+async function sendAPNs(env: Env, deviceToken: string, title: string, body: string): Promise<APNsResult> {
   // Try sandbox first (development builds), fall back to production
   const endpoints = [
     'https://api.sandbox.push.apple.com',
@@ -1490,8 +1497,10 @@ async function sendAPNs(env: Env, deviceToken: string, title: string, body: stri
 
   try {
     const jwt = await buildAPNsJWT(env);
-    if (!jwt) { console.error('APNs: JWT build returned null'); return; }
+    if (!jwt) { console.error('APNs: JWT build returned null'); return 'failed'; }
 
+    let lastStatus: number | null = null;
+    let lastBody = '';
     for (const endpoint of endpoints) {
       const resp = await fetch(`${endpoint}/3/device/${deviceToken}`, {
         method: 'POST',
@@ -1509,18 +1518,79 @@ async function sendAPNs(env: Env, deviceToken: string, title: string, body: stri
 
       if (resp.ok) {
         console.log(`APNs sent via ${endpoint.includes('sandbox') ? 'sandbox' : 'production'}`);
-        return;
+        return 'sent';
       }
-      const errBody = await resp.text();
-      console.error(`APNs ${endpoint.includes('sandbox') ? 'sandbox' : 'prod'} ${resp.status}: ${errBody}`);
+      lastStatus = resp.status;
+      lastBody = await resp.text();
+      console.error(`APNs ${endpoint.includes('sandbox') ? 'sandbox' : 'prod'} ${resp.status}: ${lastBody}`);
       // If sandbox says BadDeviceToken, try production (token is from a release build)
-      if (resp.status === 400 && errBody.includes('BadDeviceToken')) continue;
+      if (resp.status === 400 && lastBody.includes('BadDeviceToken')) continue;
       // Any other error, stop trying
-      return;
+      break;
     }
+    // 410 from production = token unregistered (uninstall, device wipe). Sandbox 410 we
+    // distrust (token may still be valid via prod), so treat only the last-tried endpoint
+    // as authoritative. Since the sandbox→prod fallthrough only happens on 400 BadDeviceToken,
+    // any 410 we surface is from whichever endpoint was the actual route for this token.
+    return lastStatus === 410 ? 'unregistered' : 'failed';
   } catch (e) {
     console.error(`APNs send failed: ${e}`);
+    return 'failed';
   }
+}
+
+// Cascade-delete every row tied to a device. Called when APNs returns 410 (token dead)
+// or by the daily stale-device sweep. D1 doesn't enforce the watchlist FK, so we delete
+// children explicitly. notif_claims is keyed by push_token, not device_id, so we look
+// up the token first and delete by that.
+async function deleteDevice(env: Env, deviceId: string) {
+  const row = await env.DB.prepare('SELECT push_token FROM devices WHERE device_id = ?').bind(deviceId).first();
+  const pushToken = (row?.push_token as string | null) ?? null;
+  const stmts = [
+    env.DB.prepare('DELETE FROM watchlist WHERE device_id = ?').bind(deviceId),
+    env.DB.prepare('DELETE FROM score_history WHERE device_id = ?').bind(deviceId),
+    env.DB.prepare('DELETE FROM notifications WHERE device_id = ?').bind(deviceId),
+    env.DB.prepare('DELETE FROM alerts WHERE device_id = ?').bind(deviceId),
+    env.DB.prepare('DELETE FROM devices WHERE device_id = ?').bind(deviceId),
+  ];
+  if (pushToken) {
+    stmts.push(env.DB.prepare('DELETE FROM notif_claims WHERE push_token = ?').bind(pushToken));
+  }
+  await env.DB.batch(stmts);
+  await env.ALERTS.delete(`device:${deviceId}`);
+  await env.ALERTS.delete(`watchlist:${deviceId}`);
+  console.log(`[cleanup] deleted device ${deviceId}`);
+}
+
+// Daily sweep: prune devices that haven't checked in for 30 days. Idempotent — KV-gated to
+// run once per UTC day. iOS rotates device_id on auth recovery (see PushService.handleAuthFailure),
+// orphaning the old D1 row immediately. Without this sweep those orphans accumulate forever
+// and the per-cron device pass walks them all (one row per minute per orphan), wasting
+// compute and writing dead score_history rows.
+const STALE_DEVICE_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+async function cleanupStaleDevices(env: Env) {
+  const today = new Date().toISOString().split('T')[0];
+  const lastDate = await env.ALERTS.get('cleanup:last_date');
+  if (lastDate === today) return;
+
+  const cutoffIso = new Date(Date.now() - STALE_DEVICE_AGE_MS).toISOString();
+  const stale = await env.DB.prepare(
+    'SELECT device_id FROM devices WHERE last_seen < ? OR last_seen IS NULL'
+  ).bind(cutoffIso).all();
+  for (const row of stale.results) {
+    try {
+      await deleteDevice(env, row.device_id as string);
+    } catch (e) {
+      console.log(`[cleanup] failed for ${row.device_id}: ${e}`);
+    }
+  }
+  // Also expire stale notif_claims whose tokens no longer map to any device.
+  await env.DB.prepare(
+    'DELETE FROM notif_claims WHERE push_token NOT IN (SELECT push_token FROM devices WHERE push_token IS NOT NULL)'
+  ).run();
+  await env.ALERTS.put('cleanup:last_date', today, { expirationTtl: 86400 * 2 });
+  console.log(`[cleanup] sweep complete: ${stale.results.length} stale devices removed`);
 }
 
 async function buildAPNsJWT(env: Env): Promise<string | null> {
@@ -1576,6 +1646,10 @@ interface SymbolPrediction {
   isCrypto: boolean;
   mlProb: number;
   dailyScore: number;
+  // True iff the previous cron's mlProb was below ML_THRESHOLD and current is at/above.
+  // The notification gate fires only on this rising edge, not on continued elevation —
+  // a symbol that sits at 0.75 for hours pages once when it crossed up, not every cron.
+  crossed: boolean;
 }
 
 interface NotifyFlags {
@@ -1885,10 +1959,14 @@ async function computeSymbolPredictions(
     }
   }
 
-  // Load previous ML snapshots for rate-of-change deltas + acceleration
+  // Load previous ML snapshots for rate-of-change deltas + acceleration. `mlProb` was
+  // added 2026-05-05 for rising-edge notification gating; older blobs lack it (treated as
+  // undefined, so first cron after deploy fires normally for any symbol already above
+  // threshold — a one-time noise event, not a regression).
   const prevSnapshotsRaw = await env.ALERTS.get('ml_snapshots');
   const prevSnapshots: Record<string, { dRsi: number; dAdx: number; hRsi: number; hAdx: number; hMacdHist: number;
-    hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number; fundingHist?: number[] }> =
+    hRsiD1?: number; hMacdD1?: number; dRsiD1?: number; dAdxD1?: number; fundingHist?: number[];
+    mlProb?: number }> =
     prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
   const newSnapshots: typeof prevSnapshots = {};
 
@@ -2112,6 +2190,9 @@ async function computeSymbolPredictions(
       const ps = prevSnapshots[symbol];
       const prevFundingHist = ps?.fundingHist || [];
       const newFundingHist = isCrypto ? [...prevFundingHist, derivSignals.fundingRateRaw || 0].slice(-4) : [];
+      // v9 single-model: direction-agnostic goodR probability
+      const mlProb = mlPredict(features as Record<string, number>, isCrypto);
+
       newSnapshots[symbol] = {
         dRsi: features.dRsi, dAdx: features.dAdx,
         hRsi: features.hRsi, hAdx: features.hAdx, hMacdHist: features.hMacdHist,
@@ -2120,10 +2201,8 @@ async function computeSymbolPredictions(
         dRsiD1: ps ? features.dRsi - ps.dRsi : 0,
         dAdxD1: ps ? features.dAdx - ps.dAdx : 0,
         fundingHist: newFundingHist,
+        mlProb,
       };
-
-      // v9 single-model: direction-agnostic goodR probability
-      const mlProb = mlPredict(features as Record<string, number>, isCrypto);
 
       // Per-symbol prediction cache for the /ml-predict endpoint. Symbol-level (not
       // device-level) — the same prediction is valid for any device asking. 5-min TTL so
@@ -2146,11 +2225,15 @@ async function computeSymbolPredictions(
         await env.ALERTS.put(`debug:${symbol.toLowerCase()}_features`, JSON.stringify({ features, mlProbability: mlProb }), { expirationTtl: 3600 });
       }
 
+      const prevMl = ps?.mlProb;
+      const crossed = prevMl !== undefined && prevMl < ML_THRESHOLD && mlProb >= ML_THRESHOLD;
+
       predictions.set(symbol, {
         symbol,
         isCrypto,
         mlProb,
         dailyScore: features.dailyScore,
+        crossed,
       });
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);
@@ -2165,12 +2248,16 @@ async function computeSymbolPredictions(
 
 // Device pass: reads device's watchlist from the precomputed predictions Map (no fresh
 // candle/derivative fetches), writes per-(device, symbol) score_history, and applies
-// per-device notification gating (notify-window + ML threshold + cooldown). Cooldown
-// is keyed by push_token (not device_id) so duplicate device rows pointing at the same
-// physical phone — created when iOS rotates device_id on auth recovery — share a single
-// suppression window. Cron concurrency is gone after the symbol-pass refactor, so the
-// KV cooldown is sufficient: previous-cron writes are visible by the time the next cron
-// fires (~60s gap >> KV propagation latency).
+// per-device notification gating (notify-window + ML threshold + cooldown).
+//
+// Dedupe is an atomic D1 claim against `notif_claims` keyed by (push_token, symbol).
+// Concurrent cron passes — which can overlap when a single pass exceeds the 60s cron
+// interval — race through D1's primary region serializer; only one INSERT/UPDATE
+// changes a row, the rest see `meta.changes === 0` and skip. Push_token (not device_id)
+// is the key so rotated device_ids pointing at the same physical phone share a claim.
+// (Pre-2026-05-05 the gate used `notif:<pushToken>:<symbol>` in KV which raced because
+// KV is eventually consistent — two parallel readers both saw "no prior fire" and both
+// fired, producing the duplicate APNs the user observed.)
 async function processDeviceNotifications(
   env: Env,
   deviceId: string,
@@ -2178,19 +2265,30 @@ async function processDeviceNotifications(
   predictions: Map<string, SymbolPrediction>,
   notifyFlags: NotifyFlags,
 ) {
-  const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
   const pushToken = await getPushToken(env, deviceId);
+  const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
+  const now = Date.now();
+  const expiresAt = now + NOTIFY_COOLDOWN_SEC * 1000;
 
   // Notify gate. Records score_history regardless (so the user's history endpoint sees
-  // every cron), but only adds to triggered if the gate passes.
+  // every cron), but only adds to triggered if (a) the symbol just crossed up through
+  // ML_THRESHOLD on this cron and (b) the atomic D1 claim succeeds. Continued elevation
+  // doesn't re-fire — the user is paged once per crossing event, not every cron the
+  // probability stays above threshold.
   for (const symbol of watchlist) {
     const pred = predictions.get(symbol);
     if (!pred) continue;
     const inWindow = pred.isCrypto ? notifyFlags.inCryptoNotifyWindow : notifyFlags.inStockNotifyWindow;
-    if (!inWindow || pred.mlProb < ML_THRESHOLD || !pushToken) continue;
-    const cooldownKey = `notif:${pushToken}:${symbol}`;
-    const lastFired = await env.ALERTS.get(cooldownKey);
-    if (lastFired) continue;
+    if (!inWindow || !pred.crossed || !pushToken) continue;
+    // Atomic claim: insert if absent, otherwise overwrite only if the prior claim has
+    // expired. `meta.changes === 1` means we won (either fresh insert or expired-claim
+    // takeover); `0` means another concurrent caller already holds an unexpired claim.
+    const claim = await env.DB.prepare(
+      `INSERT INTO notif_claims (push_token, symbol, expires_at) VALUES (?1, ?2, ?3)
+       ON CONFLICT(push_token, symbol) DO UPDATE SET expires_at = ?3
+       WHERE notif_claims.expires_at < ?4`
+    ).bind(pushToken, symbol, expiresAt, now).run();
+    if ((claim.meta.changes ?? 0) === 0) continue;
     triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb, direction: '' });
   }
 
@@ -2206,14 +2304,26 @@ async function processDeviceNotifications(
 
   if (triggered.length === 0 || !pushToken) return;
 
+  // Single APN per device, batching all crossings in this window. Single-symbol case
+  // keeps the original wording with the ML% so a glance at the lock screen still tells
+  // the user the conviction; multi-symbol case lists tickers without per-symbol probs
+  // (they all cleared 70%) to keep the title scannable.
+  const tickers = triggered.map(t => t.symbol.replace('USDT', ''));
+  let title: string;
+  if (triggered.length === 1) {
+    const t = triggered[0];
+    title = `${tickers[0]} — Setup conditions favorable (ML ${Math.round(t.mlProb * 100)}%)`;
+  } else {
+    title = `${triggered.length} setups favorable: ${tickers.join(', ')}`;
+  }
+  const result = await sendAPNs(env, pushToken, title, `Open the app for the directional analysis.`);
+  if (result === 'unregistered') {
+    await deleteDevice(env, deviceId);
+    return;
+  }
+  // Log every triggered symbol regardless of how many APNs we sent — `notifications`
+  // is the per-symbol audit trail, not the per-push log.
   for (const t of triggered) {
-    const ticker = t.symbol.replace('USDT', '');
-    await sendAPNs(env, pushToken,
-      `${ticker} — Setup conditions favorable (ML ${Math.round(t.mlProb * 100)}%)`,
-      `Open the app for the directional analysis.`
-    );
-    await env.ALERTS.put(`notif:${pushToken}:${t.symbol}`, String(Date.now()),
-      { expirationTtl: NOTIFY_COOLDOWN_SEC });
     await env.DB.prepare(
       'INSERT INTO notifications (device_id, symbol, type, ml_probability, score, direction) VALUES (?, ?, ?, ?, ?, ?)'
     ).bind(deviceId, t.symbol, 'ml_crossing', t.mlProb, t.score, t.direction).run();
