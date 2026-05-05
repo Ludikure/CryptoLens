@@ -292,7 +292,7 @@ struct OutcomeDashboardView: View {
     }
 
     private func shareText(_ s: OutcomeStats) -> String {
-        """
+        let summary = """
         MarketScope Outcome Tracking
 
         Trade Setups:
@@ -306,6 +306,45 @@ struct OutcomeDashboardView: View {
         \u{2022} Total: \(s.totalFlats) | Evaluated: \(s.evaluatedFlats)
         \u{2022} False FLATs: \(s.falseFlats) (\(String(format: "%.0f%%", s.falseFlatRate)))
         """
+
+        let liveBlock: String = liveSetups.isEmpty ? "" : """
+
+
+        Live Trades (\(liveSetups.count)):
+        \(liveSetups.map { formatSetupLine($0) }.joined(separator: "\n"))
+        """
+
+        let allHistorical = OutcomeTracker.allSetups().filter { ts in
+            // Anything not currently live: resolved, invalidated, expired, or active-but-counted.
+            !liveSetups.contains(where: { $0.id == ts.id })
+        }
+        let historyBlock: String = allHistorical.isEmpty ? "" : """
+
+
+        Trade Outcomes (\(allHistorical.count)):
+        \(allHistorical.map { formatSetupLine($0) }.joined(separator: "\n"))
+        """
+
+        return summary + liveBlock + historyBlock
+    }
+
+    /// Single-line formatter mirroring the row layout — symbol/dir/tag, prices, fav/adv,
+    /// outcome label, timestamp. Stays compact so a long share doesn't exceed paste limits.
+    private func formatSetupLine(_ t: TrackedSetup) -> String {
+        let date = t.timestamp.formatted(.dateTime.month(.abbreviated).day().hour().minute())
+        let dir = t.setup.direction
+        let cond = t.setupType == .conditional ? " COND" : ""
+        let entry = Formatters.formatPrice(t.setup.entry)
+        let sl = Formatters.formatPrice(t.setup.stopLoss)
+        let tp1 = Formatters.formatPrice(t.setup.tp1)
+        var line = "\(date) \(t.symbol) \(dir)\(cond) — \(t.outcome.result) | E:\(entry) SL:\(sl) TP1:\(tp1)"
+        if t.outcome.entryHit {
+            line += " | MaxFav:\(Formatters.formatPrice(t.outcome.maxFavorable)) MaxAdv:\(Formatters.formatPrice(t.outcome.maxAdverse))"
+        }
+        if t.outcome.state == .invalidated, let reason = t.outcome.reEvalResult?.reason {
+            line += " (\(reason))"
+        }
+        return line
     }
 
     private func outcomeColor(_ result: String) -> Color {

@@ -25,6 +25,22 @@ enum OutcomeTracker {
         }
     }
 
+    /// Returns every tracked setup across every symbol, newest first. `stats()` only
+    /// includes the first 10 in `recentSetups` (UI cap); this is for export paths
+    /// that need the full history.
+    static func allSetups(symbol: String? = nil) -> [TrackedSetup] {
+        return ioQueue.sync {
+            var all = [TrackedSetup]()
+            let dir = outcomeDir
+            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            for file in files where file.lastPathComponent.hasPrefix("setups_") {
+                if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
+                all.append(contentsOf: loadTrackedSetups(url: file))
+            }
+            return all.sorted { $0.timestamp > $1.timestamp }
+        }
+    }
+
     // MARK: - Trade Setup Outcomes
 
     /// Called during each refresh cycle with current price and recent candles.
