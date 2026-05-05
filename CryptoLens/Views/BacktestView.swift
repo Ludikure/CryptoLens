@@ -47,7 +47,10 @@ struct BacktestView: View {
                 .disabled(engine.isRunning)
 
                 if engine.isRunning {
-                    ProgressView(value: engine.progress)
+                    // Clamp at the View boundary too — engine already publishes a clamped
+                    // value, but @Published reads can transiently see partial state during
+                    // SwiftUI updates, and the bar's no worse off rounding to the edge.
+                    ProgressView(value: min(1.0, max(0.0, engine.progress)))
                     Text(engine.statusMessage).font(.caption).foregroundStyle(.secondary)
                     if !engine.batchProgress.isEmpty {
                         Text(engine.batchProgress).font(.caption).foregroundStyle(.blue)
