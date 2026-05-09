@@ -816,9 +816,13 @@ class AnalysisService: ObservableObject {
             }
             #endif
 
-            // Fetch resolved outcome history for this symbol
+            // Fetch resolved outcome history for this symbol. The model_version filter
+            // here used to be hardcoded to 10, which silently excluded stocks (v12) from
+            // their own outcome feedback. Now we filter by current model version per
+            // asset class so each market sees its own track record.
             var outcomeHistory: [(direction: String, entry: Double, outcome: String, mlProb: Double?, conviction: String?)] = []
-            if let outUrl = URL(string: "\(PushService.workerURL)/outcomes?symbol=\(symbol)&model_version=10&resolved=true") {
+            let mv = OutcomeTracker.currentModelVersion(for: symbol)
+            if let outUrl = URL(string: "\(PushService.workerURL)/outcomes?symbol=\(symbol)&model_version=\(mv)&resolved=true") {
                 var outReq = URLRequest(url: outUrl)
                 outReq.timeoutInterval = 5
                 PushService.addAuthHeaders(&outReq)

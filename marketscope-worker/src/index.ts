@@ -1146,14 +1146,16 @@ export default {
         await env.DB.prepare(
           `INSERT INTO trade_outcomes
            (device_id, symbol, direction, entry_price, stop_loss, tp1, tp2,
-            ml_probability, daily_score, four_h_score, conviction, outcome, pnl_percent, notes, model_version)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ml_probability, daily_score, four_h_score, conviction, outcome, pnl_percent,
+            notes, model_version, prompt_version)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(
           deviceId, body.symbol, body.direction, body.entry, body.stopLoss || 0,
           body.tp1 || 0, body.tp2 || null, body.mlProb || null,
           body.dailyScore || null, body.fourHScore || null,
           body.conviction || null, body.outcome || null,
-          body.pnlPercent || null, body.notes || null, body.modelVersion || null
+          body.pnlPercent || null, body.notes || null, body.modelVersion || null,
+          body.promptVersion || null
         ).run();
         return json({ ok: true });
       } catch {
@@ -1182,6 +1184,10 @@ export default {
       if (url.searchParams.get('model_version')) {
         query += ' AND model_version = ?';
         params.push(parseInt(url.searchParams.get('model_version')!));
+      }
+      if (url.searchParams.get('prompt_version')) {
+        query += ' AND prompt_version = ?';
+        params.push(url.searchParams.get('prompt_version')!);
       }
       if (url.searchParams.get('resolved') === 'true') {
         query += " AND outcome IS NOT NULL AND outcome NOT IN ('open', 'not_triggered')";

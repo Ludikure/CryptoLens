@@ -169,8 +169,12 @@ enum OutcomeTracker {
                         tracked[i].outcome.maxAdverse = adverse; changed = true
                     }
 
-                    // Once resolved, only track excursions
-                    if tracked[i].outcome.isCounted { continue }
+                    // Once resolved, only track excursions. tp1Hit alone is NOT resolution —
+                    // the runner continues until TP2 hits or the (now-breakeven) stop is hit.
+                    // Pre-2026-05-09 this used `isCounted` which included tp1Hit, causing every
+                    // post-TP1 bar to skip tracking and stamp the trade tp1_win permanently —
+                    // 23/24 winners in the production data never registered TP2 because of it.
+                    if tracked[i].outcome.stopHit || tracked[i].outcome.tp2Hit { continue }
 
                     // Check breakeven activation: price reached +1.0 R:R from entry
                     if !tracked[i].outcome.breakevenActivated && risk > 0 {
@@ -305,11 +309,28 @@ enum OutcomeTracker {
 
     // MARK: - Registration
 
+    /// System-iteration version. Bump when prompt, kill rules, stop-placement floors,
+    /// or OutcomeTracker logic change materially. Independent of ML model version.
+    /// Lets us partition the `trade_outcomes` archive into homogeneous slices for
+    /// honest before/after analysis. Format: `YYYY-MM-DD-tag`.
+    static let currentPromptVersion = "2026-05-09-multihorizon"
+
+    /// ML model version is asset-class-dependent: crypto uses v10 (LightGBM), stocks
+    /// use v12 (XGBoost, retrained 2026-05-04 on lookahead-corrected data). The
+    /// `currentModelVersion(for:)` resolver picks the right one at registration time.
+    static func currentModelVersion(for symbol: String) -> Int {
+        symbol.hasSuffix("USDT") ? 10 : 12
+    }
+
     /// Register a new setup for tracking. Classifies as market or conditional.
+    /// `modelVersion` defaults to the asset-class-appropriate value via the resolver
+    /// above, so callers don't need to keep crypto/stock mapping in sync separately.
     static func registerSetup(_ setup: TradeSetup, symbol: String, analysisId: UUID,
                               currentPrice: Double = 0,
                               mlProbability: Double? = nil, conviction: String? = nil,
-                              modelVersion: Int = 10) {
+                              modelVersion: Int? = nil,
+                              promptVersion: String = currentPromptVersion) {
+        let resolvedModelVersion = modelVersion ?? currentModelVersion(for: symbol)
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
             var tracked = loadTrackedSetups(url: url)
@@ -337,8 +358,8 @@ enum OutcomeTracker {
 
             var ts = TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
                                    mlProbability: mlProbability, conviction: conviction,
-                                   modelVersion: modelVersion, setupType: setupType,
-                                   priceAtSetup: currentPrice)
+                                   modelVersion: resolvedModelVersion, setupType: setupType,
+                                   priceAtSetup: currentPrice, promptVersion: promptVersion)
 
             if setupType == .conditional {
                 ts.outcome.state = .pending
@@ -386,6 +407,7 @@ enum OutcomeTracker {
                         "mlProb": t.mlProbability ?? 0,
                         "conviction": t.conviction ?? "",
                         "modelVersion": t.modelVersion,
+                        "promptVersion": t.promptVersion,
                     ]
                     request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
                     _ = try? await URLSession.shared.data(for: request)
@@ -624,18 +646,25 @@ struct TrackedSetup: Codable, Identifiable {
     /// the correct entry-detection direction (price must move TOWARD entry from this side).
     /// 0 if missing on legacy stored setups.
     let priceAtSetup: Double
+    /// Prompt + system-behavior version snapshot at registration time. See
+    /// `OutcomeTracker.currentPromptVersion`. Lets us slice the outcome archive by
+    /// system-iteration without conflating the data across material changes.
+    let promptVersion: String
 
     var id: UUID { setup.id }
 
     private enum CodingKeys: String, CodingKey {
         case setup, symbol, analysisId, timestamp, outcome,
              killsAtGeneration, synced, mlProbability, conviction, modelVersion, setupType,
-             priceAtSetup
+             priceAtSetup, promptVersion
     }
 
     init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil,
-         mlProbability: Double? = nil, conviction: String? = nil, modelVersion: Int = 10,
-         setupType: SetupType = .market, priceAtSetup: Double = 0) {
+         mlProbability: Double? = nil, conviction: String? = nil,
+         modelVersion: Int? = nil,
+         setupType: SetupType = .market, priceAtSetup: Double = 0,
+         promptVersion: String = OutcomeTracker.currentPromptVersion) {
+        let resolvedModelVersion = modelVersion ?? OutcomeTracker.currentModelVersion(for: symbol)
         self.setup = setup
         self.symbol = symbol
         self.analysisId = analysisId
@@ -645,9 +674,10 @@ struct TrackedSetup: Codable, Identifiable {
         self.synced = false
         self.mlProbability = mlProbability
         self.conviction = conviction
-        self.modelVersion = modelVersion
+        self.modelVersion = resolvedModelVersion
         self.setupType = setupType
         self.priceAtSetup = priceAtSetup
+        self.promptVersion = promptVersion
     }
 
     init(from decoder: Decoder) throws {
@@ -664,6 +694,9 @@ struct TrackedSetup: Codable, Identifiable {
         modelVersion = try c.decodeIfPresent(Int.self, forKey: .modelVersion) ?? 10
         setupType = (try? c.decode(SetupType.self, forKey: .setupType)) ?? .market
         priceAtSetup = (try? c.decode(Double.self, forKey: .priceAtSetup)) ?? 0
+        // Legacy setups (pre-2026-05-09) lack promptVersion. Stamp them as "legacy"
+        // so they segregate from current-iteration trades in the archive.
+        promptVersion = (try? c.decode(String.self, forKey: .promptVersion)) ?? "legacy"
     }
 
     func encode(to encoder: Encoder) throws {
@@ -679,6 +712,8 @@ struct TrackedSetup: Codable, Identifiable {
         try c.encodeIfPresent(conviction, forKey: .conviction)
         try c.encodeIfPresent(modelVersion, forKey: .modelVersion)
         try c.encode(setupType, forKey: .setupType)
+        try c.encode(priceAtSetup, forKey: .priceAtSetup)
+        try c.encode(promptVersion, forKey: .promptVersion)
     }
 }
 
