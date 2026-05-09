@@ -4,6 +4,7 @@ DerivedData/
 .DS_Store
 marketscope-worker/.wrangler/
 .wrangler/
+node_modules/
 
 # ML training intermediates: large or regeneratable.
 ml-training/__pycache__/

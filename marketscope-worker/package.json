@@ -6,10 +6,16 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "deploy": "wrangler deploy",
-    "predeploy": "vitest run"
+    "predeploy": "vitest run",
+    "backtest": "tsx scripts/backtest.ts",
+    "augment": "tsx scripts/augment-csv.ts",
+    "persistence": "tsx scripts/persistence-analysis.ts",
+    "parity": "tsx scripts/parity-diff.ts"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "p-limit": "^7.3.0",
+    "tsx": "^4.21.0",
     "vitest": "^1.6.0"
   }
 }
