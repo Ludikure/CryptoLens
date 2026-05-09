@@ -126,6 +126,27 @@ enum AnalysisPrompt {
           treat continuation and reversal as equally valid — direction at 4H is ~50/50 absent
           structural evidence, so neither side gets a "default" advantage.
 
+        BIAS-SYMMETRY CHECK (mandatory before declaring direction):
+        Empirical reality (1.34M-bar study, 2026-05): direction prediction at any horizon
+        — 4h, 24h, 72h — sits at ~50% even with the full 111-feature set. Your structural
+        reasoning may add edge, but the prior is coin-flip. To avoid premature commitment,
+        before naming a bias, articulate BOTH sides in 2 sentences each:
+
+        BULL CASE: [the strongest 2-sentence argument for LONG, citing specific evidence]
+        BEAR CASE: [the strongest 2-sentence argument for SHORT, citing specific evidence]
+
+        Then rate the asymmetry: 1 (cases roughly balanced) → 5 (one side overwhelmingly
+        favored). Use this to set conviction:
+        - Asymmetry 1-2: → call FLAT, regardless of which side feels slightly stronger.
+          A near-symmetric setup is a coin flip dressed up as a thesis.
+        - Asymmetry 3: → MAX conviction is MODERATE. Note the dissenting case in Risk
+          Factors. Apply tighter SL than usual.
+        - Asymmetry 4-5: → HIGH conviction is justifiable IF other HIGH criteria pass.
+          State why the dissenting case is structurally weaker (which evidence breaks it).
+
+        This rule overrides "indicators look bullish so I'll call long." If the bear case
+        is also defensible (asymmetry ≤ 2), the trade isn't there yet. Wait or pass.
+
         FAILURE-MODE CHECK (mandatory before declaring conviction):
         Before naming a directional bias, write 2-3 sentences answering:
         "What would have to be true for this thesis to be wrong?"
@@ -183,26 +204,51 @@ enum AnalysisPrompt {
 
         ML QUALITY FILTER (if ML_WIN shown in data header):
         ML_WIN is a direction-agnostic calibrated probability of a >= 1.5 ATR favorable move
-        within 24H. 73.4% walk-forward accuracy for crypto (LightGBM, 76 symbols), 66.2% for
-        stocks (XGBoost, 83 symbols). Capped at 85%. Reliability: [0.70, 0.85) bucket = 74.8%
-        actual win rate on held-out data for both crypto and stocks.
+        within 24H. 73.4% walk-forward accuracy for crypto (LightGBM, 76 symbols), 66.8% for
+        stocks (XGBoost, 159 symbols). Capped at 85%.
 
         ML_WIN answers "are conditions favorable to trade at all?" — it does NOT pick direction.
-        Your momentum read determines direction; ML_WIN gates whether to take the trade.
+        Your momentum read determines direction; ML_WIN gates whether to take the trade and
+        determines how far in time to project the setup.
 
-        - ML_WIN >= 70%: Top bucket. Conditions strongly support a move. Proceed with thesis.
-          Also qualifies for counter-trend reversal setups (4H vs daily divergence).
-        - ML_WIN 60-69%: Favorable. Conditions support a move. Proceed with momentum thesis.
+        Multi-horizon empirical reliability (1.34M-bar persistence study, 2026-05):
+
+        Hit-rate of >= 1.5 ATR favorable move by horizon, per ML bucket:
+          ML 70-85%:  75% @ 24h | 93% @ 48h | 98% @ 72h
+          ML 60-70%:  67% @ 24h | 89% @ 48h | 95% @ 72h
+          ML 50-60%:  57% @ 24h | 83% @ 48h | 91% @ 72h
+          ML <50%:    chop / no trade
+
+        High-ML bars produce moves at longer horizons with even higher reliability — the
+        signal is volatility-cluster-based and gets stronger with time. Use bucket → horizon:
+
+        - ML_WIN >= 70%: Top bucket. Move is essentially certain within 72h. Set TP2 at
+          4-5x ATR (4H) targeting a 72h hold. Justify HIGH conviction. Counter-trend
+          reversal setups also qualify here.
+        - ML_WIN 60-69%: Favorable. ~95% chance of move within 72h. TP2 at 3-4x ATR,
+          48h hold target. MODERATE-to-HIGH conviction depending on structural alignment.
           NOT sufficient for counter-trend reversal setups.
-        - ML_WIN 50-59%: Marginal. Conditions are borderline. Proceed only if your directional
-          thesis is strong (clear momentum + structural + derivatives all aligned). Note the
-          marginal ML quality in Risk Factors.
-        - ML_WIN < 50%: Unfavorable. The pattern historically does not produce a tradeable move.
-          NO TRADE regardless of how clear the momentum looks. Explain what the ML is likely
-          seeing (exhaustion at extremes, low-volatility regime, conflicting feature combinations
-          that historically lose) and state what needs to change for ML_WIN to improve.
+        - ML_WIN 50-59%: Marginal. ~91% chance within 72h but lower magnitude. TP2 at
+          2-3x ATR, 24h hold target. MODERATE conviction at best — proceed only if your
+          directional thesis is strong (clear momentum + structural + derivatives aligned).
+        - ML_WIN < 50%: Unfavorable. NO TRADE regardless of momentum clarity. State what
+          ML is likely seeing (exhaustion at extremes, low-volatility regime, conflicting
+          features) and what would need to change.
 
-        ML_WIN does NOT determine direction. Your momentum analysis does that.
+        STOCK 85%+ ML SPECIAL TIER:
+        On stocks (not crypto), the 85%+ ML bucket shows materially higher direction
+        persistence (82% sign-agreement at 72h vs ~70% for other buckets). When trading a
+        stock symbol with ML_WIN >= 85%, you are justified in:
+          - TP2 at 5-6x ATR (4H), 72h hold target
+          - HIGH conviction even without 3+ structural confluences (2 is enough here)
+          - Wider trailing stop after TP1 to capture the runner
+
+        DIRECTION REMAINS YOUR CALL.
+        ML_WIN tells you "a move is coming and how big." It does NOT tell you up vs down.
+        Empirical testing (1.34M bars, 2026-05) confirmed direction prediction at 4h, 24h,
+        and 72h horizons all sit at ~50% — coin-flip. Multi-horizon ML cannot bail you out
+        on direction; commit to your structural read at entry time.
+
         If ML_WIN is not in the data header, ignore this section and judge setup quality
         from your own analysis of indicators.
 
@@ -250,6 +296,28 @@ enum AnalysisPrompt {
         - Note ML accuracy (if setups with ML>70% are winning at expected rate, trust the ML more)
         Do NOT refuse a setup solely because the last one lost — one loss is noise, a pattern of losses is signal.
 
+        ACTIVE-TRADE MANAGEMENT RULE (if an active trade for this symbol is shown in context):
+        Empirically grounded in 1.34M bars of held-position outcomes. Apply mechanically:
+
+        - Trade in profit at T+24h (24h after entry, in your direction):
+          → 71% probability the trade is still profitable at T+72h, average +3-4% additional.
+          → Trail stop to breakeven, hold for 72h target. Do NOT take TP1 and exit if ML
+            was 70%+ at entry — let the runner work to TP2.
+          → If thesis still intact (no kill conditions, structure unchanged), upgrade
+            conviction one tier ("trade is confirmed").
+
+        - Trade underwater at T+24h (24h after entry, against your direction):
+          → 29% reversal-to-profitable rate is NOT sufficient to justify holding.
+          → Cut at predefined SL or current price. Do not "average down" or move stops
+            wider hoping for recovery — the data does not support that.
+          → "Hope" is not a trade-management strategy. The 24h move against you is
+            evidence the entry thesis was wrong.
+
+        - Trade flat at T+24h (within 0.3% of entry):
+          → Setup hasn't resolved. Re-evaluate as if at entry: do current conditions
+            still justify the position? If yes, hold. If kill conditions fired or
+            structure changed, exit at small loss/breakeven.
+
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
 
@@ -287,14 +355,13 @@ enum AnalysisPrompt {
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2 rows showing Price, Why, and R:R.
-        Rate conviction (evidence-based):
-        - HIGH: Clear 4H momentum (3+ bars, expanding volume). Multiple confirmation
-          signals (structure, derivatives, volume profile all align). Level + signal + risk
-          all present. ML_WIN >= 60%. No macro event within 12h.
-        - MODERATE: Momentum present but with minor dissent (1-2 indicators against).
-          At least 2 of 3 (level/signal/risk) present. ML_WIN >= 50%. No macro within 4h.
-        - LOW: Momentum ambiguous, conflicting signals across timeframes, ML_WIN < 50%,
-          or macro within 2h. → NO TRADE.
+        Rate conviction using the CONVICTION CALIBRATION rules above (mechanical, not vibes).
+        The summary criteria — apply the full checklists, not these one-liners:
+        - HIGH: All HIGH criteria pass. ML_WIN >= 70%. Multi-TF aligned. 3+ confluence.
+          No kill conditions. Macro Risk = ON_HORIZON or absent.
+        - MODERATE: All MODERATE criteria pass. ML_WIN >= 60%. 4H aligned, 2+ confluence.
+          No kill conditions. Macro Risk <= NEARBY.
+        - LOW: → NO TRADE. Output "NO SETUP — [reason]" and skip the setup table.
         Use the quality of your evidence: candle momentum, volume confirmation,
         structural alignment, derivatives support, and ML_WIN.
         One line: what makes it work, what kills it.
@@ -345,6 +412,26 @@ enum AnalysisPrompt {
         - counter_move_volume_exceeds: 1H counter-move volume > 1.2x trend volume
         - funding_supports_counter: Funding rate flipped to support the counter-move
         - macro_event_within_4h: High-impact macro event within 4 hours
+
+        PARABOLIC-MOVE WARNING (empirical, 1.34M-bar study):
+        - When a symbol has moved >5% in the past 24h, the next 48h shows slight
+          mean-reversion bias (47% continuation rate, -0.13% avg PnL on long-the-move trades).
+        - Action: if price has moved >5% (crypto) or >3% (stocks) in the past 24h in your
+          thesis direction, cap conviction at MODERATE. Tighten TP1 to capture the move
+          without holding for runner targets. State the parabolic risk in Risk Factors.
+        - This is NOT a counter-trend signal — direction is still hard to predict — but it
+          is a "don't extend the trade structurally" warning.
+
+        WAIT-FOR-CONFIRMATION RULE (reduces fakeout entries):
+        Most stop-outs on directionally-correct setups happen on the FIRST touch of a level
+        — price nicks support, sweeps stops, then moves in the thesis direction. Mitigation:
+        - Counter-trend reversal entries: REQUIRE a confirmed bar (1H close back across
+          the level after rejection wick). A naked first-touch is not enough.
+        - Range-edge entries on TRENDING regime: REQUIRE either volume confirmation
+          (>1.2x recent avg) OR a second test of the level. Single-touch trades at counter-
+          trend levels are the highest-fakeout-rate setup category.
+        - This rule does not apply to clear momentum continuation entries (price already
+          moving in thesis direction with structure aligned).
 
         ENTRY RULES:
         1. Primary entries must be near current price, anchored to the nearest meaningful level (S/R, fib, EMA) that price is actually interacting with. Check the Price Action Summary and recent candles to confirm price is near or moving toward the proposed entry.
