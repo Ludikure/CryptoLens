@@ -975,6 +975,44 @@ enum AnalysisPrompt {
                 for mode in modes { lines.append("  \(mode)") }
             }
 
+            // Phase E6 — News-Thesis Conflict (stocks, when news headlines present)
+            if let si = stockInfo, let news = si.newsHeadlines, !news.isEmpty,
+               fourH.bias.contains("Bullish") || fourH.bias.contains("Bearish") {
+                let bullishKeywords = ["beat", "beats", "raises", "raised", "upgrade", "upgraded",
+                                       "surge", "surged", "surges", "growth", "jumps", "soars",
+                                       "rallies", "breakthrough", "approval", "approves",
+                                       "wins", "boost", "boosts", "robust", "exceeds", "record high"]
+                let bearishKeywords = ["miss", "misses", "missed", "downgrade", "downgraded",
+                                       "plunge", "plunges", "slumps", "declines", "lawsuit",
+                                       "sued", "investigation", "recall", "fraud", "probe",
+                                       "layoffs", "slashes", "warns", "warning", "halts",
+                                       "suspends", "falls", "drops", "tumbles", "sinks", "cuts"]
+                var bullishHits = 0
+                var bearishHits = 0
+                for headline in news.prefix(8) {
+                    let lower = headline.lowercased()
+                    for kw in bullishKeywords where lower.contains(kw) { bullishHits += 1; break }
+                    for kw in bearishKeywords where lower.contains(kw) { bearishHits += 1; break }
+                }
+                let biasDir = fourH.bias.contains("Bullish") ? "BULLISH" : "BEARISH"
+                let newsLabel: String
+                let conflictState: String
+                if bullishHits >= 2 && bullishHits > bearishHits {
+                    newsLabel = "BULLISH_NEWS (\(bullishHits) bull / \(bearishHits) bear keywords, last 8 headlines)"
+                    conflictState = biasDir == "BULLISH" ? "SUPPORTS" : "CONFLICTS"
+                } else if bearishHits >= 2 && bearishHits > bullishHits {
+                    newsLabel = "BEARISH_NEWS (\(bullishHits) bull / \(bearishHits) bear keywords, last 8 headlines)"
+                    conflictState = biasDir == "BEARISH" ? "SUPPORTS" : "CONFLICTS"
+                } else {
+                    newsLabel = "NEUTRAL_NEWS (\(bullishHits) bull / \(bearishHits) bear keywords — no strong tilt)"
+                    conflictState = "NEUTRAL"
+                }
+                lines.append("News-Thesis Conflict: \(newsLabel) vs Bias=\(biasDir) → \(conflictState)")
+                if conflictState == "CONFLICTS" {
+                    lines.append("  Action: name the conflict explicitly in Bias; either justify why technicals override OR downgrade conviction / call FLAT")
+                }
+            }
+
             // Phase E1 — Multi-TF Alignment (explicit synthesis of 3 bias labels)
             do {
                 let dailyDir = daily.bias.contains("Bullish") ? "Bullish" : (daily.bias.contains("Bearish") ? "Bearish" : "Neutral")
