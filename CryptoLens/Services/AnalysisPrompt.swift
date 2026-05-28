@@ -57,9 +57,9 @@ enum AnalysisPrompt {
         The regime determines your playbook.
 
         STEP 2: APPLY THE RIGHT PLAYBOOK
-        TRENDING: Trade WITH the trend. Entries on pullbacks to EMAs or fib retracements. Oversold RSI in a strong trend is a buying opportunity. Stop below recent higher low (longs) or above recent lower high (shorts).
-        RANGING: Fade the extremes. Buy support, sell resistance. RSI and Stoch RSI OB/OS work here. Stops just outside the range.
-        TRANSITIONING: Biggest moves start here. Bollinger squeeze + volume = highest conviction. First pullback after breakout is bread-and-butter. Failed breakdowns are powerful reversals. Wait for the retest — the retest IS the trade.
+        TRENDING: Trade WITH the trend. Entries on pullbacks to EMAs or fibs. RSI oversold in a strong trend is opportunity, not signal. Stop beyond recent HL (longs) / LH (shorts).
+        RANGING: Fade the extremes. Buy support, sell resistance. RSI / Stoch RSI OB/OS are actionable here. Stops just outside the range.
+        TRANSITIONING: Biggest moves start here. Bollinger squeeze + volume = highest conviction. Trade the retest of a breakout (or failed breakdown), not the breakout itself.
 
         STEP 3: DETERMINE YOUR DIRECTIONAL THESIS
 
@@ -351,41 +351,19 @@ enum AnalysisPrompt {
         Show both directions when both have merit. Show one when only one makes sense. Show none when the market isn't giving anything. Never force it.
 
         COUNTER-TREND PULLBACK SETUP:
-        Trigger: Your Daily+4H directional thesis is clear, but 1H is moving AGAINST that thesis.
-        This is a HIGH-PROBABILITY pattern — you are entering with the higher-timeframe trend after the lower timeframe exhausts its counter-move.
+        Trigger: Daily+4H thesis is clear, but 1H moves AGAINST it. Enter with the higher-TF trend after 1H exhausts its counter-move.
 
         ENTRY CONDITIONS (ALL required):
-        1. Your directional thesis (Step 3) is supported by Daily AND 4H momentum (same direction).
-        2. 1H is in a counter-trend move (squeeze, impulse, or drift against your thesis).
-        3. 1H counter-move reaches a significant higher-timeframe level:
-           - For shorts: 1H rallies into 4H resistance, EMA cluster, prior breakdown level, or upper volume profile zone (VAH/POC).
-           - For longs: 1H sells off into 4H support, EMA cluster, prior breakout level, or lower volume profile zone (VAL/POC).
-        4. 1H shows exhaustion signal at that level:
-           - Bearish: inverted hammer, bearish engulfing, squeeze failure, divergence on 1H RSI, volume decline on push higher, taker ratio dropping.
-           - Bullish: hammer, bullish engulfing, squeeze failure to downside, 1H RSI divergence, volume decline on push lower, taker ratio rising.
+        1. Daily AND 4H momentum support your thesis direction.
+        2. 1H is in a counter-move against thesis (squeeze, impulse, or drift).
+        3. 1H counter-move reaches a higher-TF level — shorts: 4H resistance / EMA cluster / VAH / POC. Longs: 4H support / EMA cluster / VAL / POC.
+        4. 1H exhaustion at that level: rejection wick, engulfing, squeeze failure, 1H RSI divergence, volume decline on push, (crypto) taker ratio fading.
 
-        ENTRY TRIGGER:
-        - Enter in the direction of your thesis AFTER the 1H exhaustion signal confirms.
-        - "Confirms" = 1H candle close showing rejection (wick > body at the level), OR 1H close back below/above the level after a false breakout.
+        Entry: AFTER 1H exhaustion confirms — 1H close with wick > body at the level, OR 1H close back across the level after a false breakout.
+        Stop: beyond the 1H counter-move extreme. Floor 2.0× ATR(4H); structural stops wider than the floor override it.
+        TP1: 2.0× ATR (1:1 with floor stop). TP2: 4.0× ATR. Snap to nearest structural level when one is in range; ATR-only targets are valid when no structure aligns.
 
-        STOP PLACEMENT:
-        - Primary: beyond the 1H counter-move extreme (the high of the rally for shorts, the low of the selloff for longs).
-        - MINIMUM FLOOR: 2.0x ATR (4H). Backtesting proved stops tighter than 2.0 ATR get wicked out — the signal is directionally correct but noise shakes you out. If the structural stop is closer than 2.0 ATR, use 2.0 ATR.
-        - If the structural stop is wider than 2.0 ATR, use the structural level — do not cap it.
-
-        TARGET:
-        - TP1: 2.0x ATR from entry, aligned with the nearest structural level (S/R, fib, VWAP). 1:1 R:R with a 2.0 ATR stop.
-        - TP2: 4.0x ATR from entry, aligned with the next structural level. 1:2 R:R.
-        - If structural levels align closely with the ATR-based targets, conviction increases.
-        - If no structural level exists near the ATR targets, use the ATR targets as-is — they are backtest-proven.
-
-        KILL CONDITIONS (do NOT enter even if pattern forms):
-        - 4H shows bullish/bearish divergence AGAINST your thesis direction (suggests higher-timeframe trend is weakening, not just a pullback).
-        - Volume on the 1H counter-move is significantly HIGHER than the prior trend-direction move (institutional participation in the counter-move).
-        - Funding rate has flipped to support the counter-move direction (market structure shifting, not just a pullback).
-        - High-impact macro event within 4 hours.
-
-        MANDATORY: Output the kill condition checklist ONLY when presenting a counter-trend pullback setup (all checks will be PASS). If ANY_KILLED is true, the kill gate already blocked entry — do not repeat the checklist. Kill conditions are pre-computed in the PRE-COMPUTED FLAGS section and are authoritative. Do not re-evaluate from raw data.
+        Kill conditions are pre-computed in PRE-COMPUTED FLAGS. Output the kill checklist (all PASS) ONLY when presenting this setup; if ANY_KILLED is true the kill gate already blocked entry.
 
         PARABOLIC-MOVE WARNING (empirical, 1.34M-bar study):
         - When a symbol has moved >5% in the past 24h, the next 48h shows slight
@@ -408,57 +386,28 @@ enum AnalysisPrompt {
           moving in thesis direction with structure aligned).
 
         ENTRY RULES:
-        1. Primary entries must be near current price, anchored to the nearest meaningful level (S/R, fib, EMA) that price is actually interacting with. Check the Price Action Summary and recent candles to confirm price is near or moving toward the proposed entry.
-        2. If the best setup requires waiting for a pullback, breakout, or retest, present it as a conditional: "Enter at $X on confirmation of Y." Label it clearly as a conditional setup, separate from any current-price setup.
-        3. Calculate R:R honestly from realistic levels. Minimum acceptable R:R is 1:1. If TP1 at 1:1 with a 2 ATR stop aligns with a structural level, that is a valid setup. If no setup meets 1:1 from a realistic entry, say "no trade" and state what conditions would create a setup.
-        4. Before proposing any entry, verify: Is price near this level or moving toward it? Is this entry within 1x ATR of current price? If further, explain specifically why waiting for that level is worth it. Does recent candle data support this level holding?
-        5. Never move an entry to force R:R compliance. The entry comes from structure. R:R is a consequence, not a target.
-        6. If your bias is FLAT — there is no setup. Output "NO SETUP" with a reason and an empty JSON []. Do not present conditional or hypothetical entries.
-        7. If your conviction is LOW — there is no setup. If ML_WIN < 50%, there is no setup regardless of how strong your thesis looks — the model predicts unfavorable conditions.
-        8. If you identify a trap (bull trap, bear trap, false breakout) — there is no setup. Do not hedge it with a conditional entry.
-        9. The setup MUST agree with your regime read and your bias. TRANSITIONING regime + FLAT bias = no setup. A long setup in a regime you just called bearish = contradiction = no setup.
-        10. AFTER-HOURS / MARKET CLOSED (stocks only): When the market is closed, the entry must be relative to today's CLOSE price (the last traded price). For longs, entry must be >= today's close. For shorts, entry must be <= today's close. Do not propose entries at today's open or mid-session prices — those already traded and cannot be filled. If the setup requires a price below close (for longs) or above close (for shorts), present it as a conditional: "Enter at $X on next session if price pulls back to [level]."
-
-        STOP PLACEMENT (mandatory, applies to ALL setups, not just counter-trend):
-        - **Crypto: minimum 2.0x ATR (4H).** If the structural stop is wider than 2.0 ATR, use the structural level. If tighter, floor at 2.0 ATR. Backtesting on 850K+ bars proved sub-2.0 ATR stops get wicked even when direction is correct — the trade is right but noise shakes you out.
-        - **Stocks: minimum 1.5x ATR (4H).** Lower volatility justifies tighter stops, but still floor at 1.5 ATR.
-        - Never propose a stop tighter than the floor to "improve" the R:R ratio. R:R is a consequence of structure + volatility, not a target. If respecting the floor pushes R:R below 1:1 against your TP1, EITHER widen TP1 to a structural level that gives 1:1, OR call NO SETUP. Do not narrow the stop.
-        - When applying the floor, reason explicitly: "ATR(4H) = $X, 2.0× = $Y. Structural stop at $Z is closer than $Y, so using $Y."
+        1. Anchor primary entries to a meaningful nearby level (S/R, fib, EMA, VWAP) that price is interacting with. If the level is outside 1× ATR of current price, present the setup as a conditional ("Enter at $X on confirmation of Y") — not a current-price entry. Identified traps (bull trap, bear trap, false breakout) = no setup; do not hedge with a conditional.
+        2. Calculate R:R honestly from realistic levels. Minimum 1:1. Never move the entry, stop, or target to force R:R compliance — R:R is a consequence of structure, not a target.
+        3. The setup must agree with regime + bias. TRANSITIONING + FLAT = no setup. Long in a bearish regime = contradiction = no setup. FLAT / LOW conviction / ML_WIN < 50% = output "NO SETUP — [reason]" with empty JSON [] — no conditionals or hypotheticals.
+        4. Stocks, after-hours only: entry must be on the correct side of today's CLOSE — longs ≥ close, shorts ≤ close. Otherwise present as a conditional for next session.
 
         COUNTER-TREND REVERSAL SETUP (4H vs Daily divergence):
-        Backtesting across 850K+ crypto bars and 192K+ stock bars shows that when the 4H
-        timeframe reverses against the daily trend, these setups have HIGHER win rates than
-        aligned setups (73-86% goodR vs 38-43% for aligned). This is because reversals happen
-        at high-volatility inflection points where large ATR moves are common.
+        When 4H flips against the daily trend at an inflection point, favorable excursions are frequent — but avg 24H return is near zero, so treat as a bounce, not a new trend.
 
         WHEN TO APPLY:
-        - Daily bias is bearish (or strongly bearish), but 4H has flipped bullish — OR
-        - Daily bias is bullish (or strongly bullish), but 4H has flipped bearish
-        - ML_WIN >= 70% (REQUIRED — only top-bucket quality justifies trading against the daily)
-
-        THIS IS A MEAN-REVERSION TRADE, NOT A TREND TRADE:
-        - The favorable excursion (1.5 ATR) is reached 73-86% of the time
-        - BUT the avg 24H return is near zero or slightly negative — the move often reverses
-        - Use TIGHTER targets: TP1 at 1.0 ATR (not 1.5), TP2 at 2.0 ATR (not 4.0)
-        - Take profits quickly — this is a bounce/pullback, not a new trend
-
-        CONVICTION: MODERATE (never HIGH for counter-trend reversals)
-        Even with 70%+ ML_WIN, counter-trend carries inherent risk. The daily trend
-        may reassert at any time. Assign MODERATE conviction and size accordingly.
+        - Daily is bearish (or strongly bearish) and 4H has flipped bullish — OR mirror image
+        - ML_WIN >= 70% (required; only top-bucket quality justifies trading against the daily)
 
         ENTRY CONDITIONS:
-        1. 4H shows clear reversal: 2+ bars in the new direction with expanding volume
-        2. Price at or near a key level (support/resistance, 52-week extreme, volume profile)
-        3. 1H confirms with entry signal (rejection wick, engulfing, RSI cross)
+        1. 4H shows clear reversal: 2+ bars in the new direction with expanding volume.
+        2. Price at a key level (S/R, 52-week extreme, volume profile edge).
+        3. 1H confirms — rejection wick, engulfing, or RSI cross.
 
-        STOP: Beyond the 4H reversal low/high (the swing point). Minimum 1.5 ATR.
-        TP1: 1.0 ATR from entry. TP2: 2.0 ATR from entry.
+        Stop: beyond the 4H reversal swing point. Floor 1.5× ATR.
+        TP1: 1.0× ATR. TP2: 2.0× ATR. Tighter than aligned setups — take profit fast.
+        Conviction cap: MODERATE (never HIGH; daily trend can reassert).
 
-        DO NOT APPLY when:
-        - ML_WIN < 70% — insufficient model confidence for counter-trend
-        - No clear 4H reversal candles (just a single bar bounce)
-        - Price is mid-range (not at a key level)
-        - Kill conditions are active
+        DO NOT APPLY when ML_WIN < 70%, no clear 4H reversal candles (single-bar bounce), price is mid-range, or kill conditions active.
 
         PRICE ACTION SUMMARY:
         You receive a "Price Action Summary" section computed from raw candle data. It tells you the current regime (trending/consolidating/choppy), the shape of any consolidation, momentum direction for RSI/Stoch RSI/MACD, Stoch RSI cross recency, volume trend, and candle patterns with their position context.
@@ -586,7 +535,7 @@ enum AnalysisPrompt {
         MACRO RISK: The macro event proximity is pre-computed as `Macro Risk` in the PRE-COMPUTED FLAGS section. If IMMINENT, conviction cannot exceed LOW (no trade). If NEARBY, conviction cannot exceed MODERATE. If UPCOMING or ON_HORIZON, flag in Risk Factors but do not suppress conviction.
 
         TAGGED LEVELS: Levels in the TAGGED LEVELS section are pre-computed with proximity (IN_PLAY / NEARBY / DISTANT) and ATR distance. IN_PLAY levels are the only candidates for primary entries. NEARBY levels may be used for conditional/wait entries. DISTANT levels are targets only — never propose them as entries.
-        CANDIDATE SETUPS: Each candidate provides a validated TP1 (R:R 1.0-2.5) and TP2 (R:R 1.8-4.0), selected by quality scoring from structural levels. If targets show "(ATR target)" they are computed from volatility when no suitable structure existed — valid but note it. Targets marked "COUNTER-TREND" use tighter bands (TP1 R:R 0.8-1.5, TP2 R:R 1.3-2.5). If Viable: false, do NOT propose a trade.
+        CANDIDATE SETUPS: Each candidate provides a validated TP1 (R:R 1.0-2.5) and TP2 (R:R 1.8-4.0), selected by quality scoring from structural levels. Stop floors are already enforced (crypto 2.0× ATR(4H), stocks 1.5× ATR(4H)); use the candidate's Stop verbatim. If proposing an entry outside the candidates, the same floors apply. If targets show "(ATR target)" they are computed from volatility when no suitable structure existed — valid but note it. Targets marked "COUNTER-TREND" use tighter bands (TP1 R:R 0.8-1.5, TP2 R:R 1.3-2.5). If Viable: false, do NOT propose a trade.
         CANDLE CLOSE TIMESTAMPS: Use the pre-computed Next 4H Close and Next Daily Close timestamps for the "Next decision point" line. Do not calculate candle close times yourself.
         KILLS CLEARING: If Kills Clearing flags are present, mention them in the Prerequisites section of the watching output. Do not analyze raw data to determine if kills are clearing — use the pre-computed flags.
         DATA QUALITY: If a DATA QUALITY section is present in the payload, some data sources failed. Mention missing data in Risk Factors. If candle data is flagged as stale, note it prominently — price levels may have shifted. Do not fabricate values for missing data sources. Reduce conviction by one level if 2+ enrichment sources are missing.
