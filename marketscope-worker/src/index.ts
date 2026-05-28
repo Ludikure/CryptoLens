@@ -312,11 +312,16 @@ export default {
             requestBody.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
           }
 
+          // Sonnet 4.6 defaults to 200K context; the analysis prompt + indicator series
+          // + economic events + news can push past that on busy macro days. The
+          // `context-1m-2025-08-07` beta unlocks 1M context (input + thinking + output).
+          // Cheap header, no behaviour change for smaller prompts.
           const resp = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
             headers: {
               'x-api-key': env.CLAUDE_API_KEY,
               'anthropic-version': '2023-06-01',
+              'anthropic-beta': 'context-1m-2025-08-07',
               'content-type': 'application/json',
             },
             body: JSON.stringify(requestBody),

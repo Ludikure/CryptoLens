@@ -1248,10 +1248,13 @@ enum AnalysisPrompt {
             return df
         }()
 
+        // Cap at 12 each side. FairEconomy weeks can return 50+ events; uncapped this
+        // section alone was ~30KB and a primary cause of the 413 prompt-too-long errors.
+        // High-impact events are prioritized first via the existing sort upstream.
         if !releasedEvents.isEmpty {
             lines.append("")
             lines.append("=== RECENTLY RELEASED ECONOMIC DATA ===")
-            for event in releasedEvents {
+            for event in releasedEvents.prefix(12) {
                 var line = "✅ \(event.title) (\(event.country)) — Released \(etFormatter.string(from: event.date)) ET"
                 if let actual = event.actual, !actual.isEmpty {
                     line += " | Actual: \(actual)"
@@ -1270,7 +1273,7 @@ enum AnalysisPrompt {
         if !upcomingEvents.isEmpty {
             lines.append("")
             lines.append("=== UPCOMING ECONOMIC EVENTS ===")
-            for event in upcomingEvents {
+            for event in upcomingEvents.prefix(12) {
                 var line = "\(event.title) (\(event.country)) — \(etFormatter.string(from: event.date)) ET"
                 if let forecast = event.forecast, !forecast.isEmpty { line += " | Exp: \(forecast)" }
                 if let prev = event.previous, !prev.isEmpty { line += " | Prev: \(prev)" }
