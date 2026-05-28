@@ -85,10 +85,10 @@ enum AnalysisPrompt {
 
         Per-timeframe role: Daily = prevailing momentum (close sequence, EMA slope). 4H = continuing or exhausting (volume trend, RSI direction, MACD hist). 1H = entry timing (Stoch RSI crosses, candle patterns at levels).
 
-        Three states to recognize:
-        - MOMENTUM CONFIRMED — multi-TF agreement, RSI / volume / EMA all align with direction. Bias = momentum direction; entry on 1H pullback.
-        - MOMENTUM AMBIGUOUS — alternating bars, flat RSI, no clear EMA interaction. Look for market structure (HH/HL vs LL/LH), derivatives positioning, volume profile acceptance. No edge → FLAT.
-        - STRUCTURAL EVIDENCE FAVORS REVERSAL — momentum exists but exhaustion (RSI divergence, declining volume on push, rejection wicks at key level, crowded positioning, CVD divergence). 3+ exhaustion signals at a level → bias = reversal. 1-2 signals → note in Risk Factors only. Continuation and reversal carry equal evidentiary burden absent confluence — neither is the default.
+        Three states to recognize (use the pre-computed Exhaustion Signals + Continuation Signals counts in PRE-COMPUTED FLAGS):
+        - MOMENTUM CONFIRMED — Continuation Signals ≥ 2 and Exhaustion Signals ≤ 1. Bias = 4H momentum direction; entry on 1H pullback.
+        - MOMENTUM AMBIGUOUS — counts roughly equal, or both low. Look for market structure (HH/HL vs LL/LH), derivatives positioning, volume profile acceptance. No edge → FLAT.
+        - STRUCTURAL EVIDENCE FAVORS REVERSAL — Exhaustion Signals ≥ 3 → bias = reversal direction. Exhaustion Signals 1-2 → note in Risk Factors only. Continuation and reversal carry equal evidentiary burden absent confluence — neither is the default.
 
         BIAS-SYMMETRY CHECK (mandatory before declaring direction):
         Empirical reality (1.34M-bar study, 2026-05): direction prediction at any horizon
@@ -287,16 +287,7 @@ enum AnalysisPrompt {
 
         Kill conditions are pre-computed in PRE-COMPUTED FLAGS. Output the kill checklist (all PASS) ONLY when presenting this setup; if ANY_KILLED is true the kill gate already blocked entry.
 
-        WAIT-FOR-CONFIRMATION RULE (reduces fakeout entries):
-        Most stop-outs on directionally-correct setups happen on the FIRST touch of a level
-        — price nicks support, sweeps stops, then moves in the thesis direction. Mitigation:
-        - Counter-trend reversal entries: REQUIRE a confirmed bar (1H close back across
-          the level after rejection wick). A naked first-touch is not enough.
-        - Range-edge entries on TRENDING regime: REQUIRE either volume confirmation
-          (>1.2x recent avg) OR a second test of the level. Single-touch trades at counter-
-          trend levels are the highest-fakeout-rate setup category.
-        - This rule does not apply to clear momentum continuation entries (price already
-          moving in thesis direction with structure aligned).
+        WAIT-FOR-CONFIRMATION: each CANDIDATE SETUP carries a Confirmation field. WICK_REJECTION_CLOSE_BACK_ACROSS_LEVEL or VOLUME_1.2X_OR_SECOND_TEST means present the candidate as conditional until that event prints — naked first-touch entries are the highest-fakeout-rate category. NONE means a confirmation candle is not required (clear momentum continuation).
 
         ENTRY RULES:
         1. Anchor primary entries to a meaningful nearby level (S/R, fib, EMA, VWAP) that price is interacting with. If the level is outside 1× ATR of current price, present the setup as a conditional ("Enter at $X on confirmation of Y") — not a current-price entry. Identified traps (bull trap, bear trap, false breakout) = no setup; do not hedge with a conditional.
@@ -809,6 +800,83 @@ enum AnalysisPrompt {
             }
             if !momentumParts.isEmpty {
                 lines.append("Momentum Confirmation (4H): \(momentumParts.joined(separator: " | "))")
+            }
+
+            // Phase C7 — Exhaustion / Continuation signal counts (4H direction-aware)
+            let bullish4H = fourH.bias.contains("Bullish")
+            let bearish4H = fourH.bias.contains("Bearish")
+            if bullish4H || bearish4H {
+                let direction = bullish4H ? "Bullish" : "Bearish"
+                var exhaustion = [String]()
+                var continuation = [String]()
+
+                // 4H RSI divergence against direction
+                if fourH.rsiSeries.count >= 15 && fourH.candles.count >= 15 {
+                    let lookbackCandles = Array(fourH.candles.suffix(20))
+                    let lookbackRSI = Array(fourH.rsiSeries.suffix(min(20, fourH.rsiSeries.count)))
+                    if lookbackCandles.count == lookbackRSI.count,
+                       DivergenceDetector.hasDivergence(candles: lookbackCandles, rsiSeries: lookbackRSI, biasDirection: direction) {
+                        exhaustion.append(bullish4H ? "rsi_bearish_divergence" : "rsi_bullish_divergence")
+                    }
+                }
+
+                // Volume direction last 3 4H bars vs trailing 20-bar avg (reuses C3 logic)
+                if fourH.candles.count >= 23 {
+                    let recent3 = Array(fourH.candles.suffix(3))
+                    let priorAvg = fourH.candles.dropLast(3).suffix(20).map(\.volume).reduce(0, +) / 20
+                    if priorAvg > 0 {
+                        let recentAvg = recent3.map(\.volume).reduce(0, +) / 3
+                        let volMultiple = Double(recentAvg) / Double(priorAvg)
+                        let allUp = recent3.allSatisfy { $0.close > $0.open }
+                        let allDown = recent3.allSatisfy { $0.close < $0.open }
+                        let multStr = String(format: "%.2f", volMultiple)
+                        if bullish4H && allUp && volMultiple > 1.2 { continuation.append("volume_confirming_up_\(multStr)x") }
+                        else if bullish4H && allUp && volMultiple < 0.8 { exhaustion.append("volume_diverging_up_\(multStr)x") }
+                        else if bearish4H && allDown && volMultiple > 1.2 { continuation.append("volume_confirming_down_\(multStr)x") }
+                        else if bearish4H && allDown && volMultiple < 0.8 { exhaustion.append("volume_diverging_down_\(multStr)x") }
+                    }
+                }
+
+                // Rejection wick on most recent 4H candle (against direction)
+                if let last = fourH.candles.last {
+                    let body = abs(last.close - last.open)
+                    if body > 0 {
+                        let upperWick = last.high - max(last.close, last.open)
+                        let lowerWick = min(last.close, last.open) - last.low
+                        if bullish4H && upperWick > body * 2 { exhaustion.append("rejection_wick_upper") }
+                        else if bearish4H && lowerWick > body * 2 { exhaustion.append("rejection_wick_lower") }
+                    }
+                }
+
+                // Crowded positioning against direction (crypto)
+                if let pos = positioning {
+                    if bullish4H && pos.crowding == .crowdedLong { exhaustion.append("crowded_longs") }
+                    else if bearish4H && pos.crowding == .crowdedShort { exhaustion.append("crowded_shorts") }
+                }
+
+                // CVD divergence (spot pressure)
+                if let sp = spotPressure {
+                    if bullish4H && sp.cvdTrend == "Falling" { exhaustion.append("cvd_divergence_distribution") }
+                    else if bearish4H && sp.cvdTrend == "Rising" { exhaustion.append("cvd_divergence_accumulation") }
+                }
+
+                // EMA stack aligned with direction (continuation)
+                if let e20 = fourH.ema20, let e50 = fourH.ema50, let e200 = fourH.ema200 {
+                    if bullish4H && e20 > e50 && e50 > e200 { continuation.append("ema_stack_bullish_aligned") }
+                    else if bearish4H && e20 < e50 && e50 < e200 { continuation.append("ema_stack_bearish_aligned") }
+                }
+
+                // Funding rate aligned with direction (continuation, crypto)
+                if let d = derivatives {
+                    let fr = d.fundingRatePercent
+                    if bullish4H && fr < -0.005 { continuation.append("funding_negative_supports_long") }
+                    else if bearish4H && fr > 0.005 { continuation.append("funding_positive_supports_short") }
+                }
+
+                let exStr = exhaustion.isEmpty ? "0 — none" : "\(exhaustion.count) — \(exhaustion.joined(separator: ", "))"
+                let contStr = continuation.isEmpty ? "0 — none" : "\(continuation.count) — \(continuation.joined(separator: ", "))"
+                lines.append("Exhaustion Signals (4H, vs \(direction) momentum): \(exStr)")
+                lines.append("Continuation Signals (4H, with \(direction) momentum): \(contStr)")
             }
 
             // Phase C5 — ML Bucket (lookup table derived from 1.34M-bar persistence study, 2026-05)
@@ -1349,6 +1417,20 @@ enum AnalysisPrompt {
                 let direction4 = dailyBearish4 ? "SHORT" : (dailyBullish4 ? "LONG" : "")
                 let isCounterTrend = !aligned4 && !direction4.isEmpty
 
+                // Mirror of PRE-COMPUTED FLAGS regime logic (the outer scope's `regime` doesn't reach here)
+                let adxDaily4 = daily.adx?.adx ?? 0
+                var maAlignment4 = "tangled"
+                if let e20 = daily.ema20, let e50 = daily.ema50, let e200 = daily.ema200 {
+                    if e20 > e50 && e50 > e200 { maAlignment4 = "bullish_stacked" }
+                    else if e20 < e50 && e50 < e200 { maAlignment4 = "bearish_stacked" }
+                }
+                let bbSqueezeAny4 = indicators.contains { $0.bollingerBands?.squeeze == true }
+                let regime: String
+                if adxDaily4 > 25 && maAlignment4 != "tangled" { regime = "TRENDING" }
+                else if bbSqueezeAny4 || (adxDaily4 >= 20 && adxDaily4 <= 25) { regime = "TRANSITIONING" }
+                else if adxDaily4 < 20 { regime = "RANGING" }
+                else { regime = "TRANSITIONING" }
+
                 if !direction4.isEmpty {
                     let effectiveDirection = direction4
                     let entryLevels = uniqueLevels.filter { $0.proximity == "IN_PLAY" }
@@ -1500,11 +1582,22 @@ enum AnalysisPrompt {
 
                         let setupLabel = isCounterTrend ? "COUNTER-TREND" : "TREND"
 
+                        // Phase C6 — Confirmation Required (replaces WAIT-FOR-CONFIRMATION RULE)
+                        let confirmation: String
+                        if isCounterTrend {
+                            confirmation = "WICK_REJECTION_CLOSE_BACK_ACROSS_LEVEL"
+                        } else if regime == "TRENDING" {
+                            confirmation = "VOLUME_1.2X_OR_SECOND_TEST"
+                        } else {
+                            confirmation = "NONE"
+                        }
+
                         candidates.append(
                             "[\(setupLabel)] Entry \(Formatters.formatPrice(entry.price)) (\(entry.type)) | " +
                             "Stop \(Formatters.formatPrice(adjustedStop)) | " +
                             "Risk \(Formatters.formatPrice(risk)) (\(qtyStr) units @ \(Formatters.formatPrice(riskDollars)) risk) | " +
                             "TP1: \(targetLines[0]) | TP2: \(targetLines[1]) | " +
+                            "Confirmation: \(confirmation) | " +
                             "Viable: \(viable)"
                         )
                     }
