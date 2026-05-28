@@ -332,15 +332,6 @@ enum AnalysisPrompt {
 
         Kill conditions are pre-computed in PRE-COMPUTED FLAGS. Output the kill checklist (all PASS) ONLY when presenting this setup; if ANY_KILLED is true the kill gate already blocked entry.
 
-        PARABOLIC-MOVE WARNING (empirical, 1.34M-bar study):
-        - When a symbol has moved >5% in the past 24h, the next 48h shows slight
-          mean-reversion bias (47% continuation rate, -0.13% avg PnL on long-the-move trades).
-        - Action: if price has moved >5% (crypto) or >3% (stocks) in the past 24h in your
-          thesis direction, cap conviction at MODERATE. Tighten TP1 to capture the move
-          without holding for runner targets. State the parabolic risk in Risk Factors.
-        - This is NOT a counter-trend signal — direction is still hard to predict — but it
-          is a "don't extend the trade structurally" warning.
-
         WAIT-FOR-CONFIRMATION RULE (reduces fakeout entries):
         Most stop-outs on directionally-correct setups happen on the FIRST touch of a level
         — price nicks support, sweeps stops, then moves in the thesis direction. Mitigation:
@@ -356,7 +347,6 @@ enum AnalysisPrompt {
         1. Anchor primary entries to a meaningful nearby level (S/R, fib, EMA, VWAP) that price is interacting with. If the level is outside 1× ATR of current price, present the setup as a conditional ("Enter at $X on confirmation of Y") — not a current-price entry. Identified traps (bull trap, bear trap, false breakout) = no setup; do not hedge with a conditional.
         2. Calculate R:R honestly from realistic levels. Minimum 1:1. Never move the entry, stop, or target to force R:R compliance — R:R is a consequence of structure, not a target.
         3. The setup must agree with regime + bias. TRANSITIONING + FLAT = no setup. Long in a bearish regime = contradiction = no setup. FLAT / LOW conviction / ML_WIN < 50% = output "NO SETUP — [reason]" with empty JSON [] — no conditionals or hypotheticals.
-        4. Stocks, after-hours only: entry must be on the correct side of today's CLOSE — longs ≥ close, shorts ≤ close. Otherwise present as a conditional for next session.
 
         COUNTER-TREND REVERSAL SETUP (4H vs Daily divergence):
         When 4H flips against the daily trend at an inflection point, favorable excursions are frequent — but avg 24H return is near zero, so treat as a bounce, not a new trend.
@@ -805,6 +795,29 @@ enum AnalysisPrompt {
                 lines.append("Conviction Cap: \(macroRisk == "IMMINENT" ? "LOW (no trade)" : macroRisk == "NEARBY" ? "MODERATE max" : "no cap")")
             } else {
                 lines.append("Macro Risk: NONE")
+            }
+
+            // Phase C1 — Parabolic-move flag (mean-reversion bias on >5% crypto / >3% stock 24h move)
+            if daily.candles.count >= 1, let currentPrice = indicators.first?.price, currentPrice > 0 {
+                let priorDailyClose = daily.candles.last!.close
+                if priorDailyClose > 0 {
+                    let pct24h = (currentPrice - priorDailyClose) / priorDailyClose * 100
+                    let threshold = stockInfo != nil ? 3.0 : 5.0
+                    if pct24h >= threshold {
+                        lines.append("Parabolic Risk: ELEVATED_LONG (24h move +\(String(format: "%.1f", pct24h))% > \(String(format: "%.0f", threshold))% — mean-reversion bias next 48h, cap conviction MODERATE on longs, tighten TP1)")
+                    } else if pct24h <= -threshold {
+                        lines.append("Parabolic Risk: ELEVATED_SHORT (24h move \(String(format: "%.1f", pct24h))% < -\(String(format: "%.0f", threshold))% — mean-reversion bias next 48h, cap conviction MODERATE on shorts, tighten TP1)")
+                    } else {
+                        lines.append("Parabolic Risk: NONE (24h move \(String(format: "%+.1f", pct24h))%)")
+                    }
+                }
+            }
+
+            // Phase C2 — After-Hours Entry Floor (stocks, market closed)
+            if let si = stockInfo, si.marketState != "OPEN",
+               let closePrice = indicators.first?.price, closePrice > 0 {
+                let priceStr = Formatters.formatPrice(closePrice)
+                lines.append("After-Hours Entry Floor: today's close \(priceStr). Longs must enter >= \(priceStr); shorts <= \(priceStr). Otherwise present as a conditional for next session.")
             }
 
             // Phase 2d — Kills-clearing detection (uses prevDurState from before write)
