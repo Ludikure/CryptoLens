@@ -194,39 +194,9 @@ enum AnalysisPrompt {
         UNFAVORABLE bucket (ML_WIN < 50%) = NO TRADE regardless of directional clarity. State what ML is likely seeing (exhaustion, low-vol regime, conflicting features) but do not propose a trade.
         If `ML Bucket` is absent, judge setup quality from your own indicator analysis.
 
-        CONVICTION CALIBRATION (rule-based, not vibes — apply mechanically):
-
-        HIGH conviction requires ALL of:
-          ☐ Multi-timeframe alignment: Daily AND 4H biases agree, same direction
-          ☐ Structural confluence: 3+ of {EMA stack aligned, market structure HH/HL or LL/LH,
-            S/R confluence at entry, volume confirms move, vol regime not exhausted}
-          ☐ ML_WIN >= 70% (or ML_WIN absent and indicators all aligned)
-          ☐ No active kill conditions (ANY_KILLED = false)
-          ☐ Macro Risk = ON_HORIZON or absent (not IMMINENT, NEARBY, or UPCOMING)
-          ☐ News (if present) does not contradict the thesis
-          ☐ Failure mode is specific (not "could go the other way")
-
-        MODERATE conviction requires:
-          ☐ At least 4H bias matches your direction
-          ☐ 2 pieces of structural confluence
-          ☐ ML_WIN >= 60% (or absent + reasonable indicator alignment)
-          ☐ No active kill conditions
-          ☐ Macro Risk <= NEARBY
-          ☐ Failure mode is specific
-
-        Downgrade ONE level if:
-          - 2+ data sources are missing/stale (DATA QUALITY flag)
-          - Counter-trend reversal setup (cap at MODERATE regardless)
-          - Setup is at a worn level (4+ prior tests)
-
-        LOW conviction OR FLAT (= "no trade") if:
-          - Multi-TF biases disagree
-          - Only 1 piece of confluence
-          - ML_WIN < 50%
-          - Any kill condition active
-          - Macro Risk = IMMINENT
-          - Failure mode is generic
-          → Output "NO SETUP — [specific reason]". Skip Step 4.
+        CONVICTION (mechanical envelope, pre-computed in PRE-COMPUTED FLAGS):
+        The `Conviction Envelope` field carries `max_allowed` (FLAT / LOW / MODERATE / HIGH), the specific reasons HIGH or MODERATE was blocked, the downgrade-one-tier conditions currently active, and the auto-FLAT triggers. You MAY NOT output a conviction tier above `max_allowed`. You may pick within (e.g., MODERATE-LOW if downgrade conditions apply). If `auto_FLAT_active` is non-empty, output NO SETUP regardless of any other reasoning.
+        The remaining LLM judgment is two-fold: (a) is the failure mode specific to this setup (not "could go the other way") — if generic, apply the downgrade-one-tier; (b) for active trades, is the thesis still intact (no kill conditions, structure unchanged) — feeds the Action Envelope's conditional clauses.
 
         OUTCOME HISTORY (if provided):
         Recent trade outcomes for this specific symbol are shown. Use them to:
@@ -564,6 +534,16 @@ enum AnalysisPrompt {
             let fourH = indicators[1]
             let oneH = indicators.count > 2 ? indicators[2] : nil
 
+            // Phase C10 — Conviction Envelope capture vars. Populated by the sub-blocks
+            // below as their flags are computed; read at the bottom to emit the envelope.
+            var envAnyKilled = false
+            var envDivergenceEscalated = false
+            var envMacroRisk = "NONE"
+            var envContinuationCount = 0
+            var envExhaustionCount = 0
+            var envAlignment = "UNKNOWN"
+            var envNewsConflicts = false
+
             // Phase 1 — Regime label
             let adxDaily = daily.adx?.adx ?? 0
             var maAlignment = "tangled"
@@ -698,6 +678,7 @@ enum AnalysisPrompt {
                 killMacro = macroIn4h
 
                 let anyKilled = killDivergence || killVolume || killFunding || killMacro
+                envAnyKilled = anyKilled  // C10 capture
 
                 // Phase 3 — Kill duration tracking (candle-anchored, not refresh-anchored)
                 let killDurKey = "killDur_\(symbol)"
@@ -725,6 +706,7 @@ enum AnalysisPrompt {
 
                 // Divergence escalation: 6+ candles = trend transition, not pullback
                 let divergenceEscalated = (durState["divergence"] ?? 0) >= 6
+                envDivergenceEscalated = divergenceEscalated  // C10 capture
 
                 var killParts = [String]()
                 if killDivergence { killParts.append("divergence_against_bias(\(durState["divergence"] ?? 1) candles)") }
@@ -746,8 +728,10 @@ enum AnalysisPrompt {
                 else { macroRisk = "ON_HORIZON" }
                 lines.append("Macro Risk: \(macroRisk) — \(nearest.title) in \(String(format: "%.1f", hoursUntil))h")
                 lines.append("Conviction Cap: \(macroRisk == "IMMINENT" ? "LOW (no trade)" : macroRisk == "NEARBY" ? "MODERATE max" : "no cap")")
+                envMacroRisk = macroRisk  // C10 capture
             } else {
                 lines.append("Macro Risk: NONE")
+                envMacroRisk = "NONE"  // C10 capture
             }
 
             // Phase C1 — Parabolic-move flag (mean-reversion bias on >5% crypto / >3% stock 24h move)
@@ -890,6 +874,8 @@ enum AnalysisPrompt {
                 let contStr = continuation.isEmpty ? "0 — none" : "\(continuation.count) — \(continuation.joined(separator: ", "))"
                 lines.append("Exhaustion Signals (4H, vs \(direction) momentum): \(exStr)")
                 lines.append("Continuation Signals (4H, with \(direction) momentum): \(contStr)")
+                envContinuationCount = continuation.count  // C10 capture
+                envExhaustionCount = exhaustion.count       // C10 capture
             }
 
             // Phase C9 — Bias Feasibility asymmetry score (per-direction conviction-criteria check)
@@ -1053,6 +1039,7 @@ enum AnalysisPrompt {
                 lines.append("News-Thesis Conflict: \(newsLabel) vs Bias=\(biasDir) → \(conflictState)")
                 if conflictState == "CONFLICTS" {
                     lines.append("  Action: name the conflict explicitly in Bias; either justify why technicals override OR downgrade conviction / call FLAT")
+                    envNewsConflicts = true  // C10 capture
                 }
             }
 
@@ -1072,6 +1059,7 @@ enum AnalysisPrompt {
                     state = "MIXED"
                 }
                 lines.append("Multi-TF Alignment: \(state) (Daily \(dailyDir), 4H \(fourHDir), 1H \(oneHDir))")
+                envAlignment = state  // C10 capture
             }
 
             // Phase E2 — Vol Regime implication (extreme high vol → mean-reversion; extreme low → expansion)
@@ -1108,6 +1096,91 @@ enum AnalysisPrompt {
                 }
                 if !wornEntries.isEmpty {
                     lines.append("Worn Levels (4H, within 2× ATR of price): \(wornEntries.joined(separator: " | "))")
+                }
+            }
+
+            // Phase C10 — Conviction Envelope (mechanical evaluation; replaces CONVICTION CALIBRATION prose)
+            do {
+                let mlPct = fourH.mlWinProbability.map { Int($0 * 100) }
+                let staleCount = dataQuality?.missingEnrichments.count ?? 0
+
+                // Auto-FLAT hard gate
+                var autoFlat = [String]()
+                if let m = mlPct, m < 50 { autoFlat.append("ML_WIN_\(m)%<50") }
+                if envAnyKilled { autoFlat.append("ANY_KILLED=true") }
+                if envDivergenceEscalated { autoFlat.append("divergence_escalated_6+_candles") }
+                if envAlignment == "MIXED" { autoFlat.append("biases_MIXED") }
+                if envMacroRisk == "IMMINENT" { autoFlat.append("macro_IMMINENT") }
+
+                // HIGH conviction blockers
+                var highBlocks = [String]()
+                if envAlignment != "ALIGNED_BULLISH" && envAlignment != "ALIGNED_BEARISH" {
+                    highBlocks.append("alignment_\(envAlignment)_not_full")
+                }
+                if envContinuationCount < 3 {
+                    highBlocks.append("continuation_\(envContinuationCount)/3+_required")
+                }
+                if let m = mlPct, m < 70 {
+                    highBlocks.append("ML_WIN_\(m)<70")
+                }
+                if envMacroRisk != "NONE" && envMacroRisk != "ON_HORIZON" {
+                    highBlocks.append("macro_\(envMacroRisk)_not_ON_HORIZON")
+                }
+                if envNewsConflicts {
+                    highBlocks.append("news_thesis_conflict")
+                }
+
+                // MODERATE conviction blockers
+                var moderateBlocks = [String]()
+                if envContinuationCount < 2 {
+                    moderateBlocks.append("continuation_\(envContinuationCount)/2+_required")
+                }
+                if let m = mlPct, m < 60 {
+                    moderateBlocks.append("ML_WIN_\(m)<60")
+                }
+                if envMacroRisk != "NONE" && envMacroRisk != "ON_HORIZON" && envMacroRisk != "UPCOMING" {
+                    moderateBlocks.append("macro_\(envMacroRisk)_exceeds_NEARBY")
+                }
+
+                // Downgrade-one-tier conditions (LLM applies)
+                var downgrade = [String]()
+                if staleCount >= 2 { downgrade.append("data_stale_\(staleCount)_sources") }
+                if oneHOpposes { downgrade.append("counter_trend_pullback_cap_MODERATE") }
+                // Worn level downgrade: check if any IN_PLAY 4H level has 4+ tests
+                if let ms = fourH.marketStructure, let cp = indicators.first?.price, cp > 0, let a = fourH.atr?.atr, a > 0 {
+                    let nearWorn = ms.levelTests.contains { abs($0.price - cp) / a <= 1.0 && $0.tests >= 4 }
+                    if nearWorn { downgrade.append("entry_at_worn_level_4+_tests") }
+                }
+
+                // Determine max allowed
+                let maxAllowed: String
+                if !autoFlat.isEmpty {
+                    maxAllowed = "FLAT"
+                } else if highBlocks.isEmpty {
+                    maxAllowed = "HIGH"
+                } else if moderateBlocks.isEmpty {
+                    maxAllowed = "MODERATE"
+                } else {
+                    maxAllowed = "LOW"  // = NO TRADE
+                }
+
+                lines.append("Conviction Envelope:")
+                lines.append("  max_allowed: \(maxAllowed)")
+                if !autoFlat.isEmpty {
+                    lines.append("  auto_FLAT_active: \(autoFlat.joined(separator: ", "))")
+                    lines.append("  → Output NO SETUP regardless of any other reasoning")
+                } else {
+                    if !highBlocks.isEmpty {
+                        lines.append("  HIGH_blocked_because: \(highBlocks.joined(separator: ", "))")
+                    }
+                    if !moderateBlocks.isEmpty {
+                        lines.append("  MODERATE_blocked_because: \(moderateBlocks.joined(separator: ", "))")
+                    }
+                    if !downgrade.isEmpty {
+                        lines.append("  downgrade_one_tier_if_LLM_decides: \(downgrade.joined(separator: ", "))")
+                    }
+                    lines.append("  LLM_judgment_required: failure_mode_specific_not_generic, thesis_intact_check")
+                    lines.append("  → Pick conviction within max_allowed. You may NOT output a tier above max_allowed.")
                 }
             }
 
