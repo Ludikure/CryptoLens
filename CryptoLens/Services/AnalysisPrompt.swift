@@ -163,33 +163,26 @@ enum AnalysisPrompt {
         have a specific failure scenario in mind, which means the conviction is not earned.
         Downgrade conviction one level OR call FLAT.
 
-        BIAS LABEL AUTHORITY (treat as authoritative for direction):
-        The Daily/4H/1H bias labels in the PRE-COMPUTED FLAGS section are computed from
-        holistic structural analysis (HH/HL, EMA stack alignment, multi-indicator confluence,
-        ADX direction). They are more reliable for direction than recent indicator readings on
-        a few candles. Do NOT override a Strong Bullish or Strong Bearish bias label based on:
-        - A few candles showing pullback (RSI dipping, single bearish/bullish candle pattern)
-        - MACD recently crossing the other way
-        - Volume on one or two recent counter-direction bars
+        BIAS LABEL — STRUCTURAL CONTEXT, NOT AUTHORITATIVE:
+        The Daily/4H/1H bias labels in the PRE-COMPUTED FLAGS section are summary outputs
+        from a scoring function over EMA stack, ADX direction, RSI regime, MACD, and (for
+        daily-crypto) derivatives — a useful structural snapshot, but a SIGNAL alongside
+        the raw data you analyze in Step 3, not an authority that overrides your thesis.
+        Use it as a tie-breaker on ambiguous setups; do not use it to ignore exhaustion
+        signals or to dismiss a 1H structural break that disagrees with a higher-TF label.
 
-        These are normal pullbacks WITHIN the labeled trend, not structural reversals.
+        Concrete weighting:
+        - Bias label aligned with your independent thesis → conviction +1 step
+        - Bias label disagrees with your thesis AND your thesis rests on 3+ exhaustion
+          signals at a key level → take the trade against the label at MODERATE conviction max
+        - Bias label disagrees AND your thesis only rests on momentum slope → FLAT
+          (the label is signal that the structural setup hasn't actually reversed)
+        - Pre-computed `divergence_against_bias` or `divergence_escalated` flag fires →
+          the label itself is being challenged; weight your independent thesis higher
 
-        To override a bias label, you need ONE of these structural break signals:
-        1. A 1H or higher closed candle that BREAKS market structure (lower-low against
-           Bullish, higher-high against Bearish), confirmed on the same TF as the label.
-        2. Explicit RSI/MACD divergence sustained across 4+ candles AND volume confirmation.
-        3. The pre-computed PRE-COMPUTED FLAGS section explicitly flags divergence_against_bias
-           or divergence_escalated for this symbol.
-
-        If you cannot point to one of those three, do not call a setup AGAINST the bias label.
-        Either align with the label, or call FLAT.
-
-        Concrete example of what NOT to do:
-        - Bias label says "1H Strong Bullish"
-        - Recent 4 1H candles show pullback (RSI 43 falling, MACD just crossed bearish)
-        - DON'T: "1H momentum bearish, calling SHORT"
-        - DO: "1H pulling back inside Strong Bullish trend; wait for pullback completion
-          to enter LONG, or call FLAT if no clean entry presents"
+        If the directional thesis you wrote in Step 3 contradicts the bias label, name
+        the conflict in your output ("4H label Strong Bullish but 4H closed below prior
+        HL on volume → exhaustion thesis, conviction MODERATE"). Don't silently override.
 
         STATING YOUR THESIS:
         Declare LONG, SHORT, or FLAT with specific evidence:

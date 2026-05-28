@@ -155,7 +155,7 @@ struct TradeOutcome: Codable {
 
     var resolved: Bool {
         state == .invalidated || state == .expired ||
-        stopHit || tp2Hit || (tp1Hit && stopHit)
+        stopHit || tp2Hit
     }
 
     /// Whether this setup should be counted in win/loss statistics.

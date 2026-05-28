@@ -1,5 +1,15 @@
 import Foundation
 
+/// America/New_York calendar for time features (dayOfWeek, hourBucket, isWeekend).
+/// Was Calendar.current which produced device-local values — devices outside ET
+/// would emit feature values that didn't match the worker's ET-pinned cron, the
+/// training pipeline's canonical, or each other. Pinning to ET removes the drift.
+private let etCalendar: Calendar = {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: "America/New_York")!
+    return c
+}()
+
 @MainActor
 class AnalysisService: ObservableObject {
     let binance = BinanceService()
@@ -589,6 +599,11 @@ class AnalysisService: ObservableObject {
                 outcomeCandles = (try? await yahoo.fetchCandles(symbol: symbol, interval: "15m")) ?? result.h1.candles
             }
             OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles, cachedResult: result)
+            // Cross-symbol PENDING sweep — catches timeouts and entry triggers on setups
+            // for symbols other than the one we just analyzed. Without this, a PENDING
+            // BTC setup can sit unrefreshed while the user works on ETH, the BTC entry
+            // touches live, and the re-eval never fires.
+            OutcomeTracker.scanAllPendingSetups()
             OutcomeTracker.trackFlatOutcomes(symbol: symbol, currentPrice: result.daily.price)
             OutcomeTracker.syncResolvedOutcomes(symbol: symbol)
             saveCache(result)
@@ -1194,7 +1209,7 @@ class AnalysisService: ObservableObject {
             atrPercent: tf2.atr?.atrPercent ?? 0, atrPercentile: tf1.atrPercentile ?? 50,
             isCrypto: isCrypto,
             tfAlignment: _tfAlign, momentumAlignment: _momAlign, structureAlignment: _structAlign,
-            dayOfWeek: Calendar.current.component(.weekday, from: Date()) - 1,
+            dayOfWeek: etCalendar.component(.weekday, from: Date()) - 1,
             barsSinceRegimeChange: barsSinceRegimeChange,
             regimeCode: _regimeCode,
             // Rate-of-change (from previous refresh)
@@ -1229,11 +1244,11 @@ class AnalysisService: ObservableObject {
             hRsiAccel: hRsiAccel, hMacdAccel: hMacdAccel, dAdxAccel: dAdxAccel,
             // Time-of-day
             hourBucket: {
-                let h = Calendar.current.component(.hour, from: Date())
+                let h = etCalendar.component(.hour, from: Date())
                 return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3
             }(),
             isWeekend: {
-                let wd = Calendar.current.component(.weekday, from: Date())
+                let wd = etCalendar.component(.weekday, from: Date())
                 return wd == 1 || wd == 7
             }(),
             // Basis

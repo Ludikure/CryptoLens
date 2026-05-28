@@ -61,9 +61,14 @@ enum OutcomeTracker {
             for i in tracked.indices {
                 let state = tracked[i].outcome.state
 
-                // Skip resolved, invalidated, expired
+                // Skip resolved, invalidated, expired. `resolved` covers
+                // stopHit/tp2Hit — tp1Hit alone is NOT resolution because the runner
+                // continues until TP2 hits or the (now-breakeven) stop is hit. Was
+                // `isCounted` which included tp1Hit, short-circuiting the inner loop
+                // and freezing tracking at the first TP1 cross — 23 of 24 winners
+                // in production never registered TP2 because of it.
                 if state == .invalidated || state == .expired { continue }
-                if state == .active && tracked[i].outcome.isCounted { continue }
+                if state == .active && tracked[i].outcome.resolved { continue }
 
                 // --- PENDING state: check timeout and entry trigger ---
                 if state == .pending {
@@ -624,6 +629,81 @@ enum OutcomeTracker {
     private static func save<T: Encodable>(_ value: T, to url: URL) {
         if let data = try? JSONEncoder().encode(value) {
             try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    // MARK: - Cross-Symbol PENDING Scan
+
+    /// Walks every symbol's `setups_*.json` and processes PENDING setups regardless of
+    /// which symbol the user is currently analyzing. Catches the case where a PENDING
+    /// setup for BTC sits unrefreshed while the user works on ETH — without this, the
+    /// BTC entry can touch live, conditions can change, and the re-eval never fires
+    /// until the user returns to BTC by which point the trigger is stale.
+    ///
+    /// Per-symbol behaviour:
+    ///   - Timeout check (12h expiry) runs even when no cached AnalysisResult exists.
+    ///   - Entry-trigger check needs cached AnalysisResult; falls through silently when
+    ///     no recent analysis is available for the symbol.
+    ///
+    /// Limitation: the cached AnalysisResult for a non-currently-analyzed symbol can be
+    /// hours old. Entry triggers fire against cached price data, so a stale cache may
+    /// either miss a live touch or trigger on a level the price has long since moved
+    /// past. Background price polling would fix this; out of scope here.
+    static func scanAllPendingSetups() {
+        ioQueue.async {
+            let dir = outcomeDir
+            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            for file in files {
+                guard file.lastPathComponent.hasPrefix("setups_") else { continue }
+                let symbol = file.lastPathComponent
+                    .replacingOccurrences(of: "setups_", with: "")
+                    .replacingOccurrences(of: ".json", with: "")
+                var tracked = loadTrackedSetups(url: file)
+                guard tracked.contains(where: { $0.outcome.state == .pending }) else { continue }
+
+                let cachedResult = AnalysisHistoryStore.load(symbol: symbol).first
+                var changed = false
+
+                for i in tracked.indices {
+                    guard tracked[i].outcome.state == .pending else { continue }
+
+                    // Timeout check first — runs without cached data.
+                    if let expires = tracked[i].outcome.pendingExpiresAt, Date() > expires {
+                        tracked[i].outcome.state = .expired
+                        tracked[i].outcome.reEvalResult = ReEvalResult(
+                            direction: "", mlWin: nil, killsActive: false,
+                            validated: false, reason: "Pending window expired (12h)")
+                        changed = true
+                        continue
+                    }
+
+                    // Entry trigger needs cached price data — skip if no recent analysis.
+                    guard let result = cachedResult else { continue }
+                    let setup = tracked[i].setup
+                    let isLong = setup.direction == "LONG"
+                    let currentPrice = result.tf1.price
+                    let h1Candles = result.tf3.candles
+
+                    let entryTouched = isLong
+                        ? (currentPrice <= setup.entry || h1Candles.contains { $0.low <= setup.entry })
+                        : (currentPrice >= setup.entry || h1Candles.contains { $0.high >= setup.entry })
+
+                    if entryTouched {
+                        let evalResult = reEvaluate(original: tracked[i], cachedResult: result)
+                        tracked[i].outcome.reEvalResult = evalResult
+                        if evalResult.validated {
+                            tracked[i].outcome.state = .active
+                            tracked[i].outcome.entryHit = true
+                            tracked[i].outcome.entryHitTime = Date()
+                        } else {
+                            tracked[i].outcome.state = .invalidated
+                        }
+                        changed = true
+                    }
+                }
+
+                if changed { save(tracked, to: file) }
+            }
         }
     }
 }

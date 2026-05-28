@@ -1,5 +1,14 @@
 import Foundation
 
+/// ET-pinned calendar for time features. Matches the worker's America/New_York cron
+/// and replaces Calendar.current which produced training-machine-local values that
+/// drifted from live-cron inference whenever the dev machine wasn't in ET.
+private let etCalendar: Calendar = {
+    var c = Calendar(identifier: .gregorian)
+    c.timeZone = TimeZone(identifier: "America/New_York")!
+    return c
+}()
+
 /// Pre-fetched data shared across all symbols in a batch export run.
 struct SharedBacktestData {
     let vixCandles: [Candle]
@@ -750,7 +759,7 @@ class BacktestEngine: ObservableObject {
                         return 0
                     }(),
                     // Temporal
-                    dayOfWeek: Calendar.current.component(.weekday, from: evalTime) - 1, // 0=Sun..6=Sat
+                    dayOfWeek: etCalendar.component(.weekday, from: evalTime) - 1, // 0=Sun..6=Sat
                     barsSinceRegimeChange: min(barsSinceRegimeChange, 100), // cap at 100
                     regimeCode: regime == "TRENDING" ? 2 : regime == "TRANSITIONING" ? 1 : 0,
                     // Rate-of-change (delta over 6 bars)
@@ -818,11 +827,11 @@ class BacktestEngine: ObservableObject {
                     }(),
                     // Time-of-day
                     hourBucket: {
-                        let h = Calendar.current.component(.hour, from: evalTime)
+                        let h = etCalendar.component(.hour, from: evalTime)
                         return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3
                     }(),
                     isWeekend: {
-                        let wd = Calendar.current.component(.weekday, from: evalTime)
+                        let wd = etCalendar.component(.weekday, from: evalTime)
                         return wd == 1 || wd == 7
                     }(),
                     // Basis — not available in backtest (would need premium index history download)
@@ -895,7 +904,7 @@ class BacktestEngine: ObservableObject {
                     }(),
                     isMarketHours: {
                         guard !isCrypto else { return true }
-                        let h = Calendar.current.component(.hour, from: evalTime)
+                        let h = etCalendar.component(.hour, from: evalTime)
                         return h >= 9 && h < 16
                     }(),
                     earningsProximity: {
