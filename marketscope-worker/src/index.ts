@@ -807,19 +807,25 @@ export default {
     // === ML Model Version (R2) ===
     // === ML Prediction Read (cron-cached) ===
     // Returns the latest cached ML probability + features for a symbol. Cache is populated
-    // by the per-minute cron via `ml_pred:<symbol>` KV keys (5-min TTL). Symbols drop out
-    // of cache only if no device watchlists them for >5min. Auth-gated via the standard
-    // header check above.
+    // by the per-minute cron via a single `ml_preds:all` KV blob (5-min TTL) that maps
+    // symbol → {symbol, probability, features, timestamp, isCrypto}. Was 76 separate
+    // `ml_pred:<symbol>` keys; batching cut KV writes from ~3.3M/month to ~43K/month
+    // (the dominant Cloudflare cost). Auth-gated via the standard header check above.
     if (path === '/ml-predict' && request.method === 'GET') {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       if (!symbol) return json({ error: 'Missing symbol' }, 400);
-      const cached = await env.ALERTS.get(`ml_pred:${symbol}`);
-      if (!cached) {
-        // Cache miss: symbol isn't in any device's watchlist, or cron hasn't completed
-        // its first pass since the symbol was added. iOS falls back to local prediction.
-        return json({ error: 'No cached prediction', symbol }, 404);
+      const cached = await env.ALERTS.get('ml_preds:all');
+      if (cached) {
+        const all = JSON.parse(cached) as Record<string, any>;
+        const entry = all[symbol];
+        if (entry) return json(entry);
       }
-      return json(JSON.parse(cached));
+      // Transition fallback: read the legacy per-symbol key if the batched blob is missing
+      // or doesn't yet contain this symbol. Safe to remove a cron cycle (~5 min) after
+      // deploy when the batched blob has fully replaced the old keys.
+      const legacy = await env.ALERTS.get(`ml_pred:${symbol}`);
+      if (legacy) return json(JSON.parse(legacy));
+      return json({ error: 'No cached prediction', symbol }, 404);
     }
 
     if (path === '/ml-models/version') {
@@ -1722,9 +1728,11 @@ async function checkAllDeviceScores(env: Env) {
 }
 
 // Symbol pass: fetches global market data once, then for each symbol computes features +
-// `mlPredict`, writes the per-symbol KV cache used by `/ml-predict`, and returns a Map of
-// predictions consumed by the device pass below. Side-effects beyond the return value:
-//  - `ml_pred:<symbol>` KV write (5-min TTL) — fed to iOS via /ml-predict
+// `mlPredict`, accumulates predictions, and returns a Map consumed by the device pass.
+// Side-effects beyond the return value:
+//  - `ml_preds:all` KV write (5-min TTL, one batched blob covering all symbols) — fed
+//    to iOS via /ml-predict?symbol=X which extracts the requested symbol's record.
+//    Previously a per-symbol `ml_pred:<symbol>` write; batching cut KV writes ~75×.
 //  - `ml_snapshots` KV write (24h TTL) — feeds next cron's rate-of-change deltas
 //  - `prev_oi:<symbol>` KV write (24h TTL) — for OI delta on next cron
 //  - `derivatives_history` D1 archive every ~4H per symbol
@@ -1735,6 +1743,9 @@ async function computeSymbolPredictions(
   allSymbols: string[],
 ): Promise<Map<string, SymbolPrediction>> {
   const predictions = new Map<string, SymbolPrediction>();
+  // Accumulates per-symbol ML predictions for a single batched KV write after the loop —
+  // replaces what used to be 76 individual `ml_pred:<symbol>` writes per cron run.
+  const mlPredBatch: Record<string, { symbol: string; probability: number; features: FullFeatures; timestamp: number; isCrypto: boolean }> = {};
   const hasStocks = allSymbols.some(s => !s.endsWith('USDT'));
 
   // Fetch Fear & Greed index (global, once per cron run)
@@ -2210,21 +2221,12 @@ async function computeSymbolPredictions(
         mlProb,
       };
 
-      // Per-symbol prediction cache for the /ml-predict endpoint. Symbol-level (not
-      // device-level) — the same prediction is valid for any device asking. 5-min TTL so
-      // a symbol that drops out of every watchlist eventually clears, but the cron's
-      // ~60s cadence keeps watchlisted symbols continuously fresh.
-      await env.ALERTS.put(
-        `ml_pred:${symbol}`,
-        JSON.stringify({
-          symbol,
-          probability: mlProb,
-          features,
-          timestamp: Date.now(),
-          isCrypto,
-        }),
-        { expirationTtl: 300 }
-      );
+      // Capture prediction for the batched ml_preds:all blob written at the end of the
+      // symbol pass. Per-symbol KV writes were the dominant Cloudflare cost — 76 crypto
+      // symbols × every minute × 5-min TTL = ~3.3M writes/month, 60% of the bill. The
+      // batched blob is ~110KB (well under the 25MB KV value limit) and writes once per
+      // cron instead of 76 times.
+      mlPredBatch[symbol] = { symbol, probability: mlProb, features, timestamp: Date.now(), isCrypto };
 
       // Debug: dump features for comparison with iOS
       if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT' || symbol === 'TSLA' || symbol === 'NVDA') {
@@ -2248,6 +2250,12 @@ async function computeSymbolPredictions(
 
   // Save ML snapshots for next cron's rate-of-change deltas
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
+
+  // Single batched ml_preds:all blob written once per cron in place of 76 per-symbol
+  // ml_pred:<symbol> writes. /ml-predict?symbol=X reads this blob and extracts the
+  // requested symbol's record. 5-min TTL preserves the "drops out of cache when cron
+  // stops" behaviour the per-symbol blob had.
+  await env.ALERTS.put('ml_preds:all', JSON.stringify(mlPredBatch), { expirationTtl: 300 });
 
   return predictions;
 }
