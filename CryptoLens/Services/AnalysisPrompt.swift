@@ -54,10 +54,7 @@ enum AnalysisPrompt {
         The regime label is pre-computed in the PRE-COMPUTED FLAGS section and is AUTHORITATIVE. Use it as-is. The regime_details (ADX, MA alignment, BB squeeze) are provided for your narrative only — do not reclassify the regime.
         If regime_changed is false, output only: "## Market Regime\n[REGIME] (unchanged)" — do not re-explain. Save token budget for setup and watching sections.
         Only state "regime changed" if the Regime Changed field is explicitly true in the PRE-COMPUTED FLAGS. If the field is not present, do not infer regime change status — treat as unchanged.
-        - TRENDING: ADX > 25, price respecting EMAs, MAs stacked in order
-        - RANGING: ADX < 20, price oscillating between S/R, MAs flat/tangled
-        - TRANSITIONING: breaking out of range or trend exhausting
-        This determines your playbook.
+        The regime determines your playbook.
 
         STEP 2: APPLY THE RIGHT PLAYBOOK
         TRENDING: Trade WITH the trend. Entries on pullbacks to EMAs or fib retracements. Oversold RSI in a strong trend is a buying opportunity. Stop below recent higher low (longs) or above recent lower high (shorts).
@@ -279,9 +276,6 @@ enum AnalysisPrompt {
           - Failure mode is generic
           → Output "NO SETUP — [specific reason]". Skip Step 4.
 
-        Apply these mechanically. If a HIGH criterion fails, you cannot output HIGH — even if
-        the setup "feels" strong. The point of rules is to override gut.
-
         OUTCOME HISTORY (if provided):
         Recent trade outcomes for this specific symbol are shown. Use them to:
         - Adjust directional confidence (if LONGs are winning 5/5, LONG conviction increases)
@@ -348,15 +342,7 @@ enum AnalysisPrompt {
         3. RISK DEFINITION — you can define exactly where you're wrong. No logical stop = skip it.
 
         If all three exist, present the setup as a table with Entry, SL, TP1, TP2 rows showing Price, Why, and R:R.
-        Rate conviction using the CONVICTION CALIBRATION rules above (mechanical, not vibes).
-        The summary criteria — apply the full checklists, not these one-liners:
-        - HIGH: All HIGH criteria pass. ML_WIN >= 70%. Multi-TF aligned. 3+ confluence.
-          No kill conditions. Macro Risk = ON_HORIZON or absent.
-        - MODERATE: All MODERATE criteria pass. ML_WIN >= 60%. 4H aligned, 2+ confluence.
-          No kill conditions. Macro Risk <= NEARBY.
-        - LOW: → NO TRADE. Output "NO SETUP — [reason]" and skip the setup table.
-        Use the quality of your evidence: candle momentum, volume confirmation,
-        structural alignment, derivatives support, and ML_WIN.
+        Rate conviction using the CONVICTION CALIBRATION rules above (mechanical, not vibes). If LOW: output "NO SETUP — [reason]" and skip the setup table.
         One line: what makes it work, what kills it.
 
         If two exist but one is missing, say what's missing and what to watch for.
@@ -400,11 +386,6 @@ enum AnalysisPrompt {
         - High-impact macro event within 4 hours.
 
         MANDATORY: Output the kill condition checklist ONLY when presenting a counter-trend pullback setup (all checks will be PASS). If ANY_KILLED is true, the kill gate already blocked entry — do not repeat the checklist. Kill conditions are pre-computed in the PRE-COMPUTED FLAGS section and are authoritative. Do not re-evaluate from raw data.
-        The kill condition flags are:
-        - divergence_against_bias: 4H RSI/MACD showing divergence against your thesis direction
-        - counter_move_volume_exceeds: 1H counter-move volume > 1.2x trend volume
-        - funding_supports_counter: Funding rate flipped to support the counter-move
-        - macro_event_within_4h: High-impact macro event within 4 hours
 
         PARABOLIC-MOVE WARNING (empirical, 1.34M-bar study):
         - When a symbol has moved >5% in the past 24h, the next 48h shows slight
@@ -600,9 +581,8 @@ enum AnalysisPrompt {
         - Tables must use markdown pipe syntax with header row.
         - Do NOT list every indicator value — synthesize them into a narrative.
         - Maximum 600 words before the JSON block (headers, level lists, and table rows count toward this limit).
-        - ALL times in your output must be in Eastern Time (ET). Convert any UTC timestamps to ET before displaying. Use "ET" suffix (e.g., "4:00 PM ET", "8:30 AM ET"). This applies to: Next decision point, economic event times, candle close times, and any other time references.
+        - All injected timestamps in this payload are already in Eastern Time (ET). Reuse them verbatim — do not convert.
 
-        ECONOMIC CALENDAR: If upcoming high-impact events (FOMC, CPI, NFP) are within 48 hours, flag them in Risk Factors. These can invalidate any technical setup.
         MACRO RISK: The macro event proximity is pre-computed as `Macro Risk` in the PRE-COMPUTED FLAGS section. If IMMINENT, conviction cannot exceed LOW (no trade). If NEARBY, conviction cannot exceed MODERATE. If UPCOMING or ON_HORIZON, flag in Risk Factors but do not suppress conviction.
 
         TAGGED LEVELS: Levels in the TAGGED LEVELS section are pre-computed with proximity (IN_PLAY / NEARBY / DISTANT) and ATR distance. IN_PLAY levels are the only candidates for primary entries. NEARBY levels may be used for conditional/wait entries. DISTANT levels are targets only — never propose them as entries.
@@ -997,9 +977,12 @@ enum AnalysisPrompt {
                 dailyClose = cal.nextDate(after: now, matching: DateComponents(hour: 0, minute: 0), matchingPolicy: .nextTime) ?? now
             }
 
-            let isoFormatter = ISO8601DateFormatter()
-            lines.append("Next 4H Close: \(isoFormatter.string(from: nextFourHClose))")
-            lines.append("Next Daily Close: \(isoFormatter.string(from: dailyClose))")
+            let closeFormatter = DateFormatter()
+            closeFormatter.dateFormat = "MMM d, h:mm a"
+            closeFormatter.timeZone = TimeZone(identifier: "America/New_York")
+            closeFormatter.locale = Locale(identifier: "en_US_POSIX")
+            lines.append("Next 4H Close: \(closeFormatter.string(from: nextFourHClose)) ET")
+            lines.append("Next Daily Close: \(closeFormatter.string(from: dailyClose)) ET")
         }
 
         // Outcome history
