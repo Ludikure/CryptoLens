@@ -916,10 +916,12 @@ class AnalysisService: ObservableObject {
             let shouldTrack = market == .crypto || MarketHours.isMarketOpen()
             if shouldTrack {
                 let mlProb = result.daily.mlWinProbability
+                let archetype = AnalysisPrompt.classifyArchetype(indicators: [result.tf1, result.tf2, result.tf3])
                 for setup in tradeSetups {
                     OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id,
                                                   currentPrice: result.daily.price,
-                                                  mlProbability: mlProb)
+                                                  mlProbability: mlProb,
+                                                  archetype: archetype)
                 }
             }
             // Track FLAT/kill outcomes

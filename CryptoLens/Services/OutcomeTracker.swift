@@ -25,6 +25,26 @@ enum OutcomeTracker {
         }
     }
 
+    /// Returns wins/losses for a (symbol, archetype) pair over the last N days.
+    /// Win = tp1Hit or tp2Hit (resolved profitably). Loss = stopHit. Setups still
+    /// active/pending or expired-no-fill are excluded — they have no verdict yet.
+    /// Legacy stored setups (archetype == nil) are excluded.
+    static func archetypeRecord(symbol: String, archetype: String, lookbackDays: Int = 30) -> (wins: Int, losses: Int, total: Int) {
+        return ioQueue.sync {
+            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
+            let cutoff = Date().addingTimeInterval(TimeInterval(-lookbackDays * 86400))
+            var wins = 0
+            var losses = 0
+            for s in loadTrackedSetups(url: url) {
+                guard s.archetype == archetype, s.timestamp >= cutoff else { continue }
+                if s.outcome.tp1Hit || s.outcome.tp2Hit { wins += 1 }
+                else if s.outcome.stopHit { losses += 1 }
+                // active/pending/expired-no-fill: no verdict yet, skip
+            }
+            return (wins, losses, wins + losses)
+        }
+    }
+
     /// Returns every tracked setup across every symbol, newest first. `stats()` only
     /// includes the first 10 in `recentSetups` (UI cap); this is for export paths
     /// that need the full history.
@@ -334,7 +354,8 @@ enum OutcomeTracker {
                               currentPrice: Double = 0,
                               mlProbability: Double? = nil, conviction: String? = nil,
                               modelVersion: Int? = nil,
-                              promptVersion: String = currentPromptVersion) {
+                              promptVersion: String = currentPromptVersion,
+                              archetype: String? = nil) {
         let resolvedModelVersion = modelVersion ?? currentModelVersion(for: symbol)
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
@@ -364,7 +385,8 @@ enum OutcomeTracker {
             var ts = TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
                                    mlProbability: mlProbability, conviction: conviction,
                                    modelVersion: resolvedModelVersion, setupType: setupType,
-                                   priceAtSetup: currentPrice, promptVersion: promptVersion)
+                                   priceAtSetup: currentPrice, promptVersion: promptVersion,
+                                   archetype: archetype)
 
             if setupType == .conditional {
                 ts.outcome.state = .pending
@@ -730,20 +752,25 @@ struct TrackedSetup: Codable, Identifiable {
     /// `OutcomeTracker.currentPromptVersion`. Lets us slice the outcome archive by
     /// system-iteration without conflating the data across material changes.
     let promptVersion: String
+    /// Setup archetype at registration time (e.g. COUNTER_TREND_PULLBACK,
+    /// MOMENTUM_CONTINUATION). Optional so legacy stored data decodes as nil.
+    /// Used by `archetypeRecord` to slice win/loss by setup pattern.
+    let archetype: String?
 
     var id: UUID { setup.id }
 
     private enum CodingKeys: String, CodingKey {
         case setup, symbol, analysisId, timestamp, outcome,
              killsAtGeneration, synced, mlProbability, conviction, modelVersion, setupType,
-             priceAtSetup, promptVersion
+             priceAtSetup, promptVersion, archetype
     }
 
     init(setup: TradeSetup, symbol: String, analysisId: UUID, killSnapshot: KillSnapshot? = nil,
          mlProbability: Double? = nil, conviction: String? = nil,
          modelVersion: Int? = nil,
          setupType: SetupType = .market, priceAtSetup: Double = 0,
-         promptVersion: String = OutcomeTracker.currentPromptVersion) {
+         promptVersion: String = OutcomeTracker.currentPromptVersion,
+         archetype: String? = nil) {
         let resolvedModelVersion = modelVersion ?? OutcomeTracker.currentModelVersion(for: symbol)
         self.setup = setup
         self.symbol = symbol
@@ -758,6 +785,7 @@ struct TrackedSetup: Codable, Identifiable {
         self.setupType = setupType
         self.priceAtSetup = priceAtSetup
         self.promptVersion = promptVersion
+        self.archetype = archetype
     }
 
     init(from decoder: Decoder) throws {
@@ -777,6 +805,7 @@ struct TrackedSetup: Codable, Identifiable {
         // Legacy setups (pre-2026-05-09) lack promptVersion. Stamp them as "legacy"
         // so they segregate from current-iteration trades in the archive.
         promptVersion = (try? c.decode(String.self, forKey: .promptVersion)) ?? "legacy"
+        archetype = try c.decodeIfPresent(String.self, forKey: .archetype)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -794,6 +823,7 @@ struct TrackedSetup: Codable, Identifiable {
         try c.encode(setupType, forKey: .setupType)
         try c.encode(priceAtSetup, forKey: .priceAtSetup)
         try c.encode(promptVersion, forKey: .promptVersion)
+        try c.encodeIfPresent(archetype, forKey: .archetype)
     }
 }
 

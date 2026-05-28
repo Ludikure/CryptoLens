@@ -26,6 +26,49 @@ enum AnalysisPrompt {
         return max(0.0, 1.0 - obstacleSum)
     }
 
+    /// Setup archetype, deterministic from indicator state. Used both in buildUserPrompt
+    /// (to pick the failure-mode checklist and emit Archetype Track Record) and at setup
+    /// registration time (so OutcomeTracker can slice win/loss by archetype later).
+    static func classifyArchetype(indicators: [IndicatorResult]) -> String {
+        guard indicators.count >= 2 else { return "UNCLEAR_INSUFFICIENT_DATA" }
+        let daily = indicators[0]
+        let fourH = indicators[1]
+        let oneH = indicators.count > 2 ? indicators[2] : nil
+
+        let dailyBull = daily.bias.contains("Bullish")
+        let dailyBear = daily.bias.contains("Bearish")
+        let fourHBull = fourH.bias.contains("Bullish")
+        let fourHBear = fourH.bias.contains("Bearish")
+        let oneHBull = oneH?.bias.contains("Bullish") ?? false
+        let oneHBear = oneH?.bias.contains("Bearish") ?? false
+
+        let dirAligned4 = (dailyBull && fourHBull) || (dailyBear && fourHBear)
+        let allAligned = (dailyBull && fourHBull && oneHBull) || (dailyBear && fourHBear && oneHBear)
+        let oneHCounters = dirAligned4 && ((dailyBull && oneHBear) || (dailyBear && oneHBull))
+        let counterTrendDisagree = !dirAligned4 && (dailyBull || dailyBear) && (fourHBull || fourHBear)
+
+        if counterTrendDisagree { return "COUNTER_TREND_REVERSAL" }
+        if oneHCounters { return "COUNTER_TREND_PULLBACK" }
+        if allAligned { return "MOMENTUM_CONTINUATION" }
+
+        // Regime fallback (mirrors PRE-COMPUTED FLAGS regime logic)
+        let adxDaily = daily.adx?.adx ?? 0
+        var maAlignment = "tangled"
+        if let e20 = daily.ema20, let e50 = daily.ema50, let e200 = daily.ema200 {
+            if e20 > e50 && e50 > e200 { maAlignment = "bullish_stacked" }
+            else if e20 < e50 && e50 < e200 { maAlignment = "bearish_stacked" }
+        }
+        let bbSqueezeAny = indicators.contains { $0.bollingerBands?.squeeze == true }
+        if adxDaily > 25 && maAlignment != "tangled" {
+            return "MOMENTUM_CONTINUATION"
+        } else if bbSqueezeAny || (adxDaily >= 20 && adxDaily <= 25) {
+            return "BREAKOUT_RETEST"
+        } else if adxDaily < 20 {
+            return "RANGE_EDGE_FADE"
+        }
+        return "UNCLEAR_NO_STRONG_DIRECTION"
+    }
+
     /// Symbols whose historical favorable-excursion distribution justifies the wide TP1 band.
     /// These names exhibit fat-tail directional persistence — once price extends past 1.5 ATR
     /// favorable, it continues to 2+ ATR ~85%+ of the time. Aligned-bullish bars on these
@@ -910,62 +953,47 @@ enum AnalysisPrompt {
             }
 
             // Phase E4 — Likely Failure Modes by setup archetype (replaces generic "what would have to be true to be wrong" answers)
+            // Phase E7 — Archetype Track Record for this symbol (sliced by archetype label)
             do {
-                let dailyBull = daily.bias.contains("Bullish")
-                let dailyBear = daily.bias.contains("Bearish")
-                let fourHBull = fourH.bias.contains("Bullish")
-                let fourHBear = fourH.bias.contains("Bearish")
-                let oneHBull = oneH?.bias.contains("Bullish") ?? false
-                let oneHBear = oneH?.bias.contains("Bearish") ?? false
-                let dirAligned4 = (dailyBull && fourHBull) || (dailyBear && fourHBear)
-                let allAligned = (dailyBull && fourHBull && oneHBull) || (dailyBear && fourHBear && oneHBear)
-                let oneHCounters = dirAligned4 && ((dailyBull && oneHBear) || (dailyBear && oneHBull))
-                let counterTrendDisagree = !dirAligned4 && (dailyBull || dailyBear) && (fourHBull || fourHBear)
-
-                let archetype: String
+                let archetype = Self.classifyArchetype(indicators: indicators)
                 let modes: [String]
-                if counterTrendDisagree {
-                    archetype = "COUNTER_TREND_REVERSAL"
+                switch archetype {
+                case "COUNTER_TREND_REVERSAL":
                     modes = [
                         "(a) 4H reversal was a single-bar bounce, not a structural flip — invalidated by next 4H closing back through swing point",
                         "(b) Daily trend reasserts within hours — watch for 1H structural break in daily direction within 6 bars of entry",
                         "(c) ML_WIN was elevated by features that don't apply to counter-trend regime (e.g., high vol on a kill-clearing bar)",
                         "(d) key level being faded was the wrong level — fresh 4H test at adjacent level would invalidate"
                     ]
-                } else if oneHCounters {
-                    archetype = "COUNTER_TREND_PULLBACK"
+                case "COUNTER_TREND_PULLBACK":
                     modes = [
                         "(a) higher-TF trend was actually exhausting, not pausing — confirmed by 4H structural break against thesis (LL on bullish thesis, HH on bearish)",
                         "(b) 1H exhaustion signal was a single wick, 1H continuation resumes — wait for 1H close back across the level",
                         "(c) Volume on counter-move is institutional not retail — counter_move_volume_exceeds kill condition catches this",
                         "(d) news/macro catalyst hit during the pullback window that justifies the counter-move"
                     ]
-                } else if allAligned {
-                    archetype = "MOMENTUM_CONTINUATION"
+                case "MOMENTUM_CONTINUATION":
                     modes = [
                         "(a) momentum was fading not confirming — declining MACD hist on next 4H close confirms",
                         "(b) entry level held by stop hunts not real demand — invalidated by quick sweep + close back through within 1-2 bars",
                         "(c) higher-TF retracement target was already hit and exhausted — daily structure may be shifting silently",
                         "(d) Parabolic Risk flag elevated → mean-reversion bias next 48h reduces continuation probability"
                     ]
-                } else if regime == "RANGING" {
-                    archetype = "RANGE_EDGE_FADE"
+                case "RANGE_EDGE_FADE":
                     modes = [
                         "(a) range is actually breaking out — confirmed by close beyond VAH/VAL with volume >1.5× avg",
                         "(b) the level being faded has been tested 4+ times (worn) and is likely to break",
                         "(c) range is widening, not stable — recent 4H bars show ATR expansion >1.3× trailing avg",
                         "(d) macro catalyst within 4h is likely to break the range regardless of structure"
                     ]
-                } else if regime == "TRANSITIONING" {
-                    archetype = "BREAKOUT_RETEST"
+                case "BREAKOUT_RETEST":
                     modes = [
                         "(a) the breakout was a fakeout — retest fails because the move didn't have real participation (volume <1.2× on breakout bar)",
                         "(b) you're entering the breakout bar itself, not the retest — wait for the retest, the retest IS the trade",
                         "(c) the squeeze hasn't actually fired — Bollinger bands haven't expanded materially on the breakout candle",
                         "(d) opposite kill (failed breakdown / breakout) clears the trade thesis — watch for close back inside the prior range"
                     ]
-                } else {
-                    archetype = "UNCLEAR_NO_STRONG_DIRECTION"
+                default:
                     modes = [
                         "(a) no archetype matched — biases mixed, regime ambiguous, no strong evidence either way",
                         "(b) consider FLAT — without an archetype, the failure surface is wide and undefined"
@@ -973,6 +1001,21 @@ enum AnalysisPrompt {
                 }
                 lines.append("Likely Failure Modes (\(archetype)):")
                 for mode in modes { lines.append("  \(mode)") }
+
+                // E7 — query OutcomeTracker for this (symbol, archetype) over last 30 days
+                let record = OutcomeTracker.archetypeRecord(symbol: symbol, archetype: archetype, lookbackDays: 30)
+                if record.total >= 5 {
+                    let winRate = Double(record.wins) / Double(record.total) * 100
+                    let verdict: String
+                    if winRate >= 60 { verdict = "pattern_reliable_on_this_symbol_trust_signal" }
+                    else if winRate <= 30 { verdict = "distrust_this_archetype_on_this_symbol_require_extra_confluence" }
+                    else { verdict = "mixed_no_strong_edge_size_conservatively" }
+                    lines.append("Archetype Track Record (\(symbol) \(archetype), 30d): \(record.wins)W \(record.losses)L (\(String(format: "%.0f", winRate))%) — \(verdict)")
+                } else if record.total > 0 {
+                    lines.append("Archetype Track Record (\(symbol) \(archetype), 30d): \(record.wins)W \(record.losses)L — too few samples (\(record.total)) for verdict")
+                } else {
+                    lines.append("Archetype Track Record (\(symbol) \(archetype), 30d): no resolved samples yet")
+                }
             }
 
             // Phase E6 — News-Thesis Conflict (stocks, when news headlines present)
