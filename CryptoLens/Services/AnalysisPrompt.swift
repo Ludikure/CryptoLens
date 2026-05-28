@@ -367,13 +367,7 @@ enum AnalysisPrompt {
         DO NOT APPLY when ML_WIN < 70%, no clear 4H reversal candles (single-bar bounce), price is mid-range, or kill conditions active.
 
         PRICE ACTION SUMMARY:
-        You receive a "Price Action Summary" section computed from raw candle data. It tells you the current regime (trending/consolidating/choppy), the shape of any consolidation, momentum direction for RSI/Stoch RSI/MACD, Stoch RSI cross recency, volume trend, and candle patterns with their position context.
-        Use this as your starting framework. It answers "what is price doing RIGHT NOW."
-        Key things the summary gives you that indicators alone don't:
-        - RSI at 30 and RISING is very different from RSI at 30 and FALLING
-        - A fresh Stoch RSI bullish cross (2 candles ago) is a signal. A stale one (8 candles ago) is history.
-        - MACD histogram expanding bearish = momentum accelerating down. Contracting = momentum fading, reversal may be forming.
-        - Volume increasing on a move = conviction. Decreasing = fading, the move may not hold.
+        You receive a "Price Action Summary" section computed from raw candle data — current regime, consolidation shape, and candle patterns with position context. The momentum/volume direction is pre-computed separately (Momentum Confirmation, Volume Confirmation flags). Use the summary to answer "what is price doing right now."
         - "Hammer at support ($65,730)" is a trade trigger. "Hammer in space" is noise.
 
         CANDLE VERIFICATION:
@@ -818,6 +812,48 @@ enum AnalysisPrompt {
                let closePrice = indicators.first?.price, closePrice > 0 {
                 let priceStr = Formatters.formatPrice(closePrice)
                 lines.append("After-Hours Entry Floor: today's close \(priceStr). Longs must enter >= \(priceStr); shorts <= \(priceStr). Otherwise present as a conditional for next session.")
+            }
+
+            // Phase C3 — Volume Confirmation (4H last 3 bars vs trailing 20-bar avg)
+            if fourH.candles.count >= 23 {
+                let recent3 = Array(fourH.candles.suffix(3))
+                let priorAvg = fourH.candles.dropLast(3).suffix(20).map(\.volume).reduce(0, +) / 20
+                if priorAvg > 0 {
+                    let recentAvg = recent3.map(\.volume).reduce(0, +) / 3
+                    let volMultiple = Double(recentAvg) / Double(priorAvg)
+                    let allUp = recent3.allSatisfy { $0.close > $0.open }
+                    let allDown = recent3.allSatisfy { $0.close < $0.open }
+                    let volStr = String(format: "%.2f", volMultiple)
+                    let state: String
+                    if allUp && volMultiple > 1.2 {
+                        state = "CONFIRMING_UP (avg vol \(volStr)× trailing 20-bar, all 3 bars green)"
+                    } else if allDown && volMultiple > 1.2 {
+                        state = "CONFIRMING_DOWN (avg vol \(volStr)× trailing 20-bar, all 3 bars red)"
+                    } else if allUp && volMultiple < 0.8 {
+                        state = "DIVERGING_UP (price up but avg vol only \(volStr)× — hollow rally)"
+                    } else if allDown && volMultiple < 0.8 {
+                        state = "DIVERGING_DOWN (price down but avg vol only \(volStr)× — hollow drop)"
+                    } else {
+                        state = "NONE (avg vol \(volStr)×, direction mixed or volume neutral)"
+                    }
+                    lines.append("Volume Confirmation (4H, last 3 bars): \(state)")
+                }
+            }
+
+            // Phase C4 — Momentum Confirmation pack (RSI / MACD hist / Stoch cross direction at 4H)
+            let pa4H = PriceActionAnalyzer.analyze(indicator: fourH)
+            var momentumParts = [String]()
+            if pa4H.momentum.rsiDirection != "unknown" {
+                momentumParts.append("rsi: \(pa4H.momentum.rsiDirection)")
+            }
+            if pa4H.momentum.macdHistDirection != "unknown" {
+                momentumParts.append("macd_hist: \(pa4H.momentum.macdHistDirection)")
+            }
+            if !pa4H.momentum.stochCrossSignal.isEmpty {
+                momentumParts.append("stoch_cross: \(pa4H.momentum.stochCrossSignal) (\(pa4H.momentum.stochCrossFreshness), \(pa4H.momentum.stochCrossAge) bars ago)")
+            }
+            if !momentumParts.isEmpty {
+                lines.append("Momentum Confirmation (4H): \(momentumParts.joined(separator: " | "))")
             }
 
             // Phase 2d — Kills-clearing detection (uses prevDurState from before write)
