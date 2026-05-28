@@ -464,16 +464,18 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
         const price = fourHAll[i].close;
         const atrFor4H = (features.atrPercent / 100) * price;
 
-        // Bias/score per timeframe via the iOS ScoringFunction port. Daily-crypto gets
-        // the derivatives combined signal; other timeframes pass zeros to match Swift's
-        // conditional gating at ScoringFunction.swift:117-125. Cross-asset signal is
-        // stubbed at 0 — Swift's crossAsset.combinedSignal comes from a separate ETH/BTC+
-        // F&G fusion not yet ported; affects daily-crypto scores by ±2 at most.
+        // Bias/score per timeframe via the iOS ScoringFunction port. crossAssetSignal
+        // and derivativesCombined are BOTH stubbed at 0 here for parity with Swift's
+        // training data: BacktestEngine.swift:416 calls IndicatorEngine.computeAll
+        // without passing either argument, so the snapshot ScoringFunction sees has
+        // crossAssetSignal=0 and derivativesCombinedSignal=0 — regardless of what
+        // the CSV-output derivatives columns store. (MLFeatures uses derivCtx?.
+        // combinedSignal for the CSV column at BacktestEngine.swift:695, but that
+        // value never feeds back into the score.) Passing real values here breaks
+        // parity by exactly the Layer 5/6 contribution magnitude.
         const scoringParams = isCrypto ? CRYPTO_DEFAULT : STOCK_DEFAULT;
-        const dailyExt = isCrypto
-            ? { crossAssetSignal: 0, derivativesCombined: derivSignals.derivativesCombined }
-            : { crossAssetSignal: 0, derivativesCombined: 0 };
         const zeroExt = { crossAssetSignal: 0, derivativesCombined: 0 };
+        const dailyExt = zeroExt;
         const dailyBR = computeTimeframeBias(dailySlice, isCrypto, '1d', scoringParams, dailyExt);
         const fourHBR = computeTimeframeBias(fourHSlice, isCrypto, '4h', scoringParams, zeroExt);
         const oneHBR = oneHSlice.length >= 30
