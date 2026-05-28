@@ -815,17 +815,10 @@ export default {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       if (!symbol) return json({ error: 'Missing symbol' }, 400);
       const cached = await env.ALERTS.get('ml_preds:all');
-      if (cached) {
-        const all = JSON.parse(cached) as Record<string, any>;
-        const entry = all[symbol];
-        if (entry) return json(entry);
-      }
-      // Transition fallback: read the legacy per-symbol key if the batched blob is missing
-      // or doesn't yet contain this symbol. Safe to remove a cron cycle (~5 min) after
-      // deploy when the batched blob has fully replaced the old keys.
-      const legacy = await env.ALERTS.get(`ml_pred:${symbol}`);
-      if (legacy) return json(JSON.parse(legacy));
-      return json({ error: 'No cached prediction', symbol }, 404);
+      if (!cached) return json({ error: 'No cached prediction', symbol }, 404);
+      const entry = (JSON.parse(cached) as Record<string, any>)[symbol];
+      if (!entry) return json({ error: 'No cached prediction', symbol }, 404);
+      return json(entry);
     }
 
     if (path === '/ml-models/version') {
@@ -1746,6 +1739,21 @@ async function computeSymbolPredictions(
   // Accumulates per-symbol ML predictions for a single batched KV write after the loop —
   // replaces what used to be 76 individual `ml_pred:<symbol>` writes per cron run.
   const mlPredBatch: Record<string, { symbol: string; probability: number; features: FullFeatures; timestamp: number; isCrypto: boolean }> = {};
+  // Per-cron batched lookups: previous-bar open interest, last-derivatives-archive
+  // timestamps (4H gate), and the candle cache for 1d/4h/1h. Each replaces 76 individual
+  // KV reads + writes per cron with a single read + write of one blob. Candle cache is
+  // the biggest line — was 228 reads/cron (76 × 3 intervals); now 3.
+  const prevOIBatchRaw = await env.ALERTS.get('prev_oi:all');
+  const prevOIMap: Record<string, number> = prevOIBatchRaw ? JSON.parse(prevOIBatchRaw) : {};
+  const derivArchiveBatchRaw = await env.ALERTS.get('deriv_archive:all');
+  const derivArchiveMap: Record<string, number> = derivArchiveBatchRaw ? JSON.parse(derivArchiveBatchRaw) : {};
+  const candles1dRaw = await env.ALERTS.get('candles:all:1d');
+  const candles4hRaw = await env.ALERTS.get('candles:all:4h');
+  const candles1hRaw = await env.ALERTS.get('candles:all:1h');
+  const candles1dMap: Record<string, ScoreCandle[]> = candles1dRaw ? JSON.parse(candles1dRaw) : {};
+  const candles4hMap: Record<string, FullCandle[]> = candles4hRaw ? JSON.parse(candles4hRaw) : {};
+  const candles1hMap: Record<string, FullCandle[]> = candles1hRaw ? JSON.parse(candles1hRaw) : {};
+  const candlesDirty = { '1d': false, '4h': false, '1h': false };
   const hasStocks = allSymbols.some(s => !s.endsWith('USDT'));
 
   // Fetch Fear & Greed index (global, once per cron run)
@@ -1991,67 +1999,51 @@ async function computeSymbolPredictions(
     try {
       const isCrypto = symbol.endsWith('USDT');
 
-      // Check candle cache first (5-min TTL)
-      const cacheKey = `candles:${symbol}:1d`;
-      let candles: ScoreCandle[];
-      const cached = await env.ALERTS.get(cacheKey);
-      if (cached) {
-        candles = JSON.parse(cached);
-      } else {
+      // Candle cache: lookup in per-interval batched maps; fetch + insert on miss.
+      let candles: ScoreCandle[] = candles1dMap[symbol] ?? [];
+      if (!candles.length) {
         candles = await fetchScoreCandles(symbol, isCrypto);
         if (candles.length > 0) {
-          await env.ALERTS.put(cacheKey, JSON.stringify(candles), { expirationTtl: 300 });
-          // Archive to D1 (non-blocking)
+          candles1dMap[symbol] = candles;
+          candlesDirty['1d'] = true;
           archiveCandlesToD1(env, symbol, '1d', candles).catch(() => {});
         }
       }
       if (candles.length < 210) continue;
 
       // Fetch 4H + 1H candles for full ML features
-      let fourHCandles: FullCandle[] = [];
-      let oneHCandles: FullCandle[] = [];
+      let fourHCandles: FullCandle[] = candles4hMap[symbol] ?? [];
+      let oneHCandles: FullCandle[] = candles1hMap[symbol] ?? [];
       if (isCrypto) {
-        // 4H candles
-        const cacheKey4H = `candles:${symbol}:4h`;
-        const cached4H = await env.ALERTS.get(cacheKey4H);
-        if (cached4H) {
-          fourHCandles = JSON.parse(cached4H);
-        } else {
+        if (!fourHCandles.length) {
           try {
             const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=4h&limit=260`);
             if (resp.ok) {
               const data = await resp.json() as any[];
               const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
               fourHCandles = dropInProgress(parsed, '4h');
-              await env.ALERTS.put(cacheKey4H, JSON.stringify(fourHCandles), { expirationTtl: 300 });
+              candles4hMap[symbol] = fourHCandles;
+              candlesDirty['4h'] = true;
               archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
             }
           } catch {}
         }
-        // 1H candles
-        const cacheKey1H = `candles:${symbol}:1h`;
-        const cached1H = await env.ALERTS.get(cacheKey1H);
-        if (cached1H) {
-          oneHCandles = JSON.parse(cached1H);
-        } else {
+        if (!oneHCandles.length) {
           try {
             const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=1h&limit=100`);
             if (resp.ok) {
               const data = await resp.json() as any[];
               const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
               oneHCandles = dropInProgress(parsed, '1h');
-              await env.ALERTS.put(cacheKey1H, JSON.stringify(oneHCandles), { expirationTtl: 300 });
+              candles1hMap[symbol] = oneHCandles;
+              candlesDirty['1h'] = true;
               archiveCandlesToD1(env, symbol, '1h', oneHCandles).catch(() => {});
             }
           } catch {}
         }
       } else {
         // Stock: fetch 1H from Yahoo, aggregate to 4H
-        const cacheKey1H = `candles:${symbol}:1h`;
-        const cached1H = await env.ALERTS.get(cacheKey1H);
-        if (cached1H) {
-          oneHCandles = JSON.parse(cached1H);
-        } else {
+        if (!oneHCandles.length) {
           try {
             const resp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1h&range=6mo`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
             if (resp.ok) {
@@ -2067,14 +2059,20 @@ async function computeSymbolPredictions(
                   }
                 }
                 oneHCandles = dropInProgress(parsed, '1h');
-                await env.ALERTS.put(cacheKey1H, JSON.stringify(oneHCandles), { expirationTtl: 300 });
+                candles1hMap[symbol] = oneHCandles;
+                candlesDirty['1h'] = true;
               }
             }
           } catch {}
         }
         // Aggregate 1H → 4H via shared helper (mirrors iOS CandleAggregator.aggregate1HTo4H).
-        if (oneHCandles.length > 0) {
+        // Cache the aggregated stock 4H so the next cron skips the recompute on hit.
+        if (!fourHCandles.length && oneHCandles.length > 0) {
           fourHCandles = dropInProgress(aggregate1HTo4H_ET(oneHCandles), '4h');
+          if (fourHCandles.length) {
+            candles4hMap[symbol] = fourHCandles;
+            candlesDirty['4h'] = true;
+          }
         }
         if (fourHCandles.length > 0) {
           archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
@@ -2088,9 +2086,7 @@ async function computeSymbolPredictions(
       let derivSignals: any = { fundingSignal: 0, oiSignal: 0, takerSignal: 0, crowdingSignal: 0, derivativesCombined: 0 };
       let basisPct = 0, largeBuyVol = 0, largeSellVol = 0;
       if (isCrypto) {
-        const prevOIKey = `prev_oi:${symbol}`;
-        const prevOIStr = await env.ALERTS.get(prevOIKey);
-        const prevOI = prevOIStr ? parseFloat(prevOIStr) : 0;
+        const prevOI = prevOIMap[symbol] ?? 0;
         const FAPI = 'https://fapi.binance.com';
         let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0;
         let openInterest = 0, markPrice = 0, indexPrice = 0, longPct = 0, takerRatio = 0;
@@ -2123,7 +2119,7 @@ async function computeSymbolPredictions(
           oiChangePct = (openInterest - prevOI) / prevOI * 100;
         }
         if (openInterest > 0) {
-          await env.ALERTS.put(prevOIKey, String(openInterest), { expirationTtl: 86400 });
+          prevOIMap[symbol] = openInterest;
         }
 
         try {
@@ -2183,16 +2179,17 @@ async function computeSymbolPredictions(
         derivSignals.derivativesCombined = Math.max(-3, Math.min(3,
           derivSignals.fundingSignal + derivSignals.oiSignal + derivSignals.takerSignal + derivSignals.crowdingSignal));
 
-        // Archive to D1 (every 4H)
-        const archiveKey = `deriv_archive:${symbol}`;
-        const lastArchive = await env.ALERTS.get(archiveKey);
-        if (!lastArchive || Date.now() - parseInt(lastArchive) > 3.5 * 3600 * 1000) {
+        // Archive to D1 (every 4H). Per-symbol gate moved into the in-memory map; the
+        // batched blob is flushed at the end of computeSymbolPredictions only if any
+        // symbol actually archived this cron.
+        const lastArchive = derivArchiveMap[symbol];
+        if (!lastArchive || Date.now() - lastArchive > 3.5 * 3600 * 1000) {
           const ts = Math.floor(Date.now() / 1000);
           try {
             await env.DB.prepare(
               'INSERT OR REPLACE INTO derivatives_history (symbol, timestamp, funding_rate, open_interest, long_percent, taker_ratio, top_trader_long_pct, taker_buy_vol, taker_sell_vol, mark_price, index_price, basis_pct, large_buy_vol, large_sell_vol, large_buy_count, large_sell_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
             ).bind(symbol, ts, fundingRate, openInterest, longPct, takerRatio, topTraderLongPct, takerBuyVol, takerSellVol, markPrice, indexPrice, basisPct, largeBuyVol, largeSellVol, largeBuyCount, largeSellCount).run();
-            await env.ALERTS.put(archiveKey, String(Date.now()), { expirationTtl: 14400 });
+            derivArchiveMap[symbol] = Date.now();
           } catch {}
         }
       }
@@ -2251,11 +2248,18 @@ async function computeSymbolPredictions(
   // Save ML snapshots for next cron's rate-of-change deltas
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
 
-  // Single batched ml_preds:all blob written once per cron in place of 76 per-symbol
-  // ml_pred:<symbol> writes. /ml-predict?symbol=X reads this blob and extracts the
-  // requested symbol's record. 5-min TTL preserves the "drops out of cache when cron
-  // stops" behaviour the per-symbol blob had.
+  // Batched KV blobs written once per cron in place of 4-5 × 76 per-symbol writes.
+  // 5-min TTL on ml_preds:all and candles:all:<interval> preserves the "drop out of
+  // cache when cron stops" behaviour the per-symbol blobs had; prev_oi:all and
+  // deriv_archive:all use longer TTLs since they're internal state that should survive
+  // cron-cycle gaps. Candle blobs only flush when at least one symbol was missing —
+  // saves writes during the ~4 of 5 crons where everything hits cache.
   await env.ALERTS.put('ml_preds:all', JSON.stringify(mlPredBatch), { expirationTtl: 300 });
+  await env.ALERTS.put('prev_oi:all', JSON.stringify(prevOIMap), { expirationTtl: 86400 });
+  await env.ALERTS.put('deriv_archive:all', JSON.stringify(derivArchiveMap), { expirationTtl: 14400 });
+  if (candlesDirty['1d']) await env.ALERTS.put('candles:all:1d', JSON.stringify(candles1dMap), { expirationTtl: 300 });
+  if (candlesDirty['4h']) await env.ALERTS.put('candles:all:4h', JSON.stringify(candles4hMap), { expirationTtl: 300 });
+  if (candlesDirty['1h']) await env.ALERTS.put('candles:all:1h', JSON.stringify(candles1hMap), { expirationTtl: 300 });
 
   return predictions;
 }
