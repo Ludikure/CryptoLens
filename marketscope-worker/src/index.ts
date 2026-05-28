@@ -72,8 +72,8 @@ const CORS = {
 // Limits
 const RATE_LIMIT_ANALYZE = 30;   // AI calls per device per hour
 const MAX_ALERTS = 50;           // Max alerts per device
-const MAX_PROMPT_CHARS = 40_000; // Max prompt size (weekly + SPY + spot pressure increase payload)
-const MAX_BODY_BYTES = 256_000;  // Max request body size (256KB)
+const MAX_PROMPT_CHARS = 200_000; // ~50K tokens per field; fits within 1M context beta with room for thinking + output
+const MAX_BODY_BYTES = 600_000;   // Max request body size (600KB) — covers system + user prompt + JSON wrapper headroom
 const MAX_NOTE_LENGTH = 500;     // Max alert note length
 const DEVICE_ID_REGEX = /^[a-zA-Z0-9-]{1,128}$/;
 const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'];
