@@ -31,7 +31,7 @@ import pandas as pd
 TARGET_COLUMN = {24: 'fwdMaxFavR', 48: 'fwdMaxFavR48H', 72: 'fwdMaxFavR72H'}
 
 
-def load_symbol_with_horizon(symbol, is_crypto, horizon, source_dir):
+def load_symbol_with_horizon(symbol, is_crypto, horizon, source_dir, threshold=1.5):
     """Drop-in for v12.load_symbol that picks the target column by horizon and
     handles ms-stamped CSVs (Node CLI default at the time of writing) by
     normalizing to seconds when the values look out of range."""
@@ -54,7 +54,7 @@ def load_symbol_with_horizon(symbol, is_crypto, horizon, source_dir):
     if (df['timestamp'] > 1e11).any():
         df['timestamp'] = (df['timestamp'] // 1000).astype(int)
     valid = df[df[target_col].notna() & df['fwdReturn24H'].notna()].copy()
-    valid['goodR'] = (valid[target_col] >= 1.5).astype(int)
+    valid['goodR'] = (valid[target_col] >= threshold).astype(int)
     for feat in v12.FEATURES:
         if feat not in valid.columns:
             if feat == 'takerRatioRaw': default = 1.0
@@ -74,6 +74,9 @@ def main():
                     help="Filename suffix for the output model (e.g. 'h72' → ml-model-stock-h72.json)")
     ap.add_argument('--skip-crypto', action='store_true')
     ap.add_argument('--skip-stocks', action='store_true')
+    ap.add_argument('--threshold', type=float, default=1.5,
+                    help="goodR threshold in ATR multiples. 1.5 matches v12 baseline; "
+                         "2.0 recommended for 72h horizon (1.5 saturates near 95%% base rate).")
     args = ap.parse_args()
 
     source_dir = f'/Users/bojanmihovilovic/CryptoLens/ml-training/{args.source}'
@@ -84,7 +87,7 @@ def main():
     # forking the whole training script for a target-column swap.
     v12.DOWNLOADS = source_dir
     original_load = v12.load_symbol
-    v12.load_symbol = lambda sym, is_c: load_symbol_with_horizon(sym, is_c, horizon, source_dir)
+    v12.load_symbol = lambda sym, is_c: load_symbol_with_horizon(sym, is_c, horizon, source_dir, args.threshold)
 
     # Output filename includes suffix. Hijack export_model to redirect.
     original_export = v12.export_model
@@ -96,9 +99,9 @@ def main():
             'features': v12.FEATURES, 'trees': trees, 'base_score': base_score,
             'version': 12, 'market': market, 'engine': model_type,
             'n_features': len(v12.FEATURES), 'n_trees': len(trees), 'n_samples': n_samples,
-            'model_type': 'classifier', 'target': f'goodR_{horizon}h',
+            'model_type': 'classifier', 'target': f'goodR_{horizon}h_{args.threshold}',
             'calibration': {'x': x_cal, 'y': y_cal, 'cap': v12.CAP, 'method': 'isotonic'},
-            'description': f'{market} ({model_type}) — goodR = {target_col}>=1.5, {n_samples} bars',
+            'description': f'{market} ({model_type}) — goodR = {target_col}>={args.threshold}, {n_samples} bars',
         }
         out_path = f'{v12.WORKER}/ml-model-{market}-{args.suffix}.json'
         with open(out_path, 'w') as f:

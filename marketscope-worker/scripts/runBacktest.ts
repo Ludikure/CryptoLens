@@ -52,6 +52,10 @@ import { CSV_HEADER, rowToCSV, type BarOutput } from './csv.js';
 import { fetchGlobalContext, resolveBarContext, sliceSectorETF, type GlobalContext } from './context.js';
 import { loadMergedDerivatives, resolveDerivativesAt } from './derivatives.js';
 import type { D1DerivativesArchive } from './fetchers/derivatives-d1.js';
+import {
+    computeTimeframeBias, alignFromBiases, regimeFromDaily, emaRegimeFromDaily,
+    CRYPTO_DEFAULT, STOCK_DEFAULT,
+} from './scoring-bias.js';
 
 /// Neutral derivatives signals for stock bars. computeAllFeatures still wants this
 /// struct populated; the model treats all-zero rows as "no derivatives info".
@@ -200,6 +204,110 @@ function computeFwdMaxFavR(
     return Math.max(upMove, downMove) / atrFor4H;
 }
 
+/// Trade simulation port from BacktestEngine.swift:493-566. Runs only when bias is
+/// aligned (bullish or bearish). Returns the CSV-label fields for tradeOutcome, pnl,
+/// bars, peakFav, peakAdv. Neutral/conflict bars get the zero-row sentinel that Swift
+/// emits via the `tradeResult == nil` branch (line 568).
+interface TradeSimResult {
+    outcome: string;
+    pnlPct: number;
+    barsToOutcome: number;
+    maxFavorable: number;
+    maxAdverse: number;
+}
+
+function simulateTrade(
+    alignment: string, isCrypto: boolean, fourHPrice: number, atrFor4H: number,
+    oneHCandles: Candle[], firstFutureOneHIdx: number,
+): TradeSimResult {
+    const empty: TradeSimResult = {
+        outcome: 'NONE', pnlPct: 0, barsToOutcome: 0, maxFavorable: 0, maxAdverse: 0,
+    };
+    if (!alignment.includes('bullish') && !alignment.includes('bearish')) return empty;
+    if (atrFor4H <= 0) return empty;
+    const isBull = alignment.includes('bullish');
+    const slippagePct = isCrypto ? 0.00015 : 0.0003;
+    const slippage = fourHPrice * slippagePct;
+    const entry = isBull ? fourHPrice + slippage : fourHPrice - slippage;
+    let stop = isBull ? entry - atrFor4H * 2 - slippage : entry + atrFor4H * 2 + slippage;
+    const tp1 = isBull ? entry + atrFor4H * 2 - slippage : entry - atrFor4H * 2 + slippage;
+    const tp2 = isBull ? entry + atrFor4H * 4 - slippage : entry - atrFor4H * 4 + slippage;
+    const risk = Math.abs(entry - stop);
+
+    const maxScan = 72;
+    let outcome = 'EXPIRED';
+    let bars = maxScan;
+    let peakFav = 0, peakAdv = 0;
+    let tp1Reached = false, tp1ReachedBar = 0;
+
+    for (let b = 0; b < maxScan; b++) {
+        const idx = firstFutureOneHIdx + b;
+        if (idx >= oneHCandles.length) { bars = b; break; }
+        const c = oneHCandles[idx];
+        const fav = isBull ? c.high - entry : entry - c.low;
+        const adv = isBull ? entry - c.low : c.high - entry;
+        if (fav > peakFav) peakFav = fav;
+        if (adv > peakAdv) peakAdv = adv;
+        const stopHit = isBull ? c.low <= stop : c.high >= stop;
+        const tp1Hit = isBull ? c.high >= tp1 : c.low <= tp1;
+        const tp2Hit = isBull ? c.high >= tp2 : c.low <= tp2;
+        if (stopHit && tp1Hit) {
+            const distStop = Math.abs(c.open - stop);
+            const distTp1 = Math.abs(c.open - tp1);
+            if (distStop <= distTp1) { outcome = 'STOPPED'; bars = b + 1; break; }
+            else { tp1Reached = true; tp1ReachedBar = b; stop = entry; }
+        } else if (stopHit) { outcome = 'STOPPED'; bars = b + 1; break; }
+        else if (tp1Hit && !tp1Reached) { tp1Reached = true; tp1ReachedBar = b; stop = entry; }
+        if (tp2Hit) { outcome = 'TP2'; bars = b + 1; break; }
+    }
+    if (outcome === 'EXPIRED' && tp1Reached) {
+        outcome = 'TP1'; bars = tp1ReachedBar + 1;
+    }
+    let pnl = 0;
+    if (outcome === 'TP1') pnl = Math.abs(tp1 - entry) / entry * 100;
+    else if (outcome === 'TP2') pnl = Math.abs(tp2 - entry) / entry * 100;
+    else if (outcome === 'STOPPED') pnl = -risk / entry * 100;
+
+    return { outcome, pnlPct: pnl, barsToOutcome: bars, maxFavorable: peakFav, maxAdverse: peakAdv };
+}
+
+/// First 1H candle index strictly after `evalTime`. Mirrors Swift's `oneHIdx` semantics
+/// (it's pre-advanced to the next bar before each iteration's trade scan).
+function firstOneHIndexAfter(oneHCandles: Candle[], evalTime: number): number {
+    let lo = 0, hi = oneHCandles.length;
+    while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (oneHCandles[mid].time <= evalTime) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+}
+
+/// Direction-aware fwdMaxFavR matching BacktestEngine.swift:1022-1026. For aligned
+/// bullish setups, only the upside excursion counts (long-trade favorable). For aligned
+/// bearish, only downside. Neutral and conflict use max-of-both (the worker's prior
+/// default behaviour) — this is the row-by-row "favorable" direction the goodR label
+/// is derived from.
+function computeFwdMaxFavRDirectional(
+    fourHCandles: Candle[], i: number, lookahead: number, atrFor4H: number,
+    alignment: string,
+): number {
+    if (atrFor4H <= 0) return 0;
+    const end = Math.min(i + lookahead, fourHCandles.length - 1);
+    if (end <= i) return 0;
+    const price = fourHCandles[i].close;
+    let maxHigh = -Infinity, minLow = Infinity;
+    for (let k = i + 1; k <= end; k++) {
+        if (fourHCandles[k].high > maxHigh) maxHigh = fourHCandles[k].high;
+        if (fourHCandles[k].low < minLow) minLow = fourHCandles[k].low;
+    }
+    if (maxHigh === -Infinity) return 0;
+    const upMove = maxHigh - price;
+    const downMove = price - minLow;
+    if (alignment.includes('bearish')) return downMove / atrFor4H;
+    if (alignment.includes('bullish')) return upMove / atrFor4H;
+    return Math.max(upMove, downMove) / atrFor4H;
+}
+
 /// Close-to-close return at +N 4H bars from `i`, in pct. Clamps to series end so the
 /// final bars don't crash the loop; rows past the lookahead get the same close repeatedly,
 /// which is the right semantics for "this trade isn't resolvable yet" (fwdReturn shrinks
@@ -292,9 +400,15 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
 
     for (let i = evalStartIndex; i < fourHAll.length - 1; i++) {
         const evalTime = fourHAll[i].time;
-        const dailySlice = sliceUpTo(dailyAll, evalTime);
-        const fourHSlice = fourHAll.slice(0, i + 1);
-        const oneHSlice = sliceUpTo(oneHAll, evalTime);
+        // Match BacktestEngine.swift:414-424 — pass only the last 300 bars per timeframe to
+        // computeAllFeatures, not the full history. The percentile-style features
+        // (atrPercentile, volScalar downstream) rank current ATR against the population
+        // sliced in here; full-history population produced ~25pp drift vs Swift's 300.
+        const dailyFull = sliceUpTo(dailyAll, evalTime);
+        const dailySlice = dailyFull.slice(Math.max(0, dailyFull.length - 300));
+        const fourHSlice = fourHAll.slice(Math.max(0, i + 1 - 300), i + 1);
+        const oneHFull = sliceUpTo(oneHAll, evalTime);
+        const oneHSlice = oneHFull.slice(Math.max(0, oneHFull.length - 300));
         if (dailySlice.length < 250 || fourHSlice.length < 210) continue;
 
         const snapshot = buildSnapshot(state);
@@ -350,13 +464,38 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
         const price = fourHAll[i].close;
         const atrFor4H = (features.atrPercent / 100) * price;
 
+        // Bias/score per timeframe via the iOS ScoringFunction port. Daily-crypto gets
+        // the derivatives combined signal; other timeframes pass zeros to match Swift's
+        // conditional gating at ScoringFunction.swift:117-125. Cross-asset signal is
+        // stubbed at 0 — Swift's crossAsset.combinedSignal comes from a separate ETH/BTC+
+        // F&G fusion not yet ported; affects daily-crypto scores by ±2 at most.
+        const scoringParams = isCrypto ? CRYPTO_DEFAULT : STOCK_DEFAULT;
+        const dailyExt = isCrypto
+            ? { crossAssetSignal: 0, derivativesCombined: derivSignals.derivativesCombined }
+            : { crossAssetSignal: 0, derivativesCombined: 0 };
+        const zeroExt = { crossAssetSignal: 0, derivativesCombined: 0 };
+        const dailyBR = computeTimeframeBias(dailySlice, isCrypto, '1d', scoringParams, dailyExt);
+        const fourHBR = computeTimeframeBias(fourHSlice, isCrypto, '4h', scoringParams, zeroExt);
+        const oneHBR = oneHSlice.length >= 30
+            ? computeTimeframeBias(oneHSlice, isCrypto, '1h', scoringParams, zeroExt)
+            : { score: 0, bias: 'Neutral', emaRegime: 'mixed' as const, stackBullish: false, stackBearish: false, adx: 0, rsi: 50 };
+        const biasAlignmentStr = alignFromBiases(dailyBR.bias, fourHBR.bias);
+        const regimeStr = regimeFromDaily(dailyBR.adx, dailyBR.stackBullish, dailyBR.stackBearish);
+        const emaRegimeStr = emaRegimeFromDaily(dailyBR.stackBullish, dailyBR.stackBearish);
+
+        // Trade simulation — only fires on aligned bars; matches Swift's
+        // tradeResult == nil semantics on neutral/conflict.
+        const firstOneH = firstOneHIndexAfter(oneHAll, evalTime);
+        const tradeSim = simulateTrade(
+            biasAlignmentStr, isCrypto, price, atrFor4H, oneHAll, firstOneH,
+        );
+
         const w24 = computeFwdWindow24H(fourHAll, i);
-        const fwdMaxFavR24 = computeFwdMaxFavR(fourHAll, i, 6, atrFor4H);
-        const fwdMaxFavR48 = computeFwdMaxFavR(fourHAll, i, 12, atrFor4H);
-        const fwdMaxFavR72 = computeFwdMaxFavR(fourHAll, i, 18, atrFor4H);
-        // Signed close-to-close returns at the longer horizons. Lets persistence
-        // analysis check whether 24h direction matches 48h/72h direction (i.e. is
-        // the model catching continuations or whipsaws).
+        // Direction-aware fwdMaxFavR mirrors BacktestEngine.swift:1022-1026 — long
+        // setups use upMove, short setups use downMove, neutral keeps max-of-both.
+        const fwdMaxFavR24 = computeFwdMaxFavRDirectional(fourHAll, i, 6, atrFor4H, biasAlignmentStr);
+        const fwdMaxFavR48 = computeFwdMaxFavRDirectional(fourHAll, i, 12, atrFor4H, biasAlignmentStr);
+        const fwdMaxFavR72 = computeFwdMaxFavRDirectional(fourHAll, i, 18, atrFor4H, biasAlignmentStr);
         const fwdR48H = fwdReturnAtBars(fourHAll, i, 12);
         const fwdR72H = fwdReturnAtBars(fourHAll, i, 18);
 
@@ -364,20 +503,19 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
             symbol,
             timestampMs: evalTime,
             price,
-            // Score / bias / regime fields aren't in scoring-full.ts; not model inputs,
-            // only labels. Stubbed neutral.
-            dailyScore: 0, fourHScore: 0, oneHScore: 0,
-            dailyBias: 'Neutral', fourHBias: 'Neutral', oneHBias: 'Neutral',
-            biasAlignment: 'neutral',
-            regime: 'NEUTRAL', emaRegime: 'NEUTRAL',
+            dailyScore: dailyBR.score, fourHScore: fourHBR.score, oneHScore: oneHBR.score,
+            dailyBias: dailyBR.bias, fourHBias: fourHBR.bias, oneHBias: oneHBR.bias,
+            biasAlignment: biasAlignmentStr,
+            regime: regimeStr, emaRegime: emaRegimeStr,
             volScalar: features.volScalarML ?? 1.0,
             atrPercentile: features.atrPercentile ?? 50,
             isCrypto,
             features,
-            // Trade-outcome simulation (entry-to-stop-or-target) isn't ported — separate
-            // BacktestEngine logic, only CSV labels.
-            tradeOutcome: 'NONE', tradePnlPct: 0, tradeBarsToOutcome: 0,
-            tradeMaxFavorable: 0, tradeMaxAdverse: 0,
+            tradeOutcome: tradeSim.outcome,
+            tradePnlPct: tradeSim.pnlPct,
+            tradeBarsToOutcome: tradeSim.barsToOutcome,
+            tradeMaxFavorable: tradeSim.maxFavorable,
+            tradeMaxAdverse: tradeSim.maxAdverse,
             fwdReturn4H: w24.r4H, fwdReturn12H: w24.r12H, fwdReturn24H: w24.r24H,
             fwdMaxUp24H: w24.maxUpPct, fwdMaxDown24H: w24.maxDownPct,
             fwdMaxFavR: fwdMaxFavR24,

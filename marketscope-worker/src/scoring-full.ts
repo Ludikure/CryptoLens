@@ -276,7 +276,7 @@ function computeADX(candles: Candle[], period: number = 14): { adx: number; plus
 
 // Mirrors Swift ATR.compute() — Wilder smoothing over full TR series.
 // Previous version was simple mean of last 14 TRs, which ran 2-3× higher during recent volatility.
-function computeATR(candles: Candle[], period: number = 14): number {
+export function computeATR(candles: Candle[], period: number = 14): number {
     if (candles.length < period + 1) return candles[candles.length - 1]?.close * 0.01 || 1;
     const trs: number[] = [];
     for (let i = 1; i < candles.length; i++) {
@@ -619,7 +619,8 @@ interface TimeframeFeatures {
     vwapValue: number | null;
 }
 
-function extractFeatures(candles: Candle[], isCrypto: boolean, timeframe: 'daily' | '4h' | '1h' = 'daily'): TimeframeFeatures {
+export type { TimeframeFeatures };
+export function extractFeatures(candles: Candle[], isCrypto: boolean, timeframe: 'daily' | '4h' | '1h' = 'daily'): TimeframeFeatures {
     const closes = candles.map(c => c.close);
     const volumes = candles.map(c => c.volume);
     const price = closes[closes.length - 1];
