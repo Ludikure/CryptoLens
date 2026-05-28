@@ -91,25 +91,12 @@ enum AnalysisPrompt {
         - STRUCTURAL EVIDENCE FAVORS REVERSAL — Exhaustion Signals ≥ 3 → bias = reversal direction. Exhaustion Signals 1-2 → note in Risk Factors only. Continuation and reversal carry equal evidentiary burden absent confluence — neither is the default.
 
         BIAS-SYMMETRY CHECK (mandatory before declaring direction):
-        Empirical reality (1.34M-bar study, 2026-05): direction prediction at any horizon
-        — 4h, 24h, 72h — sits at ~50% even with the full 111-feature set. Your structural
-        reasoning may add edge, but the prior is coin-flip. To avoid premature commitment,
-        before naming a bias, articulate BOTH sides in 2 sentences each:
+        Empirical reality (1.34M-bar study, 2026-05): direction prediction at any horizon sits at ~50% even with the full 111-feature set. Before naming a bias, articulate BOTH sides in 2 sentences each (citing specific evidence):
 
-        BULL CASE: [the strongest 2-sentence argument for LONG, citing specific evidence]
-        BEAR CASE: [the strongest 2-sentence argument for SHORT, citing specific evidence]
+        BULL CASE: [the strongest 2-sentence argument for LONG]
+        BEAR CASE: [the strongest 2-sentence argument for SHORT]
 
-        Then rate the asymmetry: 1 (cases roughly balanced) → 5 (one side overwhelmingly
-        favored). Use this to set conviction:
-        - Asymmetry 1-2: → call FLAT, regardless of which side feels slightly stronger.
-          A near-symmetric setup is a coin flip dressed up as a thesis.
-        - Asymmetry 3: → MAX conviction is MODERATE. Note the dissenting case in Risk
-          Factors. Apply tighter SL than usual.
-        - Asymmetry 4-5: → HIGH conviction is justifiable IF other HIGH criteria pass.
-          State why the dissenting case is structurally weaker (which evidence breaks it).
-
-        This rule overrides "indicators look bullish so I'll call long." If the bear case
-        is also defensible (asymmetry ≤ 2), the trade isn't there yet. Wait or pass.
+        The numeric asymmetry is pre-computed as `Bias Feasibility` in PRE-COMPUTED FLAGS (LONG score / SHORT score / asymmetry / conviction_cap). Honor the conviction_cap verbatim. The narrative articulation above is still required — it forces you to look at the dissenting case. If conviction_cap is FLAT_required_close_call, mention both cases briefly but do not present a setup.
 
         FAILURE-MODE CHECK (mandatory before declaring conviction):
         Before naming a directional bias, write 2-3 sentences answering:
@@ -205,27 +192,8 @@ enum AnalysisPrompt {
         - Note ML accuracy (if setups with ML>70% are winning at expected rate, trust the ML more)
         Do NOT refuse a setup solely because the last one lost — one loss is noise, a pattern of losses is signal.
 
-        ACTIVE-TRADE MANAGEMENT RULE (if an active trade for this symbol is shown in context):
-        Empirically grounded in 1.34M bars of held-position outcomes. Apply mechanically:
-
-        - Trade in profit at T+24h (24h after entry, in your direction):
-          → 71% probability the trade is still profitable at T+72h, average +3-4% additional.
-          → Trail stop to breakeven, hold for 72h target. Do NOT take TP1 and exit if ML
-            was 70%+ at entry — let the runner work to TP2.
-          → If thesis still intact (no kill conditions, structure unchanged), upgrade
-            conviction one tier ("trade is confirmed").
-
-        - Trade underwater at T+24h (24h after entry, against your direction):
-          → 29% reversal-to-profitable rate is NOT sufficient to justify holding.
-          → Cut at predefined SL or current price. Do not "average down" or move stops
-            wider hoping for recovery — the data does not support that.
-          → "Hope" is not a trade-management strategy. The 24h move against you is
-            evidence the entry thesis was wrong.
-
-        - Trade flat at T+24h (within 0.3% of entry):
-          → Setup hasn't resolved. Re-evaluate as if at entry: do current conditions
-            still justify the position? If yes, hold. If kill conditions fired or
-            structure changed, exit at small loss/breakeven.
+        ACTIVE TRADE MANAGEMENT:
+        If `Active Trade State` is present in PRE-COMPUTED FLAGS, follow the matching `Action Envelope` verbatim. The envelope is mechanical (state-based) — your job is the thesis check ("is the entry thesis still intact?"), which determines whether the conditional clauses in the envelope apply. Do not re-derive the management rule from scratch.
 
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
@@ -879,6 +847,66 @@ enum AnalysisPrompt {
                 lines.append("Continuation Signals (4H, with \(direction) momentum): \(contStr)")
             }
 
+            // Phase C9 — Bias Feasibility asymmetry score (per-direction conviction-criteria check)
+            do {
+                func score(direction: String) -> Int {
+                    var s = 0
+                    let bull = direction == "LONG"
+                    // 1. Daily bias
+                    if bull ? daily.bias.contains("Bullish") : daily.bias.contains("Bearish") { s += 1 }
+                    // 2. 4H bias
+                    if bull ? fourH.bias.contains("Bullish") : fourH.bias.contains("Bearish") { s += 1 }
+                    // 3. 1H bias
+                    if let oneHData = oneH {
+                        if bull ? oneHData.bias.contains("Bullish") : oneHData.bias.contains("Bearish") { s += 1 }
+                    }
+                    // 4. ML_WIN >= 70% (direction-agnostic favor, +1 both)
+                    if let m = fourH.mlWinProbability, m >= 0.70 { s += 1 }
+                    // 5. Volume Confirmation matches direction (reuses C3 logic)
+                    if fourH.candles.count >= 23 {
+                        let recent3 = Array(fourH.candles.suffix(3))
+                        let priorAvg = fourH.candles.dropLast(3).suffix(20).map(\.volume).reduce(0, +) / 20
+                        if priorAvg > 0 {
+                            let recentAvg = recent3.map(\.volume).reduce(0, +) / 3
+                            let mult = Double(recentAvg) / Double(priorAvg)
+                            let allUp = recent3.allSatisfy { $0.close > $0.open }
+                            let allDown = recent3.allSatisfy { $0.close < $0.open }
+                            if bull && allUp && mult > 1.2 { s += 1 }
+                            else if !bull && allDown && mult > 1.2 { s += 1 }
+                        }
+                    }
+                    // 6. EMA stack aligned with direction
+                    if let e20 = fourH.ema20, let e50 = fourH.ema50, let e200 = fourH.ema200 {
+                        if bull && e20 > e50 && e50 > e200 { s += 1 }
+                        else if !bull && e20 < e50 && e50 < e200 { s += 1 }
+                    }
+                    // 7. Funding rate (crypto) or ML Bucket TOP (stocks)
+                    if let d = derivatives {
+                        let fr = d.fundingRatePercent
+                        if bull && fr < -0.005 { s += 1 }
+                        else if !bull && fr > 0.005 { s += 1 }
+                    } else if stockInfo != nil {
+                        if let m = fourH.mlWinProbability, m >= 0.85 { s += 1 }
+                    }
+                    return s
+                }
+                let longScore = score(direction: "LONG")
+                let shortScore = score(direction: "SHORT")
+                let asymmetry = abs(longScore - shortScore)
+                let favored: String
+                if longScore > shortScore { favored = "LONG" }
+                else if shortScore > longScore { favored = "SHORT" }
+                else { favored = "NONE" }
+                let cap: String
+                switch asymmetry {
+                case 0...2: cap = "FLAT_required_close_call"
+                case 3: cap = "MODERATE_max"
+                case 4...5: cap = "HIGH_allowed"
+                default: cap = "HIGH_strong"
+                }
+                lines.append("Bias Feasibility: LONG \(longScore)/7, SHORT \(shortScore)/7 — asymmetry \(asymmetry) (favored: \(favored), conviction_cap: \(cap))")
+            }
+
             // Phase C5 — ML Bucket (lookup table derived from 1.34M-bar persistence study, 2026-05)
             if let mlProb = fourH.mlWinProbability {
                 let mlPct = Int(mlProb * 100)
@@ -896,6 +924,41 @@ enum AnalysisPrompt {
                     bucket = "UNFAVORABLE (ML_WIN \(mlPct)%) — NO TRADE regardless of directional clarity"
                 }
                 lines.append("ML Bucket: \(bucket)")
+            }
+
+            // Phase C8 — Active Trade State + Action Envelope
+            let activeForSymbol = OutcomeTracker.activeSetups(symbol: symbol).filter {
+                $0.outcome.state == .active && $0.outcome.entryHit
+            }
+            if !activeForSymbol.isEmpty, let currentPrice = indicators.first?.price, currentPrice > 0 {
+                for tracked in activeForSymbol {
+                    guard let entryTime = tracked.outcome.entryHitTime else { continue }
+                    let dir = tracked.setup.direction.uppercased()
+                    let entry = tracked.setup.entry
+                    guard entry > 0 else { continue }
+                    let ageHours = Date().timeIntervalSince(entryTime) / 3600
+                    let pnlPct: Double = dir == "LONG"
+                        ? (currentPrice - entry) / entry * 100
+                        : (entry - currentPrice) / entry * 100
+                    lines.append("Active Trade: \(dir) entry \(Formatters.formatPrice(entry)), age \(String(format: "%.0f", ageHours))h, PnL \(String(format: "%+.2f", pnlPct))%")
+                    let state: String
+                    let envelope: String
+                    if ageHours < 24 {
+                        state = "INTRA_24H"
+                        envelope = "no_envelope_yet_wait_for_T+24h"
+                    } else if pnlPct >= 0.3 {
+                        state = "IN_PROFIT_24H"
+                        envelope = "trail_stop_to_BE, hold_for_72h_target_if_thesis_intact, upgrade_conviction_one_tier_if_thesis_intact"
+                    } else if pnlPct <= -0.3 {
+                        state = "UNDERWATER_24H"
+                        envelope = "cut_at_SL_now_no_average_down, no_widening_stops"
+                    } else {
+                        state = "FLAT_24H"
+                        envelope = "reevaluate_as_if_at_entry, exit_at_BE_if_kills_fired_or_structure_changed"
+                    }
+                    lines.append("Active Trade State: \(state)")
+                    lines.append("Action Envelope: \(envelope)")
+                }
             }
 
             // Phase 2d — Kills-clearing detection (uses prevDurState from before write)
