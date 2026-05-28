@@ -907,6 +907,61 @@ enum AnalysisPrompt {
                 lines.append("Bias Feasibility: LONG \(longScore)/7, SHORT \(shortScore)/7 — asymmetry \(asymmetry) (favored: \(favored), conviction_cap: \(cap))")
             }
 
+            // Phase E1 — Multi-TF Alignment (explicit synthesis of 3 bias labels)
+            do {
+                let dailyDir = daily.bias.contains("Bullish") ? "Bullish" : (daily.bias.contains("Bearish") ? "Bearish" : "Neutral")
+                let fourHDir = fourH.bias.contains("Bullish") ? "Bullish" : (fourH.bias.contains("Bearish") ? "Bearish" : "Neutral")
+                let oneHDir = oneH.map { $0.bias.contains("Bullish") ? "Bullish" : ($0.bias.contains("Bearish") ? "Bearish" : "Neutral") } ?? "—"
+                let state: String
+                if dailyDir == "Bullish" && fourHDir == "Bullish" && (oneHDir == "Bullish" || oneHDir == "—") {
+                    state = "ALIGNED_BULLISH"
+                } else if dailyDir == "Bearish" && fourHDir == "Bearish" && (oneHDir == "Bearish" || oneHDir == "—") {
+                    state = "ALIGNED_BEARISH"
+                } else if dailyDir == fourHDir && dailyDir != "Neutral" {
+                    state = "ALIGNED_\(dailyDir.uppercased())_HIGHER_TF_ONLY"  // 1H disagrees
+                } else {
+                    state = "MIXED"
+                }
+                lines.append("Multi-TF Alignment: \(state) (Daily \(dailyDir), 4H \(fourHDir), 1H \(oneHDir))")
+            }
+
+            // Phase E2 — Vol Regime implication (extreme high vol → mean-reversion; extreme low → expansion)
+            if let pct = daily.atrPercentile {
+                let pctInt = Int(pct)
+                let implication: String
+                if pctInt >= 85 {
+                    implication = "expect_mean_reversion_next_24_48h (extreme high vol contracts)"
+                } else if pctInt <= 15 {
+                    implication = "expect_expansion_soon (extreme low vol expands — Bollinger squeeze territory)"
+                } else if pctInt >= 70 {
+                    implication = "elevated_vol_caution_on_extension_targets"
+                } else if pctInt <= 30 {
+                    implication = "compressed_vol_breakout_setups_favored"
+                } else {
+                    implication = "normal_range_no_bias"
+                }
+                lines.append("Vol Regime: ATR_PERCENTILE_\(pctInt) → \(implication)")
+            }
+
+            // Phase E3 — Worn Levels (4H structure levels within 2× ATR of current price)
+            if let ms = fourH.marketStructure, !ms.levelTests.isEmpty,
+               let currentPrice = indicators.first?.price, currentPrice > 0,
+               let atr = fourH.atr?.atr, atr > 0 {
+                var wornEntries = [String]()
+                for level in ms.levelTests.prefix(8) {
+                    let atrDist = abs(level.price - currentPrice) / atr
+                    guard atrDist <= 2.0 else { continue }
+                    let wear: String
+                    if level.tests >= 4 { wear = "WORN_\(level.tests)x_distrust" }
+                    else if level.tests >= 2 { wear = "RECENT_\(level.tests)x" }
+                    else { wear = "FRESH_1x_strongest_reaction" }
+                    wornEntries.append("\(Formatters.formatPrice(level.price)) [\(wear)]")
+                }
+                if !wornEntries.isEmpty {
+                    lines.append("Worn Levels (4H, within 2× ATR of price): \(wornEntries.joined(separator: " | "))")
+                }
+            }
+
             // Phase C5 — ML Bucket (lookup table derived from 1.34M-bar persistence study, 2026-05)
             if let mlProb = fourH.mlWinProbability {
                 let mlPct = Int(mlProb * 100)
