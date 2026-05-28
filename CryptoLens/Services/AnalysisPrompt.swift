@@ -350,6 +350,16 @@ enum AnalysisPrompt {
         This must be ONE line with at most two conditions. Always include a time component (next candle close, next 4H close, specific event time) so the user knows when to look again.
         Examples: "Next decision point: 4H candle close at 6:00 PM ET or price reaching $67,663." / "Next decision point: 1H close below $66,938 or NFP release tomorrow 8:30 AM ET."
 
+        ## Self-Check
+        Mandatory verification block. One line per check, each tagged Y / N / NA, with the value or specific reason in parens:
+        - Regime authoritative used as-is: Y/N (used: [REGIME])
+        - Conviction within envelope: Y/N ([LEVEL] vs cap [conviction_cap value])
+        - Kill conditions honored: Y/N/NA (ANY_KILLED=[true/false], action: [skipped setup / none required])
+        - Bias matches feasibility favored direction: Y/N ([direction] feasibility = [N/7])
+        - Failure mode specific (not generic): Y/N ([one specific failure cited])
+        - Active Trade Action Envelope honored: Y/N/NA ([state] → [action taken])
+        Any N → fix the corresponding output section before submitting.
+
         ---
         At the very end, include a JSON block with trade setups:
         ```json
@@ -358,20 +368,12 @@ enum AnalysisPrompt {
         If no valid setup, output empty array: `[]`
         Use actual prices from the data. This JSON is machine-parsed to create alerts.
 
-        SELF-CHECK BEFORE FINALIZING (run mentally, do not output):
-        1. Does Bias reference SPECIFIC structural evidence by name (multi-TF alignment / S/R level
-           with price / volume confirmation / regime / exhaustion or continuation signal), not vague
-           "momentum looks bullish"?
-        2. Did you write a SPECIFIC failure mode ("RSI divergence must confirm with volume" /
-           "needs to break $X with conviction"), not generic ("could go down")?
-        3. Does the conviction grade pass the rule-based calibration above (count the checkboxes),
-           not based on feel?
-        4. If news was provided, did you reference it explicitly in the Bias?
-        5. If DATA QUALITY flagged missing/stale sources, did you reduce conviction one level
-           and mention in Risk Factors?
-        6. Are entry/SL/TP prices actual numbers from the TAGGED LEVELS or candle data, not made-up?
-        7. Is the Next decision point in ET with both time AND price-condition components?
-        If any check fails, fix the output before submitting.
+        Specificity rules (enforced by ## Self-Check output block):
+        - Bias must cite specific structural evidence by name (multi-TF alignment, S/R with price, volume confirmation, regime, exhaustion/continuation signal) — not vague "momentum looks bullish."
+        - Failure mode must be specific to this setup — not "could go the other way."
+        - Entry/SL/TP must use prices from TAGGED LEVELS or candle data — not fabricated.
+        - If news present, reference it explicitly in Bias.
+        - If DATA QUALITY flagged 2+ missing/stale sources, reduce conviction one level and mention in Risk Factors.
 
         IMPORTANT RULES:
         - ONLY reference indicator values, levels, and data points explicitly present in this payload. If a data field is not provided, state "data unavailable" — never estimate or infer missing values.
@@ -905,6 +907,72 @@ enum AnalysisPrompt {
                 default: cap = "HIGH_strong"
                 }
                 lines.append("Bias Feasibility: LONG \(longScore)/7, SHORT \(shortScore)/7 — asymmetry \(asymmetry) (favored: \(favored), conviction_cap: \(cap))")
+            }
+
+            // Phase E4 — Likely Failure Modes by setup archetype (replaces generic "what would have to be true to be wrong" answers)
+            do {
+                let dailyBull = daily.bias.contains("Bullish")
+                let dailyBear = daily.bias.contains("Bearish")
+                let fourHBull = fourH.bias.contains("Bullish")
+                let fourHBear = fourH.bias.contains("Bearish")
+                let oneHBull = oneH?.bias.contains("Bullish") ?? false
+                let oneHBear = oneH?.bias.contains("Bearish") ?? false
+                let dirAligned4 = (dailyBull && fourHBull) || (dailyBear && fourHBear)
+                let allAligned = (dailyBull && fourHBull && oneHBull) || (dailyBear && fourHBear && oneHBear)
+                let oneHCounters = dirAligned4 && ((dailyBull && oneHBear) || (dailyBear && oneHBull))
+                let counterTrendDisagree = !dirAligned4 && (dailyBull || dailyBear) && (fourHBull || fourHBear)
+
+                let archetype: String
+                let modes: [String]
+                if counterTrendDisagree {
+                    archetype = "COUNTER_TREND_REVERSAL"
+                    modes = [
+                        "(a) 4H reversal was a single-bar bounce, not a structural flip — invalidated by next 4H closing back through swing point",
+                        "(b) Daily trend reasserts within hours — watch for 1H structural break in daily direction within 6 bars of entry",
+                        "(c) ML_WIN was elevated by features that don't apply to counter-trend regime (e.g., high vol on a kill-clearing bar)",
+                        "(d) key level being faded was the wrong level — fresh 4H test at adjacent level would invalidate"
+                    ]
+                } else if oneHCounters {
+                    archetype = "COUNTER_TREND_PULLBACK"
+                    modes = [
+                        "(a) higher-TF trend was actually exhausting, not pausing — confirmed by 4H structural break against thesis (LL on bullish thesis, HH on bearish)",
+                        "(b) 1H exhaustion signal was a single wick, 1H continuation resumes — wait for 1H close back across the level",
+                        "(c) Volume on counter-move is institutional not retail — counter_move_volume_exceeds kill condition catches this",
+                        "(d) news/macro catalyst hit during the pullback window that justifies the counter-move"
+                    ]
+                } else if allAligned {
+                    archetype = "MOMENTUM_CONTINUATION"
+                    modes = [
+                        "(a) momentum was fading not confirming — declining MACD hist on next 4H close confirms",
+                        "(b) entry level held by stop hunts not real demand — invalidated by quick sweep + close back through within 1-2 bars",
+                        "(c) higher-TF retracement target was already hit and exhausted — daily structure may be shifting silently",
+                        "(d) Parabolic Risk flag elevated → mean-reversion bias next 48h reduces continuation probability"
+                    ]
+                } else if regime == "RANGING" {
+                    archetype = "RANGE_EDGE_FADE"
+                    modes = [
+                        "(a) range is actually breaking out — confirmed by close beyond VAH/VAL with volume >1.5× avg",
+                        "(b) the level being faded has been tested 4+ times (worn) and is likely to break",
+                        "(c) range is widening, not stable — recent 4H bars show ATR expansion >1.3× trailing avg",
+                        "(d) macro catalyst within 4h is likely to break the range regardless of structure"
+                    ]
+                } else if regime == "TRANSITIONING" {
+                    archetype = "BREAKOUT_RETEST"
+                    modes = [
+                        "(a) the breakout was a fakeout — retest fails because the move didn't have real participation (volume <1.2× on breakout bar)",
+                        "(b) you're entering the breakout bar itself, not the retest — wait for the retest, the retest IS the trade",
+                        "(c) the squeeze hasn't actually fired — Bollinger bands haven't expanded materially on the breakout candle",
+                        "(d) opposite kill (failed breakdown / breakout) clears the trade thesis — watch for close back inside the prior range"
+                    ]
+                } else {
+                    archetype = "UNCLEAR_NO_STRONG_DIRECTION"
+                    modes = [
+                        "(a) no archetype matched — biases mixed, regime ambiguous, no strong evidence either way",
+                        "(b) consider FLAT — without an archetype, the failure surface is wide and undefined"
+                    ]
+                }
+                lines.append("Likely Failure Modes (\(archetype)):")
+                for mode in modes { lines.append("  \(mode)") }
             }
 
             // Phase E1 — Multi-TF Alignment (explicit synthesis of 3 bias labels)
