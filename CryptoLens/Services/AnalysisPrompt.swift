@@ -159,55 +159,10 @@ enum AnalysisPrompt {
 
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
-        ML QUALITY FILTER (if ML_WIN shown in data header):
-        ML_WIN is a direction-agnostic calibrated probability of a >= 1.5 ATR favorable move
-        within 24H. 73.4% walk-forward accuracy for crypto (LightGBM, 76 symbols), 66.8% for
-        stocks (XGBoost, 159 symbols). Capped at 85%.
-
-        ML_WIN answers "are conditions favorable to trade at all?" — it does NOT pick direction.
-        Your momentum read determines direction; ML_WIN gates whether to take the trade and
-        determines how far in time to project the setup.
-
-        Multi-horizon empirical reliability (1.34M-bar persistence study, 2026-05):
-
-        Hit-rate of >= 1.5 ATR favorable move by horizon, per ML bucket:
-          ML 70-85%:  75% @ 24h | 93% @ 48h | 98% @ 72h
-          ML 60-70%:  67% @ 24h | 89% @ 48h | 95% @ 72h
-          ML 50-60%:  57% @ 24h | 83% @ 48h | 91% @ 72h
-          ML <50%:    chop / no trade
-
-        High-ML bars produce moves at longer horizons with even higher reliability — the
-        signal is volatility-cluster-based and gets stronger with time. Use bucket → horizon:
-
-        - ML_WIN >= 70%: Top bucket. Move is essentially certain within 72h. Set TP2 at
-          4-5x ATR (4H) targeting a 72h hold. Justify HIGH conviction. Counter-trend
-          reversal setups also qualify here.
-        - ML_WIN 60-69%: Favorable. ~95% chance of move within 72h. TP2 at 3-4x ATR,
-          48h hold target. MODERATE-to-HIGH conviction depending on structural alignment.
-          NOT sufficient for counter-trend reversal setups.
-        - ML_WIN 50-59%: Marginal. ~91% chance within 72h but lower magnitude. TP2 at
-          2-3x ATR, 24h hold target. MODERATE conviction at best — proceed only if your
-          directional thesis is strong (clear momentum + structural + derivatives aligned).
-        - ML_WIN < 50%: Unfavorable. NO TRADE regardless of momentum clarity. State what
-          ML is likely seeing (exhaustion at extremes, low-volatility regime, conflicting
-          features) and what would need to change.
-
-        STOCK 85%+ ML SPECIAL TIER:
-        On stocks (not crypto), the 85%+ ML bucket shows materially higher direction
-        persistence (82% sign-agreement at 72h vs ~70% for other buckets). When trading a
-        stock symbol with ML_WIN >= 85%, you are justified in:
-          - TP2 at 5-6x ATR (4H), 72h hold target
-          - HIGH conviction even without 3+ structural confluences (2 is enough here)
-          - Wider trailing stop after TP1 to capture the runner
-
-        DIRECTION REMAINS YOUR CALL.
-        ML_WIN tells you "a move is coming and how big." It does NOT tell you up vs down.
-        Empirical testing (1.34M bars, 2026-05) confirmed direction prediction at 4h, 24h,
-        and 72h horizons all sit at ~50% — coin-flip. Multi-horizon ML cannot bail you out
-        on direction; commit to your structural read at entry time.
-
-        If ML_WIN is not in the data header, ignore this section and judge setup quality
-        from your own analysis of indicators.
+        ML QUALITY FILTER:
+        ML_WIN is a direction-agnostic calibrated probability of a >= 1.5 ATR favorable move within 24h. It gates trade-or-not and sizing, NOT direction (empirical sign-accuracy ~50% at all horizons — direction is your call from structure). The pre-computed `ML Bucket` field in PRE-COMPUTED FLAGS carries the actionable info: 72h hit-rate, TP2 ATR multiplier, hold horizon, conviction ceiling, and counter-trend qualification. Use it verbatim — do not re-derive the bucket from ML_WIN%.
+        UNFAVORABLE bucket (ML_WIN < 50%) = NO TRADE regardless of directional clarity. State what ML is likely seeing (exhaustion, low-vol regime, conflicting features) but do not propose a trade.
+        If `ML Bucket` is absent, judge setup quality from your own indicator analysis.
 
         CONVICTION CALIBRATION (rule-based, not vibes — apply mechanically):
 
@@ -854,6 +809,25 @@ enum AnalysisPrompt {
             }
             if !momentumParts.isEmpty {
                 lines.append("Momentum Confirmation (4H): \(momentumParts.joined(separator: " | "))")
+            }
+
+            // Phase C5 — ML Bucket (lookup table derived from 1.34M-bar persistence study, 2026-05)
+            if let mlProb = fourH.mlWinProbability {
+                let mlPct = Int(mlProb * 100)
+                let isStock = stockInfo != nil
+                let bucket: String
+                if isStock && mlPct >= 85 {
+                    bucket = "STOCK_TOP (ML_WIN \(mlPct)%) — 72h hit-rate 98%, TP2 5-6× ATR, hold 72h, conviction ceiling HIGH, counter-trend qualified: yes, relaxed_confluence: 2_ok, runner_stop_wider: true"
+                } else if mlPct >= 70 {
+                    bucket = "TOP (ML_WIN \(mlPct)%) — 72h hit-rate 98%, TP2 4-5× ATR, hold 72h, conviction ceiling HIGH, counter-trend qualified: yes"
+                } else if mlPct >= 60 {
+                    bucket = "FAVORABLE (ML_WIN \(mlPct)%) — 72h hit-rate 95%, TP2 3-4× ATR, hold 48h, conviction ceiling HIGH, counter-trend qualified: no"
+                } else if mlPct >= 50 {
+                    bucket = "MARGINAL (ML_WIN \(mlPct)%) — 72h hit-rate 91%, TP2 2-3× ATR, hold 24h, conviction ceiling MODERATE, counter-trend qualified: no"
+                } else {
+                    bucket = "UNFAVORABLE (ML_WIN \(mlPct)%) — NO TRADE regardless of directional clarity"
+                }
+                lines.append("ML Bucket: \(bucket)")
             }
 
             // Phase 2d — Kills-clearing detection (uses prevDurState from before write)
