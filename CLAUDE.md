@@ -68,6 +68,11 @@ The app pre-computes authoritative flags passed to the LLM in the `PRE-COMPUTED 
 - **Kill Conditions**: divergence_against_bias, counter_move_volume_exceeds, funding_supports_counter, macro_event_within_4h. Duration tracked in candles. Kills-clearing flags (divergence_weakening, volume_normalizing).
 - **Macro Risk**: IMMINENT/NEARBY/UPCOMING/ON_HORIZON with conviction caps.
 - **Tagged Levels**: S/R, VWAP, POC/VAH/VAL with IN_PLAY/NEARBY/DISTANT proximity and ATR distance.
+- **Worn Levels** (2026-05-29): 4H structure levels within 2× ATR of price, tagged with direction (RES above price / SUP below) and FLIP_ROLE when a level appears as both a recent swing high AND swing low (broken and reclaimed → stronger than never-broken). Test count → FRESH_1x / RECENT_Nx / WORN_Nx_distrust.
+- **Sector Strength** (stocks, 2026-05-29): `XLK OUTPERFORMING vs SPY (+1.8%) → risk-on tailwind` when relativeStrength1d + outperformingSector are set.
+- **Insider Cluster** (stocks, 2026-05-29): `N buys in 30d from K officers ($X.XM total) — fundamental buy signal` when 3+ buys from 3+ distinct names (or 5+ sells from 4+ names for distribution signal).
+- **Earnings Proximity** (stocks, 2026-05-29): Hard-wired into the Conviction Envelope, not advisory. 0–2d → moderateBlock (cap LOW = no trade); 3–7d → highBlock (cap MODERATE); 8–14d → downgrade tier (LLM applies).
+- **Active Trade State** (continuous values, 2026-05-29): Replaces the older INTRA_24H/IN_PROFIT/UNDERWATER/FLAT buckets. Emits elapsed hours, PnL in R units, peak excursion R, TP1 % reached, ML delta from registration, milestone flags (T+24h crossed, TP1 hit, partial taken, BE-stop active), and a concrete `Action:` line keyed on actual R thresholds (≤ -0.7R → cut, ≥ +0.5R → trail to BE, etc.).
 - **Candle Close Timestamps**: Next 4H and Daily close times.
 
 ### Data Flow
@@ -138,6 +143,7 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 - `OutcomeTracker` and `AnalysisHistoryStore` use dedicated `DispatchQueue`s for disk I/O.
 - Use `.task { }` instead of `.onAppear { Task { } }` for async work in views (auto-cancels on disappear).
 - Use iOS 17 `onChange` form: `.onChange(of: value) { }` (zero-parameter) or `.onChange(of: value) { old, new in }`.
+- `AnalysisPrompt.promptVersion` is a `@TaskLocal` (see A/B Testing Infrastructure section). Bound around `provider.analyze()` in `AnalysisService` so concurrent symbol analyses each see their own A/B bucket without races.
 
 ## ML Scoring Pipeline
 
@@ -343,7 +349,17 @@ Deeper models (d5) and more trees (t200) showed diminishing returns. LightGBM d4
 
 ## Outcome Feedback Loop
 
-The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist with model_version = 10). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column.
+The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist with the current model_version: 11 for crypto, 13 for stocks). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column; each `TrackedSetup` also carries a `promptVersion` field (see A/B Testing Infrastructure) so we can compare populations by system iteration as well as by model.
+
+## A/B Testing Infrastructure (2026-05-29)
+
+Setups are bucketed at registration time into `baseline` or `treatment` prompt versions. The bucket is deterministic on `(deviceId, day)` via UTF-8 byte parity, so a single user's day isn't split mid-session but different days re-randomize. Honors the `experiments_enabled` UserDefault (default ON) — toggling OFF in Settings always returns baseline.
+
+- **Bucket assignment**: `OutcomeTracker.assignedPromptVersion(deviceId:date:)` returns one of `baselinePromptVersion` ("2026-05-09-multihorizon") or `treatmentPromptVersion` ("2026-05-29-experiment").
+- **Plumbing**: `AnalysisService` computes the assigned version once per analysis run, then wraps `provider.analyze()` with `AnalysisPrompt.$promptVersion.withValue(...)` (TaskLocal) so the prompt-build sees the same bucket the resulting `TrackedSetup` gets stamped with. Prompt and outcome stay in sync — no risk of prompting under one bucket and recording under another.
+- **Per-version stats**: `OutcomeTracker.versionStats(lookbackDays:)` slices the existing tracked-setup archive by `promptVersion` (no separate storage). Returns `[String: VersionStats]` with counted/resolved/wins/losses/winRate/avgRR per version.
+- **Dashboard**: `OutcomeDashboardView` "A/B: Prompt Version (30d)" section shows baseline vs treatment side-by-side. 2×2 chi-square verdict (`p < 0.05 ↔ χ² > 3.841`) appears only when both sides have ≥30 resolved setups; otherwise prints "Need ≥30 resolved per side."
+- **Active treatment behavior**: Band-default inversion (see Target Selection System) is the first behavioral change applied only when `promptVersion == treatmentPromptVersion`. Future changes ship the same way.
 
 ## Historical Analysis Sharing (2026-05-04)
 
@@ -358,6 +374,16 @@ Three-layer quality scoring for TP1/TP2 selection (replaced naive "nearest 3 lev
 - Level confluence: levels within 0.3 ATR merged into reinforcing clusters
 - Weighted clearance: obstacles penalized by their strength
 - Counter-trend: tighter bands (TP1 0.8-1.5, TP2 1.3-2.5) when 4H opposes daily
+
+### Band-Default Inversion (A/B treatment, 2026-05-29)
+
+Per-symbol EV analysis on `csv_exports_v11/` + `csv_exports_v13/` (n=237) showed 86% of symbols see ≥ +0.01 R/trade gain from the tighter DOGE-style bands (TP1 1.5 / TP2 2.5 / stop 2.0 ATR) over the historical wide defaults (TP1 2.0 / TP2 4.0). Inversion lives in the treatment A/B bucket only — baseline keeps the previous behavior so the archive stays comparable.
+
+- `useTighterBands(symbol:)` in `AnalysisPrompt.swift` is the single switch:
+  - Baseline bucket: tighter only for `wideBandSymbols` (DOGEUSDT). Preserves the pre-A/B archive's behavior.
+  - Treatment bucket: tighter by default; `trendingSymbols` whitelist (~17) opt back to wide.
+- `trendingSymbols` (whitelist that keeps wide defaults under treatment): GLD, COIN, PFE, GME, CAT, JUPUSDT, INTC, MU, HBARUSDT, NEOUSDT, ENJUSDT, CMG, TIAUSDT, TEAM, XLC, SNAP, ON, NVDA. Edge values from the EV analysis are inline in the doc-comment.
+- Both buckets and the whitelist apply only outside counter-trend setups — counter-trend keeps its own dedicated band block.
 
 ## Counter-Trend Reversal Setup
 
