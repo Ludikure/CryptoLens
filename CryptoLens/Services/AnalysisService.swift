@@ -858,29 +858,36 @@ class AnalysisService: ObservableObject {
                 }
             }
 
+            // A/B bucket for this analysis run. Bound via TaskLocal so AnalysisPrompt
+            // sees the same version it uses for band-default selection that we later
+            // stamp on the resulting TrackedSetup — prompt and outcome stay in sync.
+            let assignedVersion = OutcomeTracker.assignedPromptVersion(deviceId: PushService.deviceId)
+
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
             if let provider = aiProvider {
                 aiLoadingPhase = .waitingForResponse
                 loadingStatus = "Analyzing with \(provider.displayName)..."
-                let response = try await provider.analyze(
-                    indicators: [tf1, tf2, tf3],
-                    sentiment: sentiment,
-                    symbol: symbol,
-                    market: market,
-                    stockInfo: stockInfo,
-                    derivatives: derivData,
-                    positioning: positioning,
-                    stockSentiment: stockSentiment,
-                    economicEvents: events,
-                    macro: macroSnapshot,
-                    weeklyContext: weeklyContext,
-                    spyContext: spyContext,
-                    spotPressure: spotPressure,
-                    dataQuality: dataQuality,
-                    crossAsset: crossAsset,
-                    outcomeHistory: outcomeHistory
-                )
+                let response = try await AnalysisPrompt.$promptVersion.withValue(assignedVersion) {
+                    try await provider.analyze(
+                        indicators: [tf1, tf2, tf3],
+                        sentiment: sentiment,
+                        symbol: symbol,
+                        market: market,
+                        stockInfo: stockInfo,
+                        derivatives: derivData,
+                        positioning: positioning,
+                        stockSentiment: stockSentiment,
+                        economicEvents: events,
+                        macro: macroSnapshot,
+                        weeklyContext: weeklyContext,
+                        spyContext: spyContext,
+                        spotPressure: spotPressure,
+                        dataQuality: dataQuality,
+                        crossAsset: crossAsset,
+                        outcomeHistory: outcomeHistory
+                    )
+                }
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = response.markdown
                 tradeSetups = response.setups
@@ -923,7 +930,6 @@ class AnalysisService: ObservableObject {
                 let archetype = AnalysisPrompt.classifyArchetype(indicators: [result.tf1, result.tf2, result.tf3])
                 // 4H ATR (price units) for the worker's entry-zone width.
                 let atrAtReg = result.tf2.atr?.atr
-                let assignedVersion = OutcomeTracker.assignedPromptVersion(deviceId: PushService.deviceId)
                 for setup in tradeSetups {
                     OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id,
                                                   currentPrice: result.daily.price,

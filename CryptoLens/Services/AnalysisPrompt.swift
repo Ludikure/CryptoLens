@@ -3,6 +3,13 @@ import Foundation
 /// Shared prompt construction and response parsing for all AI providers.
 enum AnalysisPrompt {
 
+    /// A/B bucket assigned by `OutcomeTracker.assignedPromptVersion` for the current
+    /// analysis run. Bound via TaskLocal at the `provider.analyze` call site in
+    /// `AnalysisService` so concurrent symbol analyses each see their own bucket.
+    /// Drives band-default selection (treatment uses tighter bands except for the
+    /// `trendingSymbols` whitelist; baseline uses the historic wide-band logic).
+    @TaskLocal static var promptVersion: String = OutcomeTracker.baselinePromptVersion
+
     private struct TaggedLevel {
         let price: Double
         let type: String
@@ -88,6 +95,36 @@ enum AnalysisPrompt {
     ///   - aligned-bullish hit rate at 2 ATR favorable (72h horizon) >= 45%
     ///   - conditional 1.5 → 2.5 >= 50%
     private static let wideBandSymbols: Set<String> = ["DOGEUSDT"]
+
+    /// Symbols whose 1H/4H structure historically rewards wider targets — the
+    /// per-symbol EV analysis (2026-05-29 against `csv_exports_v11/` + `csv_exports_v13/`,
+    /// n=237) showed these 17 see negative or near-zero edge from tighter bands. They
+    /// keep the OLD wide defaults (2.0/4.0 TP1/TP2) in the treatment bucket.
+    /// Edge values from that analysis (R/trade, negative = wide better):
+    ///   GLD -0.0700, COIN -0.0394, PFE -0.0285, GME -0.0172, CAT -0.0107,
+    ///   JUPUSDT -0.0200, TEAM/XLC/SNAP/ON/NVDA between -0.005 and 0,
+    ///   INTC/MU/HBARUSDT/NEOUSDT/ENJUSDT/CMG/TIAUSDT between 0 and +0.01 (marginal).
+    private static let trendingSymbols: Set<String> = [
+        "GLD", "COIN", "PFE", "GME", "CAT",
+        "TEAM", "XLC", "SNAP", "ON", "NVDA",
+        "JUPUSDT", "INTC", "MU", "HBARUSDT", "NEOUSDT", "ENJUSDT", "CMG", "TIAUSDT"
+    ]
+
+    /// Whether this trade should use the TIGHTER (1.5 TP1 / 2.5 TP2 / 2.0 stop) band
+    /// defaults. Two paths converge here:
+    ///   - Baseline bucket: tighter only for `wideBandSymbols` (DOGE — preserves
+    ///     the prior shipped behavior so baseline outcomes are comparable to the
+    ///     pre-A/B archive).
+    ///   - Treatment bucket: tighter by default; `trendingSymbols` opt out.
+    /// Centralizing this here means the band-selection block below stays a single
+    /// `isWideBand` switch — the meaning of that flag just depends on the bucket.
+    private static func useTighterBands(symbol: String) -> Bool {
+        let sym = symbol.uppercased()
+        if AnalysisPrompt.promptVersion == OutcomeTracker.treatmentPromptVersion {
+            return !trendingSymbols.contains(sym)
+        }
+        return wideBandSymbols.contains(sym)
+    }
 
     static func systemPrompt(market: Market = .crypto, params: ScoringParams? = nil) -> String {
         _ = params  // retained for API compatibility; thresholds no longer drive prompt text
@@ -1861,7 +1898,7 @@ enum AnalysisPrompt {
                         // in expected value (+0.162 R/trade vs +0.131 for the old 3.0/5.0 wide bands;
                         // see wideBandSymbols doc-comment for the full backtest table). Stop floor
                         // stays at 2.0 ATR so the trade runs sub-1:1 R:R — that's intentional.
-                        let isWideBand = Self.wideBandSymbols.contains(symbol.uppercased())
+                        let isWideBand = Self.useTighterBands(symbol: symbol)
                         let tp1RRBand: (Double, Double)
                         let tp1ATRBand: (Double, Double)
                         let idealTP1RR: Double
