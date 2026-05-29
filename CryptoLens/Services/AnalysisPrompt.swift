@@ -241,7 +241,7 @@ enum AnalysisPrompt {
 
         CONVICTION (mechanical envelope, pre-computed in PRE-COMPUTED FLAGS):
         The `Conviction Envelope` field carries `max_allowed` (FLAT / LOW / MODERATE / HIGH), the specific reasons HIGH or MODERATE was blocked, the downgrade-one-tier conditions currently active, and the auto-FLAT triggers. You MAY NOT output a conviction tier above `max_allowed`. You may pick within (e.g., MODERATE-LOW if downgrade conditions apply). If `auto_FLAT_active` is non-empty, output NO SETUP regardless of any other reasoning.
-        The remaining LLM judgment is two-fold: (a) is the failure mode specific to this setup (not "could go the other way") — if generic, apply the downgrade-one-tier; (b) for active trades, is the thesis still intact (no kill conditions, structure unchanged) — feeds the Action Envelope's conditional clauses.
+        The remaining LLM judgment is two-fold: (a) is the failure mode specific to this setup (not "could go the other way") — if generic, apply the downgrade-one-tier; (b) for active trades, is the thesis still intact (no kill conditions, structure unchanged) — gates whether to follow the pre-computed Action line.
 
         OUTCOME HISTORY (if provided):
         Recent trade outcomes for this specific symbol are shown. Use them to:
@@ -251,7 +251,7 @@ enum AnalysisPrompt {
         Do NOT refuse a setup solely because the last one lost — one loss is noise, a pattern of losses is signal.
 
         ACTIVE TRADE MANAGEMENT:
-        If `Active Trade State` is present in PRE-COMPUTED FLAGS, follow the matching `Action Envelope` verbatim. The envelope is mechanical (state-based) — your job is the thesis check ("is the entry thesis still intact?"), which determines whether the conditional clauses in the envelope apply. Do not re-derive the management rule from scratch.
+        If an `Active Trade:` block is present in PRE-COMPUTED FLAGS, the block carries continuous values (elapsed hours, current PnL in R units, peak excursion, TP1 % reached, ML deltas, milestone flags) plus an `Action:` line with the specific instruction. Follow the `Action:` line verbatim — it's keyed on actual R values, not bucket labels. Your job is the thesis check ("is the entry thesis still intact?") which gates conditional language in the Action ("unless 4H reverses", "if kills fire"). Do not re-derive management from scratch.
 
         KILL CONDITION GATE (evaluate before Step 4):
         If counter_trend_pullback is true in the PRE-COMPUTED FLAGS, check kill conditions BEFORE building any setup:
@@ -416,7 +416,7 @@ enum AnalysisPrompt {
         - Kill conditions honored: Y/N/NA (ANY_KILLED=[true/false], action: [skipped setup / none required])
         - Bias matches feasibility favored direction: Y/N ([direction] feasibility = [N/7])
         - Failure mode specific (not generic): Y/N ([one specific failure cited])
-        - Active Trade Action Envelope honored: Y/N/NA ([state] → [action taken])
+        - Active Trade Action followed: Y/N/NA ([action: ...] → [action taken])
         Any N → fix the corresponding output section before submitting.
 
         ---
@@ -1275,38 +1275,105 @@ enum AnalysisPrompt {
                 lines.append("ML Persistence (72h ≥2.5 ATR): \(p72Pct)% — \(guidance)")
             }
 
-            // Phase C8 — Active Trade State + Action Envelope
+            // Phase C8 — Active Trade State (continuous values)
+            // Replaces the coarse INTRA_24H/IN_PROFIT/UNDERWATER/FLAT buckets with
+            // specific numbers (R units, peak excursion, TP1 % reached, ML delta
+            // from registration) so the LLM can reason about edge cases without
+            // having to pattern-match bucket labels.
             let activeForSymbol = OutcomeTracker.activeSetups(symbol: symbol).filter {
                 $0.outcome.state == .active && $0.outcome.entryHit
             }
             if !activeForSymbol.isEmpty, let currentPrice = indicators.first?.price, currentPrice > 0 {
+                let currentMLWin = indicators.first?.mlWinProbability
+                let currentMLPersist = indicators.first?.mlPersistenceProbability
                 for tracked in activeForSymbol {
                     guard let entryTime = tracked.outcome.entryHitTime else { continue }
                     let dir = tracked.setup.direction.uppercased()
                     let entry = tracked.setup.entry
-                    guard entry > 0 else { continue }
+                    let risk = tracked.setup.risk
+                    guard entry > 0, risk > 0 else { continue }
+                    let isLong = dir == "LONG"
                     let ageHours = Date().timeIntervalSince(entryTime) / 3600
-                    let pnlPct: Double = dir == "LONG"
-                        ? (currentPrice - entry) / entry * 100
-                        : (entry - currentPrice) / entry * 100
-                    lines.append("Active Trade: \(dir) entry \(Formatters.formatPrice(entry)), age \(String(format: "%.0f", ageHours))h, PnL \(String(format: "%+.2f", pnlPct))%")
-                    let state: String
-                    let envelope: String
-                    if ageHours < 24 {
-                        state = "INTRA_24H"
-                        envelope = "no_envelope_yet_wait_for_T+24h"
-                    } else if pnlPct >= 0.3 {
-                        state = "IN_PROFIT_24H"
-                        envelope = "trail_stop_to_BE, hold_for_72h_target_if_thesis_intact, upgrade_conviction_one_tier_if_thesis_intact"
-                    } else if pnlPct <= -0.3 {
-                        state = "UNDERWATER_24H"
-                        envelope = "cut_at_SL_now_no_average_down, no_widening_stops"
-                    } else {
-                        state = "FLAT_24H"
-                        envelope = "reevaluate_as_if_at_entry, exit_at_BE_if_kills_fired_or_structure_changed"
+
+                    // R units — primary trade-management currency. Beats raw % because
+                    // it's normalized by the trade's own risk envelope.
+                    let currentPnL = isLong ? (currentPrice - entry) : (entry - currentPrice)
+                    let currentR = currentPnL / risk
+                    let peakR = tracked.outcome.maxFavorable / risk
+                    let drawdownR = tracked.outcome.maxAdverse / risk  // magnitude (>=0)
+
+                    // TP1 progress as % of distance from entry covered at peak.
+                    // Bounded [0,100] so the printed number is intuitive even on
+                    // overshoot or weird stale-state edge cases.
+                    let tp1Distance = abs(tracked.setup.tp1 - entry)
+                    let tp1ProgressPct: Double = tp1Distance > 0
+                        ? min(100, max(0, tracked.outcome.maxFavorable / tp1Distance * 100))
+                        : 0
+
+                    // Trade header — one dense line with all the numerics that matter.
+                    var headerParts: [String] = []
+                    headerParts.append("\(dir) entry \(Formatters.formatPrice(entry))")
+                    headerParts.append(String(format: "%.0fh elapsed", ageHours))
+                    headerParts.append(String(format: "PnL %+.2fR", currentR))
+                    // Only print peak/drawdown when meaningfully different from current —
+                    // otherwise it's noise on a flat trade.
+                    if peakR > currentR + 0.2 {
+                        headerParts.append(String(format: "peak +%.2fR", peakR))
                     }
-                    lines.append("Active Trade State: \(state)")
-                    lines.append("Action Envelope: \(envelope)")
+                    if drawdownR > 0.2 {
+                        headerParts.append(String(format: "drawdown -%.2fR", drawdownR))
+                    }
+                    if tp1Distance > 0 && tracked.outcome.maxFavorable > 0 {
+                        headerParts.append(String(format: "TP1 %.0f%% reached", tp1ProgressPct))
+                    }
+                    lines.append("Active Trade: " + headerParts.joined(separator: ", "))
+
+                    // ML deltas. Persistence wasn't stored at registration time (legacy
+                    // data model), so we can only emit the current value for that one —
+                    // not as informative as a delta, but still gives the LLM a fresh read.
+                    if let regML = tracked.mlProbability {
+                        if let cur = currentMLWin {
+                            let delta = (cur - regML) * 100
+                            let trend = abs(delta) < 2 ? "stable" : (delta > 0 ? "rising" : "declining")
+                            lines.append(String(format: "ML Win at registration: %.0f%% | current: %.0f%% (%+.0fpp, %@)",
+                                                 regML * 100, cur * 100, delta, trend))
+                        } else {
+                            lines.append(String(format: "ML Win at registration: %.0f%%", regML * 100))
+                        }
+                    }
+                    if let cur = currentMLPersist {
+                        lines.append(String(format: "ML Persistence current: %.0f%%", cur * 100))
+                    }
+
+                    // Management milestones — facts, not bucket labels. The LLM picks the
+                    // Action from these + the R numbers above.
+                    var milestones: [String] = []
+                    if ageHours >= 24 { milestones.append("T+24h crossed") }
+                    if ageHours >= 48 { milestones.append("T+48h crossed") }
+                    if ageHours >= 72 { milestones.append("T+72h crossed") }
+                    if tracked.outcome.tp1Hit { milestones.append("TP1 hit") }
+                    if tracked.outcome.partialTaken { milestones.append("partial taken") }
+                    if tracked.outcome.breakevenActivated { milestones.append("BE-stop active") }
+                    if !milestones.isEmpty {
+                        lines.append("Milestones: " + milestones.joined(separator: ", "))
+                    }
+
+                    // Action — concrete instructions keyed on actual R values, not buckets.
+                    // Order matters: stop-near check fires first regardless of age, then
+                    // partial-in-pocket, then profit, then flat, then pre-T+24h hold.
+                    let action: String
+                    if currentR <= -0.7 {
+                        action = String(format: "Near stop (%.1fR). Cut at SL. No average-down, no stop widening.", currentR)
+                    } else if tracked.outcome.tp1Hit && tracked.outcome.partialTaken {
+                        action = "TP1 partial in pocket. Trail BE-stop on remainder. Re-evaluate at +1.5R or 48h elapsed."
+                    } else if currentR >= 0.5 {
+                        action = String(format: "In profit (+%.2fR). Trail stop to BE if not already. Hold to TP1 unless 4H reverses against direction.", currentR)
+                    } else if ageHours < 24 {
+                        action = "Pre-T+24h hold window. No mandatory action. Cut early only if thesis breaks (kills fire or 4H reverses against direction)."
+                    } else {
+                        action = String(format: "Flat (%+.2fR) past T+24h. Re-evaluate as if at entry. Exit at BE if kills fire or 4H structure breaks against thesis.", currentR)
+                    }
+                    lines.append("Action: " + action)
                 }
             }
 
