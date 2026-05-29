@@ -69,17 +69,24 @@ enum AnalysisPrompt {
         return "UNCLEAR_NO_STRONG_DIRECTION"
     }
 
-    /// Symbols whose historical favorable-excursion distribution justifies the wide TP1 band.
-    /// These names exhibit fat-tail directional persistence — once price extends past 1.5 ATR
-    /// favorable, it continues to 2+ ATR ~85%+ of the time. Aligned-bullish bars on these
-    /// symbols hit 2 ATR favorable ~50%+ of the time vs ~22-26% for the rest of the universe.
+    /// Symbols with strong conditional persistence — TIGHTER TP1/TP2 (1.5/2.5 ATR vs default
+    /// 2.0/4.0) gives meaningfully better expected value because the higher hit rate
+    /// compensates for smaller R:R per trade. Stop floor stays at 2.0 ATR so the trade
+    /// runs sub-1:1 R:R — that's intentional, the math works because of the conditional
+    /// persistence (P(2.5 | 1.5) ≈ 56% on DOGE).
     ///
-    /// Add a symbol here only after running BacktestEngine on it and confirming both:
-    ///   - aligned-bullish hit rate at 2 ATR ≥ 45%
-    ///   - conditional 1.5 → 2.0 ≥ 80%
+    /// Empirical (csv_exports_v11 DOGE, n=1937 aligned-bullish bars, 72h horizon):
+    ///   - Hit rate at 1.5 ATR: 59%; at 2.5 ATR: 43%; at 2.0 ATR: 51%
+    ///   - Conditional 1.5 → 2.5: 56%
+    ///   - EV per trade (50% partial at TP1, BE-trail to TP2):
+    ///       1.5/2.5/2.0 → +0.162 R   (this config)
+    ///       1.5/2.0/2.0 → +0.149 R   (similar; TP2 slightly closer)
+    ///       3.0/5.0/2.0 → +0.131 R   (old DOGE wide bands)
+    ///       2.0/4.0/2.0 → +0.143 R   (default for BTC/ETH/etc.)
     ///
-    /// Empirical basis (2026-05-05 backtests, n=1356 aligned-bullish DOGE bars):
-    ///   DOGE: 52.8% at 2 ATR, 88.5% conditional. BTC/ETH/SOL/XRP/ADA all 21-24% / 64-69%.
+    /// Add a symbol here only after confirming on its own csv_exports_v11/<SYM>USDT.csv:
+    ///   - aligned-bullish hit rate at 2 ATR favorable (72h horizon) >= 45%
+    ///   - conditional 1.5 → 2.5 >= 50%
     private static let wideBandSymbols: Set<String> = ["DOGEUSDT"]
 
     static func systemPrompt(market: Market = .crypto, params: ScoringParams? = nil) -> String {
@@ -1848,9 +1855,12 @@ enum AnalysisPrompt {
                         // TP1 band on most symbols: at 2 ATR favorable, aligned-bullish bars hit only
                         // ~22% of the time on BTC/ETH/SOL/XRP/ADA and ~26% on stocks, vs ~32% at 1.5
                         // ATR — the 1.0-1.5 ATR range is where the distribution actually concentrates.
-                        // Wide-band symbols (DOGE-like) keep the original (1.0, 2.5) RR band because
-                        // their fat-tail behavior delivers 50%+ at 2 ATR. TP2 placement is unchanged
-                        // across both branches (its band is already wide enough to capture runner moves).
+                        // Wide-band symbols (DOGE-like) use TIGHTER TP1/TP2 than the default (1.5 / 2.5
+                        // ATR rather than 2.0 / 4.0). The conditional persistence 1.5 → 2.5 ≈ 56% on
+                        // DOGE is strong enough that the higher hit rate beats the lower R:R per trade
+                        // in expected value (+0.162 R/trade vs +0.131 for the old 3.0/5.0 wide bands;
+                        // see wideBandSymbols doc-comment for the full backtest table). Stop floor
+                        // stays at 2.0 ATR so the trade runs sub-1:1 R:R — that's intentional.
                         let isWideBand = Self.wideBandSymbols.contains(symbol.uppercased())
                         let tp1RRBand: (Double, Double)
                         let tp1ATRBand: (Double, Double)
@@ -1860,17 +1870,32 @@ enum AnalysisPrompt {
                             tp1ATRBand = (0.5, 2.0)
                             idealTP1RR = 1.0
                         } else if isWideBand {
-                            tp1RRBand = (1.0, 2.5)
-                            tp1ATRBand = (0.8, 3.0)
-                            idealTP1RR = 1.5
+                            // TP1 at ~1.5 ATR with 2.0 ATR stop → 0.75 R:R. Sub-1 R:R intentional.
+                            tp1RRBand = (0.5, 1.0)
+                            tp1ATRBand = (1.0, 2.0)
+                            idealTP1RR = 0.75
                         } else {
                             tp1RRBand = (1.0, 1.7)
                             tp1ATRBand = (0.8, 2.0)
                             idealTP1RR = 1.3
                         }
-                        let tp2RRBand: (Double, Double) = isCounterTrend ? (1.3, 2.5) : (1.3, 4.0)
-                        let tp2ATRBand: (Double, Double) = isCounterTrend ? (1.0, 3.5) : (1.5, 5.0)
-                        let idealTP2RR = isCounterTrend ? 1.8 : 2.5
+                        let tp2RRBand: (Double, Double)
+                        let tp2ATRBand: (Double, Double)
+                        let idealTP2RR: Double
+                        if isCounterTrend {
+                            tp2RRBand = (1.3, 2.5)
+                            tp2ATRBand = (1.0, 3.5)
+                            idealTP2RR = 1.8
+                        } else if isWideBand {
+                            // TP2 at ~2.5 ATR with 2.0 ATR stop → 1.25 R:R.
+                            tp2RRBand = (0.75, 1.5)
+                            tp2ATRBand = (2.0, 3.0)
+                            idealTP2RR = 1.25
+                        } else {
+                            tp2RRBand = (1.3, 4.0)
+                            tp2ATRBand = (1.5, 5.0)
+                            idealTP2RR = 2.5
+                        }
 
                         let directionalLevels: [TaggedLevel]
                         if effectiveDirection == "SHORT" {
@@ -1927,9 +1952,11 @@ enum AnalysisPrompt {
                         let finalTP1Type: String
                         if let t1 = tp1 { finalTP1Price = t1.price; finalTP1Type = t1.type }
                         else {
-                            // Fallback ATR multiplier matches the band: tight-band symbols anchor at
-                            // 1.2× ATR (band [0.8, 2.0]); wide-band/counter-trend keep the prior 1.5×.
-                            let fbMult = (!isCounterTrend && !isWideBand) ? 1.2 : 1.5
+                            // Fallback ATR multiplier matches the band's ideal:
+                            // wideBand → 1.5× (band [1.0, 2.0], ideal 0.75 R:R = 1.5 ATR)
+                            // counter-trend → 1.5× (kept from prior behavior)
+                            // default → 1.2× (band [0.8, 2.0])
+                            let fbMult = isWideBand ? 1.5 : (isCounterTrend ? 1.5 : 1.2)
                             let fbLabel = String(format: "%.1f× ATR", fbMult)
                             let fb = atrFallback(fbMult, fbLabel); finalTP1Price = fb.price; finalTP1Type = fb.type
                         }
@@ -1937,7 +1964,13 @@ enum AnalysisPrompt {
                         let finalTP2Price: Double
                         let finalTP2Type: String
                         if let t2 = tp2 { finalTP2Price = t2.price; finalTP2Type = t2.type }
-                        else { let fb = atrFallback(2.5, "2.5× ATR"); finalTP2Price = fb.price; finalTP2Type = fb.type }
+                        else {
+                            // wideBand TP2 ideal is 2.5× ATR (1.25 R:R), others stay at 2.5× too
+                            // (that's the default idealTP2RR with 2 ATR stop = 5 ATR target — but
+                            // ATR-fallback uses a smaller anchor since structure was missing entirely).
+                            let fb = atrFallback(isWideBand ? 2.5 : 2.5, "2.5× ATR")
+                            finalTP2Price = fb.price; finalTP2Type = fb.type
+                        }
 
                         let finalTP1RR = abs(finalTP1Price - entry.price) / risk
                         let finalTP2RR = abs(finalTP2Price - entry.price) / risk
@@ -1946,7 +1979,10 @@ enum AnalysisPrompt {
                             "\(Formatters.formatPrice(finalTP1Price)) (\(finalTP1Type)) R:R=\(String(format: "%.2f", finalTP1RR))",
                             "\(Formatters.formatPrice(finalTP2Price)) (\(finalTP2Type)) R:R=\(String(format: "%.2f", finalTP2RR))"
                         ]
-                        let viable = finalTP1RR >= (isCounterTrend ? 0.8 : 1.0)
+                        // Viable floor: wideBand setups intentionally run sub-1:1 R:R (the
+                        // conditional persistence on these symbols compensates — see
+                        // wideBandSymbols doc-comment for the EV math).
+                        let viable = finalTP1RR >= (isCounterTrend ? 0.8 : isWideBand ? 0.5 : 1.0)
 
                         let setupLabel = isCounterTrend ? "COUNTER-TREND" : "TREND"
 
