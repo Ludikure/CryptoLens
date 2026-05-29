@@ -90,7 +90,7 @@ enum OutcomeTracker {
                 if state == .invalidated || state == .expired { continue }
                 if state == .active && tracked[i].outcome.resolved { continue }
 
-                // --- PENDING state: check timeout and entry trigger ---
+                // --- PENDING state: check timeout, proactive re-validation, and entry trigger ---
                 if state == .pending {
                     // Timeout check (12h)
                     if let expires = tracked[i].outcome.pendingExpiresAt, Date() > expires {
@@ -102,6 +102,24 @@ enum OutcomeTracker {
                         continue
                     }
 
+                    // Proactive re-validation for aging pending setups. Without this,
+                    // a setup created at 9am could sit in pending until entry is touched
+                    // at 3pm — by which time the original conditions (ML, kills, regime)
+                    // may have materially changed. Run reEvaluate on every refresh once
+                    // the setup is >= 1h old; if invalidated, mark immediately rather than
+                    // waiting for the entry touch to surface the staleness.
+                    let setupAge = Date().timeIntervalSince(tracked[i].timestamp)
+                    if setupAge >= 3600 {
+                        let proactiveEval = reEvaluate(original: tracked[i], cachedResult: cachedResult)
+                        if !proactiveEval.validated {
+                            tracked[i].outcome.state = .invalidated
+                            tracked[i].outcome.reEvalResult = proactiveEval
+                            changed = true
+                            print("[OutcomeTracker] Proactive invalidation \(symbol): \(proactiveEval.reason)")
+                            continue
+                        }
+                    }
+
                     // Check if entry price was touched
                     let setup = tracked[i].setup
                     let isLong = setup.direction == "LONG"
@@ -110,7 +128,9 @@ enum OutcomeTracker {
                     }
 
                     if entryTouched {
-                        // Run lightweight re-evaluation
+                        // Run lightweight re-evaluation at the entry-touch moment too.
+                        // (Proactive eval above may have validated 30 min ago; if state changed
+                        // since then we want to catch it before activating the trade.)
                         let evalResult = reEvaluate(original: tracked[i], cachedResult: cachedResult)
                         tracked[i].outcome.reEvalResult = evalResult
 
@@ -309,7 +329,7 @@ enum OutcomeTracker {
                                 reason: "Kill conditions active: \(reasons.joined(separator: ", "))")
         }
 
-        // Check 4: ML score drift
+        // Check 4: ML score drift (24h gate)
         if let ml = newMLWin {
             if ml < 0.50 {
                 return ReEvalResult(direction: newDirection, mlWin: ml,
@@ -323,6 +343,18 @@ enum OutcomeTracker {
                                         killsActive: false, validated: false,
                                         reason: "ML_WIN dropped \(Int(drift * 100))pp (\(Int(originalML * 100))% → \(Int(ml * 100))%)")
                 }
+            }
+        }
+
+        // Check 5: ML Persistence drop (72h exit-strategy gate). If persistence collapses
+        // below 40% (deep LOW bucket) on a runner-dependent setup, the exit thesis is
+        // broken even if the 24h ML is still favorable — the runner won't reach TP2 and
+        // tight TP1-only setups are usually presented as conditional anyway.
+        if let mlH72 = result.daily.mlPersistenceProbability {
+            if mlH72 < 0.40 {
+                return ReEvalResult(direction: newDirection, mlWin: newMLWin,
+                                    killsActive: false, validated: false,
+                                    reason: "ML Persistence collapsed below 40% (\(Int(mlH72 * 100))%) — runner thesis broken")
             }
         }
 
