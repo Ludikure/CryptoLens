@@ -114,7 +114,8 @@
       "vpInValueArea": 1,
       "vpVAWidth": 8.739844875359056
     },
-    "mlProbability": 0.5238235592842102
+    "mlProbability": 0.5238235592842102,
+    "mlPersistenceProbability": 0.5530612468719482
   },
   "inputs": {
     "dailyCandles": [

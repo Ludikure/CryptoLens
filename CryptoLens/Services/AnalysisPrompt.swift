@@ -892,7 +892,7 @@ enum AnalysisPrompt {
                         if bull ? oneHData.bias.contains("Bullish") : oneHData.bias.contains("Bearish") { s += 1 }
                     }
                     // 4. ML_WIN >= 70% (direction-agnostic favor, +1 both)
-                    if let m = fourH.mlWinProbability, m >= 0.70 { s += 1 }
+                    if let m = daily.mlWinProbability, m >= 0.70 { s += 1 }
                     // 5. Volume Confirmation matches direction (reuses C3 logic)
                     if fourH.candles.count >= 23 {
                         let recent3 = Array(fourH.candles.suffix(3))
@@ -917,7 +917,7 @@ enum AnalysisPrompt {
                         if bull && fr < -0.005 { s += 1 }
                         else if !bull && fr > 0.005 { s += 1 }
                     } else if stockInfo != nil {
-                        if let m = fourH.mlWinProbability, m >= 0.85 { s += 1 }
+                        if let m = daily.mlWinProbability, m >= 0.85 { s += 1 }
                     }
                     return s
                 }
@@ -1101,7 +1101,7 @@ enum AnalysisPrompt {
 
             // Phase C10 — Conviction Envelope (mechanical evaluation; replaces CONVICTION CALIBRATION prose)
             do {
-                let mlPct = fourH.mlWinProbability.map { Int($0 * 100) }
+                let mlPct = daily.mlWinProbability.map { Int($0 * 100) }
                 let staleCount = dataQuality?.missingEnrichments.count ?? 0
 
                 // Auto-FLAT hard gate
@@ -1185,7 +1185,7 @@ enum AnalysisPrompt {
             }
 
             // Phase C5 — ML Bucket (lookup table derived from 1.34M-bar persistence study, 2026-05)
-            if let mlProb = fourH.mlWinProbability {
+            if let mlProb = daily.mlWinProbability {
                 let mlPct = Int(mlProb * 100)
                 let isStock = stockInfo != nil
                 let bucket: String
@@ -1201,6 +1201,24 @@ enum AnalysisPrompt {
                     bucket = "UNFAVORABLE (ML_WIN \(mlPct)%) — NO TRADE regardless of directional clarity"
                 }
                 lines.append("ML Bucket: \(bucket)")
+            }
+
+            // ML Persistence (72h ≥2.5 ATR) — runner-hold confidence. Different question than
+            // ML_WIN (24h ≥1.5 ATR which gates trade quality); answers whether to hold for TP2
+            // or take TP1 fast. Top bucket reliability on out-of-sample: crypto 75.7%, stocks 77.6%.
+            if let p72 = daily.mlPersistenceProbability {
+                let p72Pct = Int(p72 * 100)
+                let guidance: String
+                if p72Pct >= 70 {
+                    guidance = "HIGH (≥70%) — full 72h hold viable, TP2 at the upper band of ML Bucket's range is justified, runner can target the upper TP2 multiplier"
+                } else if p72Pct >= 60 {
+                    guidance = "MODERATE (60-69%) — keep TP2 at lower band (3-4× ATR rather than 5×), consider partial TP1 + trailing the runner"
+                } else if p72Pct >= 50 {
+                    guidance = "WEAK (50-59%) — take TP1 at +1R-1.5R, trail tightly or exit at BE after TP1; mean-reversion likely before 2.5 ATR"
+                } else {
+                    guidance = "LOW (<50%) — do NOT hold for TP2. Take TP1 fast or pass if TP1 < 1.5R. Persistence model expects mean-reversion."
+                }
+                lines.append("ML Persistence (72h ≥2.5 ATR): \(p72Pct)% — \(guidance)")
             }
 
             // Phase C8 — Active Trade State + Action Envelope

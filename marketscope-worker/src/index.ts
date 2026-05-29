@@ -2,7 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
-import { mlPredict, buildMLInput } from './ml-predict';
+import { mlPredict, mlPredictH72, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
 
@@ -2211,6 +2211,9 @@ async function computeSymbolPredictions(
       const newFundingHist = isCrypto ? [...prevFundingHist, derivSignals.fundingRateRaw || 0].slice(-4) : [];
       // v9 single-model: direction-agnostic goodR probability
       const mlProb = mlPredict(features as Record<string, number>, isCrypto);
+      // 72h persistence: probability of >= 2.5 ATR favorable move within 72h.
+      // Different question than mlProb — runner-hold confidence vs trade-quality gate.
+      const mlProbH72 = mlPredictH72(features as Record<string, number>, isCrypto);
 
       newSnapshots[symbol] = {
         dRsi: features.dRsi, dAdx: features.dAdx,
@@ -2228,7 +2231,9 @@ async function computeSymbolPredictions(
       // symbols × every minute × 5-min TTL = ~3.3M writes/month, 60% of the bill. The
       // batched blob is ~110KB (well under the 25MB KV value limit) and writes once per
       // cron instead of 76 times.
-      mlPredBatch[symbol] = { symbol, probability: mlProb, features, timestamp: Date.now(), isCrypto };
+      // probabilityH72 is the runner-hold persistence score; kept alongside the existing
+      // `probability` field so old iOS clients can ignore it cleanly (additive change).
+      mlPredBatch[symbol] = { symbol, probability: mlProb, probabilityH72: mlProbH72, features, timestamp: Date.now(), isCrypto };
 
       // Debug: dump features for comparison with iOS
       if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT' || symbol === 'TSLA' || symbol === 'NVDA') {

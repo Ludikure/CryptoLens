@@ -525,7 +525,9 @@ class AnalysisService: ObservableObject {
             // ML win probability — worker is the single source of truth (same prediction
             // drives notifications). nil on cache miss / network failure; UI handles.
             var tf1ML = tf1
-            tf1ML.mlWinProbability = await fetchWorkerML(symbol: symbol)
+            let workerML = await fetchWorkerML(symbol: symbol)
+            tf1ML.mlWinProbability = workerML.probability
+            tf1ML.mlPersistenceProbability = workerML.persistence
             #if DEBUG
             // Local feature dump for parity-vs-canonical investigations only. Constructed in
             // DEBUG builds so we can compare what the iOS live path would have produced vs
@@ -700,7 +702,9 @@ class AnalysisService: ObservableObject {
             var (tf1, tf2, tf3, _) = try await fetchAndCompute(symbol: symbol, market: market, crossAsset: crossAsset, derivatives: earlyDerivData)
 
             // ML win probability for the AI prompt — worker is the single source of truth.
-            tf1.mlWinProbability = await fetchWorkerML(symbol: symbol)
+            let workerML2 = await fetchWorkerML(symbol: symbol)
+            tf1.mlWinProbability = workerML2.probability
+            tf1.mlPersistenceProbability = workerML2.persistence
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
@@ -1533,12 +1537,12 @@ class AnalysisService: ObservableObject {
     /// the live iOS feature-build path drifted slightly from BacktestEngine canonical, so
     /// a local fallback would display numbers that don't match notifications. Worker is the
     /// only source of truth for displayed ML.
-    private func fetchWorkerML(symbol: String) async -> Double? {
+    private func fetchWorkerML(symbol: String) async -> (probability: Double?, persistence: Double?) {
         do {
             let prediction = try await WorkerMLService.predict(symbol: symbol)
-            return prediction.probability
+            return (prediction.probability, prediction.probabilityH72)
         } catch {
-            return nil
+            return (nil, nil)
         }
     }
 }

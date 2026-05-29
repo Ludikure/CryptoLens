@@ -4,6 +4,9 @@
 
 import cryptoModelData from './ml-model-crypto.json';
 import stockModelData from './ml-model-stock.json';
+// 72h persistence models: same feature set, different target (goodR72h_2.5 instead of goodR_1.5)
+import cryptoH72ModelData from './ml-model-crypto-h72t25.json';
+import stockH72ModelData from './ml-model-stock-h72t25.json';
 
 interface TreeNode {
     nodeid: number;
@@ -22,6 +25,14 @@ const cryptoBaseScore: number = (cryptoModelData as any).base_score ?? 0.5;
 const stockBaseScore: number = (stockModelData as any).base_score ?? 0.5;
 const cryptoCal = (cryptoModelData as any).calibration as { x: number[]; y: number[] } | undefined;
 const stockCal = (stockModelData as any).calibration as { x: number[]; y: number[] } | undefined;
+
+// 72h persistence
+const cryptoH72Trees: TreeNode[] = cryptoH72ModelData.trees;
+const stockH72Trees: TreeNode[] = stockH72ModelData.trees;
+const cryptoH72BaseScore: number = (cryptoH72ModelData as any).base_score ?? 0.5;
+const stockH72BaseScore: number = (stockH72ModelData as any).base_score ?? 0.5;
+const cryptoH72Cal = (cryptoH72ModelData as any).calibration as { x: number[]; y: number[] } | undefined;
+const stockH72Cal = (stockH72ModelData as any).calibration as { x: number[]; y: number[] } | undefined;
 
 function calibrate(rawProb: number, isCrypto: boolean): number {
     const cal = isCrypto ? cryptoCal : stockCal;
@@ -58,6 +69,30 @@ export function mlPredict(input: Record<string, number>, isCrypto: boolean): num
     for (const tree of trees) sum += evaluateTree(tree, input);
     if (!isFinite(sum)) return 0.5;
     return calibrate(sigmoid(sum), isCrypto);
+}
+
+/// 72h persistence model: probability of >= 2.5 ATR favorable move within 72h.
+/// Different question than mlPredict (which is 24h @ 1.5 ATR). Used to gate the
+/// "hold for the runner" decision: high persistence → TP2 is reachable;
+/// low persistence → take TP1 and exit, mean-reversion likely before 2.5 ATR.
+export function mlPredictH72(input: Record<string, number>, isCrypto: boolean): number {
+    const trees = isCrypto ? cryptoH72Trees : stockH72Trees;
+    const baseScore = isCrypto ? cryptoH72BaseScore : stockH72BaseScore;
+    const cal = isCrypto ? cryptoH72Cal : stockH72Cal;
+    const baseLogit = Math.log(baseScore / (1 - baseScore));
+    let sum = baseLogit;
+    for (const tree of trees) sum += evaluateTree(tree, input);
+    if (!isFinite(sum)) return 0.5;
+    // Reuse the calibrate logic but with the h72 calibration table
+    const rawProb = sigmoid(sum);
+    if (!cal || cal.x.length < 2) return rawProb;
+    const { x, y } = cal;
+    if (rawProb <= x[0]) return y[0];
+    if (rawProb >= x[x.length - 1]) return y[y.length - 1];
+    let lo = 0;
+    for (let i = 1; i < x.length; i++) { if (x[i] > rawProb) { lo = i - 1; break; } }
+    const t = (rawProb - x[lo]) / (x[lo + 1] - x[lo]);
+    return Math.max(0, Math.min(0.85, y[lo] + t * (y[lo + 1] - y[lo])));
 }
 
 /// Build feature dict from scoring results + candle data.

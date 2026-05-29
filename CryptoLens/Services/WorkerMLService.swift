@@ -12,7 +12,8 @@ import Foundation
 enum WorkerMLService {
 
     struct Prediction {
-        let probability: Double
+        let probability: Double              // 24h@1.5 ATR — trade-quality gate
+        let probabilityH72: Double?          // 72h@2.5 ATR — runner-hold persistence
         let timestamp: Date
         let isCrypto: Bool
     }
@@ -47,6 +48,7 @@ enum WorkerMLService {
 
         struct Body: Decodable {
             let probability: Double
+            let probabilityH72: Double?
             let timestamp: TimeInterval
             let isCrypto: Bool
         }
@@ -55,6 +57,7 @@ enum WorkerMLService {
         }
         return Prediction(
             probability: body.probability,
+            probabilityH72: body.probabilityH72,
             timestamp: Date(timeIntervalSince1970: body.timestamp / 1000),
             isCrypto: body.isCrypto
         )

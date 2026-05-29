@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mlPredict } from '../src/ml-predict.js';
+import { mlPredict, mlPredictH72 } from '../src/ml-predict.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_DIR = join(__dirname, '..', 'test', 'fixtures', 'backtest-canonical');
@@ -35,14 +35,28 @@ function main() {
         }
         const oldML = fixture.expected.mlProbability;
         const newML = mlPredict(featuresInput, fixture.isCrypto);
-        const drift = Math.abs(newML - oldML);
-        if (drift < 1e-9) {
-            console.log(`  ${f}: ${oldML.toFixed(10)} (unchanged)`);
+        const newMLH72 = mlPredictH72(featuresInput, fixture.isCrypto);
+        const oldMLH72: number | undefined = fixture.expected.mlPersistenceProbability;
+        const mlDrift = Math.abs(newML - oldML);
+        const h72Drift = oldMLH72 !== undefined ? Math.abs(newMLH72 - oldMLH72) : Infinity;
+        let dirty = false;
+        if (mlDrift >= 1e-9) {
+            fixture.expected.mlProbability = newML;
+            dirty = true;
+        }
+        if (oldMLH72 === undefined || h72Drift >= 1e-9) {
+            fixture.expected.mlPersistenceProbability = newMLH72;
+            dirty = true;
+        }
+        if (!dirty) {
+            console.log(`  ${f}: unchanged (ml=${oldML.toFixed(4)}, h72=${oldMLH72?.toFixed(4) ?? 'n/a'})`);
             continue;
         }
-        fixture.expected.mlProbability = newML;
         writeFileSync(path, JSON.stringify(fixture, null, 2) + '\n');
-        console.log(`  ${f}: ${oldML.toFixed(10)} → ${newML.toFixed(10)} (Δ=${drift.toExponential(2)})`);
+        const mlNote = mlDrift >= 1e-9 ? `ml ${oldML.toFixed(4)}→${newML.toFixed(4)}` : `ml ${oldML.toFixed(4)} unchanged`;
+        const h72Note = oldMLH72 === undefined ? `h72 added=${newMLH72.toFixed(4)}` :
+            h72Drift >= 1e-9 ? `h72 ${oldMLH72.toFixed(4)}→${newMLH72.toFixed(4)}` : `h72 ${oldMLH72.toFixed(4)} unchanged`;
+        console.log(`  ${f}: ${mlNote}; ${h72Note}`);
     }
 }
 

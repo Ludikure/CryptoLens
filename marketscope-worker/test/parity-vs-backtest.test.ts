@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { computeAllFeatures, type Candle as FullCandle } from '../src/scoring-full';
-import { mlPredict } from '../src/ml-predict';
+import { mlPredict, mlPredictH72 } from '../src/ml-predict';
 import { readFileSync, readdirSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
@@ -83,6 +83,7 @@ interface ParityFixture {
     expected: {
         features: Record<string, number>;
         mlProbability: number;
+        mlPersistenceProbability?: number;
     };
 }
 
@@ -146,6 +147,14 @@ describe('Worker ↔ BacktestEngine canonical parity', () => {
             test('mlProbability', () => {
                 const ml = mlPredict(features as Record<string, number>, fixture.isCrypto);
                 expect(ml).toBeCloseTo(fixture.expected.mlProbability, TOLERANCE_DECIMAL_PLACES);
+            });
+
+            // 72h persistence probability parity. Fixtures without an h72 expected value
+            // skip this — the field was added in 2026-05-29 with the h72t25 model integration.
+            test('mlPersistenceProbability', () => {
+                if (fixture.expected.mlPersistenceProbability === undefined) return;
+                const mlH72 = mlPredictH72(features as Record<string, number>, fixture.isCrypto);
+                expect(mlH72).toBeCloseTo(fixture.expected.mlPersistenceProbability, TOLERANCE_DECIMAL_PLACES);
             });
         });
     }
