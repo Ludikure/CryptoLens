@@ -1127,21 +1127,91 @@ enum AnalysisPrompt {
             }
 
             // Phase E3 — Worn Levels (4H structure levels within 2× ATR of current price)
+            // Tags now include direction (RES/SUP) and FLIP_ROLE detection: a level that
+            // appears as both a recent swing high AND a swing low has been broken and
+            // retested in the opposite role — typically a stronger structure than a
+            // never-broken level because it survived a battle in both directions.
             if let ms = fourH.marketStructure, !ms.levelTests.isEmpty,
                let currentPrice = indicators.first?.price, currentPrice > 0,
                let atr = fourH.atr?.atr, atr > 0 {
                 var wornEntries = [String]()
+                let flipThreshold = atr * 0.15  // tight clustering — match the swing-grouping logic
                 for level in ms.levelTests.prefix(8) {
                     let atrDist = abs(level.price - currentPrice) / atr
                     guard atrDist <= 2.0 else { continue }
-                    let wear: String
-                    if level.tests >= 4 { wear = "WORN_\(level.tests)x_distrust" }
-                    else if level.tests >= 2 { wear = "RECENT_\(level.tests)x" }
-                    else { wear = "FRESH_1x_strongest_reaction" }
-                    wornEntries.append("\(Formatters.formatPrice(level.price)) [\(wear)]")
+
+                    let direction: String
+                    if level.price > currentPrice { direction = "RES" }
+                    else if level.price < currentPrice { direction = "SUP" }
+                    else { direction = "AT" }
+
+                    // Flip-role: level price within tight threshold of BOTH a recent
+                    // swing high AND a recent swing low → was broken and reclaimed.
+                    let appearsAsHigh = ms.swingHighs.contains { abs($0 - level.price) < flipThreshold }
+                    let appearsAsLow = ms.swingLows.contains { abs($0 - level.price) < flipThreshold }
+                    let isFlipRole = appearsAsHigh && appearsAsLow
+
+                    var tags: [String] = []
+                    if isFlipRole { tags.append("FLIP_ROLE") }
+                    if level.tests >= 4 { tags.append("WORN_\(level.tests)x_distrust") }
+                    else if level.tests >= 2 { tags.append("RECENT_\(level.tests)x") }
+                    else { tags.append("FRESH_1x_strongest_reaction") }
+
+                    wornEntries.append("\(direction) \(Formatters.formatPrice(level.price)) [\(tags.joined(separator: ","))]")
                 }
                 if !wornEntries.isEmpty {
                     lines.append("Worn Levels (4H, within 2× ATR of price): \(wornEntries.joined(separator: " | "))")
+                }
+            }
+
+            // Phase E (this session) — Stock-only context flags. All gated on stockInfo
+            // being non-nil so crypto runs see none of these lines.
+            if let si = stockInfo {
+                // E2 — Sector Strength (relative perf vs SPY today). Risk-on/off tilt
+                // for the trade that's independent of the symbol's own structure.
+                if let sector = si.sectorETF, let rs = si.relativeStrength1d, let outperform = si.outperformingSector {
+                    let label = outperform ? "OUTPERFORMING" : "UNDERPERFORMING"
+                    let bias = outperform ? "risk-on tailwind" : "risk-off headwind"
+                    lines.append(String(format: "Sector Strength: %@ %@ vs SPY (%+.1f%%) → %@",
+                                         sector, label, rs, bias))
+                }
+
+                // E4 — Insider Cluster. Cluster buy = 3+ buys in 30d from 3+ distinct
+                // officers (rare and informative). Cluster sell needs a higher bar
+                // (5+ sells from 4+ names) because scheduled selling under 10b5-1
+                // creates baseline insider-sell noise.
+                if let txs = si.insiderTransactions, !txs.isEmpty {
+                    let cutoff = Date().addingTimeInterval(-30 * 86400)
+                    let recent = txs.filter { $0.date >= cutoff }
+                    let buys = recent.filter { $0.isBuy }
+                    let sells = recent.filter { !$0.isBuy }
+                    let buyOfficers = Set(buys.map(\.name)).count
+                    let sellOfficers = Set(sells.map(\.name)).count
+                    let buyValueM = buys.reduce(0.0) { $0 + $1.value } / 1_000_000
+                    let sellValueM = sells.reduce(0.0) { $0 + $1.value } / 1_000_000
+
+                    if buys.count >= 3 && buyOfficers >= 3 {
+                        lines.append(String(format: "Insider Cluster: %d buys in 30d from %d officers ($%.1fM total) — fundamental buy signal",
+                                             buys.count, buyOfficers, buyValueM))
+                    } else if sells.count >= 5 && sellOfficers >= 4 {
+                        lines.append(String(format: "Insider Cluster: %d sells in 30d from %d officers ($%.1fM total) — possible distribution",
+                                             sells.count, sellOfficers, sellValueM))
+                    }
+                }
+
+                // E5 — Earnings Proximity (sharpened). Already a feature in the ML
+                // model, but the LLM needs an explicit conviction cap when earnings
+                // are imminent — gap risk in the 5-20% range is normal and a stop
+                // sized to current ATR won't survive a pre-earnings re-rating.
+                if let earnings = si.earningsDate, earnings > Date() {
+                    let days = Calendar.current.dateComponents([.day], from: Date(), to: earnings).day ?? 0
+                    if days <= 2 {
+                        lines.append("Earnings Proximity: \(days)d to earnings — CONVICTION_CAP_LOW (gap risk 5-20%, stop will not hold)")
+                    } else if days <= 7 {
+                        lines.append("Earnings Proximity: \(days)d to earnings — CONVICTION_CAP_MODERATE (skip if 4H momentum opposes thesis)")
+                    } else if days <= 14 {
+                        lines.append("Earnings Proximity: \(days)d to earnings — flag in Risk Factors, no conviction cap")
+                    }
                 }
             }
 
@@ -1196,6 +1266,21 @@ enum AnalysisPrompt {
                 if let ms = fourH.marketStructure, let cp = indicators.first?.price, cp > 0, let a = fourH.atr?.atr, a > 0 {
                     let nearWorn = ms.levelTests.contains { abs($0.price - cp) / a <= 1.0 && $0.tests >= 4 }
                     if nearWorn { downgrade.append("entry_at_worn_level_4+_tests") }
+                }
+
+                // E5 — Earnings proximity (stocks). Hard caps applied via envelope so
+                // the LLM can't override with "but the technicals are clean."
+                // 0–2d: cap LOW (no trade — stop can't survive a pre-earnings re-rating).
+                // 3–7d: cap MODERATE. 8–14d: downgrade tier.
+                if let si = stockInfo, let earnings = si.earningsDate, earnings > Date() {
+                    let days = Calendar.current.dateComponents([.day], from: Date(), to: earnings).day ?? 99
+                    if days <= 2 {
+                        moderateBlocks.append("earnings_in_\(days)d_cap_LOW")
+                    } else if days <= 7 {
+                        highBlocks.append("earnings_in_\(days)d_cap_MODERATE")
+                    } else if days <= 14 {
+                        downgrade.append("earnings_in_\(days)d_downgrade_one_tier")
+                    }
                 }
 
                 // Determine max allowed
