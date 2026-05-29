@@ -329,7 +329,8 @@ enum AnalysisPrompt {
         ## Bias
         State your directional thesis with evidence and ML quality:
         "Bias: SHORT — [momentum evidence]. [Structure evidence]. [Derivatives evidence if crypto].
-         ML_WIN: XX%."
+         ML_WIN: XX% (bucket). ML Persistence: XX% (label)."
+        Always cite BOTH ML values, even if the call is FLAT — the persistence number is signal regardless of whether a trade is proposed. If the two disagree (e.g., ML_WIN TOP but Persistence WEAK), call out the disagreement in the bias narrative — it sharpens the read.
 
         ## Trade Setup
         Only if conviction is MODERATE or higher, bias is LONG or SHORT, AND ML_WIN >= 50% (if available). Present as a markdown table:
