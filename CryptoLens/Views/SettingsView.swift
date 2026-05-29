@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var selectedProvider: AIProviderType = .deepseek
     @State private var selectedModel: String = ""
     @State private var autoAlerts = UserDefaults.standard.object(forKey: "auto_alerts_enabled") as? Bool ?? false
+    @State private var experimentsEnabled = UserDefaults.standard.object(forKey: "experiments_enabled") as? Bool ?? true
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
@@ -138,6 +139,17 @@ struct SettingsView: View {
                     Text("Contract: \(String(format: "%g", contractSize)) units (e.g. 0.01 = nano BTC)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle("Enable A/B experiments", isOn: $experimentsEnabled)
+                        .onChange(of: experimentsEnabled) {
+                            UserDefaults.standard.set(experimentsEnabled, forKey: "experiments_enabled")
+                        }
+                } header: {
+                    Text("Experiments")
+                } footer: {
+                    Text("When enabled, new trade setups are bucketed into baseline or treatment prompt versions so outcome differences can be measured. Turn OFF to always use the baseline prompt.")
                 }
 
                 Section("Data") {

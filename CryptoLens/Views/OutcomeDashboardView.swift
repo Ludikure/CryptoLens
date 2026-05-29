@@ -5,6 +5,7 @@ struct OutcomeDashboardView: View {
     @EnvironmentObject var service: AnalysisService
     @State private var stats: OutcomeStats?
     @State private var liveSetups: [TrackedSetup] = []
+    @State private var versionComparison: [String: VersionStats] = [:]
 
     var body: some View {
         List {
@@ -20,6 +21,11 @@ struct OutcomeDashboardView: View {
                             }
                         }
                     }
+                }
+
+                // A/B comparison — baseline vs treatment slice of the same archive
+                if hasABData {
+                    abSection
                 }
 
                 // Setup performance — generated vs counted
@@ -94,10 +100,12 @@ struct OutcomeDashboardView: View {
         .navigationTitle("Outcome Tracking")
         .task {
             stats = OutcomeTracker.stats()
+            versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
         }
         .refreshable {
             stats = OutcomeTracker.stats()
+            versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
         }
         .toolbar {
@@ -111,6 +119,143 @@ struct OutcomeDashboardView: View {
                     ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
                 }
             }
+        }
+    }
+
+    // MARK: - A/B comparison
+
+    private var hasABData: Bool {
+        let b = versionComparison[OutcomeTracker.baselinePromptVersion]
+        let t = versionComparison[OutcomeTracker.treatmentPromptVersion]
+        return (b?.countedSetups ?? 0) + (t?.countedSetups ?? 0) > 0
+    }
+
+    @ViewBuilder
+    private var abSection: some View {
+        let baseline = versionComparison[OutcomeTracker.baselinePromptVersion]
+        let treatment = versionComparison[OutcomeTracker.treatmentPromptVersion]
+
+        Section {
+            // Header row
+            HStack {
+                Text("").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Baseline")
+                    .font(.caption2).fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 80, alignment: .trailing)
+                Text("Treatment")
+                    .font(.caption2).fontWeight(.semibold)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 80, alignment: .trailing)
+            }
+            abMetricRow("Counted", baseline?.countedSetups, treatment?.countedSetups)
+            abMetricRow("Resolved", baseline?.resolvedSetups, treatment?.resolvedSetups)
+            abMetricRow("Wins / Losses",
+                        baselineText: pairText(baseline?.wins, baseline?.losses),
+                        treatmentText: pairText(treatment?.wins, treatment?.losses))
+            abMetricRow("Win Rate",
+                        baselineText: percentText(baseline?.winRate, samples: baseline?.resolvedSetups),
+                        treatmentText: percentText(treatment?.winRate, samples: treatment?.resolvedSetups),
+                        baselineColor: rateColor(baseline?.winRate, samples: baseline?.resolvedSetups),
+                        treatmentColor: rateColor(treatment?.winRate, samples: treatment?.resolvedSetups))
+            abMetricRow("Avg R Achieved",
+                        baselineText: rrText(baseline?.avgRRAchieved, samples: baseline?.resolvedSetups),
+                        treatmentText: rrText(treatment?.avgRRAchieved, samples: treatment?.resolvedSetups))
+
+            // Significance verdict (only when both sides have enough samples)
+            if let verdict = significanceVerdict(baseline: baseline, treatment: treatment) {
+                HStack {
+                    Image(systemName: verdict.icon)
+                        .foregroundStyle(verdict.color)
+                    Text(verdict.label)
+                        .font(.caption)
+                        .foregroundStyle(verdict.color)
+                }
+            }
+        } header: {
+            HStack {
+                Text("A/B: Prompt Version (30d)")
+                Spacer()
+            }
+        } footer: {
+            Text("Setups split deterministically by (device, day). Counted = entry triggered; Resolved = terminal state reached.")
+                .font(.caption2)
+        }
+    }
+
+    private func abMetricRow(_ label: String, _ baselineVal: Int?, _ treatmentVal: Int?) -> some View {
+        abMetricRow(label,
+                    baselineText: baselineVal.map { "\($0)" } ?? "—",
+                    treatmentText: treatmentVal.map { "\($0)" } ?? "—")
+    }
+
+    private func abMetricRow(_ label: String,
+                              baselineText: String, treatmentText: String,
+                              baselineColor: Color = .primary, treatmentColor: Color = .primary) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(baselineText).fontWeight(.semibold).foregroundStyle(baselineColor)
+                .frame(width: 80, alignment: .trailing)
+            Text(treatmentText).fontWeight(.semibold).foregroundStyle(treatmentColor)
+                .frame(width: 80, alignment: .trailing)
+        }
+        .font(.subheadline)
+    }
+
+    private func pairText(_ a: Int?, _ b: Int?) -> String {
+        guard a != nil || b != nil else { return "—" }
+        return "\(a ?? 0)/\(b ?? 0)"
+    }
+
+    private func percentText(_ rate: Double?, samples: Int?) -> String {
+        guard let rate, let samples, samples > 0 else { return "—" }
+        return String(format: "%.0f%%", rate)
+    }
+
+    private func rrText(_ rr: Double?, samples: Int?) -> String {
+        guard let rr, let samples, samples > 0 else { return "—" }
+        return String(format: "%.2fR", rr)
+    }
+
+    private func rateColor(_ rate: Double?, samples: Int?) -> Color {
+        guard let rate, let samples, samples >= 10 else { return .secondary }
+        return rate >= 50 ? .green : .red
+    }
+
+    private struct ABVerdict {
+        let label: String
+        let color: Color
+        let icon: String
+    }
+
+    /// 2x2 chi-square on (wins/losses, baseline/treatment). Requires both sides to
+    /// have >= 30 resolved setups for the test to be meaningful. p < 0.05 ↔ chi² > 3.841.
+    private func significanceVerdict(baseline: VersionStats?, treatment: VersionStats?) -> ABVerdict? {
+        guard let b = baseline, let t = treatment else { return nil }
+        let a = Double(b.wins), c = Double(b.losses)
+        let d = Double(t.wins), e = Double(t.losses)
+        let nBaseline = b.resolvedSetups, nTreatment = t.resolvedSetups
+        if nBaseline < 30 || nTreatment < 30 {
+            return ABVerdict(label: "Need ≥30 resolved per side for significance (\(nBaseline)/\(nTreatment) so far)",
+                              color: .secondary, icon: "hourglass")
+        }
+        let n = a + c + d + e
+        let denom = (a + c) * (d + e) * (a + d) * (c + e)
+        guard denom > 0 else {
+            return ABVerdict(label: "Insufficient variance to test", color: .secondary, icon: "minus.circle")
+        }
+        let chi2 = pow((a * e - c * d), 2) * n / denom
+        let treatmentBetter = (t.winRate > b.winRate)
+        if chi2 > 3.841 {
+            return ABVerdict(label: treatmentBetter
+                                ? "Treatment wins (p < 0.05)"
+                                : "Baseline wins (p < 0.05)",
+                              color: treatmentBetter ? .green : .red,
+                              icon: "checkmark.circle.fill")
+        } else {
+            return ABVerdict(label: "Not significant (χ² = \(String(format: "%.2f", chi2)))",
+                              color: .secondary, icon: "equal.circle")
         }
     }
 

@@ -372,11 +372,37 @@ enum OutcomeTracker {
 
     // MARK: - Registration
 
-    /// System-iteration version. Bump when prompt, kill rules, stop-placement floors,
-    /// or OutcomeTracker logic change materially. Independent of ML model version.
-    /// Lets us partition the `trade_outcomes` archive into homogeneous slices for
-    /// honest before/after analysis. Format: `YYYY-MM-DD-tag`.
-    static let currentPromptVersion = "2026-05-09-multihorizon"
+    /// Baseline prompt+system version. Bump when prompt, kill rules, stop-placement
+    /// floors, or OutcomeTracker logic change materially. Format: `YYYY-MM-DD-tag`.
+    static let baselinePromptVersion = "2026-05-09-multihorizon"
+
+    /// Treatment prompt+system version. Setups land here when the per-device A/B
+    /// hash picks the experiment bucket. Initially functionally identical to baseline —
+    /// the tag exists so later changes (band-default inversion, etc.) can be applied
+    /// only when this version is active and outcomes can be compared apples-to-apples.
+    static let treatmentPromptVersion = "2026-05-29-experiment"
+
+    /// Back-compat alias for callers that didn't go through `assignedPromptVersion`.
+    /// New code should call the bucketing function instead.
+    static let currentPromptVersion = baselinePromptVersion
+
+    /// Deterministic A/B bucket. Same `(deviceId, day)` always maps to the same
+    /// version so a single user's day isn't split mid-session. Different days
+    /// re-randomize, so over weeks a device contributes to both populations.
+    /// Honors `experiments_enabled` UserDefault (default true) — when false, always
+    /// returns baseline. Hash is a UTF-8 byte sum (stable across processes, unlike
+    /// Swift's seeded `Hasher`).
+    static func assignedPromptVersion(deviceId: String, date: Date = Date()) -> String {
+        let experimentsEnabled = (UserDefaults.standard.object(forKey: "experiments_enabled") as? Bool) ?? true
+        guard experimentsEnabled else { return baselinePromptVersion }
+
+        let utc = TimeZone(identifier: "UTC")!
+        let comps = Calendar(identifier: .iso8601).dateComponents(in: utc, from: date)
+        let day = "\(comps.year ?? 0)-\(comps.month ?? 0)-\(comps.day ?? 0)"
+        let combined = deviceId + "|" + day
+        let sum = combined.utf8.reduce(0) { $0 &+ Int($1) }
+        return (sum & 1 == 0) ? baselinePromptVersion : treatmentPromptVersion
+    }
 
     /// ML model version is asset-class-dependent: crypto uses v10 (LightGBM), stocks
     /// use v12 (XGBoost, retrained 2026-05-04 on lookahead-corrected data). The
@@ -638,6 +664,61 @@ enum OutcomeTracker {
         }
     }
 
+    // MARK: - Per-version A/B aggregation
+
+    /// Outcome stats sliced by `promptVersion`. Same definitions as `OutcomeStats`
+    /// but keyed by the version string the setup was registered under. Use this
+    /// to compare baseline vs treatment populations in the dashboard.
+    /// Returns one entry per version found in the lookback window (so versions
+    /// with zero setups in the window are omitted from the map).
+    static func versionStats(lookbackDays: Int = 30) -> [String: VersionStats] {
+        return ioQueue.sync {
+            let cutoff = Date().addingTimeInterval(-Double(lookbackDays) * 86400)
+            var setupsByVersion: [String: [TrackedSetup]] = [:]
+
+            let dir = outcomeDir
+            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            for file in files where file.lastPathComponent.hasPrefix("setups_") {
+                for ts in loadTrackedSetups(url: file) where ts.timestamp >= cutoff {
+                    setupsByVersion[ts.promptVersion, default: []].append(ts)
+                }
+            }
+
+            return setupsByVersion.mapValues { setups in
+                let counted = setups.filter { $0.outcome.state == .active }
+                let resolved = counted.filter { $0.outcome.isCounted }
+                let wins = resolved.filter { $0.outcome.tp1Hit }
+                let losses = resolved.filter { $0.outcome.stopHit && !$0.outcome.tp1Hit && !$0.outcome.partialTaken }
+                let partialBE = resolved.filter { $0.outcome.stopHit && !$0.outcome.tp1Hit && $0.outcome.partialTaken }
+                let invalidated = setups.filter { $0.outcome.state == .invalidated }
+                let expired = setups.filter { $0.outcome.state == .expired }
+
+                var avgRR: Double = 0
+                if !resolved.isEmpty {
+                    let rrValues = resolved.compactMap { tracked -> Double? in
+                        let s = tracked.setup
+                        guard s.risk > 0, tracked.outcome.entryHit else { return nil }
+                        return tracked.outcome.maxFavorable / s.risk
+                    }
+                    if !rrValues.isEmpty { avgRR = rrValues.reduce(0, +) / Double(rrValues.count) }
+                }
+
+                return VersionStats(
+                    totalSetups: setups.count,
+                    countedSetups: counted.count,
+                    resolvedSetups: resolved.count,
+                    wins: wins.count,
+                    losses: losses.count,
+                    partialBE: partialBE.count,
+                    invalidatedSetups: invalidated.count,
+                    expiredSetups: expired.count,
+                    winRate: resolved.isEmpty ? 0 : Double(wins.count) / Double(resolved.count) * 100,
+                    avgRRAchieved: avgRR
+                )
+            }
+        }
+    }
+
     // MARK: - Restore from Server
 
     /// Fetch resolved outcomes from D1 and merge into local cache.
@@ -880,6 +961,22 @@ struct TrackedSetup: Codable, Identifiable {
         try c.encode(promptVersion, forKey: .promptVersion)
         try c.encodeIfPresent(archetype, forKey: .archetype)
     }
+}
+
+/// One row of the A/B comparison table. Computed by `OutcomeTracker.versionStats`
+/// from the existing tracked-setup archive — no separate storage, just a
+/// `groupBy promptVersion` over the same files `stats()` reads.
+struct VersionStats {
+    let totalSetups: Int          // All setups registered under this version
+    let countedSetups: Int        // Reached ACTIVE state (entry triggered)
+    let resolvedSetups: Int       // Reached terminal state (tp1Hit/stopHit/expired)
+    let wins: Int
+    let losses: Int
+    let partialBE: Int
+    let invalidatedSetups: Int
+    let expiredSetups: Int
+    let winRate: Double           // wins / resolved, 0–100
+    let avgRRAchieved: Double     // Average maxFavorable / risk on resolved
 }
 
 struct OutcomeStats {

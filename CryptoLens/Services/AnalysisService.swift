@@ -923,10 +923,12 @@ class AnalysisService: ObservableObject {
                 let archetype = AnalysisPrompt.classifyArchetype(indicators: [result.tf1, result.tf2, result.tf3])
                 // 4H ATR (price units) for the worker's entry-zone width.
                 let atrAtReg = result.tf2.atr?.atr
+                let assignedVersion = OutcomeTracker.assignedPromptVersion(deviceId: PushService.deviceId)
                 for setup in tradeSetups {
                     OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id,
                                                   currentPrice: result.daily.price,
                                                   mlProbability: mlProb,
+                                                  promptVersion: assignedVersion,
                                                   archetype: archetype,
                                                   atrAtRegistration: atrAtReg)
                 }
