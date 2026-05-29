@@ -65,9 +65,21 @@ struct IndicatorTableView: View {
                 .background(Color(.systemGray5))
 
                 // Rows
-                row("ML Win", tooltip: "v9 calibrated probability of >=1.5 ATR favorable move within 24h. Direction-agnostic — LLM determines direction. ≥70% = high probability. <50% = unfavorable.") { r in
+                row("ML Win", tooltip: "Trade-or-not gate. Calibrated probability of ≥1.5 ATR favorable move within 24h. Direction-agnostic — LLM determines direction. ≥70% = TOP bucket (high probability), <50% = no trade.") { r in
                     if let ml = r.mlWinProbability {
                         let pct = Int(ml * 100)
+                        let color: Color = pct >= 70 ? .green :
+                                           pct >= 60 ? Color.green.opacity(0.7) :
+                                           pct >= 50 ? .secondary :
+                                           .red
+                        Text("\(pct)%")
+                            .fontWeight(pct >= 70 ? .bold : .regular)
+                            .foregroundStyle(color)
+                    } else { dash }
+                }
+                row("ML Persistence", tooltip: "Runner-hold gate (separate from ML Win). Calibrated probability of ≥2.5 ATR favorable move within 72h. Drives TP2 sizing and hold horizon. ≥70% = full 72h hold viable. <50% = take TP1 fast, no runner.") { r in
+                    if let mlH72 = r.mlPersistenceProbability {
+                        let pct = Int(mlH72 * 100)
                         let color: Color = pct >= 70 ? .green :
                                            pct >= 60 ? Color.green.opacity(0.7) :
                                            pct >= 50 ? .secondary :
