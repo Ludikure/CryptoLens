@@ -189,10 +189,11 @@ enum AnalysisPrompt {
 
         If FLAT — skip Step 4 entirely. Go straight to output with "NO SETUP."
 
-        ML QUALITY FILTER:
-        ML_WIN is a direction-agnostic calibrated probability of a >= 1.5 ATR favorable move within 24h. It gates trade-or-not and sizing, NOT direction (empirical sign-accuracy ~50% at all horizons — direction is your call from structure). The pre-computed `ML Bucket` field in PRE-COMPUTED FLAGS carries the actionable info: 72h hit-rate, TP2 ATR multiplier, hold horizon, conviction ceiling, and counter-trend qualification. Use it verbatim — do not re-derive the bucket from ML_WIN%.
-        UNFAVORABLE bucket (ML_WIN < 50%) = NO TRADE regardless of directional clarity. State what ML is likely seeing (exhaustion, low-vol regime, conflicting features) but do not propose a trade.
-        If `ML Bucket` is absent, judge setup quality from your own indicator analysis.
+        ML QUALITY FILTER (two orthogonal pre-computed flags — read both):
+        Direction is your call from structure — both ML signals are direction-agnostic (~50% sign accuracy at all horizons).
+        - `ML Bucket` (24h ≥1.5 ATR): trade-or-not gate. Carries the conviction ceiling and counter-trend qualification for this bar. Use the ceiling verbatim — do not re-derive from raw ML_WIN%. UNFAVORABLE bucket = NO TRADE regardless of directional clarity.
+        - `ML Persistence` (72h ≥2.5 ATR): runner / exit gate. Carries TP2 multiplier, hold horizon, and partial/trailing strategy for this bar. Use its prescription verbatim — it overrides any TP2 sizing you'd otherwise derive from ATR alone.
+        The two fields answer different questions (quality vs persistence) so there is no conflict to resolve. If either field is absent, judge that aspect from your own indicator analysis.
 
         CONVICTION (mechanical envelope, pre-computed in PRE-COMPUTED FLAGS):
         The `Conviction Envelope` field carries `max_allowed` (FLAT / LOW / MODERATE / HIGH), the specific reasons HIGH or MODERATE was blocked, the downgrade-one-tier conditions currently active, and the auto-FLAT triggers. You MAY NOT output a conviction tier above `max_allowed`. You may pick within (e.g., MODERATE-LOW if downgrade conditions apply). If `auto_FLAT_active` is non-empty, output NO SETUP regardless of any other reasoning.
@@ -1184,19 +1185,23 @@ enum AnalysisPrompt {
                 }
             }
 
-            // Phase C5 — ML Bucket (lookup table derived from 1.34M-bar persistence study, 2026-05)
+            // Phase C5 — ML Bucket (24h trade-quality gate; lookup derived from 1.34M-bar
+            // persistence study, 2026-05). Answers ONLY: trade-or-not + conviction ceiling +
+            // counter-trend qualification. TP2 sizing, hold horizon, and exit strategy are
+            // answered by the separate ML Persistence (72h) field below — keeping the two
+            // orthogonal so the LLM gets one recommendation per question.
             if let mlProb = daily.mlWinProbability {
                 let mlPct = Int(mlProb * 100)
                 let isStock = stockInfo != nil
                 let bucket: String
                 if isStock && mlPct >= 85 {
-                    bucket = "STOCK_TOP (ML_WIN \(mlPct)%) — 72h hit-rate 98%, TP2 5-6× ATR, hold 72h, conviction ceiling HIGH, counter-trend qualified: yes, relaxed_confluence: 2_ok, runner_stop_wider: true"
+                    bucket = "STOCK_TOP (ML_WIN \(mlPct)%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes, relaxed_confluence: 2_ok"
                 } else if mlPct >= 70 {
-                    bucket = "TOP (ML_WIN \(mlPct)%) — 72h hit-rate 98%, TP2 4-5× ATR, hold 72h, conviction ceiling HIGH, counter-trend qualified: yes"
+                    bucket = "TOP (ML_WIN \(mlPct)%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes"
                 } else if mlPct >= 60 {
-                    bucket = "FAVORABLE (ML_WIN \(mlPct)%) — 72h hit-rate 95%, TP2 3-4× ATR, hold 48h, conviction ceiling HIGH, counter-trend qualified: no"
+                    bucket = "FAVORABLE (ML_WIN \(mlPct)%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: no"
                 } else if mlPct >= 50 {
-                    bucket = "MARGINAL (ML_WIN \(mlPct)%) — 72h hit-rate 91%, TP2 2-3× ATR, hold 24h, conviction ceiling MODERATE, counter-trend qualified: no"
+                    bucket = "MARGINAL (ML_WIN \(mlPct)%) — direction-agnostic move quality, conviction ceiling MODERATE, counter-trend qualified: no"
                 } else {
                     bucket = "UNFAVORABLE (ML_WIN \(mlPct)%) — NO TRADE regardless of directional clarity"
                 }
@@ -1206,17 +1211,21 @@ enum AnalysisPrompt {
             // ML Persistence (72h ≥2.5 ATR) — runner-hold confidence. Different question than
             // ML_WIN (24h ≥1.5 ATR which gates trade quality); answers whether to hold for TP2
             // or take TP1 fast. Top bucket reliability on out-of-sample: crypto 75.7%, stocks 77.6%.
+            // ML Persistence is self-contained on TP2 sizing + hold horizon + exit strategy.
+            // It doesn't depend on or reference ML Bucket — the two are orthogonal.
+            // Multipliers are stocks/crypto symmetric here; stock STOCK_TOP bucket runners can
+            // use the upper end of HIGH (5× ATR, wider trail) at LLM judgment.
             if let p72 = daily.mlPersistenceProbability {
                 let p72Pct = Int(p72 * 100)
                 let guidance: String
                 if p72Pct >= 70 {
-                    guidance = "HIGH (≥70%) — full 72h hold viable, TP2 at the upper band of ML Bucket's range is justified, runner can target the upper TP2 multiplier"
+                    guidance = "HIGH (≥70%) — full 72h hold viable, TP2 at 4-5× ATR(4H), runner targets the upper multiplier, trail 1-1.5× ATR after TP1"
                 } else if p72Pct >= 60 {
-                    guidance = "MODERATE (60-69%) — keep TP2 at lower band (3-4× ATR rather than 5×), consider partial TP1 + trailing the runner"
+                    guidance = "MODERATE (60-69%) — TP2 at 3-4× ATR(4H), 48h hold target, take partial 50% at TP1 + trail the runner 1× ATR"
                 } else if p72Pct >= 50 {
-                    guidance = "WEAK (50-59%) — take TP1 at +1R-1.5R, trail tightly or exit at BE after TP1; mean-reversion likely before 2.5 ATR"
+                    guidance = "WEAK (50-59%) — TP2 at 2-3× ATR(4H) max, 24h hold, take TP1 at +1R-1.5R and trail tightly (0.7× ATR) or exit at BE after TP1"
                 } else {
-                    guidance = "LOW (<50%) — do NOT hold for TP2. Take TP1 fast or pass if TP1 < 1.5R. Persistence model expects mean-reversion."
+                    guidance = "LOW (<50%) — do NOT hold for TP2. Take TP1 fast (+1R-1.5R) or pass the setup if TP1 < 1.5R. Persistence model expects mean-reversion before 2.5 ATR."
                 }
                 lines.append("ML Persistence (72h ≥2.5 ATR): \(p72Pct)% — \(guidance)")
             }
