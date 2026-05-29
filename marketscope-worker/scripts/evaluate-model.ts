@@ -31,18 +31,19 @@ interface ModelJSON {
     calibration?: { x: number[]; y: number[] };
 }
 
-function parseArgs(argv: string[]): { modelPath: string; csvDir: string } {
-    let modelPath = '', csvDir = '';
+function parseArgs(argv: string[]): { modelPath: string; csvDir: string; perSymbol: boolean } {
+    let modelPath = '', csvDir = '', perSymbol = false;
     for (let i = 2; i < argv.length; i++) {
         const k = argv[i];
+        if (k === '--per-symbol') { perSymbol = true; continue; }
         const v = argv[i + 1];
         if (k === '--model') { modelPath = v; i++; }
         else if (k === '--csvs') { csvDir = v; i++; }
     }
     if (!modelPath || !csvDir) {
-        throw new Error('Usage: --model <path> --csvs <dir>');
+        throw new Error('Usage: --model <path> --csvs <dir> [--per-symbol]');
     }
-    return { modelPath, csvDir };
+    return { modelPath, csvDir, perSymbol };
 }
 
 function evaluateTree(node: TreeNode, input: Record<string, number>): number {
@@ -101,7 +102,7 @@ function rowToFeatures(header: string[], row: string[]): Record<string, number> 
 }
 
 function main() {
-    const { modelPath, csvDir } = parseArgs(process.argv);
+    const { modelPath, csvDir, perSymbol } = parseArgs(process.argv);
     const model: ModelJSON = JSON.parse(readFileSync(modelPath, 'utf8'));
     console.log(`Loaded model: ${modelPath}`);
     console.log(`  Trees: ${model.trees.length}, base_score: ${model.base_score}, calibration breakpoints: ${model.calibration?.x.length ?? 0}`);
@@ -121,7 +122,12 @@ function main() {
     let probSum = 0, probMax = 0;
     const probSamples: number[] = []; // For percentile
 
+    // Per-symbol breakdown: only populated when --per-symbol is set
+    interface SymbolStats { total: number; correct: number; wins: number; topN: number; topWins: number; }
+    const perSym: Record<string, SymbolStats> = {};
+
     for (const f of files) {
+        const symbol = f.replace(/\.csv$/, '');
         const path = join(csvDir, f);
         const { header, rows } = parseCSV(readFileSync(path, 'utf8'));
         const fwdMaxFavRIdx = header.indexOf('fwdMaxFavR');
@@ -129,6 +135,7 @@ function main() {
             console.warn(`  ${f}: missing fwdMaxFavR — skipped`);
             continue;
         }
+        const stats: SymbolStats = { total: 0, correct: 0, wins: 0, topN: 0, topWins: 0 };
         for (const row of rows) {
             const fwdMaxFavR = parseFloat(row[fwdMaxFavRIdx]);
             if (!Number.isFinite(fwdMaxFavR)) continue;
@@ -143,7 +150,13 @@ function main() {
             probSamples.push(p);
 
             // Decision at 0.5 threshold (matches calibrate_v9.py walk_forward_oof line 216)
-            if ((p >= 0.5 ? 1 : 0) === goodR) correct++;
+            const correctRow = (p >= 0.5 ? 1 : 0) === goodR;
+            if (correctRow) correct++;
+
+            stats.total++;
+            if (correctRow) stats.correct++;
+            stats.wins += goodR;
+            if (p >= 0.70) { stats.topN++; stats.topWins += goodR; }
 
             // Bucket
             let key: string;
@@ -155,6 +168,7 @@ function main() {
             buckets[key].n++;
             buckets[key].wins += goodR;
         }
+        if (perSymbol) perSym[symbol] = stats;
     }
 
     probSamples.sort((a, b) => a - b);
@@ -171,6 +185,37 @@ function main() {
     for (const [k, v] of Object.entries(buckets)) {
         const winRate = v.n > 0 ? v.wins / v.n * 100 : 0;
         console.log(`  ${k}: n=${v.n.toString().padStart(6)}, actual=${winRate.toFixed(1)}%`);
+    }
+
+    if (perSymbol && Object.keys(perSym).length > 0) {
+        console.log(`\n=== Per-symbol top-bucket (>=0.70) reliability, sorted by reliability ===`);
+        const rows = Object.entries(perSym).map(([sym, s]) => ({
+            sym,
+            topN: s.topN,
+            topReliability: s.topN > 0 ? s.topWins / s.topN * 100 : 0,
+            baseGoodR: s.total > 0 ? s.wins / s.total * 100 : 0,
+            edge: 0, // computed below
+            acc: s.total > 0 ? s.correct / s.total * 100 : 0,
+            total: s.total,
+        }));
+        rows.forEach(r => { r.edge = r.topReliability - r.baseGoodR; });
+        rows.sort((a, b) => b.topReliability - a.topReliability);
+        console.log(`  symbol      topN  top_rel%  baseGoodR%  edge_pp  acc%  total`);
+        for (const r of rows) {
+            console.log(`  ${r.sym.padEnd(10)} ${r.topN.toString().padStart(5)}  ${r.topReliability.toFixed(1).padStart(7)}%  ${r.baseGoodR.toFixed(1).padStart(9)}%  ${(r.edge >= 0 ? '+' : '') + r.edge.toFixed(1).padStart(6)}  ${r.acc.toFixed(1).padStart(4)}%  ${r.total.toString().padStart(5)}`);
+        }
+
+        // Summary stats
+        const withSamples = rows.filter(r => r.topN >= 50);
+        if (withSamples.length > 0) {
+            const meanRel = withSamples.reduce((s, r) => s + r.topReliability, 0) / withSamples.length;
+            const minR = withSamples.reduce((m, r) => r.topReliability < m.topReliability ? r : m, withSamples[0]);
+            const maxR = withSamples.reduce((m, r) => r.topReliability > m.topReliability ? r : m, withSamples[0]);
+            console.log(`\n  Across ${withSamples.length} symbols with topN >= 50:`);
+            console.log(`    mean top-bucket reliability: ${meanRel.toFixed(1)}%`);
+            console.log(`    best: ${maxR.sym} @ ${maxR.topReliability.toFixed(1)}% (n=${maxR.topN})`);
+            console.log(`    worst: ${minR.sym} @ ${minR.topReliability.toFixed(1)}% (n=${minR.topN})`);
+        }
     }
 }
 
