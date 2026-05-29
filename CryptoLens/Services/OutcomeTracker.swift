@@ -92,6 +92,8 @@ enum OutcomeTracker {
 
                 // --- PENDING state: check timeout, proactive re-validation, and entry trigger ---
                 if state == .pending {
+                    let setupId = tracked[i].setup.id
+
                     // Timeout check (12h)
                     if let expires = tracked[i].outcome.pendingExpiresAt, Date() > expires {
                         tracked[i].outcome.state = .expired
@@ -99,6 +101,7 @@ enum OutcomeTracker {
                             direction: "", mlWin: nil, killsActive: false,
                             validated: false, reason: "Pending window expired (12h)")
                         changed = true
+                        Task { await WorkerPendingSetupService.cancel(setupId: setupId) }
                         continue
                     }
 
@@ -116,6 +119,7 @@ enum OutcomeTracker {
                             tracked[i].outcome.reEvalResult = proactiveEval
                             changed = true
                             print("[OutcomeTracker] Proactive invalidation \(symbol): \(proactiveEval.reason)")
+                            Task { await WorkerPendingSetupService.cancel(setupId: setupId) }
                             continue
                         }
                     }
@@ -142,6 +146,8 @@ enum OutcomeTracker {
                             tracked[i].outcome.state = .invalidated
                         }
                         changed = true
+                        // Either way, the setup is no longer pending — cancel worker tracking.
+                        Task { await WorkerPendingSetupService.cancel(setupId: setupId) }
                     }
                     continue
                 }
@@ -387,7 +393,8 @@ enum OutcomeTracker {
                               mlProbability: Double? = nil, conviction: String? = nil,
                               modelVersion: Int? = nil,
                               promptVersion: String = currentPromptVersion,
-                              archetype: String? = nil) {
+                              archetype: String? = nil,
+                              atrAtRegistration: Double? = nil) {
         let resolvedModelVersion = modelVersion ?? currentModelVersion(for: symbol)
         ioQueue.async {
             let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
@@ -433,6 +440,22 @@ enum OutcomeTracker {
             if tracked.count > 50 { tracked = Array(tracked.prefix(50)) }
 
             save(tracked, to: url)
+
+            // Register pending setups with the worker so the cron can fire an
+            // "entry zone reached" APN when the latest 4H bar touches entry ± 0.3 × ATR
+            // AND ML is still favorable. Fire-and-forget; failures don't block local
+            // tracking. Only conditional setups go to the worker — market setups are
+            // already at-current-price so there's nothing to wait for.
+            if setupType == .conditional, let atr = atrAtRegistration, atr > 0,
+               let expiresAt = ts.outcome.pendingExpiresAt {
+                Task {
+                    await WorkerPendingSetupService.register(
+                        setupId: setup.id, symbol: symbol,
+                        direction: setup.direction, entry: setup.entry,
+                        atr: atr, mlAtRegistration: mlProbability,
+                        expiresAt: expiresAt)
+                }
+            }
         }
     }
 

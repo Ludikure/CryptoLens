@@ -206,6 +206,81 @@ export default {
       return json({ ok: true });
     }
 
+    // === Pending Setup Tracking (entry-touched APNs) ===
+    // iOS posts pending conditional setups here so the worker cron can monitor for
+    // entry-zone touches and send a push notification when conditions are still
+    // favorable. Closes the gap where a user-conditional entry sits silently waiting
+    // until the user manually opens the app.
+    if (path === '/pending-setups' && request.method === 'POST') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        // Lazy migration: idempotent. CREATE TABLE IF NOT EXISTS is a no-op after first
+        // call. Schema kept here so the table can be recreated from source if needed.
+        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS pending_setups (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          symbol TEXT NOT NULL,
+          direction TEXT NOT NULL,
+          entry REAL NOT NULL,
+          atr REAL NOT NULL,
+          ml_at_registration REAL,
+          expires_at INTEGER NOT NULL,
+          registered_at INTEGER NOT NULL,
+          notified INTEGER DEFAULT 0
+        )`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_pending_setups_symbol ON pending_setups(symbol)`).run();
+        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_pending_setups_device ON pending_setups(device_id)`).run();
+
+        const body = await request.json() as {
+          id: string; symbol: string; direction: string;
+          entry: number; atr: number;
+          mlAtRegistration?: number; expiresAt: number;
+        };
+        if (!body.id || !body.symbol || !body.direction ||
+            typeof body.entry !== 'number' || typeof body.atr !== 'number' ||
+            typeof body.expiresAt !== 'number') {
+          return json({ error: 'Invalid request' }, 400);
+        }
+        const symbol = sanitizeSymbol(body.symbol);
+        if (!symbol) return json({ error: 'Invalid symbol' }, 400);
+        if (body.direction !== 'LONG' && body.direction !== 'SHORT') {
+          return json({ error: 'Invalid direction' }, 400);
+        }
+        await env.DB.prepare(`INSERT OR REPLACE INTO pending_setups
+          (id, device_id, symbol, direction, entry, atr, ml_at_registration, expires_at, registered_at, notified)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).bind(
+          body.id, deviceId, symbol, body.direction,
+          body.entry, body.atr,
+          body.mlAtRegistration ?? null,
+          body.expiresAt, Date.now()
+        ).run();
+        return json({ ok: true });
+      } catch (e) {
+        console.log(`[pending-setups POST] error: ${e}`);
+        return json({ error: 'Invalid request' }, 400);
+      }
+    }
+    if (path === '/pending-setups' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        const rows = await env.DB.prepare(
+          'SELECT id, symbol, direction, entry, atr, ml_at_registration as mlAtRegistration, expires_at as expiresAt, registered_at as registeredAt, notified FROM pending_setups WHERE device_id = ?'
+        ).bind(deviceId).all();
+        return json(rows.results);
+      } catch {
+        return json([]);  // table may not exist yet
+      }
+    }
+    const pendingDeleteMatch = path.match(/^\/pending-setups\/(.+)$/);
+    if (pendingDeleteMatch && request.method === 'DELETE') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const id = pendingDeleteMatch[1];
+      try {
+        await env.DB.prepare('DELETE FROM pending_setups WHERE id = ? AND device_id = ?').bind(id, deviceId).run();
+      } catch { /* table may not exist */ }
+      return json({ ok: true });
+    }
+
     // === AI Analysis Proxy ===
     if (path === '/analyze' && request.method === 'POST') {
       if (!deviceId) return json({ error: 'Missing device ID' }, 400);
@@ -1660,6 +1735,15 @@ interface SymbolPrediction {
   // The notification gate fires only on this rising edge, not on continued elevation —
   // a symbol that sits at 0.75 for hours pages once when it crossed up, not every cron.
   crossed: boolean;
+  // Last 4H bar high/low/close — used by pending-setup entry-zone touch detection so
+  // we don't re-fetch the price for each device's setup checks. The 4H high/low covers
+  // any intra-bar touch of the entry level; close is for staleness gating.
+  last4HHigh: number;
+  last4HLow: number;
+  last4HClose: number;
+  // ATR in price units (atrPercent × close / 100), used to define the entry-zone width
+  // (default 0.3 × ATR around the entry price).
+  atrPrice: number;
 }
 
 interface NotifyFlags {
@@ -2243,12 +2327,24 @@ async function computeSymbolPredictions(
       const prevMl = ps?.mlProb;
       const crossed = prevMl !== undefined && prevMl < ML_THRESHOLD && mlProb >= ML_THRESHOLD;
 
+      // Last 4H bar for pending-setup entry-touch detection. Defensive fallback to 0
+      // if candles disappeared — the device-pass code handles 0 by skipping the check.
+      const last4H = fourHCandles[fourHCandles.length - 1];
+      const last4HHigh = last4H?.high ?? 0;
+      const last4HLow = last4H?.low ?? 0;
+      const last4HClose = last4H?.close ?? 0;
+      const atrPrice = (features.atrPercent / 100) * last4HClose;
+
       predictions.set(symbol, {
         symbol,
         isCrypto,
         mlProb,
         dailyScore: features.dailyScore,
         crossed,
+        last4HHigh,
+        last4HLow,
+        last4HClose,
+        atrPrice,
       });
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);
@@ -2328,6 +2424,63 @@ async function processDeviceNotifications(
     await env.DB.prepare(
       'INSERT INTO score_history (device_id, symbol, daily_score, four_h_score, ml_probability, bias, notification_sent) VALUES (?, ?, ?, ?, ?, ?, ?)'
     ).bind(deviceId, symbol, 0, 0, pred.mlProb, pred.mlProb > 0.5 ? 'Bullish' : 'Bearish', wasNotified ? 1 : 0).run();
+  }
+
+  // === Entry-touched check for this device's pending setups ===
+  // For each pending setup, check if the latest 4H bar's high/low touched the entry
+  // zone (entry ± 0.3 ATR) AND ML still favorable AND not yet notified. Fire APNs once,
+  // mark notified=1 so we don't spam. Also expire old setups.
+  if (pushToken) {
+    try {
+      const setupRows = await env.DB.prepare(
+        'SELECT id, symbol, direction, entry, atr, ml_at_registration, expires_at, notified FROM pending_setups WHERE device_id = ?'
+      ).bind(deviceId).all();
+      const setups = setupRows.results as unknown as Array<{
+        id: string; symbol: string; direction: string; entry: number; atr: number;
+        ml_at_registration: number | null; expires_at: number; notified: number;
+      }>;
+      const now = Date.now();
+      for (const setup of setups) {
+        // Cleanup expired
+        if (setup.expires_at < now) {
+          await env.DB.prepare('DELETE FROM pending_setups WHERE id = ?').bind(setup.id).run();
+          continue;
+        }
+        if (setup.notified === 1) continue;
+        const pred = predictions.get(setup.symbol);
+        if (!pred || pred.atrPrice <= 0) continue;
+        // ML must still be favorable. Use 0.55 as the entry-touched gate (slightly
+        // below the 70% conviction gate so we don't suppress moderate setups during
+        // an entry touch, but firm enough to skip stale signals where ML collapsed).
+        if (pred.mlProb < 0.55) continue;
+        // Entry zone: ±0.3 × ATR around the setup's entry price.
+        const zoneWidth = setup.atr * 0.3;
+        const zoneLow = setup.entry - zoneWidth;
+        const zoneHigh = setup.entry + zoneWidth;
+        // For LONG: price must come DOWN to entry; check if last 4H low ≤ zoneHigh.
+        // For SHORT: price must come UP; check if last 4H high ≥ zoneLow.
+        const isLong = setup.direction === 'LONG';
+        const touched = isLong
+          ? pred.last4HLow <= zoneHigh && pred.last4HLow >= zoneLow - zoneWidth  // give some grace
+          : pred.last4HHigh >= zoneLow && pred.last4HHigh <= zoneHigh + zoneWidth;
+        if (!touched) continue;
+        // Send the notification
+        const name = setup.symbol.replace('USDT', '');
+        const title = `${name} entry zone reached`;
+        const dirStr = setup.direction;
+        const mlPct = Math.round(pred.mlProb * 100);
+        const entryStr = setup.entry < 10 ? setup.entry.toFixed(4) : setup.entry.toFixed(2);
+        const body = `${dirStr} setup at $${entryStr} is in range. ML ${mlPct}% — open the app to confirm + act.`;
+        const result = await sendAPNs(env, pushToken, title, body);
+        if (result === 'unregistered') {
+          await deleteDevice(env, deviceId);
+          return;
+        }
+        await env.DB.prepare('UPDATE pending_setups SET notified = 1 WHERE id = ?').bind(setup.id).run();
+      }
+    } catch (e) {
+      console.log(`[pending-setups] check failed for ${deviceId}: ${e}`);
+    }
   }
 
   if (triggered.length === 0 || !pushToken) return;
