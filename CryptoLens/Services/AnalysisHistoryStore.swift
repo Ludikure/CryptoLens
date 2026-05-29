@@ -70,10 +70,37 @@ enum AnalysisHistoryStore {
         }
     }
 
+    /// Non-blocking async variant — use from UI contexts (swipe-to-delete) to avoid
+    /// hitching the main thread on disk I/O.
+    static func deleteAsync(symbol: String, id: UUID) async {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                let url = historyDir.appendingPathComponent("\(symbol).json")
+                var history = loadSync(url: url)
+                history.removeAll { $0.id == id }
+                if let data = try? JSONEncoder().encode(history) {
+                    try? data.write(to: url, options: .atomic)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
     static func clearAll(symbol: String) {
         let url = historyDir.appendingPathComponent("\(symbol).json")
         ioQueue.sync {
             try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    /// Non-blocking async variant — use from UI contexts to avoid blocking main thread.
+    static func clearAllAsync(symbol: String) async {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                let url = historyDir.appendingPathComponent("\(symbol).json")
+                try? FileManager.default.removeItem(at: url)
+                continuation.resume()
+            }
         }
     }
 

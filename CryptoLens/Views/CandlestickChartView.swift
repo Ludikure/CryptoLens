@@ -191,19 +191,31 @@ private struct CandlestickCanvas: View {
         candles[visibleRange]
     }
 
+    /// Setup levels included in the Y-axis range so Entry/SL/TP lines never draw
+    /// off-screen when targets sit far from the visible candles' high/low.
+    private var setupLevels: [Double] {
+        guard let s = activeSetup else { return [] }
+        var levels: [Double] = [s.entry, s.stopLoss, s.tp1]
+        if let tp2 = s.tp2 { levels.append(tp2) }
+        return levels
+    }
     private var priceMin: Double {
-        let low = visibleCandles.map(\.low).min() ?? 0
+        let candleLow = visibleCandles.map(\.low).min() ?? 0
+        let low = setupLevels.isEmpty ? candleLow : min(candleLow, setupLevels.min() ?? candleLow)
         let range = priceRange
         return low - range * 0.02
     }
     private var priceMax: Double {
-        let high = visibleCandles.map(\.high).max() ?? 0
+        let candleHigh = visibleCandles.map(\.high).max() ?? 0
+        let high = setupLevels.isEmpty ? candleHigh : max(candleHigh, setupLevels.max() ?? candleHigh)
         let range = priceRange
         return high + range * 0.02
     }
     private var priceRange: Double {
-        let high = visibleCandles.map(\.high).max() ?? 1
-        let low = visibleCandles.map(\.low).min() ?? 0
+        let candleHigh = visibleCandles.map(\.high).max() ?? 1
+        let candleLow = visibleCandles.map(\.low).min() ?? 0
+        let high = setupLevels.isEmpty ? candleHigh : max(candleHigh, setupLevels.max() ?? candleHigh)
+        let low = setupLevels.isEmpty ? candleLow : min(candleLow, setupLevels.min() ?? candleLow)
         return max(high - low, 0.0001)
     }
 

@@ -154,8 +154,9 @@ export default {
       }
     }
 
-    // All endpoints (except /register, /bls/actuals) require valid auth token
-    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/history' && path !== '/darkpool' && !path.startsWith('/debug') && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
+    // All endpoints (except /register, /bls/actuals) require valid auth token.
+    // /history is auth-gated; the iOS callers (BacktestEngine) send X-Auth-Token.
+    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/darkpool' && !path.startsWith('/debug') && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       // Check D1 first, then KV fallback
       const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();
@@ -864,9 +865,17 @@ export default {
     if (path === '/watchlist' && request.method === 'POST') {
       if (!deviceId) return json({ error: 'Missing device ID' }, 400);
       const body = await request.json() as any;
-      const symbols = (body.symbols || []).slice(0, 20).filter(
-        (s: any) => typeof s === 'string' && s.length <= 20
-      );
+      // Normalize through sanitizeSymbol + uppercase. The cron archive set and most
+      // KV/prediction keys are uppercase by convention; a lowercase `btcusdt` from
+      // a misbehaving client would otherwise create a parallel `btcusdt` archive
+      // shadow and miss the shared `BTCUSDT` ARCHIVE_CRYPTO processing path.
+      const symbols = (body.symbols || []).slice(0, 20)
+        .map((s: any) => {
+          if (typeof s !== 'string') return null;
+          const clean = sanitizeSymbol(s);
+          return clean ? clean.toUpperCase() : null;
+        })
+        .filter((s: string | null): s is string => s !== null);
       const cryptoThreshold = body.cryptoThreshold || 5;
       const stockThreshold = body.stockThreshold || 3;
       // Write to D1
@@ -1157,8 +1166,13 @@ export default {
     }
 
     // === Dark Pool (FINRA RegSHO short sale volume) ===
+    // Unauth'd cache read — IP-rate-limited so an enumerator can't strip-mine the
+    // watchlist signal by hammering this endpoint.
     if (path === '/darkpool') {
-      const symbol = url.searchParams.get('symbol')?.toUpperCase();
+      const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+      const dpLimited = await checkRateLimit(env, `darkpool-ip:${ip}`, 60, 60);
+      if (dpLimited) return json({ error: 'Rate limited' }, 429);
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       if (!symbol) return json({ error: 'Missing symbol' }, 400);
       const dpCached = await env.ALERTS.get('darkpool:latest');
       if (dpCached) {
@@ -1186,8 +1200,13 @@ export default {
       return json({ count: rows.results.length, candles: rows.results });
     }
 
-    // Upload candles to D1 archive (from app backtest/stitching)
+    // Upload candles to D1 archive (from app backtest/stitching). Auth-gated by the
+    // global gate above; the per-device rate limit caps abuse from a compromised token.
     if (path === '/history' && request.method === 'POST') {
+      // 5 uploads / 5 min / device — generous for backtest runs, tight enough to bound
+      // D1 write amplification from a single bad actor.
+      const uploadLimited = await checkRateLimit(env, `history-upload:${deviceId}`, 5, 300);
+      if (uploadLimited) return json({ error: 'Upload rate limited' }, 429);
       try {
         const body = await request.json() as { symbol: string; interval: string; candles: any[] };
         if (!body.symbol || !body.interval || !body.candles?.length) return json({ error: 'Missing fields' }, 400);
@@ -1465,14 +1484,17 @@ async function checkAllDeviceAlerts(env: Env) {
   const devices = await env.DB.prepare(
     'SELECT DISTINCT device_id FROM alerts WHERE triggered = 0'
   ).all();
-  for (const row of devices.results) {
-    const deviceId = row.device_id as string;
-    try {
-      await checkDeviceAlerts(env, deviceId);
-    } catch (e) {
-      console.log(`[cron] alert check failed for ${deviceId}: ${e}`);
+  // Parallel + allSettled so one device's failure (rate-limited provider, malformed
+  // alert row, etc.) doesn't push subsequent devices past the cron's wall-time budget.
+  // Pre-fix this was sequential and a slow upstream could starve the tail of the list.
+  const results = await Promise.allSettled(
+    devices.results.map(row => checkDeviceAlerts(env, row.device_id as string))
+  );
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      console.log(`[cron] alert check failed for ${devices.results[i].device_id}: ${r.reason}`);
     }
-  }
+  });
 }
 
 async function checkDeviceAlerts(env: Env, deviceId: string) {
@@ -1607,11 +1629,21 @@ async function sendAPNs(env: Env, deviceToken: string, title: string, body: stri
       }
       lastStatus = resp.status;
       lastBody = await resp.text();
-      console.error(`APNs ${endpoint.includes('sandbox') ? 'sandbox' : 'prod'} ${resp.status}: ${lastBody}`);
-      // If sandbox says BadDeviceToken, try production (token is from a release build)
+      const env_ = endpoint.includes('sandbox') ? 'sandbox' : 'prod';
+      console.error(`APNs ${env_} ${resp.status}: ${lastBody}`);
+      // Only break on responses that conclusively describe the token itself — anything
+      // else (transient sandbox 5xx, rate-limit 429, generic network failure surfaced
+      // as 500) should still attempt production, since a production token rejected by
+      // sandbox for non-token reasons would otherwise be permanently stranded.
+      // Conclusive token-level errors: 400 BadDeviceToken doesn't apply (we want to
+      // fall through to prod), but 410 Unregistered, 403 InvalidProviderToken (key
+      // misconfig), and 413 PayloadTooLarge all describe the request/token, not the
+      // endpoint, so retrying production is pointless.
       if (resp.status === 400 && lastBody.includes('BadDeviceToken')) continue;
-      // Any other error, stop trying
-      break;
+      if (resp.status === 410 || resp.status === 403 || resp.status === 413) break;
+      // Transient: try production as a fallback. Worst case, prod also fails the same
+      // way and we surface the prod error to the caller.
+      continue;
     }
     // 410 from production = token unregistered (uninstall, device wipe). Sandbox 410 we
     // distrust (token may still be valid via prod), so treat only the last-tried endpoint
@@ -1678,7 +1710,17 @@ async function cleanupStaleDevices(env: Env) {
   console.log(`[cleanup] sweep complete: ${stale.results.length} stale devices removed`);
 }
 
+// Apple validates the JWT against `iat` and accepts tokens up to ~1h old. We cache for
+// 50 minutes (well inside Apple's window) so a single cron tick that sends N notifications
+// reuses one JWT instead of rebuilding (crypto.subtle.importKey + sign per send was the
+// dominant per-notification cost). Process-local memory; cron isolates restart cleanly.
+let cachedAPNsJWT: { jwt: string; expiresAt: number } | null = null;
+const APNS_JWT_TTL_MS = 50 * 60 * 1000;
+
 async function buildAPNsJWT(env: Env): Promise<string | null> {
+  if (cachedAPNsJWT && Date.now() < cachedAPNsJWT.expiresAt) {
+    return cachedAPNsJWT.jwt;
+  }
   try {
     const { APNS_KEY_ID: keyId, APNS_TEAM_ID: teamId, APNS_PRIVATE_KEY: privateKeyB64 } = env;
     if (!keyId || !teamId || !privateKeyB64) return null;
@@ -1697,7 +1739,9 @@ async function buildAPNsJWT(env: Env): Promise<string | null> {
     const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, new TextEncoder().encode(signingInput));
     const sigB64 = btoa(String.fromCharCode(...new Uint8Array(signature))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 
-    return `${header}.${payload}.${sigB64}`;
+    const jwt = `${header}.${payload}.${sigB64}`;
+    cachedAPNsJWT = { jwt, expiresAt: Date.now() + APNS_JWT_TTL_MS };
+    return jwt;
   } catch {
     console.error('JWT build failed');
     return null;
@@ -2417,13 +2461,22 @@ async function processDeviceNotifications(
   }
 
   // Score history per watchlisted symbol (one row per cron, even if not notified).
-  for (const symbol of watchlist) {
-    const pred = predictions.get(symbol);
-    if (!pred) continue;
-    const wasNotified = triggered.some(t => t.symbol === symbol);
-    await env.DB.prepare(
-      'INSERT INTO score_history (device_id, symbol, daily_score, four_h_score, ml_probability, bias, notification_sent) VALUES (?, ?, ?, ?, ?, ?, ?)'
-    ).bind(deviceId, symbol, 0, 0, pred.mlProb, pred.mlProb > 0.5 ? 'Bullish' : 'Bearish', wasNotified ? 1 : 0).run();
+  // Batched: pre-batch this was N D1 round-trips per device × M devices per cron, easily
+  // 1000+ writes/minute. four_h_score stays 0 — SymbolPrediction doesn't carry a 4H
+  // score today; expose `features.fourH.score` through predictions if /scores starts
+  // surfacing it.
+  const historyStmts = watchlist
+    .map(symbol => {
+      const pred = predictions.get(symbol);
+      if (!pred) return null;
+      const wasNotified = triggered.some(t => t.symbol === symbol);
+      return env.DB.prepare(
+        'INSERT INTO score_history (device_id, symbol, daily_score, four_h_score, ml_probability, bias, notification_sent) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      ).bind(deviceId, symbol, pred.dailyScore, 0, pred.mlProb, pred.mlProb > 0.5 ? 'Bullish' : 'Bearish', wasNotified ? 1 : 0);
+    })
+    .filter((s): s is NonNullable<typeof s> => s !== null);
+  if (historyStmts.length > 0) {
+    await env.DB.batch(historyStmts);
   }
 
   // === Entry-touched check for this device's pending setups ===
@@ -2457,12 +2510,15 @@ async function processDeviceNotifications(
         const zoneWidth = setup.atr * 0.3;
         const zoneLow = setup.entry - zoneWidth;
         const zoneHigh = setup.entry + zoneWidth;
-        // For LONG: price must come DOWN to entry; check if last 4H low ≤ zoneHigh.
-        // For SHORT: price must come UP; check if last 4H high ≥ zoneLow.
+        // For LONG: bar's low ended INSIDE the zone (price reached the pullback without
+        // plunging through). For SHORT: bar's high ended INSIDE the zone (price spiked
+        // up to the entry without overshooting). Pre-fix the lower/upper bound used an
+        // extra `±zoneWidth` "grace" term that doubled the effective window to 0.9 ATR,
+        // firing on bars that had already gapped well past the documented ±0.3 ATR zone.
         const isLong = setup.direction === 'LONG';
         const touched = isLong
-          ? pred.last4HLow <= zoneHigh && pred.last4HLow >= zoneLow - zoneWidth  // give some grace
-          : pred.last4HHigh >= zoneLow && pred.last4HHigh <= zoneHigh + zoneWidth;
+          ? pred.last4HLow <= zoneHigh && pred.last4HLow >= zoneLow
+          : pred.last4HHigh >= zoneLow && pred.last4HHigh <= zoneHigh;
         if (!touched) continue;
         // Send the notification
         const name = setup.symbol.replace('USDT', '');

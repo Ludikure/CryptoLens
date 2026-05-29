@@ -85,7 +85,12 @@ class AlertsStore: ObservableObject {
             PushService.addAuthHeaders(&request)
 
             guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+                  let http = response as? HTTPURLResponse else { return }
+            if http.statusCode == 401 {
+                await PushService.handleAuthFailure()
+                return
+            }
+            guard (200...299).contains(http.statusCode),
                   let serverAlerts = try? JSONDecoder().decode([ServerAlert].self, from: data)
             else { return }
 
@@ -153,11 +158,21 @@ class AlertsStore: ObservableObject {
         }
     }
 
+    /// Debounce handle for the worker sync — bursts of mutations from didSet (e.g.
+    /// auto-alert generation creating 3+ alerts in quick succession) used to spawn
+    /// parallel sync Tasks that raced server-side. Now the latest in a 250ms window
+    /// supersedes earlier ones so the worker always receives the final snapshot.
+    private var syncTask: Task<Void, Never>?
+
     private func save() {
         if let data = try? JSONEncoder().encode(alerts) {
             UserDefaults.standard.set(data, forKey: key)
         }
-        // Sync to Cloudflare Worker for server-side push
-        PushService.syncAlerts(alerts)
+        syncTask?.cancel()
+        syncTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            PushService.syncAlerts(self.alerts)
+        }
     }
 }

@@ -28,10 +28,12 @@ struct AnalysisHistoryView: View {
                         }
                         .onDelete { offsets in
                             let ids = offsets.map { history[$0].id }
-                            for id in ids {
-                                AnalysisHistoryStore.delete(symbol: symbol, id: id)
-                            }
                             history.remove(atOffsets: offsets)
+                            Task {
+                                for id in ids {
+                                    await AnalysisHistoryStore.deleteAsync(symbol: symbol, id: id)
+                                }
+                            }
                         }
                     }
                     .listStyle(.insetGrouped)

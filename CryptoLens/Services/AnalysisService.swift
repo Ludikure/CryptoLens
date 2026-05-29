@@ -915,12 +915,17 @@ class AnalysisService: ObservableObject {
             )
 
             resultsBySymbol[symbol] = result
-            lastResult = result
-            isLoading = false
-            loadingStatus = ""
-            aiLoadingPhase = .idle
-            isAIStale = false
-            HapticManager.notification(.success)
+            // Only mutate displayed UI state if the user is still viewing this symbol —
+            // otherwise lastResult flips to the wrong asset when a slow AI analysis
+            // completes after the user has already swiped to another favorite.
+            if symbol == currentSymbol {
+                lastResult = result
+                isLoading = false
+                loadingStatus = ""
+                aiLoadingPhase = .idle
+                isAIStale = false
+                HapticManager.notification(.success)
+            }
             AnalysisHistoryStore.save(result)
 
             // Outcome tracking: register new setups (skip stocks outside market hours)

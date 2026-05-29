@@ -6,8 +6,8 @@ struct SettingsView: View {
     @StateObject private var status = ConnectionStatus.shared
     @State private var selectedProvider: AIProviderType = .deepseek
     @State private var selectedModel: String = ""
-    @State private var autoAlerts = UserDefaults.standard.object(forKey: "auto_alerts_enabled") as? Bool ?? false
-    @State private var experimentsEnabled = UserDefaults.standard.object(forKey: "experiments_enabled") as? Bool ?? true
+    @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
+    @AppStorage("experiments_enabled") private var experimentsEnabled: Bool = true
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0

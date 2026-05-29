@@ -28,11 +28,16 @@ enum PushService {
         }
     }
 
-    /// Add auth headers to any worker request.
+    /// Add auth headers to any worker request. Intentionally `nonisolated` — many
+    /// callers are non-MainActor (provider classes, the YahooFinanceService actor, the
+    /// OutcomeTracker disk-IO queue) and forcing them through MainActor for what's
+    /// effectively a header dictionary build would create more hops than it removes.
+    /// Both reads below are thread-safe by Apple's documentation: UserDefaults' standard
+    /// store is documented thread-safe, and Keychain operations are serialized through
+    /// securityd. A concurrent token rotation either sees the old or the new value,
+    /// never a partial — so the prior "headers may be incomplete" concern doesn't hold.
     nonisolated static func addAuthHeaders(_ request: inout URLRequest) {
         request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
-        // deviceId and authToken are read from MainActor, but addAuthHeaders is called
-        // from non-isolated contexts. We use a synchronous approach with cached values.
         let id = UserDefaults.standard.string(forKey: "device_id") ?? ""
         request.setValue(id, forHTTPHeaderField: "X-Device-ID")
         if let token = KeychainHelper.load(key: "worker_auth_token") {

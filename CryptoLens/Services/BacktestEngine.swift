@@ -42,9 +42,10 @@ class BacktestEngine: ObservableObject {
         let startMs = Int(startDate.timeIntervalSince1970 * 1000)
         let endMs = Int(endDate.timeIntervalSince1970 * 1000)
         guard let url = URL(string: "\(PushService.workerURL)/history?symbol=\(symbol)&interval=\(interval)&start=\(startMs)&end=\(endMs)") else { return nil }
+        await PushService.ensureAuth()
         var request = URLRequest(url: url)
         request.timeoutInterval = 15
-        request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
+        PushService.addAuthHeaders(&request)
 
         guard let (data, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
@@ -1513,10 +1514,11 @@ class BacktestEngine: ObservableObject {
     static func uploadCandlesToArchive(symbol: String, interval: String, candles: [Candle]) async {
         guard !candles.isEmpty else { return }
         guard let url = URL(string: "\(PushService.workerURL)/history") else { return }
+        await PushService.ensureAuth()
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
+        PushService.addAuthHeaders(&request)
         request.timeoutInterval = 30
 
         let payload: [[String: Any]] = candles.map { c in

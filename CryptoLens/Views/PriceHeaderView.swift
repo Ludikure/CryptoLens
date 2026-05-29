@@ -129,6 +129,17 @@ struct CandleMomentumPill: View {
         return "~"
     }
 
+    /// VoiceOver-friendly direction string. The visual summary uses arrow glyphs that
+    /// don't always read well; pair with bull/bear counts for users who can't see the
+    /// color-coded candle squares.
+    private var accessibilityDirection: String {
+        let greens = lastThree.filter { $0.close > $0.open }.count
+        let reds   = lastThree.filter { $0.close < $0.open }.count
+        if greens == lastThree.count && greens > 0 { return "bullish" }
+        if reds == lastThree.count && reds > 0    { return "bearish" }
+        return "mixed (\(greens) up, \(reds) down)"
+    }
+
     var body: some View {
         VStack(spacing: 3) {
             Text(label)
@@ -149,6 +160,8 @@ struct CandleMomentumPill: View {
             .padding(.vertical, 3)
             .background(Color(.systemGray5), in: Capsule())
         }
-        .accessibilityLabel("\(label) last 3 candles: \(summary)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label) momentum")
+        .accessibilityValue(accessibilityDirection)
     }
 }

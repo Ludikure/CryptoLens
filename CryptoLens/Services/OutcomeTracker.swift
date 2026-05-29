@@ -25,6 +25,21 @@ enum OutcomeTracker {
         }
     }
 
+    /// Non-blocking variant — call from UI contexts so heavy disk loads don't hitch
+    /// the main thread.
+    static func activeSetupsAsync(symbol: String) async -> [TrackedSetup] {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
+                let setups = loadTrackedSetups(url: url).filter {
+                    ($0.outcome.state == .active && $0.outcome.entryHit && !$0.outcome.isCounted) ||
+                    $0.outcome.state == .pending
+                }
+                continuation.resume(returning: setups)
+            }
+        }
+    }
+
     /// Returns wins/losses for a (symbol, archetype) pair over the last N days.
     /// Win = tp1Hit or tp2Hit (resolved profitably). Loss = stopHit. Setups still
     /// active/pending or expired-no-fill are excluded — they have no verdict yet.
@@ -45,6 +60,24 @@ enum OutcomeTracker {
         }
     }
 
+    /// Non-blocking variant.
+    static func archetypeRecordAsync(symbol: String, archetype: String, lookbackDays: Int = 30) async -> (wins: Int, losses: Int, total: Int) {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
+                let cutoff = Date().addingTimeInterval(TimeInterval(-lookbackDays * 86400))
+                var wins = 0
+                var losses = 0
+                for s in loadTrackedSetups(url: url) {
+                    guard s.archetype == archetype, s.timestamp >= cutoff else { continue }
+                    if s.outcome.tp1Hit || s.outcome.tp2Hit { wins += 1 }
+                    else if s.outcome.stopHit { losses += 1 }
+                }
+                continuation.resume(returning: (wins, losses, wins + losses))
+            }
+        }
+    }
+
     /// Returns every tracked setup across every symbol, newest first. `stats()` only
     /// includes the first 10 in `recentSetups` (UI cap); this is for export paths
     /// that need the full history.
@@ -58,6 +91,23 @@ enum OutcomeTracker {
                 all.append(contentsOf: loadTrackedSetups(url: file))
             }
             return all.sorted { $0.timestamp > $1.timestamp }
+        }
+    }
+
+    /// Non-blocking variant — preferred for dashboard views where the directory scan
+    /// can grow as outcome history accumulates.
+    static func allSetupsAsync(symbol: String? = nil) async -> [TrackedSetup] {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                var all = [TrackedSetup]()
+                let dir = outcomeDir
+                let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+                for file in files where file.lastPathComponent.hasPrefix("setups_") {
+                    if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
+                    all.append(contentsOf: loadTrackedSetups(url: file))
+                }
+                continuation.resume(returning: all.sorted { $0.timestamp > $1.timestamp })
+            }
         }
     }
 
