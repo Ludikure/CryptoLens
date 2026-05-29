@@ -90,15 +90,27 @@ struct AnalysisHistoryView: View {
                 }
             }
 
-            // Regime from analysis
-            if let regime = extractRegime(from: result.claudeAnalysis) {
-                Text(regime)
-                    .font(.caption2)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(regimeColor(regime).opacity(0.15))
-                    .foregroundStyle(regimeColor(regime))
-                    .clipShape(Capsule())
+            // Regime + Self-Check quality
+            HStack(spacing: 6) {
+                if let regime = extractRegime(from: result.claudeAnalysis) {
+                    Text(regime)
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(regimeColor(regime).opacity(0.15))
+                        .foregroundStyle(regimeColor(regime))
+                        .clipShape(Capsule())
+                }
+                let qc = Self.parseSelfCheck(from: result.claudeAnalysis)
+                if qc.quality != .unavailable {
+                    Label(qc.shortLabel, systemImage: qc.icon)
+                        .font(.caption2)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(qc.color.opacity(0.15))
+                        .foregroundStyle(qc.color)
+                        .clipShape(Capsule())
+                }
             }
 
             // Trade setup summary
@@ -136,6 +148,77 @@ struct AnalysisHistoryView: View {
         if r.contains("ranging") || r.contains("consolidat") { return .orange }
         if r.contains("breakout") { return .blue }
         return .secondary
+    }
+
+    /// Parsed Self-Check section. Counts Y / N / NA tags and classifies the analysis
+    /// as allPass / oneIssue / multipleIssues / unavailable. Used for the badge.
+    struct SelfCheckResult {
+        let yesCount: Int
+        let noCount: Int
+        let naCount: Int
+        let quality: Quality
+
+        enum Quality { case allPass, oneIssue, multipleIssues, unavailable }
+
+        var shortLabel: String {
+            switch quality {
+            case .allPass: return "All checks pass"
+            case .oneIssue: return "1 issue"
+            case .multipleIssues: return "\(noCount) issues"
+            case .unavailable: return ""
+            }
+        }
+        var icon: String {
+            switch quality {
+            case .allPass: return "checkmark.seal.fill"
+            case .oneIssue: return "exclamationmark.triangle.fill"
+            case .multipleIssues: return "xmark.octagon.fill"
+            case .unavailable: return ""
+            }
+        }
+        var color: Color {
+            switch quality {
+            case .allPass: return .green
+            case .oneIssue: return .orange
+            case .multipleIssues: return .red
+            case .unavailable: return .secondary
+            }
+        }
+    }
+
+    /// Walk the markdown looking for the `## Self-Check` section. Inside, every line
+    /// with a colon-followed-by-Y/N/NA token contributes to the counts. Tolerant of
+    /// minor formatting drift (bullet/no-bullet, parens/no-parens after the tag).
+    static func parseSelfCheck(from markdown: String) -> SelfCheckResult {
+        let lines = markdown.components(separatedBy: "\n")
+        var inSection = false
+        var yes = 0, no = 0, na = 0
+        for raw in lines {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.lowercased().hasPrefix("## self-check") {
+                inSection = true; continue
+            }
+            if inSection && line.hasPrefix("## ") { break }
+            if !inSection { continue }
+            // Look for "...: <tag> ..." where <tag> is Y / N / NA. Be tolerant of
+            // a leading bullet or numbering. Skip the introductory sentence (no colon).
+            guard let colonIdx = line.firstIndex(of: ":") else { continue }
+            let after = line[line.index(after: colonIdx)...].trimmingCharacters(in: .whitespaces)
+            // Match the first whitespace-separated token after the colon
+            let firstToken = after.split(whereSeparator: { $0.isWhitespace || $0 == "(" }).first.map(String.init) ?? ""
+            let token = firstToken.uppercased()
+            if token == "NA" || token == "N/A" { na += 1 }
+            else if token == "Y" || token == "YES" { yes += 1 }
+            else if token == "N" || token == "NO" { no += 1 }
+        }
+        if yes + no + na == 0 {
+            return SelfCheckResult(yesCount: 0, noCount: 0, naCount: 0, quality: .unavailable)
+        }
+        let q: SelfCheckResult.Quality
+        if no == 0 { q = .allPass }
+        else if no == 1 { q = .oneIssue }
+        else { q = .multipleIssues }
+        return SelfCheckResult(yesCount: yes, noCount: no, naCount: na, quality: q)
     }
 
     private func extractRegime(from markdown: String) -> String? {
