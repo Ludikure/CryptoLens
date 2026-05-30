@@ -16,3 +16,5 @@ ml-training/dark_pool_history.json
 ml-training/earnings_history.json
 # Large generated data (47 MB) — not used in production, regeneratable from Finnhub via insider_backfill.py
 ml-training/insider_history.json
+# OHLC cache for the setup-execution backtest — regeneratable via fetch_stock_candles.py
+ml-training/stock_candles_4h.csv.gz
