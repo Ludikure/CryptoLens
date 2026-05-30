@@ -1768,7 +1768,6 @@ const ARCHIVE_CRYPTO = [
 
 const ML_THRESHOLD = 0.70;            // top-bucket only — [0.70, 0.85) had 73.1% actual win rate in WF validation
 const NOTIFY_COOLDOWN_SEC = 3.5 * 60 * 60;
-const NOTIFY_TZ = 'America/New_York';
 
 interface SymbolPrediction {
   symbol: string;
@@ -1826,23 +1825,6 @@ function notificationDirection(biasAlignment: string, dStochCross: number): numb
   return biasDir !== 0 ? biasDir : stochDir;
 }
 
-interface NotifyFlags {
-  inCryptoNotifyWindow: boolean;
-  inStockNotifyWindow: boolean;
-}
-
-function computeNotifyFlags(): NotifyFlags {
-  const CRYPTO_NOTIFY_HOURS = [8, 12, 16, 20]; // 8am, 12pm, 4pm, 8pm + 11:30pm (handled separately)
-  const STOCK_NOTIFY_HOURS = [8, 12, 16];      // 8am, 12pm, 4pm
-  const now = new Date();
-  const userHour = Number(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, hour: '2-digit', hour12: false }));
-  const isWeekday = !['Sat', 'Sun'].includes(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, weekday: 'short' }));
-  const userMinute = Number(now.toLocaleString('en-US', { timeZone: NOTIFY_TZ, minute: '2-digit' }));
-  const inCryptoNotifyWindow = CRYPTO_NOTIFY_HOURS.includes(userHour) || (userHour === 23 && userMinute >= 30 && userMinute <= 31);
-  const inStockNotifyWindow = STOCK_NOTIFY_HOURS.includes(userHour) && isWeekday;
-  return { inCryptoNotifyWindow, inStockNotifyWindow };
-}
-
 // Orchestrates the per-cron score pass.
 // Pre-refactor (commit 7148670 and earlier) this function called `checkDeviceScores` once
 // per device, and each device's call independently fetched candles + derivatives + sector
@@ -1876,13 +1858,9 @@ async function checkAllDeviceScores(env: Env) {
 
   const predictions = await computeSymbolPredictions(env, allSymbols);
 
-  // Notify-window evaluation in user-local TZ; same for every device since we only
-  // support one TZ (America/New_York) today.
-  const notifyFlags = computeNotifyFlags();
-
   for (const [deviceId, watchlist] of watchlistsByDevice) {
     try {
-      await processDeviceNotifications(env, deviceId, watchlist, predictions, notifyFlags);
+      await processDeviceNotifications(env, deviceId, watchlist, predictions);
     } catch (e) {
       console.log(`[score] device ${deviceId} error: ${e}`);
     }
@@ -2477,7 +2455,6 @@ async function processDeviceNotifications(
   deviceId: string,
   watchlist: string[],
   predictions: Map<string, SymbolPrediction>,
-  notifyFlags: NotifyFlags,
 ) {
   const pushToken = await getPushToken(env, deviceId);
   const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
@@ -2504,8 +2481,15 @@ async function processDeviceNotifications(
   for (const symbol of watchlist) {
     const pred = predictions.get(symbol);
     if (!pred) continue;
-    const inWindow = pred.isCrypto ? notifyFlags.inCryptoNotifyWindow : notifyFlags.inStockNotifyWindow;
-    if (!inWindow || !pred.crossed || !pushToken) continue;
+    // Real-time gate (2026-05-30): fire the instant a cross is detected, any hour,
+    // protected only by the 3.5h per-(token,symbol) cooldown below. The previous fixed
+    // notify-window gate (8/12/16/20/23:30 ET) silently DROPPED crosses that landed
+    // off-window: mlProb only moves on a 4H close and `crossed` is true for a single
+    // cron tick (prevMl = previous minute), so a close outside a window was missed
+    // entirely, not deferred. With crypto closing 24/7 and most closes falling outside
+    // the 4-5 hour-wide windows, the majority of signals were lost. The cooldown already
+    // prevents spam; quiet-hours is delegated to the user's iOS Focus/DND.
+    if (!pred.crossed || !pushToken) continue;
     const dir = notificationDirection(pred.biasAlignment, pred.dStochCross);
     if (dir === 0) continue;  // No direction signal (neither fires, or they conflict)
     // Atomic claim: insert if absent, otherwise overwrite only if the prior claim has
