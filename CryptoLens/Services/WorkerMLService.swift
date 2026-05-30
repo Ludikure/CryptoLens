@@ -34,6 +34,13 @@ enum WorkerMLService {
     /// Fetch the latest cached probability for `symbol`. Throws `.notFound` if the worker
     /// has no cached prediction yet (caller falls back to local).
     static func predict(symbol: String) async throws -> Prediction {
+        // Ensure we hold a worker auth token before fetching — /ml-predict is
+        // auth-gated, and unlike the AI/macro/alerts paths this one previously skipped
+        // ensureAuth(), so on a fresh launch (or after a transient /register blip) the
+        // ML fetch went out unauthenticated → 403 → blank ML score. ensureAuth() is a
+        // no-op once a token exists and re-registers if it doesn't.
+        await PushService.ensureAuth()
+
         guard var components = URLComponents(string: "\(PushService.workerURL)/ml-predict") else {
             throw FetchError.missingURL
         }
