@@ -2,7 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
-import { mlPredict, mlPredictH72, buildMLInput } from './ml-predict';
+import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
 
@@ -1885,7 +1885,9 @@ async function computeSymbolPredictions(
   const predictions = new Map<string, SymbolPrediction>();
   // Accumulates per-symbol ML predictions for a single batched KV write after the loop —
   // replaces what used to be 76 individual `ml_pred:<symbol>` writes per cron run.
-  const mlPredBatch: Record<string, { symbol: string; probability: number; features: FullFeatures; timestamp: number; isCrypto: boolean }> = {};
+  const mlPredBatch: Record<string, { symbol: string; probability: number; features: FullFeatures; timestamp: number; isCrypto: boolean;
+    // Phase 1/2 additive heads (crypto-only; null/absent otherwise). Served by /ml-predict.
+    probabilityMeta?: number | null; q75?: number | null; confident?: boolean | null; metaDirection?: number }> = {};
   // Per-cron batched lookups: previous-bar open interest, last-derivatives-archive
   // timestamps (4H gate), and the candle cache for 1d/4h/1h. Each replaces 76 individual
   // KV reads + writes per cron with a single read + write of one blob. Candle cache is
@@ -2400,6 +2402,20 @@ async function computeSymbolPredictions(
       const dailyScoreRes = computeScore(candles as ScoreCandle[], isCrypto);
       const fourHScoreRes = computeScore(fourHCandles as ScoreCandle[], isCrypto);
       const biasAlignment = biasAlignmentFromLabels(dailyScoreRes.bias, fourHScoreRes.bias);
+
+      // Phase 1/2 heads (crypto-only): direction-conditioned triple-barrier meta prob,
+      // adaptive-TP2 q75, and the conformal `confident` gate. Additive — served by
+      // /ml-predict alongside the existing probability; current prompt/notify behaviour
+      // is unchanged until the app reads them. metaDirection = the union(bias, dStoch)
+      // the meta head was conditioned on (so the app knows which side it scored).
+      const metaDirection = notificationDirection(biasAlignment, features.dStochCross || 0);
+      const probabilityMeta = mlPredictMeta(features as Record<string, number>, isCrypto, metaDirection);
+      const q75 = mlPredictQuantile(features as Record<string, number>, isCrypto, '0.75');
+      const confident = mlConfident(probabilityMeta, isCrypto);
+      mlPredBatch[symbol].probabilityMeta = probabilityMeta;
+      mlPredBatch[symbol].q75 = q75;
+      mlPredBatch[symbol].confident = confident;
+      mlPredBatch[symbol].metaDirection = metaDirection;
 
       predictions.set(symbol, {
         symbol,
