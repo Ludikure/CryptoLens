@@ -662,13 +662,23 @@ enum AnalysisPrompt {
             // ONLY when promptVersion == treatmentPromptVersion. Each backed by 4.4 years
             // of 5-fold WF setup-execution data — see ml-training/setup_execution_*.py.
             if isTreatment {
-                // Stochastic RSI crossover direction. Backtest: dStochCross + ML >= 0.65
-                // → +0.129R EV across 26,605 setups (beats aligned_bullish + ML at +0.122R,
-                // ~8.5× more samples). Treat as a primary direction signal that can
-                // override the auto-FLAT on biases_MIXED when ML quality is high.
+                // Stochastic RSI crossover direction. The direction_primitive_sweep
+                // backtest (12 alternatives, 4.4 years, stocks + crypto top-10) showed
+                // bias OR Stoch is the best notification primitive — capturing 12× more
+                // total R on stocks and 1.9× on crypto vs bias-aligned alone. Stoch is
+                // a co-equal direction signal in its own right, especially on stocks
+                // where bias alignment misses 95% of rising-edge ML bars. The prompt
+                // surfaces both so the LLM can weigh agreement/disagreement against
+                // bias and apply the rules below.
                 treatmentStochCrossDaily = daily.stochRSI?.crossover ?? "none"
                 treatmentStochCross4H = fourH.stochRSI?.crossover ?? "none"
-                lines.append("STOCH_CROSS: daily=\(treatmentStochCrossDaily) | 4H=\(treatmentStochCross4H) (primary direction signal when bias alignment is MIXED + ML >= 65)")
+                lines.append("STOCH_CROSS: daily=\(treatmentStochCrossDaily) | 4H=\(treatmentStochCross4H)")
+                lines.append("  Rules:")
+                lines.append("  - When STOCH_CROSS direction AGREES with bias direction: high-confidence directional setup, lean in (HIGH conviction permitted if other gates pass).")
+                lines.append("  - When STOCH_CROSS direction CONTRADICTS bias direction (e.g., aligned_bullish + bearish Stoch cross): flag the tension in BULL/BEAR cases; cap conviction at MODERATE unless structural evidence (S/R confluence, volume) strongly supports the bias direction.")
+                lines.append("  - When bias is MIXED but STOCH_CROSS direction is decisive (both timeframes agree) AND ML >= 65: treat STOCH_CROSS as the primary direction signal, override auto-FLAT — this is the catalyst-driven setup case where Daily lags 4H/1H momentum.")
+                lines.append("  - When STOCH_CROSS is 'none' on both timeframes: bias drives direction, treat as before.")
+                lines.append("  Backtest basis: dStoch + ML high captured +0.190R/trade on stocks (vs +0.079R for bias alone) and +0.998R on crypto top-10 (vs +1.040R for bias). Roughly co-equal on crypto, materially better on stocks.")
 
                 // LONG confirmation gate. Backtest: requiring relStrengthVsSpy >= 1 AND
                 // dRsiDelta >= 1 lifts aligned_bullish + ML EV from +0.122R to +0.171R
