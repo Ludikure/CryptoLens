@@ -231,12 +231,17 @@ def main():
     m['heads_description'] = ('Phase1/2: triple-barrier meta (tb_win_given_dir) + '
                               'fwdMaxFavR quantiles + conformal abstention tau. Additive; '
                               'quality head unchanged. See PLAN_OUTCOMES.md.')
-    out = os.path.join(IOS_ML, 'ml-model-crypto.heads.json')
-    json.dump(m, open(out, 'w'))
-    sz = os.path.getsize(out) / 1024
-    print(f"\n  wrote {out} ({sz:.0f} KB)  | meta {len(meta_trees)} trees, "
-          f"quantiles 3x{len(q_heads['0.75']['trees'])} trees, conformal tau={tau}")
-    print("  NOT deployed / not swapped into production — review + add evaluator read-paths + fixtures next.")
+    # Write to both the iOS bundle and the worker src (worker imports it directly,
+    # like the H72 head). Quality model JSON stays untouched in both.
+    worker_ml = os.path.join(os.path.dirname(__file__), '..', 'marketscope-worker', 'src')
+    for d in (IOS_ML, worker_ml):
+        out = os.path.join(d, 'ml-model-crypto.heads.json')
+        json.dump(m, open(out, 'w'))
+        print(f"  wrote {out} ({os.path.getsize(out)/1024:.0f} KB)")
+    print(f"  meta {len(meta_trees)} trees, quantiles 3x{len(q_heads['0.75']['trees'])} "
+          f"trees, conformal tau={tau}")
+    print("  NOT deployed — worker evaluator + heads-parity test exist; remaining: "
+          "endpoint wiring (compute direction → serve probabilityMeta/q75/confident) + iOS read + deploy.")
 
 
 if __name__ == '__main__':

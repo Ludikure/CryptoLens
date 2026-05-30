@@ -7,6 +7,10 @@ import stockModelData from './ml-model-stock.json';
 // 72h persistence models: same feature set, different target (goodR72h_2.5 instead of goodR_1.5)
 import cryptoH72ModelData from './ml-model-crypto-h72t25.json';
 import stockH72ModelData from './ml-model-stock-h72t25.json';
+// Phase 1/2 additive heads (crypto-only): triple-barrier meta + fwdMaxFavR quantiles
+// + conformal abstention. Separate file (like the H72 head) so the quality model JSON
+// stays byte-identical and its parity tests are untouched.
+import cryptoHeadsModelData from './ml-model-crypto.heads.json';
 
 interface TreeNode {
     nodeid: number;
@@ -93,6 +97,61 @@ export function mlPredictH72(input: Record<string, number>, isCrypto: boolean): 
     for (let i = 1; i < x.length; i++) { if (x[i] > rawProb) { lo = i - 1; break; } }
     const t = (rawProb - x[lo]) / (x[lo + 1] - x[lo]);
     return Math.max(0, Math.min(0.85, y[lo] + t * (y[lo + 1] - y[lo])));
+}
+
+// ── Phase 1/2 additive heads (crypto): triple-barrier meta + fwdMaxFavR quantiles
+//    + conformal abstention. Loaded defensively from model JSON `heads`: absent in
+//    current production → all functions return null and serving is unchanged; active
+//    once ml-model-crypto.heads.json is swapped in. Python parity self-check (against
+//    this exact aggregation) is 1.48e-7 (meta) / 1.9e-6 (quantile). See export_heads.py.
+interface Heads {
+    meta?: { trees: TreeNode[]; base_score: number;
+             calibration: { x: number[]; y: number[]; cap?: number } };
+    quantiles?: { q: Record<string, { trees: TreeNode[]; base_score: number }> };
+    conformal?: { threshold: number | null; target_coverage: number };
+}
+const cryptoHeads = (cryptoHeadsModelData as any).heads as Heads | undefined;
+
+function isoCalibrate(cal: { x: number[]; y: number[]; cap?: number }, rawProb: number): number {
+    const { x, y } = cal; const cap = cal.cap ?? 0.85;
+    if (x.length < 2) return rawProb;
+    if (rawProb <= x[0]) return y[0];
+    if (rawProb >= x[x.length - 1]) return Math.min(cap, y[y.length - 1]);
+    let lo = 0;
+    for (let i = 1; i < x.length; i++) { if (x[i] > rawProb) { lo = i - 1; break; } }
+    const t = (rawProb - x[lo]) / (x[lo + 1] - x[lo]);
+    return Math.max(0, Math.min(cap, y[lo] + t * (y[lo + 1] - y[lo])));
+}
+
+/// Direction-conditioned meta probability P(triple-barrier win | take `direction`).
+/// `direction` is +1 (LONG) / -1 (SHORT); appended as the `tradeDir` feature. Crypto
+/// only. Returns null when no meta head is present (current production).
+export function mlPredictMeta(input: Record<string, number>, isCrypto: boolean, direction: number): number | null {
+    if (!isCrypto || !cryptoHeads?.meta || direction === 0) return null;
+    const { trees, base_score, calibration } = cryptoHeads.meta;
+    const metaInput = { ...input, tradeDir: direction };
+    let sum = Math.log(base_score / (1 - base_score));
+    for (const tree of trees) sum += evaluateTree(tree, metaInput);
+    if (!isFinite(sum)) return null;
+    return isoCalibrate(calibration, sigmoid(sum));
+}
+
+/// Predicted quantile of fwdMaxFavR (ATR units) — drives adaptive TP2. q in {"0.50",
+/// "0.75","0.90"}. Raw regressor: base + Σleaves (no sigmoid/calibration). Crypto only.
+export function mlPredictQuantile(input: Record<string, number>, isCrypto: boolean, q: string): number | null {
+    const head = isCrypto ? cryptoHeads?.quantiles?.q?.[q] : undefined;
+    if (!head) return null;
+    let sum = head.base_score;
+    for (const tree of head.trees) sum += evaluateTree(tree, input);
+    return isFinite(sum) ? sum : null;
+}
+
+/// Conformal abstention: true iff the calibrated meta-prob clears the threshold whose
+/// selected-set win-rate is guaranteed (Wilson-90%-LB) to meet the target. null = no head.
+export function mlConfident(metaProb: number | null, isCrypto: boolean): boolean | null {
+    const tau = isCrypto ? cryptoHeads?.conformal?.threshold : undefined;
+    if (tau == null || metaProb == null) return null;
+    return metaProb >= tau;
 }
 
 /// Build feature dict from scoring results + candle data.
