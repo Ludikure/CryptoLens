@@ -256,5 +256,15 @@
       "conformal_tau": 0.37400001287460327,
       "confident_n": 12652
     }
+  },
+  "phase4_context": {
+    "crypto": {
+      "baseline_ev": 0.754074663100471,
+      "context_ev": 0.7457241128699477
+    },
+    "stock": {
+      "baseline_ev": 0,
+      "context_ev": 0
+    }
   }
 }
