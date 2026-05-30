@@ -1780,10 +1780,15 @@ interface SymbolPrediction {
   // a symbol that sits at 0.75 for hours pages once when it crossed up, not every cron.
   crossed: boolean;
   // Daily Stochastic RSI crossover direction (+1 = bullish cross, -1 = bearish cross,
-  // 0 = no recent cross). Used as a notification gate: only page when momentum direction
-  // is confirmed. Backtest: dStochCross + ML >= 0.65 → +0.129R EV on stocks,
-  // +0.842R EV on top-10 crypto (vs +0.122R / +0.852R for aligned_bullish + ML).
+  // 0 = no recent cross). Combined with biasAlignment as the notification direction
+  // primitive via the union rule (bias OR Stoch, skip conflicts).
   dStochCross: number;
+  // Bias alignment from per-timeframe scoring: 'aligned_bullish', 'aligned_bearish',
+  // 'conflict', or 'neutral'. Used together with dStochCross to determine the notification
+  // direction. Backtest (direction_primitive_sweep.py, 2022-2026): the union (bias OR
+  // Stoch with conflict-skip) captured 12× more total R than bias-alone on stocks
+  // and 1.9× on crypto top-10, while keeping per-trade EV nearly identical.
+  biasAlignment: string;
   // Last 4H bar high/low/close — used by pending-setup entry-zone touch detection so
   // we don't re-fetch the price for each device's setup checks. The 4H high/low covers
   // any intra-bar touch of the entry level; close is for staleness gating.
@@ -1793,6 +1798,32 @@ interface SymbolPrediction {
   // ATR in price units (atrPercent × close / 100), used to define the entry-zone width
   // (default 0.3 × ATR around the entry price).
   atrPrice: number;
+}
+
+/// Combine daily + 4H bias labels into the alignment string. Mirrors
+/// alignFromBiases in scripts/scoring-bias.ts (kept inline so the worker src
+/// doesn't depend on the scripts dir).
+function biasAlignmentFromLabels(dailyBias: string, fourHBias: string): string {
+  const dB = dailyBias.includes('Bullish');
+  const dBr = dailyBias.includes('Bearish');
+  const hB = fourHBias.includes('Bullish');
+  const hBr = fourHBias.includes('Bearish');
+  if (dBr && hBr) return 'aligned_bearish';
+  if (dB && hB) return 'aligned_bullish';
+  if ((dBr && hB) || (dB && hBr)) return 'conflict';
+  return 'neutral';
+}
+
+/// Notification direction primitive: union of bias-aligned OR dStochCross.
+/// Returns +1 for LONG, -1 for SHORT, 0 to skip the notification.
+/// Skips on conflicts (bias and Stoch disagree). See direction_primitive_sweep.py
+/// for the comparison that motivated this rule.
+function notificationDirection(biasAlignment: string, dStochCross: number): number {
+  const biasDir = biasAlignment === 'aligned_bullish' ? 1 :
+                  biasAlignment === 'aligned_bearish' ? -1 : 0;
+  const stochDir = dStochCross === 1 ? 1 : (dStochCross === -1 ? -1 : 0);
+  if (biasDir !== 0 && stochDir !== 0 && biasDir !== stochDir) return 0; // conflict
+  return biasDir !== 0 ? biasDir : stochDir;
 }
 
 interface NotifyFlags {
@@ -2384,6 +2415,14 @@ async function computeSymbolPredictions(
       const last4HClose = last4H?.close ?? 0;
       const atrPrice = (features.atrPercent / 100) * last4HClose;
 
+      // Per-timeframe bias labels for the notification direction primitive. The
+      // worker's simplified scorer (~80% accurate vs Swift ScoringFunction) is fine
+      // for direction gating — the actual setup direction in the app comes from the
+      // iOS ComputeAll which sees the user the same labels.
+      const dailyScoreRes = computeScore(candles as ScoreCandle[], isCrypto);
+      const fourHScoreRes = computeScore(fourHCandles as ScoreCandle[], isCrypto);
+      const biasAlignment = biasAlignmentFromLabels(dailyScoreRes.bias, fourHScoreRes.bias);
+
       predictions.set(symbol, {
         symbol,
         isCrypto,
@@ -2391,6 +2430,7 @@ async function computeSymbolPredictions(
         dailyScore: features.dailyScore,
         crossed,
         dStochCross: features.dStochCross || 0,
+        biasAlignment,
         last4HHigh,
         last4HLow,
         last4HClose,
@@ -2445,23 +2485,29 @@ async function processDeviceNotifications(
   const expiresAt = now + NOTIFY_COOLDOWN_SEC * 1000;
 
   // Notify gate. Records score_history regardless (so the user's history endpoint sees
-  // every cron), but only adds to triggered if (a) the symbol just crossed up through
-  // ML_THRESHOLD on this cron and (b) the atomic D1 claim succeeds. Continued elevation
-  // doesn't re-fire — the user is paged once per crossing event, not every cron the
-  // probability stays above threshold.
+  // every cron), but only adds to triggered if all of: (a) the symbol just crossed up
+  // through ML_THRESHOLD this cron, (b) the union direction primitive returns non-zero
+  // (bias-aligned OR Stoch cross fired, conflicts skipped), and (c) the atomic D1 claim
+  // succeeds. Continued elevation doesn't re-fire — paged once per crossing event.
   //
-  // NOTE 2026-05-30: a Stoch-cross gate was briefly added here and rolled back. The
-  // ml-training/notification_compare.py backtest showed the Stoch filter dropped total
-  // R captured by ~80% (both stocks and crypto top-10) while making per-trade EV slightly
-  // *worse* — for stock LONGs specifically it flipped a +0.146R bucket to -0.014R. The
-  // earlier "dStochCross + ML" finding was measured before bias-alignment filtering;
-  // once aligned_bullish/bearish is already required, Stoch adds no marginal information
-  // and just throws away setups.
+  // Direction primitive history:
+  //   - Original: bias-aligned only. Backtest showed n=613 / +0.079R EV / +48R total
+  //     on stocks across 4.4 years. Bias is a complex 6-layer score that's restrictive
+  //     enough to miss most actionable setups on stocks (no derivatives/cross-asset
+  //     layers like crypto has).
+  //   - Brief detour (rolled back same day): bias AND Stoch — intersection dropped total
+  //     R by 80% by requiring two redundant direction signals.
+  //   - Current (2026-05-30): bias OR Stoch union, skip-on-conflict. Backtest captured
+  //     12× more total R on stocks and 1.9× on crypto top-10, with per-trade EV nearly
+  //     identical to bias-alone. See ml-training/direction_primitive_sweep.py for the
+  //     full sweep vs 11 alternative primitives — union won both markets.
   for (const symbol of watchlist) {
     const pred = predictions.get(symbol);
     if (!pred) continue;
     const inWindow = pred.isCrypto ? notifyFlags.inCryptoNotifyWindow : notifyFlags.inStockNotifyWindow;
     if (!inWindow || !pred.crossed || !pushToken) continue;
+    const dir = notificationDirection(pred.biasAlignment, pred.dStochCross);
+    if (dir === 0) continue;  // No direction signal (neither fires, or they conflict)
     // Atomic claim: insert if absent, otherwise overwrite only if the prior claim has
     // expired. `meta.changes === 1` means we won (either fresh insert or expired-claim
     // takeover); `0` means another concurrent caller already holds an unexpired claim.
@@ -2471,7 +2517,8 @@ async function processDeviceNotifications(
        WHERE notif_claims.expires_at < ?4`
     ).bind(pushToken, symbol, expiresAt, now).run();
     if ((claim.meta.changes ?? 0) === 0) continue;
-    triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb, direction: '' });
+    triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb,
+                     direction: dir === 1 ? 'LONG' : 'SHORT' });
   }
 
   // Score history per watchlisted symbol (one row per cron, even if not notified).
@@ -2561,13 +2608,22 @@ async function processDeviceNotifications(
   // (they all cleared 70%) to keep the title scannable.
   const tickers = triggered.map(t => t.symbol.replace('USDT', ''));
   let title: string;
+  let body: string;
   if (triggered.length === 1) {
     const t = triggered[0];
-    title = `${tickers[0]} — Setup conditions favorable (ML ${Math.round(t.mlProb * 100)}%)`;
+    title = `${tickers[0]} ${t.direction} — ML ${Math.round(t.mlProb * 100)}%`;
+    body = `Open the app for the full directional analysis.`;
   } else {
-    title = `${triggered.length} setups favorable: ${tickers.join(', ')}`;
+    // Group by direction so the lock-screen view shows LONG/SHORT split at a glance.
+    const longs = triggered.filter(t => t.direction === 'LONG').map(t => t.symbol.replace('USDT', ''));
+    const shorts = triggered.filter(t => t.direction === 'SHORT').map(t => t.symbol.replace('USDT', ''));
+    const parts: string[] = [];
+    if (longs.length) parts.push(`LONG: ${longs.join(', ')}`);
+    if (shorts.length) parts.push(`SHORT: ${shorts.join(', ')}`);
+    title = `${triggered.length} setups favorable`;
+    body = parts.join(' | ');
   }
-  const result = await sendAPNs(env, pushToken, title, `Open the app for the directional analysis.`);
+  const result = await sendAPNs(env, pushToken, title, body);
   if (result === 'unregistered') {
     await deleteDevice(env, deviceId);
     return;
