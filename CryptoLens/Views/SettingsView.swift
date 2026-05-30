@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var selectedModel: String = ""
     @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
     @AppStorage("experiments_enabled") private var experimentsEnabled: Bool = true
+    @AppStorage("conformal_gate_enabled") private var conformalGate: Bool = false
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
@@ -150,6 +151,14 @@ struct SettingsView: View {
                     Text("Experiments")
                 } footer: {
                     Text("When enabled, new trade setups are bucketed into baseline or treatment prompt versions so outcome differences can be measured. Turn OFF to always use the baseline prompt.")
+                }
+
+                Section {
+                    Toggle("Conformal gate (crypto)", isOn: $conformalGate)
+                } header: {
+                    Text("ML — Conformal Abstention")
+                } footer: {
+                    Text("When ON, crypto setups must clear the worker's conformal confidence gate (calibrated ≥60% win) and use the adaptive q75 runner target. On a frozen-holdout backtest this lifted EV/trade from +0.245R to +0.754R while trading ~1/3 as often. OFF (default): the conformal status is shown as info only and does not affect setups. Watch the effect in Outcome Tracking.")
                 }
 
                 Section("Data") {
