@@ -599,6 +599,7 @@ enum AnalysisPrompt {
             var treatmentStochCross4H = "none"
             var treatmentLongConfirmStatus = "n/a"  // PASS / PARTIAL / FAIL / n/a
             var treatmentLongConfirmReasons: [String] = []
+            var envConformalNotConfident = false  // Phase 2 conformal gate (treatment, crypto)
 
             // Crypto macro-regime guard (survivorship + leverage tail-risk overlay).
             // Re-validation (ml-training/edge_revalidate.py) showed the ML edge stays
@@ -701,6 +702,28 @@ enum AnalysisPrompt {
                 lines.append("  - When bias is MIXED but STOCH_CROSS direction is decisive (both timeframes agree) AND ML >= 65: treat STOCH_CROSS as the primary direction signal, override auto-FLAT — this is the catalyst-driven setup case where Daily lags 4H/1H momentum.")
                 lines.append("  - When STOCH_CROSS is 'none' on both timeframes: bias drives direction, treat as before.")
                 lines.append("  Backtest basis: dStoch + ML high captured +0.190R/trade on stocks (vs +0.079R for bias alone) and +0.998R on crypto top-10 (vs +1.040R for bias). Roughly co-equal on crypto, materially better on stocks.")
+
+                // CONFORMAL gate + adaptive runner (Phase 1/2 heads, crypto-only). Worker serves
+                // a direction-conditioned triple-barrier meta prob, a conformal `confident` gate
+                // (calibrated to >=60% win with a finite-sample guarantee), and q75 (predicted
+                // fwdMaxFavR) for adaptive TP2. Holdout: gating on `confident` lifts EV/trade
+                // +0.245R -> +0.754R at 1/3 the exposure. See PLAN_OUTCOMES.md.
+                // Informational always (zero behavior change); the abstention CAP is opt-in
+                // via the `conformal_gate_enabled` UserDefault (default OFF) so the validated
+                // gate can be enabled deliberately and measured before/after in OutcomeTracker.
+                if let conf = daily.mlConfident, let mdir = daily.mlMetaDirection, mdir != 0 {
+                    let mp = daily.mlMetaProbability.map { Int(($0 * 100).rounded()) } ?? -1
+                    let dirStr = mdir == 1 ? "LONG" : "SHORT"
+                    let gateOn = UserDefaults.standard.bool(forKey: "conformal_gate_enabled")
+                    if conf {
+                        lines.append("CONFORMAL: CONFIDENT (\(dirStr), meta \(mp)%) — cleared the triple-barrier + conformal bar (calibrated >=60% win). Trade-worthy; proceed if other gates pass.")
+                    } else if gateOn {
+                        envConformalNotConfident = true
+                        lines.append("CONFORMAL: NOT CONFIDENT (\(dirStr), meta \(mp)%) — below the conformal abstention threshold. The validated gate ABSTAINS here: prefer NO SETUP unless structural evidence is exceptional. Conviction capped LOW.")
+                    } else {
+                        lines.append("CONFORMAL: NOT CONFIDENT (\(dirStr), meta \(mp)%) — below the conformal abstention threshold (informational; gate disabled). Holdout: gating here lifted EV/trade +0.245R→+0.754R at 1/3 the exposure.")
+                    }
+                }
 
                 // LONG confirmation gate. Backtest: requiring relStrengthVsSpy >= 1 AND
                 // dRsiDelta >= 1 lifts aligned_bullish + ML EV from +0.122R to +0.171R
@@ -1455,6 +1478,10 @@ enum AnalysisPrompt {
                 // surface the long-side cap so the envelope reflects it; the flag text
                 // carries the long-only + halve-size detail for the LLM to apply.
                 if envCryptoBearRegime { downgrade.append("crypto_bear_regime_LONG_cap_MODERATE_halve_size") }
+                // Conformal abstention (treatment, crypto): the validated gate trades only
+                // `confident` bars. Not-confident → cap LOW (= no trade) so the A/B archive
+                // measures the abstention's effect on resolved-R.
+                if envConformalNotConfident { moderateBlocks.append("conformal_abstain_not_confident_cap_LOW") }
                 // Worn level downgrade: check if any IN_PLAY 4H level has 4+ tests
                 if let ms = fourH.marketStructure, let cp = indicators.first?.price, cp > 0, let a = fourH.atr?.atr, a > 0 {
                     let nearWorn = ms.levelTests.contains { abs($0.price - cp) / a <= 1.0 && $0.tests >= 4 }

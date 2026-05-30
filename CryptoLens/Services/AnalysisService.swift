@@ -526,8 +526,12 @@ class AnalysisService: ObservableObject {
             // drives notifications). nil on cache miss / network failure; UI handles.
             var tf1ML = tf1
             let workerML = await fetchWorkerML(symbol: symbol)
-            tf1ML.mlWinProbability = workerML.probability
-            tf1ML.mlPersistenceProbability = workerML.persistence
+            tf1ML.mlWinProbability = workerML?.probability
+            tf1ML.mlPersistenceProbability = workerML?.probabilityH72
+            tf1ML.mlMetaProbability = workerML?.probabilityMeta
+            tf1ML.mlQ75 = workerML?.q75
+            tf1ML.mlConfident = workerML?.confident
+            tf1ML.mlMetaDirection = workerML?.metaDirection
             #if DEBUG
             // Local feature dump for parity-vs-canonical investigations only. Constructed in
             // DEBUG builds so we can compare what the iOS live path would have produced vs
@@ -703,8 +707,12 @@ class AnalysisService: ObservableObject {
 
             // ML win probability for the AI prompt — worker is the single source of truth.
             let workerML2 = await fetchWorkerML(symbol: symbol)
-            tf1.mlWinProbability = workerML2.probability
-            tf1.mlPersistenceProbability = workerML2.persistence
+            tf1.mlWinProbability = workerML2?.probability
+            tf1.mlPersistenceProbability = workerML2?.probabilityH72
+            tf1.mlMetaProbability = workerML2?.probabilityMeta
+            tf1.mlQ75 = workerML2?.q75
+            tf1.mlConfident = workerML2?.confident
+            tf1.mlMetaDirection = workerML2?.metaDirection
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
@@ -1553,12 +1561,11 @@ class AnalysisService: ObservableObject {
     /// the live iOS feature-build path drifted slightly from BacktestEngine canonical, so
     /// a local fallback would display numbers that don't match notifications. Worker is the
     /// only source of truth for displayed ML.
-    private func fetchWorkerML(symbol: String) async -> (probability: Double?, persistence: Double?) {
+    private func fetchWorkerML(symbol: String) async -> WorkerMLService.Prediction? {
         do {
-            let prediction = try await WorkerMLService.predict(symbol: symbol)
-            return (prediction.probability, prediction.probabilityH72)
+            return try await WorkerMLService.predict(symbol: symbol)
         } catch {
-            return (nil, nil)
+            return nil
         }
     }
 }

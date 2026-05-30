@@ -157,6 +157,11 @@ struct IndicatorResult: Identifiable, Codable {
     var volScalar: Double?
     var mlWinProbability: Double?   // v9 goodR: calibrated P(>= 1.5 ATR favorable move in 24h)
     var mlPersistenceProbability: Double?  // h72t25: calibrated P(>= 2.5 ATR favorable move in 72h) — runner-hold confidence
+    // Phase 1/2 additive heads (crypto-only; nil otherwise). Runtime-only (not persisted).
+    var mlMetaProbability: Double?  // P(triple-barrier win | mlMetaDirection) — direction-conditioned
+    var mlQ75: Double?              // predicted q75 of fwdMaxFavR (ATR) → adaptive TP2 runner
+    var mlConfident: Bool?          // conformal abstention gate (true = trade-worthy)
+    var mlMetaDirection: Int?       // +1/-1/0 the meta head was conditioned on
 
     init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], inProgressCandle: Candle? = nil, rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil, momentumOverride: String? = nil, biasScore: Int = 0, marketStructure: MarketStructureResult? = nil, volScalar: Double? = nil) {
         self.id = UUID()
