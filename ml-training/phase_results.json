@@ -220,5 +220,15 @@
       "best_meta_totalR": 7161.388861804682,
       "label_optimism_pct": 17.348683460617806
     }
+  },
+  "phase1_final": {
+    "stock": {
+      "holdout_baseline_ev": 0.04986403542446989,
+      "holdout_baseline_n": 245
+    },
+    "crypto": {
+      "holdout_baseline_ev": 1.0166273766173668,
+      "holdout_baseline_n": 1491
+    }
   }
 }
