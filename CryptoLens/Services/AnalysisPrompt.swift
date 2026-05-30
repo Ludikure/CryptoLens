@@ -586,7 +586,6 @@ enum AnalysisPrompt {
             var envDivergenceEscalated = false
             var envMacroRisk = "NONE"
             var envContinuationCount = 0
-            var envExhaustionCount = 0
             var envAlignment = "UNKNOWN"
             var envNewsConflicts = false
 
@@ -1068,7 +1067,6 @@ enum AnalysisPrompt {
                 lines.append("Exhaustion Signals (4H, vs \(direction) momentum): \(exStr)")
                 lines.append("Continuation Signals (4H, with \(direction) momentum): \(contStr)")
                 envContinuationCount = continuation.count  // C10 capture
-                envExhaustionCount = exhaustion.count       // C10 capture
             }
 
             // Phase C9 — Bias Feasibility asymmetry score (per-direction conviction-criteria check)
