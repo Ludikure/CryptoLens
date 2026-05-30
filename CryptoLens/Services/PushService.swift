@@ -132,23 +132,36 @@ enum PushService {
         isAuthenticating = true
         defer { isAuthenticating = false }
         ConnectionStatus.shared.workerAuth = .pending
-        for attempt in 0..<2 {
-            if attempt > 0 { try? await Task.sleep(for: .seconds(3)) }
+        for attempt in 0..<3 {
+            if attempt > 0 { try? await Task.sleep(for: .seconds(2)) }
             guard let url = URL(string: "\(workerURL)/register") else { return }
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("marketscope-ios", forHTTPHeaderField: "X-App-ID")
             request.setValue(deviceId, forHTTPHeaderField: "X-Device-ID")
+            // Send the existing token if we somehow have one (lets the worker re-issue for a
+            // known device); usually nil here, which is the deadlock case handled below.
+            if let token = authToken { request.setValue(token, forHTTPHeaderField: "X-Auth-Token") }
             request.httpBody = try? JSONSerialization.data(withJSONObject: [:] as [String: String])
 
-            if let (data, response) = try? await URLSession.shared.data(for: request),
-               let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+            guard let (data, response) = try? await URLSession.shared.data(for: request),
+                  let http = response as? HTTPURLResponse else { continue }  // network error → retry
+            if (200...299).contains(http.statusCode),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let serverToken = json["authToken"] as? String {
                 authToken = serverToken
                 ConnectionStatus.shared.workerAuth = .ok
                 return
+            }
+            if http.statusCode == 401 {
+                // Deadlock: this deviceId exists server-side but we no longer hold its token
+                // (keychain lost it). The worker correctly refuses re-registration without it.
+                // Rotate to a fresh identity (not in D1) so the next attempt registers cleanly.
+                authToken = nil
+                let newId = UUID().uuidString
+                UserDefaults.standard.set(newId, forKey: "device_id")
+                deviceId = newId
             }
         }
         ConnectionStatus.shared.workerAuth = .error
