@@ -1341,10 +1341,15 @@ enum AnalysisPrompt {
                     if alignedDirection == "LONG" && treatmentLongConfirmStatus == "FAIL" {
                         autoFlat.append("treatment_long_confirm_FAIL")
                     }
-                    // aligned_bearish SHORT restriction (P3.4). SHORTs lose money in every
-                    // historical regime (-0.060R baseline, even -0.023R in 2022 bear).
-                    // Require ML >= 70 AND STOCH_CROSS 4H bearish AND regime TRENDING to fire.
-                    if alignedDirection == "SHORT" && envAlignment == "ALIGNED_BEARISH" {
+                    // aligned_bearish SHORT restriction (P3.4) — STOCKS ONLY.
+                    // Stock SHORTs lose money in every historical regime (-0.060R baseline,
+                    // even -0.023R in 2022 bear). Restrict to ML >= 70 + STOCH_CROSS 4H
+                    // bearish + regime TRENDING for them.
+                    // CRYPTO SHORTs are the highest-EV cell in the grid (+0.952R, 78.8% win
+                    // on the 5-fold WF crypto backtest). Restriction does NOT apply.
+                    // Gated by stockInfo presence — crypto has no stockInfo struct.
+                    let isStock = stockInfo != nil
+                    if isStock && alignedDirection == "SHORT" && envAlignment == "ALIGNED_BEARISH" {
                         let mlOk = (mlPct ?? 0) >= 70
                         let stochOk = treatmentStochCross4H == "bearish"
                         let regimeOk = regime == "TRENDING"
@@ -1353,7 +1358,7 @@ enum AnalysisPrompt {
                             if !mlOk { reasons.append("ML<70") }
                             if !stochOk { reasons.append("STOCH_CROSS_4H≠bearish") }
                             if !regimeOk { reasons.append("regime≠TRENDING") }
-                            autoFlat.append("treatment_short_gate(\(reasons.joined(separator: ",")))")
+                            autoFlat.append("treatment_short_gate_stocks(\(reasons.joined(separator: ",")))")
                         }
                     }
                 }
