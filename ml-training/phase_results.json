@@ -266,5 +266,15 @@
       "baseline_ev": 0,
       "context_ev": 0
     }
+  },
+  "phase5_direction": {
+    "crypto": {
+      "baseline_ev": 0.754074663100471,
+      "path_ev": 0.754331520190094
+    },
+    "stock": {
+      "baseline_ev": 0,
+      "path_ev": 0
+    }
   }
 }
