@@ -422,21 +422,29 @@ enum OutcomeTracker {
 
     // MARK: - Registration
 
-    /// Baseline prompt+system version. Bump when prompt, kill rules, stop-placement
-    /// floors, or OutcomeTracker logic change materially. Format: `YYYY-MM-DD-tag`.
-    static let baselinePromptVersion = "2026-05-09-multihorizon"
+    /// Baseline prompt+system version. Collapsed to match the treatment version
+    /// 2026-05-30 because this is a single-user system — an A/B with n=1 user
+    /// cannot generate statistical power, and the worker's notification gate
+    /// change (bias OR Stoch union) was creating an asymmetric UX where baseline
+    /// users got Stoch-routed notifications that the baseline prompt couldn't
+    /// interpret (biases_MIXED auto-FLAT would kill the LLM analysis even though
+    /// the worker had reasons to fire the notification). Both constants now equal
+    /// the same string so the entire system runs the consolidated current-best
+    /// prompt. If MarketScope grows to multiple users later, set treatmentPromptVersion
+    /// to a new tag to restart A/B testing relative to this consolidated baseline.
+    static let baselinePromptVersion = "2026-05-30-stoch-direction"
 
-    /// Treatment prompt+system version. Setups land here when the per-device A/B
-    /// hash picks the experiment bucket. Current treatment bundles:
+    /// Treatment prompt+system version. Bundles the six changes shipped 2026-05-30:
     ///   - Band-default inversion (carried over from 2026-05-29-experiment)
-    ///   - STOCH_CROSS direction signal (overrides auto-FLAT on MIXED when ML high)
+    ///   - STOCH_CROSS direction signal (co-equal direction primitive — broadened
+    ///     2026-05-30 after the direction_primitive_sweep backtest)
     ///   - LONG confirmation gate (relStrengthVsSpy >= 1 AND dRsiDelta >= 1)
     ///   - BB extreme inversion (don't fade band touches at 24h)
-    ///   - aligned_bearish SHORT restrictions (require ML >= 0.70 + Stoch confirm + TRENDING)
+    ///   - aligned_bearish SHORT restrictions (stocks only — crypto SHORTs are
+    ///     +0.95R EV; restriction would block the highest-EV cell on crypto)
     ///   - TRANSITIONING regime conviction boost (allow HIGH when other gates pass)
     ///   - MACRO_CONTEXT block (DXY/VIX/IWM-SPY interpretive labels)
-    /// Per-fold backtest expectation: aligned_bullish + ML high EV +0.122R baseline →
-    /// +0.171R with confirmation gates; aligned_bearish -0.060R → +0.011R with gates.
+    /// Equal to baselinePromptVersion now (see comment above on the A/B collapse).
     static let treatmentPromptVersion = "2026-05-30-stoch-direction"
 
     /// Back-compat alias for callers that didn't go through `assignedPromptVersion`.
