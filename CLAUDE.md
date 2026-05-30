@@ -174,6 +174,7 @@ The app pre-computes authoritative flags passed to the LLM in the `PRE-COMPUTED 
 - **LONG_CONFIRMATION** (2026-05-30, stocks only): relStrengthVsSpy ≥ 1 AND dRsiDelta ≥ 1. PASS → unrestricted LONG; PARTIAL → cap LOW; FAIL → no LONG trade. Backtest: lifts aligned_bullish + ML EV from +0.122R to +0.171R, rescues stocks fold-5 (current bull) from −0.069R to +0.067R. Crypto has neither field — gate inactive (returns "n/a").
 - **BB_EXTREME** (2026-05-30): When dBBPercentB ≤ 0.1 or ≥ 0.9, prompt emits explicit "DO NOT short this — fading band touches LOSES money (-0.052R EV)". Treat as continuation, not fade.
 - **MACRO_CONTEXT** (2026-05-30): Labeled DXY / SPY / VIX state pulled from crossAsset + stockSentiment. Surfaces direction-relevant macro signals the LLM previously had to infer from raw numbers.
+- **CRYPTO REGIME** (2026-05-30, crypto only): survivorship + leverage tail-risk overlay computed from the analyzed symbol's daily EMA200. BEARISH (price < 200D EMA AND 200D sloping down over last 20 daily bars) → caps LONG conviction at MODERATE + halve size, SHORTs unaffected; also adds `crypto_bear_regime_LONG_cap_MODERATE_halve_size` to the envelope downgrade list. WEAK (below 200D, slope not yet down) → one-line "LONGs need extra confirmation". Rationale: `edge_revalidate.py` showed the ML edge stays +EV in 2022-bear folds, but only on symbols that survived — the dataset has no delisted tokens, so a real leveraged bear is an unmodeled tail risk. Advisory + envelope downgrade, not a hard FLAT (the historical edge is real).
 - **Conviction envelope treatment gates** (2026-05-30): aligned_bearish SHORTs gated by `isStock && ML≥70 && STOCH_CROSS bearish && regime TRENDING` (stock SHORTs lose in every backtest regime; crypto SHORTs are best cell, unrestricted). TRANSITIONING regime + aligned_bullish + ML≥65 + LONG_CONFIRMATION PASS → removes continuation-count + ML<70 highBlocks so HIGH conviction can fire.
 - **Candle Close Timestamps**: Next 4H and Daily close times.
 
@@ -488,6 +489,10 @@ Three-layer quality scoring for TP1/TP2 selection (replaced naive "nearest 3 lev
 - Weighted clearance: obstacles penalized by their strength
 - Counter-trend: tighter bands (TP1 0.8-1.5, TP2 1.3-2.5) when 4H opposes daily
 
+### Crypto Runner Widening (2026-05-30)
+
+Within the tighter-band (`isWideBand`) path, the TP2 runner is now market-aware: **crypto** uses ideal 3.0 ATR (band 2.0–3.5, R:R cap 1.75), **stocks** stay at ideal 2.5 ATR (band 2.0–3.0). Justification: `ml-training/composite_band_backtest.py` models the actual execution (50% off at TP1, stop trails to break-even, runner to TP2) on the clean multi-fold WF (incl. 2022 bear). Once TP1 books and the stop is at BE the runner is downside-free, so a wider TP2 only adds upside — crypto blended EV climbs +1.29R→+1.37R going 2.5→3.0 ATR (+1.42R at 3.5; knee ~3.0–3.5). Stocks gain only +0.007R from the same widening and carry overnight gap risk through the BE stop, so they're left at 2.5. The ATR-fallback TP2 multiple matches (crypto wideBand 3.0×, else 2.5×). `isCrypto` = `symbol` ends in `USDT`.
+
 ### Band-Default Inversion (A/B treatment, 2026-05-29)
 
 Per-symbol EV analysis on `csv_exports_v11/` + `csv_exports_v13/` (n=237) showed 86% of symbols see ≥ +0.01 R/trade gain from the tighter DOGE-style bands (TP1 1.5 / TP2 2.5 / stop 2.0 ATR) over the historical wide defaults (TP1 2.0 / TP2 4.0). Inversion lives in the treatment A/B bucket only — baseline keeps the previous behavior so the archive stays comparable.
@@ -531,6 +536,8 @@ bias-aligned (former production)    789     82.3%   +1.040R    +820.4
 dStochCross alone                   912     81.0%   +0.998R    +910.4
 union (current production)        1,517     81.9%   +1.024R   +1,553.1  ← 1.9× total R
 ```
+
+**Re-validation (2026-05-30, leakage-free — `ml-training/edge_revalidate.py`):** the sweep above pools symbols and splits by row index with a 48-*row* purge, which leaks across correlated symbols (48 rows ≈ 0 time when 159 symbols share each bar). A clean re-run (split by *timestamp*, 14-day time embargo, 5 folds spanning the 2022 bear) reproduced the per-trade numbers within ~0.03R: dStoch stocks +0.190→**+0.189R**, crypto top-10 +0.998→**+0.995R**, union/bias total-R multiple 12×→**18.7×** (stocks) / **1.9×** (crypto). The leakage is real but immaterial here — it only affects which bars the ML model selects; each trade's R resolves from genuinely-future candles in a separate file, and `fwdMaxFavR` is direction-agnostic (`max(high−price, price−low)/atr`), so no circularity. The crypto edge is also regime-robust, not bull-only: dStoch is +0.91R in the 2022-bear fold, positive every fold, longs and shorts. **The real residual risk is survivorship bias (the symbol set only contains instruments that exist today; the top-10 restriction maximizes rather than removes it) and unmodeled execution (slippage, perp funding) — not leakage.**
 
 ### Why bias and Stoch are different on stocks vs crypto
 

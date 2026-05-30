@@ -600,6 +600,28 @@ enum AnalysisPrompt {
             var treatmentLongConfirmStatus = "n/a"  // PASS / PARTIAL / FAIL / n/a
             var treatmentLongConfirmReasons: [String] = []
 
+            // Crypto macro-regime guard (survivorship + leverage tail-risk overlay).
+            // Re-validation (ml-training/edge_revalidate.py) showed the ML edge stays
+            // positive even in 2022-bear folds — BUT only across symbols that survived;
+            // the dataset has no delisted/zeroed tokens. With leverage a real bear is a
+            // live risk the backtest can't model, so when daily price is below a falling
+            // 200D EMA we cap LONG conviction and halve size. SHORTs (regime-aligned,
+            // +EV in every historical fold) are left free. See project_edge_findings.
+            var envCryptoBearRegime = false
+            if symbol.uppercased().hasSuffix("USDT"), let e200 = daily.ema200, daily.price > 0 {
+                let belowMA = daily.price < e200
+                let s = daily.ema200Series
+                let ma200Falling = s.count >= 21 && s[s.count - 1] < s[s.count - 21]
+                if belowMA && ma200Falling {
+                    envCryptoBearRegime = true
+                    lines.append("CRYPTO REGIME: BEARISH — daily price below 200D EMA and 200D sloping down.")
+                    lines.append("  The ML quality edge held in historical bear folds, but only on symbols that survived; with leverage this is a real tail risk the backtest cannot see.")
+                    lines.append("  LONG setups: cap conviction at MODERATE and HALVE position size vs normal risk. SHORT / aligned-bearish setups: unaffected (crypto shorts are +EV in every historical fold).")
+                } else if belowMA {
+                    lines.append("CRYPTO REGIME: WEAK — daily price below 200D EMA (200D not yet sloping down). LONGs require extra confirmation; sizing normal.")
+                }
+            }
+
             // Phase 1 — Regime label
             let adxDaily = daily.adx?.adx ?? 0
             var maAlignment = "tangled"
@@ -1429,6 +1451,10 @@ enum AnalysisPrompt {
                 var downgrade = [String]()
                 if staleCount >= 2 { downgrade.append("data_stale_\(staleCount)_sources") }
                 if oneHOpposes { downgrade.append("counter_trend_pullback_cap_MODERATE") }
+                // Crypto bear-regime LONG guard (see CRYPTO REGIME flag): mechanically
+                // surface the long-side cap so the envelope reflects it; the flag text
+                // carries the long-only + halve-size detail for the LLM to apply.
+                if envCryptoBearRegime { downgrade.append("crypto_bear_regime_LONG_cap_MODERATE_halve_size") }
                 // Worn level downgrade: check if any IN_PLAY 4H level has 4+ tests
                 if let ms = fourH.marketStructure, let cp = indicators.first?.price, cp > 0, let a = fourH.atr?.atr, a > 0 {
                     let nearWorn = ms.levelTests.contains { abs($0.price - cp) / a <= 1.0 && $0.tests >= 4 }
@@ -2218,6 +2244,7 @@ enum AnalysisPrompt {
                         // see wideBandSymbols doc-comment for the full backtest table). Stop floor
                         // stays at 2.0 ATR so the trade runs sub-1:1 R:R — that's intentional.
                         let isWideBand = Self.useTighterBands(symbol: symbol)
+                        let isCrypto = symbol.uppercased().hasSuffix("USDT")
                         let tp1RRBand: (Double, Double)
                         let tp1ATRBand: (Double, Double)
                         let idealTP1RR: Double
@@ -2243,10 +2270,24 @@ enum AnalysisPrompt {
                             tp2ATRBand = (1.0, 3.5)
                             idealTP2RR = 1.8
                         } else if isWideBand {
-                            // TP2 at ~2.5 ATR with 2.0 ATR stop → 1.25 R:R.
-                            tp2RRBand = (0.75, 1.5)
-                            tp2ATRBand = (2.0, 3.0)
-                            idealTP2RR = 1.25
+                            // Stocks: TP2 ~2.5 ATR (1.25 R:R on a 2.0 stop). Crypto runs the
+                            // runner wider. Composite backtest (50% at TP1, BE-trail, 72h,
+                            // clean multi-fold WF incl. 2022 bear — ml-training/
+                            // composite_band_backtest.py): once TP1 books and the stop trails
+                            // to BE the runner is downside-free, so a wider TP2 only adds
+                            // upside. Crypto blended EV climbs +1.29R→+1.37R going 2.5→3.0 ATR
+                            // (+1.42R at 3.5); knee ~3.0-3.5. Stocks gain only +0.007R from the
+                            // same move AND carry overnight gap risk through the BE stop, so
+                            // they stay at 2.5.
+                            if isCrypto {
+                                tp2RRBand = (0.75, 1.75)
+                                tp2ATRBand = (2.0, 3.5)
+                                idealTP2RR = 1.5      // 3.0 ATR target / 2.0 ATR stop
+                            } else {
+                                tp2RRBand = (0.75, 1.5)
+                                tp2ATRBand = (2.0, 3.0)
+                                idealTP2RR = 1.25     // 2.5 ATR target / 2.0 ATR stop
+                            }
                         } else {
                             tp2RRBand = (1.3, 4.0)
                             tp2ATRBand = (1.5, 5.0)
@@ -2321,10 +2362,12 @@ enum AnalysisPrompt {
                         let finalTP2Type: String
                         if let t2 = tp2 { finalTP2Price = t2.price; finalTP2Type = t2.type }
                         else {
-                            // wideBand TP2 ideal is 2.5× ATR (1.25 R:R), others stay at 2.5× too
-                            // (that's the default idealTP2RR with 2 ATR stop = 5 ATR target — but
-                            // ATR-fallback uses a smaller anchor since structure was missing entirely).
-                            let fb = atrFallback(isWideBand ? 2.5 : 2.5, "2.5× ATR")
+                            // wideBand TP2 fallback: crypto 3.0× ATR (matches the widened
+                            // runner above), stocks 2.5×. Non-wideBand also 2.5× (ATR-fallback
+                            // uses a smaller anchor than the 5 ATR structural ceiling since
+                            // structure was missing entirely).
+                            let tp2FallbackMult = (isWideBand && isCrypto) ? 3.0 : 2.5
+                            let fb = atrFallback(tp2FallbackMult, String(format: "%.1f× ATR", tp2FallbackMult))
                             finalTP2Price = fb.price; finalTP2Type = fb.type
                         }
 
