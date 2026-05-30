@@ -250,5 +250,11 @@
         "2": 0.4560000002384186
       }
     }
+  },
+  "phase3_agreement": {
+    "crypto": {
+      "conformal_tau": 0.37400001287460327,
+      "confident_n": 12652
+    }
   }
 }
