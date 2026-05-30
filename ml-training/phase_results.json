@@ -276,5 +276,15 @@
       "baseline_ev": 0,
       "path_ev": 0
     }
+  },
+  "phase6_architecture": {
+    "crypto": {
+      "single_ev": 0.754074663100471,
+      "ensemble_ev": 0.7437238785133746
+    },
+    "stock": {
+      "single_ev": 0,
+      "ensemble_ev": 0
+    }
   }
 }
