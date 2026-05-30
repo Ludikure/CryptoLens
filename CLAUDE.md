@@ -45,7 +45,104 @@ Resources/      → Assets.xcassets, earnings_history.json, dark_pool_history.js
 
 ### Cloudflare Worker (`marketscope-worker/`)
 
-TypeScript worker that proxies API calls, handles auth, push notifications (APNs), and alert checking via cron. Deployed to `marketscope-proxy.ludikure.workers.dev`.
+TypeScript worker that proxies API calls, handles auth, push notifications (APNs), and alert checking via cron. Deployed to `marketscope-proxy.ludikure.workers.dev`. Cron runs every minute. Single file `src/index.ts` (~2,600 lines) holds the router, the cron orchestrator, and all endpoint handlers. Tests in `test/` exercise feature parity vs the iOS BacktestEngine at 1e-7 tolerance.
+
+#### Endpoint inventory
+
+Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCEPT the public ones listed below. All requests must carry `X-App-ID: marketscope-ios` regardless. POST body size capped at `MAX_BODY_BYTES` except `/history`.
+
+| Path | Method | Auth | Purpose |
+|---|---|---|---|
+| `/` `/health` | GET | none | Liveness check |
+| `/register` | POST | X-App-ID only (IP rate-limited 3/24h) | Issue auth token for a new device; idempotent for existing device_id with valid token |
+| `/alerts` | POST/GET/DELETE | required | Sync alerts list to D1 / fetch active / clear |
+| `/pending-setups` | POST/GET | required | Register conditional setups for entry-zone touch monitoring |
+| `/watchlist` | POST | required | Set symbols to monitor + ML thresholds (symbols are sanitized + uppercased) |
+| `/analyze` | POST | required (60/min rate-limited) | Proxy AI provider call (Claude/Gemini/DeepSeek) with allowlist enforcement |
+| `/outcomes` | POST/PUT/GET | required | Trade outcome capture, update closed-trade, fetch device history (optional symbol/model_version/prompt_version filters) |
+| `/scores` | GET | required | Per-device score history (ML probability time series) |
+| `/notifications` | GET | required | Per-device push notification log |
+| `/performance` | GET | required | Per-symbol win/loss aggregate stats |
+| `/ml-predict?symbol=…` | GET | required | Read ML prediction from `ml_preds:all` KV (5-min TTL, written by cron). Returns `{symbol, probability, probabilityH72, features, timestamp, isCrypto}` |
+| `/ml-models/version` | GET | required | Model JSON metadata (version, features, trees, uploaded date) |
+| `/history` | GET/POST | required (POST: 5/5min rate-limit) | D1 candle archive read / upload from app backtest |
+| `/macro` | GET | required | FRED economic data proxy |
+| `/yahoo/quote` `/yahoo/summary` `/yahoo/options` | GET | required (cached 60s–10min) | Yahoo Finance proxy |
+| `/tiingo/candles` | GET | required (cached 10min) | Tiingo stock candles |
+| `/twelvedata/candles` `/twelvedata/quote` | GET | required (cached 10min) | TwelveData stock candles + quotes |
+| `/alphavantage/intraday` | GET | required | AlphaVantage historical 1H fallback |
+| `/finnhub/market-status` `/finnhub/*` | GET | required (cached 60s–1h) | Finnhub proxy (market status, analyst recs, earnings, news) |
+| `/bls/actuals` | GET | none (public) | BLS economic indicators |
+| `/derivatives` | GET | none (public) | Binance derivatives proxy (cached 5min) |
+| `/spot` | GET | none (public) | Spot price (cached 60s) |
+| `/candles/crypto` | GET | none (public) | Crypto candles (variable TTL) |
+| `/sentiment` | GET | none (public) | Fear & Greed proxy (cached 10min) |
+| `/darkpool?symbol=…` | GET | none (IP rate-limited 60/min) | FINRA dark pool ratio + Z-score |
+| `/debug/features` | GET | required | Read `debug:<sym>_features` KV for parity investigation |
+| `/debug/backfill-derivatives` | POST | required (X-App-ID gated) | One-off derivatives backfill from Binance to D1 |
+
+**Cron-only operations (no endpoint):**
+- `checkAllDeviceScores` (orchestrator) → `computeSymbolPredictions` (symbol pass, writes `ml_preds:all` etc.) → `processDeviceNotifications` (per-device gating + APNs)
+- `checkAllDeviceAlerts` (price-alert evaluation, `Promise.allSettled` for fault isolation)
+- `archiveShortInterest` (daily FINRA pull → `short_interest_history` D1)
+- `cleanupStaleDevices` (daily, 30-day inactivity sweep)
+- `dedupe_old_setups` (in pending-setup loop)
+
+#### D1 schema reference
+
+Migrations under `marketscope-worker/migrations/*.sql`. **Note:** Some columns and the `pending_setups` table were added out-of-band (via `wrangler d1 execute`) and aren't in any migration file — flagged below. A fresh D1 created from `migrations/*.sql` alone would fail.
+
+| Table | Created | Columns | Indexes |
+|---|---|---|---|
+| `devices` | 001 | device_id PK, push_token, auth_token, platform, created_at, last_seen | (primary key) |
+| `alerts` | 001 | id PK, device_id FK, symbol, target_price, condition, note, triggered, triggered_at, created_at | `idx_alerts_device(device_id, triggered)` |
+| `watchlist` | 001 | device_id+symbol PK, crypto_threshold, stock_threshold | (composite PK) |
+| `score_history` | 001 | id PK, device_id FK, symbol, timestamp, daily_score, four_h_score, ml_probability, bias, notification_sent | `idx_scores_device_symbol(device_id, symbol, timestamp DESC)` |
+| `trade_outcomes` | 001 + 003 + OOB | id PK, device_id FK, symbol, direction, entry_price, stop_loss, tp1, tp2, ml_probability, daily_score, four_h_score, conviction, opened_at, closed_at, outcome, pnl_percent, notes, model_version (003), **prompt_version (OOB — no migration)** | `idx_outcomes_device(device_id, opened_at DESC)`, `idx_outcomes_model(device_id, symbol, model_version)` (003), `idx_outcomes_prompt(device_id, prompt_version)` (006) |
+| `notifications` | 001 | id PK, device_id FK, symbol, type, ml_probability, score, direction, sent_at | `idx_notif_device(device_id, sent_at DESC)` |
+| `candles` | 001 | symbol+interval+timestamp PK, open, high, low, close, volume | `idx_candles_lookup(symbol, interval, timestamp DESC)` |
+| `derivatives_history` | 001 + 002 + OOB | symbol+timestamp PK, funding_rate, open_interest, long_percent, taker_ratio, top_trader_long_pct (002), taker_buy_vol (002), taker_sell_vol (002), mark_price (002), index_price (002), basis_pct (002), **large_buy_vol (OOB)**, **large_sell_vol (OOB)**, **large_buy_count (OOB)**, **large_sell_count (OOB)** | `idx_deriv_lookup(symbol, timestamp DESC)` |
+| `short_interest_history` | 004 | symbol+date PK, short_volume, total_volume, short_ratio, short_zscore | `idx_short_lookup(symbol, date DESC)` |
+| `notif_claims` | 005 | push_token+symbol PK, expires_at | `idx_notif_claims_expires(expires_at)` |
+| `pending_setups` | OOB (lazy `CREATE IF NOT EXISTS` at `index.ts:219`) | id PK, device_id, symbol, direction, entry, atr, ml_at_registration, expires_at, registered_at, notified | `idx_pending_setups_symbol`, `idx_pending_setups_device` (both lazy) |
+
+**Schema drift items** (low-severity, but flagged): `trade_outcomes.prompt_version`, four `derivatives_history.large_*` columns, and the entire `pending_setups` table aren't in any migration file. Consolidation to a `006_schema_drift.sql` is in the postponed-work doc.
+
+#### KV blob inventory (`env.ALERTS` namespace)
+
+Single Cloudflare KV namespace. All blobs JSON-encoded except where noted. TTLs are seconds.
+
+| Key pattern | TTL | Written by | Read by | Content |
+|---|---|---|---|---|
+| `ml_preds:all` | 300 (5 min) | cron `computeSymbolPredictions` | `/ml-predict` endpoint | `{symbol: {symbol, probability, probabilityH72, features, timestamp, isCrypto}}` for all archive symbols |
+| `ml_snapshots` | 86400 (24 h) | cron | cron next-tick | Per-symbol prev-bar values for rate-of-change deltas (dRsi/dAdx/hRsi etc.) |
+| `prev_oi:all` | 86400 | cron | cron | Per-symbol last-bar OI for delta computation |
+| `deriv_archive:all` | 14400 (4 h) | cron | cron | Per-symbol last derivatives-archive timestamp (D1 write gate) |
+| `candles:all:1d` `:4h` `:1h` | 300 | cron (only on miss) | cron | Per-symbol candle arrays for cron reuse across ticks |
+| `darkpool:latest` | (no TTL — daily refresh) | `archiveShortInterest` | `/darkpool` endpoint | FINRA dark pool ratios + Z-scores per symbol |
+| `short_arch:last_date` | (no TTL) | `archiveShortInterest` | `archiveShortInterest` | Daily dedupe gate |
+| `cleanup:last_date` | 86400 × 2 | `cleanupStaleDevices` | `cleanupStaleDevices` | Daily dedupe gate |
+| `debug:<sym>_features` | 3600 (1 h) | cron (BTC/ETH/TSLA/NVDA only) | `/debug/features` | Features dict + mlProbability for parity investigation |
+| `auth:<deviceId>` | 86400 × 90 (90 d) | `/register` | auth gate (D1 fallback) | Legacy KV auth token (D1 is primary; this is the fallback) |
+| `device:<deviceId>` | (no TTL — legacy) | (legacy `/register`) | `getPushToken` (fallback) | Legacy device blob with push token |
+| `watchlist:<deviceId>` | 86400 × 30 | `/watchlist` | cron device pass | Per-device watchlist + ML thresholds (cron reads from KV during migration) |
+| `reg-ip:<ip>` | 86400 | `checkRateLimit` (in `/register`) | `checkRateLimit` | IP-based registration rate limit counter (3/24h) |
+| `global:<deviceId>` | 60 | auth gate `checkRateLimit` | auth gate | Per-device global rate limit (60/min) |
+| `analyze:<deviceId>` | 60 | `/analyze` | `/analyze` | Per-device AI proxy rate limit |
+| `history-upload:<deviceId>` | 300 | `/history` POST | `/history` POST | Per-device candle upload rate limit (5/5min) |
+| `darkpool-ip:<ip>` | 60 | `/darkpool` | `/darkpool` | Per-IP dark pool rate limit (60/min) |
+| `yahoo:*` `tiingo:*` `twelvedata:*` `finnhub:*` `alphavantage:*` | 60–3600 | various provider proxies | same | Upstream API response caches |
+
+The cron writes are batched to avoid KV write amplification: pre-2026-05 the cron wrote 4-5 blobs per symbol per minute (~76 × 5 × 60 = 22,800 KV writes/hour). Now batched per-cron blobs: 5 blobs total per minute regardless of symbol count.
+
+#### Auth flow
+
+1. **First launch:** iOS generates a `device_id` UUID, stores in UserDefaults under key `device_id`.
+2. **Registration:** iOS calls `POST /register` with `X-App-ID: marketscope-ios`, `X-Device-ID: <uuid>`, and optionally `deviceToken` body for APNs. Worker writes `(device_id, push_token, auth_token)` row to D1 + KV mirror, returns `{authToken}`.
+3. **Token storage:** iOS stores `authToken` in Keychain under `worker_auth_token`.
+4. **Subsequent requests:** `PushService.addAuthHeaders(_:)` (`nonisolated` for thread-safety — see Concurrency Model section) adds three headers: `X-App-ID`, `X-Device-ID`, `X-Auth-Token`. Worker auth gate at `index.ts:158` validates the token against D1 (with KV fallback for legacy migration). Constant-time comparison via `timingSafeEqual()`.
+5. **401 handling:** `AlertsStore.syncFromServer` and `PushService.syncAlerts` both treat a 401 response as a signal to call `PushService.handleAuthFailure()` — which clears the auth token, generates a NEW `device_id`, and re-registers. The old D1 row stays as an orphan; `cleanupStaleDevices` daily cron prunes them after 30 days inactivity.
+6. **Cooldowns and gates** (notification + analyze + global rate-limit) are keyed by `push_token` rather than `device_id` for the notification path — iOS rotates `device_id` on auth recovery but the underlying physical device's APNs token stays stable, so push_token-keyed cooldowns correctly dedupe across rotated rows.
 
 ### Key Patterns
 
