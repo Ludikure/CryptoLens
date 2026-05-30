@@ -208,5 +208,17 @@
         }
       }
     }
+  },
+  "phase1_meta": {
+    "crypto": {
+      "baseline_ev": 0.9624842987861858,
+      "baseline_n": 9708,
+      "baseline_totalR": 9343.797572616291,
+      "best_meta_t": 0.65,
+      "best_meta_ev": 1.2437285275798335,
+      "best_meta_n": 5758,
+      "best_meta_totalR": 7161.388861804682,
+      "label_optimism_pct": 17.348683460617806
+    }
   }
 }
