@@ -2393,7 +2393,13 @@ enum AnalysisPrompt {
                             // runner above), stocks 2.5×. Non-wideBand also 2.5× (ATR-fallback
                             // uses a smaller anchor than the 5 ATR structural ceiling since
                             // structure was missing entirely).
-                            let tp2FallbackMult = (isWideBand && isCrypto) ? 3.0 : 2.5
+                            // Adaptive TP2 runner (crypto, opt-in via conformal_gate_enabled):
+                            // use the worker's predicted q75 of fwdMaxFavR (clamped to the runner
+                            // band) instead of the fixed 3.0. Phase 1c: +0.075R/trade. Default OFF
+                            // → fixed 3.0, unchanged.
+                            let adaptiveTP2 = (isCrypto && UserDefaults.standard.bool(forKey: "conformal_gate_enabled"))
+                                ? daily.mlQ75.map { min(3.5, max(2.0, $0)) } : nil
+                            let tp2FallbackMult = adaptiveTP2 ?? ((isWideBand && isCrypto) ? 3.0 : 2.5)
                             let fb = atrFallback(tp2FallbackMult, String(format: "%.1f× ATR", tp2FallbackMult))
                             finalTP2Price = fb.price; finalTP2Type = fb.type
                         }
