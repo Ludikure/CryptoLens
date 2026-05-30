@@ -230,5 +230,25 @@
       "holdout_baseline_ev": 1.0166273766173668,
       "holdout_baseline_n": 1491
     }
+  },
+  "phase2_conformal": {
+    "crypto": {
+      "target": 0.6,
+      "global_tau": 0.37400001287460327,
+      "per_regime_tau": {
+        "0": 0.37400001287460327,
+        "1": 0.37400001287460327,
+        "2": 0.37400001287460327
+      }
+    },
+    "stock": {
+      "target": 0.5,
+      "global_tau": null,
+      "per_regime_tau": {
+        "0": null,
+        "1": null,
+        "2": 0.4560000002384186
+      }
+    }
   }
 }
