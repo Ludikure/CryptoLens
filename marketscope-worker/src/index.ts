@@ -885,6 +885,12 @@ export default {
           'INSERT INTO watchlist (device_id, symbol, crypto_threshold, stock_threshold) VALUES (?, ?, ?, ?)'
         ).bind(deviceId, s, cryptoThreshold, stockThreshold));
       }
+      // Refresh last_seen on this app-launch sync so the daily stale-device sweep
+      // (deletes last_seen > 30d) doesn't orphan an actively-used device. Previously
+      // last_seen was set ONLY on /register, which an authed app never calls again — so
+      // every device got swept after 30 days, invalidating its token → blank ML "suddenly".
+      stmts.push(env.DB.prepare('UPDATE devices SET last_seen = ? WHERE device_id = ?')
+        .bind(new Date().toISOString(), deviceId));
       await env.DB.batch(stmts);
       // Also keep KV during migration (cron reads from KV)
       await env.ALERTS.put(`watchlist:${deviceId}`, JSON.stringify({
