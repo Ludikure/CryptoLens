@@ -427,10 +427,17 @@ enum OutcomeTracker {
     static let baselinePromptVersion = "2026-05-09-multihorizon"
 
     /// Treatment prompt+system version. Setups land here when the per-device A/B
-    /// hash picks the experiment bucket. Initially functionally identical to baseline —
-    /// the tag exists so later changes (band-default inversion, etc.) can be applied
-    /// only when this version is active and outcomes can be compared apples-to-apples.
-    static let treatmentPromptVersion = "2026-05-29-experiment"
+    /// hash picks the experiment bucket. Current treatment bundles:
+    ///   - Band-default inversion (carried over from 2026-05-29-experiment)
+    ///   - STOCH_CROSS direction signal (overrides auto-FLAT on MIXED when ML high)
+    ///   - LONG confirmation gate (relStrengthVsSpy >= 1 AND dRsiDelta >= 1)
+    ///   - BB extreme inversion (don't fade band touches at 24h)
+    ///   - aligned_bearish SHORT restrictions (require ML >= 0.70 + Stoch confirm + TRENDING)
+    ///   - TRANSITIONING regime conviction boost (allow HIGH when other gates pass)
+    ///   - MACRO_CONTEXT block (DXY/VIX/IWM-SPY interpretive labels)
+    /// Per-fold backtest expectation: aligned_bullish + ML high EV +0.122R baseline →
+    /// +0.171R with confirmation gates; aligned_bearish -0.060R → +0.011R with gates.
+    static let treatmentPromptVersion = "2026-05-30-stoch-direction"
 
     /// Back-compat alias for callers that didn't go through `assignedPromptVersion`.
     /// New code should call the bucketing function instead.

@@ -590,6 +590,16 @@ enum AnalysisPrompt {
             var envAlignment = "UNKNOWN"
             var envNewsConflicts = false
 
+            // Treatment-bucket capture vars — populated by the treatment block below.
+            // The conviction envelope (Phase C10) checks these to apply treatment-only
+            // gating: STOCH_CROSS override for biases_MIXED, LONG confirmation gate,
+            // restricted SHORT entries, and TRANSITIONING-regime conviction boost.
+            let isTreatment = AnalysisPrompt.promptVersion == OutcomeTracker.treatmentPromptVersion
+            var treatmentStochCrossDaily = "none"
+            var treatmentStochCross4H = "none"
+            var treatmentLongConfirmStatus = "n/a"  // PASS / PARTIAL / FAIL / n/a
+            var treatmentLongConfirmReasons: [String] = []
+
             // Phase 1 — Regime label
             let adxDaily = daily.adx?.adx ?? 0
             var maAlignment = "tangled"
@@ -646,6 +656,88 @@ enum AnalysisPrompt {
 
             lines.append("Bias Alignment: Daily=\(dailyBias), 4H=\(fourHBias), 1H=\(oneHBias)")
             lines.append("Counter-Trend Pullback: \(oneHOpposes) | Aligned Direction: \(alignedDirection)")
+
+            // === Treatment-only flags (2026-05-30-stoch-direction) ===
+            // Six bundled changes from the setup-execution backtest analysis. Active
+            // ONLY when promptVersion == treatmentPromptVersion. Each backed by 4.4 years
+            // of 5-fold WF setup-execution data — see ml-training/setup_execution_*.py.
+            if isTreatment {
+                // Stochastic RSI crossover direction. Backtest: dStochCross + ML >= 0.65
+                // → +0.129R EV across 26,605 setups (beats aligned_bullish + ML at +0.122R,
+                // ~8.5× more samples). Treat as a primary direction signal that can
+                // override the auto-FLAT on biases_MIXED when ML quality is high.
+                treatmentStochCrossDaily = daily.stochRSI?.crossover ?? "none"
+                treatmentStochCross4H = fourH.stochRSI?.crossover ?? "none"
+                lines.append("STOCH_CROSS: daily=\(treatmentStochCrossDaily) | 4H=\(treatmentStochCross4H) (primary direction signal when bias alignment is MIXED + ML >= 65)")
+
+                // LONG confirmation gate. Backtest: requiring relStrengthVsSpy >= 1 AND
+                // dRsiDelta >= 1 lifts aligned_bullish + ML EV from +0.122R to +0.171R
+                // and rescues fold-5 from -0.069R to +0.067R. Approximations used:
+                //   - relStrengthVsSpy ≈ stockInfo.relativeStrength1d (1-day return vs
+                //     sector ETF, same in spirit — direction-relevant relative strength)
+                //   - dRsiDelta = current daily RSI − second-most-recent (rsiSeries last 2)
+                // Crypto has neither field; skip the gate (treatment matches baseline for
+                // crypto longs — gate only fires for stock setups).
+                let relStrApprox: Double? = stockInfo?.relativeStrength1d
+                let dRsiDelta: Double? = {
+                    let series = daily.rsiSeries
+                    guard series.count >= 2 else { return nil }
+                    return series.last! - series[series.count - 2]
+                }()
+                if let rs = relStrApprox, let drsd = dRsiDelta {
+                    let rsPass = rs >= 1.0
+                    let drsPass = drsd >= 1.0
+                    if rsPass && drsPass {
+                        treatmentLongConfirmStatus = "PASS"
+                    } else if rsPass || drsPass {
+                        treatmentLongConfirmStatus = "PARTIAL"
+                    } else {
+                        treatmentLongConfirmStatus = "FAIL"
+                    }
+                    treatmentLongConfirmReasons.append("relStrengthVsSpy=\(String(format: "%.2f", rs))\(rsPass ? "✓" : "✗(need>=1.0)")")
+                    treatmentLongConfirmReasons.append("dRsiDelta=\(String(format: "%.2f", drsd))\(drsPass ? "✓" : "✗(need>=1.0)")")
+                    let resultText: String
+                    switch treatmentLongConfirmStatus {
+                    case "PASS": resultText = "PASS — LONG conviction unrestricted"
+                    case "PARTIAL": resultText = "PARTIAL — cap LONG conviction at LOW"
+                    case "FAIL": resultText = "FAIL — no LONG trade"
+                    default: resultText = "n/a"
+                    }
+                    lines.append("LONG_CONFIRMATION: \(treatmentLongConfirmReasons.joined(separator: " | ")) → \(resultText)")
+                } else {
+                    // Crypto or missing data — gate inactive (status stays "n/a")
+                    lines.append("LONG_CONFIRMATION: n/a (crypto or missing data — gate inactive)")
+                }
+
+                // Bollinger Band extreme inversion. Backtest: dBBPercentB <=0.1 / >=0.9 +
+                // ML high → -0.052R EV when used as a mean-reversion fade. The "buy lower
+                // band / sell upper band" trade LOSES money. Treat band touches as
+                // continuation signals, not fades. We emit the warning when at extreme.
+                if let bb = daily.bollingerBands {
+                    let pctB = bb.percentB
+                    if pctB <= 0.1 {
+                        lines.append("BB_EXTREME: daily price at/below lower band (%B=\(String(format: "%.2f", pctB))). DO NOT short this. Backtest: fading band touches LOSES money (-0.052R EV). Treat as continuation, not fade.")
+                    } else if pctB >= 0.9 {
+                        lines.append("BB_EXTREME: daily price at/above upper band (%B=\(String(format: "%.2f", pctB))). DO NOT short this. Backtest: fading band touches LOSES money. Treat as continuation, not fade — either skip the SHORT or pivot LONG if other signals confirm.")
+                    }
+                }
+
+                // MACRO_CONTEXT interpretive labels. Direction-model investigation showed
+                // DXY / VIX / IWM-SPY carry direction signal in extreme regimes. Surface
+                // as labels rather than raw numbers so the LLM can weight them in the
+                // directional thesis. Fields come from existing crossAsset + stockSentiment.
+                var macroParts: [String] = []
+                if let ca = crossAsset {
+                    macroParts.append("DXY \(ca.dxyTrend)")
+                    macroParts.append("SPY \(ca.spyTrend)")
+                }
+                if let ss = stockSentiment, let vix = ss.vix {
+                    macroParts.append("VIX \(String(format: "%.1f", vix)) (\(ss.vixLevel))")
+                }
+                if !macroParts.isEmpty {
+                    lines.append("MACRO_CONTEXT: \(macroParts.joined(separator: " | "))")
+                }
+            }
 
             // Phase 2b — Kill conditions (only relevant if counter-trend)
             if oneHOpposes, let oneHData = oneH {
@@ -1225,8 +1317,46 @@ enum AnalysisPrompt {
                 if let m = mlPct, m < 50 { autoFlat.append("ML_WIN_\(m)%<50") }
                 if envAnyKilled { autoFlat.append("ANY_KILLED=true") }
                 if envDivergenceEscalated { autoFlat.append("divergence_escalated_6+_candles") }
-                if envAlignment == "MIXED" { autoFlat.append("biases_MIXED") }
+                if envAlignment == "MIXED" {
+                    // Treatment: STOCH_CROSS direction can override biases_MIXED auto-FLAT
+                    // when both timeframes agree AND ML quality is high. Backtest justified:
+                    // dStochCross + ML >= 0.65 → +0.129R EV across 26,605 setups (full universe,
+                    // not just aligned). The mixed-bias auto-FLAT was protecting against
+                    // direction-unknown noise; STOCH_CROSS supplies the missing direction signal.
+                    let stochOverride = isTreatment
+                        && (mlPct ?? 0) >= 65
+                        && treatmentStochCrossDaily != "none"
+                        && treatmentStochCrossDaily == treatmentStochCross4H
+                    if !stochOverride {
+                        autoFlat.append("biases_MIXED")
+                    }
+                }
                 if envMacroRisk == "IMMINENT" { autoFlat.append("macro_IMMINENT") }
+
+                // Treatment-only auto-FLAT additions
+                if isTreatment {
+                    // LONG confirmation gate (P3.2). If LONG-implied direction and the
+                    // confirmation gate FAILED (neither relStrSpy nor dRsiDelta confirms),
+                    // no LONG trade — backtest shows these setups have no directional edge.
+                    if alignedDirection == "LONG" && treatmentLongConfirmStatus == "FAIL" {
+                        autoFlat.append("treatment_long_confirm_FAIL")
+                    }
+                    // aligned_bearish SHORT restriction (P3.4). SHORTs lose money in every
+                    // historical regime (-0.060R baseline, even -0.023R in 2022 bear).
+                    // Require ML >= 70 AND STOCH_CROSS 4H bearish AND regime TRENDING to fire.
+                    if alignedDirection == "SHORT" && envAlignment == "ALIGNED_BEARISH" {
+                        let mlOk = (mlPct ?? 0) >= 70
+                        let stochOk = treatmentStochCross4H == "bearish"
+                        let regimeOk = regime == "TRENDING"
+                        if !(mlOk && stochOk && regimeOk) {
+                            var reasons: [String] = []
+                            if !mlOk { reasons.append("ML<70") }
+                            if !stochOk { reasons.append("STOCH_CROSS_4H≠bearish") }
+                            if !regimeOk { reasons.append("regime≠TRENDING") }
+                            autoFlat.append("treatment_short_gate(\(reasons.joined(separator: ",")))")
+                        }
+                    }
+                }
 
                 // HIGH conviction blockers
                 var highBlocks = [String]()
@@ -1256,6 +1386,28 @@ enum AnalysisPrompt {
                 }
                 if envMacroRisk != "NONE" && envMacroRisk != "ON_HORIZON" && envMacroRisk != "UPCOMING" {
                     moderateBlocks.append("macro_\(envMacroRisk)_exceeds_NEARBY")
+                }
+
+                // Treatment-only conviction modifiers
+                if isTreatment {
+                    // LONG_CONFIRMATION PARTIAL → cap at LOW. The PASS case is unrestricted;
+                    // FAIL already adds an autoFlat above. PARTIAL means one of the two gates
+                    // passes — still better than nothing, but cap conviction.
+                    if alignedDirection == "LONG" && treatmentLongConfirmStatus == "PARTIAL" {
+                        moderateBlocks.append("treatment_long_confirm_PARTIAL_cap_LOW")
+                    }
+                    // TRANSITIONING regime conviction boost (P3.5). Backtest's highest-EV
+                    // cell across 4 years: TRANSITIONING + aligned_bullish + ML >= 0.65 +
+                    // LONG_CONFIRMATION PASS → +0.262R EV. Allow HIGH conviction by removing
+                    // the continuation-count and "alignment_not_full" blockers when the
+                    // strong-set is satisfied. Keeps the ML_WIN floor at 65 (not 70).
+                    let transitioningHighOk = regime == "TRANSITIONING"
+                        && envAlignment == "ALIGNED_BULLISH"
+                        && (mlPct ?? 0) >= 65
+                        && (treatmentLongConfirmStatus == "PASS" || treatmentLongConfirmStatus == "n/a")
+                    if transitioningHighOk {
+                        highBlocks.removeAll { $0.hasPrefix("continuation_") || $0.hasPrefix("ML_WIN_") }
+                    }
                 }
 
                 // Downgrade-one-tier conditions (LLM applies)
