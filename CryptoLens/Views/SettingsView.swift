@@ -280,7 +280,15 @@ enum KeychainHelper {
         SecItemDelete(query as CFDictionary)
         var addQuery = query
         addQuery[kSecValueData as String] = data
-        SecItemAdd(addQuery as CFDictionary, nil)
+        // AfterFirstUnlock so the token can be written/read during early or background
+        // launch (e.g. the APNs registration flow) — the default (WhenUnlocked) fails if
+        // the device happens to be locked, which silently dropped the auth token on real
+        // devices (worked on the simulator, which has no lock state). Also check the status.
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        if status != errSecSuccess {
+            NSLog("[MarketScope] KeychainHelper.save FAILED for %@ → OSStatus %d", key, Int(status))
+        }
     }
 
     static func load(key: String) -> String? {
