@@ -146,15 +146,22 @@ enum PushService {
             request.httpBody = try? JSONSerialization.data(withJSONObject: [:] as [String: String])
 
             guard let (data, response) = try? await URLSession.shared.data(for: request),
-                  let http = response as? HTTPURLResponse else { continue }  // network error → retry
+                  let http = response as? HTTPURLResponse else {
+                NSLog("[MarketScope] ensureAuth /register attempt %d → network error (no response)", attempt)
+                continue  // network error → retry
+            }
+            let bodyStr = String(data: data, encoding: .utf8) ?? ""
+            NSLog("[MarketScope] ensureAuth /register attempt %d → HTTP %d body=%@", attempt, http.statusCode, String(bodyStr.prefix(120)))
             if (200...299).contains(http.statusCode),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let serverToken = json["authToken"] as? String {
                 authToken = serverToken
                 ConnectionStatus.shared.workerAuth = .ok
+                NSLog("[MarketScope] ensureAuth: token stored, auth OK")
                 return
             }
             if http.statusCode == 401 {
+                NSLog("[MarketScope] ensureAuth: 401 → rotating deviceId")
                 // Deadlock: this deviceId exists server-side but we no longer hold its token
                 // (keychain lost it). The worker correctly refuses re-registration without it.
                 // Rotate to a fresh identity (not in D1) so the next attempt registers cleanly.
