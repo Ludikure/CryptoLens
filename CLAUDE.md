@@ -73,6 +73,11 @@ The app pre-computes authoritative flags passed to the LLM in the `PRE-COMPUTED 
 - **Insider Cluster** (stocks, 2026-05-29): `N buys in 30d from K officers ($X.XM total) — fundamental buy signal` when 3+ buys from 3+ distinct names (or 5+ sells from 4+ names for distribution signal).
 - **Earnings Proximity** (stocks, 2026-05-29): Hard-wired into the Conviction Envelope, not advisory. 0–2d → moderateBlock (cap LOW = no trade); 3–7d → highBlock (cap MODERATE); 8–14d → downgrade tier (LLM applies).
 - **Active Trade State** (continuous values, 2026-05-29): Replaces the older INTRA_24H/IN_PROFIT/UNDERWATER/FLAT buckets. Emits elapsed hours, PnL in R units, peak excursion R, TP1 % reached, ML delta from registration, milestone flags (T+24h crossed, TP1 hit, partial taken, BE-stop active), and a concrete `Action:` line keyed on actual R thresholds (≤ -0.7R → cut, ≥ +0.5R → trail to BE, etc.).
+- **STOCH_CROSS** (2026-05-30, treatment-prompt-active = always since A/B collapse): Daily + 4H Stochastic RSI crossover direction ("bullish" / "bearish" / "none"). Co-equal direction primitive with bias alignment per the direction_primitive_sweep backtest. Four rules: (a) Stoch + bias agree → high-conviction, (b) Stoch + bias contradict → flag tension, cap MODERATE unless structural evidence supports bias, (c) bias MIXED + Stoch decisive + ML≥65 → Stoch overrides auto-FLAT (catalyst-driven case), (d) Stoch 'none' both TFs → bias drives. Backtest basis: dStoch + ML≥65 captured +0.190R EV on stocks (vs +0.079R bias-alone) and +0.998R on crypto top-10.
+- **LONG_CONFIRMATION** (2026-05-30, stocks only): relStrengthVsSpy ≥ 1 AND dRsiDelta ≥ 1. PASS → unrestricted LONG; PARTIAL → cap LOW; FAIL → no LONG trade. Backtest: lifts aligned_bullish + ML EV from +0.122R to +0.171R, rescues stocks fold-5 (current bull) from −0.069R to +0.067R. Crypto has neither field — gate inactive (returns "n/a").
+- **BB_EXTREME** (2026-05-30): When dBBPercentB ≤ 0.1 or ≥ 0.9, prompt emits explicit "DO NOT short this — fading band touches LOSES money (-0.052R EV)". Treat as continuation, not fade.
+- **MACRO_CONTEXT** (2026-05-30): Labeled DXY / SPY / VIX state pulled from crossAsset + stockSentiment. Surfaces direction-relevant macro signals the LLM previously had to infer from raw numbers.
+- **Conviction envelope treatment gates** (2026-05-30): aligned_bearish SHORTs gated by `isStock && ML≥70 && STOCH_CROSS bearish && regime TRENDING` (stock SHORTs lose in every backtest regime; crypto SHORTs are best cell, unrestricted). TRANSITIONING regime + aligned_bullish + ML≥65 + LONG_CONFIRMATION PASS → removes continuation-count + ML<70 highBlocks so HIGH conviction can fire.
 - **Candle Close Timestamps**: Next 4H and Daily close times.
 
 ### Data Flow
@@ -286,8 +291,15 @@ Per-cron flow (every minute via `scheduled()` handler):
 |---|---|---|
 | Hours (ET) | 8am, 12pm, 4pm, 8pm, 11:30pm | 8am, 12pm, 4pm |
 | Days | Every day | Weekdays only |
-| Threshold | ML >= 70% | ML >= 70% |
+| Threshold | ML rising-edge >= 70% | ML rising-edge >= 70% |
+| Direction primitive | bias-aligned OR dStochCross (union, skip conflicts) | bias-aligned OR dStochCross (union, skip conflicts) |
 | Cooldown | 3.5 hours per (push_token, symbol) | 3.5 hours per (push_token, symbol) |
+
+**Direction primitive (2026-05-30):** `notificationDirection(biasAlignment, dStochCross)` in `marketscope-worker/src/index.ts`. Returns +1 (LONG), −1 (SHORT), or 0 (skip). Bars where bias and Stoch disagree are skipped. Backtest (direction_primitive_sweep, 4.4 yr): union captured 12× more total R on stocks and 1.9× on crypto top-10 vs bias-aligned-alone, with per-trade EV nearly identical. Bias-and-Stoch are largely orthogonal on stocks (53% agreement when both fire) but 88% correlated on crypto.
+
+**Notification body format (2026-05-30):** Single-symbol notifications include the inferred direction: `"AAPL LONG — ML 73%"`. Multi-symbol notifications group by direction: `"LONG: AAPL, NVDA | SHORT: TSLA"`. Direction is derived from the union primitive.
+
+**SymbolPrediction now carries:** `biasAlignment: string` (from worker's `computeScore` on daily + 4H candles → `biasAlignmentFromLabels`) and `dStochCross: number` (from `features.dStochCross`). Both inlined helpers live in `marketscope-worker/src/index.ts`.
 
 Cooldown is keyed by `push_token`, not `device_id` — iOS rotates `device_id` on auth recovery (creates a new D1 row pointing at the same physical device's APNs token), and a `device_id`-keyed cooldown would let both rows fire the same notification. Switching to `push_token` makes the cooldown share across rotated rows.
 
@@ -351,15 +363,17 @@ Deeper models (d5) and more trees (t200) showed diminishing returns. LightGBM d4
 
 The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist with the current model_version: 11 for crypto, 13 for stocks). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column; each `TrackedSetup` also carries a `promptVersion` field (see A/B Testing Infrastructure) so we can compare populations by system iteration as well as by model.
 
-## A/B Testing Infrastructure (2026-05-29)
+## A/B Testing Infrastructure (2026-05-29; collapsed 2026-05-30)
 
 Setups are bucketed at registration time into `baseline` or `treatment` prompt versions. The bucket is deterministic on `(deviceId, day)` via UTF-8 byte parity, so a single user's day isn't split mid-session but different days re-randomize. Honors the `experiments_enabled` UserDefault (default ON) — toggling OFF in Settings always returns baseline.
 
-- **Bucket assignment**: `OutcomeTracker.assignedPromptVersion(deviceId:date:)` returns one of `baselinePromptVersion` ("2026-05-09-multihorizon") or `treatmentPromptVersion` ("2026-05-29-experiment").
+**A/B collapse (2026-05-30):** Both constants now equal `"2026-05-30-stoch-direction"`. MarketScope has a single user (the developer); n=1 cannot generate statistical power. The collapse also resolved an asymmetric-UX problem: the worker notification gate change to bias-OR-Stoch union (same date) fed Stoch-routed notifications to baseline users whose prompt had no STOCH_CROSS block — those analyses dead-ended at "biases_MIXED auto-FLAT → NO SETUP". Collapsing means every analysis runs the consolidated treatment prompt (which understands Stoch as a co-equal direction primitive). All historical `prompt_version` tags on resolved outcomes remain — only new outcomes get the consolidated version. To restart A/B testing if user count grows, bump `treatmentPromptVersion` to a new tag while leaving `baselinePromptVersion` at `"2026-05-30-stoch-direction"`.
+
+- **Bucket assignment**: `OutcomeTracker.assignedPromptVersion(deviceId:date:)` still routes via UTF-8 byte parity, but both branches now return the same string post-collapse.
 - **Plumbing**: `AnalysisService` computes the assigned version once per analysis run, then wraps `provider.analyze()` with `AnalysisPrompt.$promptVersion.withValue(...)` (TaskLocal) so the prompt-build sees the same bucket the resulting `TrackedSetup` gets stamped with. Prompt and outcome stay in sync — no risk of prompting under one bucket and recording under another.
-- **Per-version stats**: `OutcomeTracker.versionStats(lookbackDays:)` slices the existing tracked-setup archive by `promptVersion` (no separate storage). Returns `[String: VersionStats]` with counted/resolved/wins/losses/winRate/avgRR per version.
-- **Dashboard**: `OutcomeDashboardView` "A/B: Prompt Version (30d)" section shows baseline vs treatment side-by-side. 2×2 chi-square verdict (`p < 0.05 ↔ χ² > 3.841`) appears only when both sides have ≥30 resolved setups; otherwise prints "Need ≥30 resolved per side."
-- **Active treatment behavior**: Band-default inversion (see Target Selection System) is the first behavioral change applied only when `promptVersion == treatmentPromptVersion`. Future changes ship the same way.
+- **Per-version stats**: `OutcomeTracker.versionStats(lookbackDays:)` slices the existing tracked-setup archive by `promptVersion` (no separate storage). Returns `[String: VersionStats]` with counted/resolved/wins/losses/winRate/avgRR per version. After collapse, the dashboard shows historical versions (legacy, 2026-05-09-multihorizon, 2026-05-29-experiment) as closed cohorts plus growing 2026-05-30-stoch-direction.
+- **Dashboard**: `OutcomeDashboardView` "A/B: Prompt Version (30d)" section still renders; useful for comparing the consolidated current prompt against the closed historical cohorts.
+- **Active treatment behavior (now active for everyone)**: see "Direction Primitive Architecture" section for the full list of treatment-conditional code blocks (all `isTreatment` checks now evaluate true).
 
 ## Historical Analysis Sharing (2026-05-04)
 
@@ -389,11 +403,133 @@ Per-symbol EV analysis on `csv_exports_v11/` + `csv_exports_v13/` (n=237) showed
 
 Backtesting (850K+ crypto, 192K+ stock bars) shows counter-trend setups (4H reverses vs daily) have 73-86% goodR vs 38-43% for aligned. Prompt allows counter-trend reversal when ML_WIN >= 70%, with tighter targets (TP1 1.0 ATR, TP2 2.0 ATR) and MODERATE conviction cap.
 
+## Direction Primitive Architecture (2026-05-30)
+
+The system uses **two direction signals as a union** rather than picking one primitive:
+
+```
+notificationDirection(biasAlignment, dStochCross) → +1 / -1 / 0
+  if bias and Stoch both fire and disagree → 0 (skip)
+  else                                     → bias direction if set, else Stoch direction
+```
+
+Implementation lives in `marketscope-worker/src/index.ts` (notification gate) and `CryptoLens/Services/AnalysisPrompt.swift` (LLM prompt rules — STOCH_CROSS block in the treatment-conditional section, which is now always active after the A/B collapse).
+
+### Why this primitive
+
+`ml-training/direction_primitive_sweep.py` tested 12 direction primitives on 4.4 years of bars (rising-edge ML cross + each primitive → bar-by-bar fill resolution). The union of bias OR dStochCross was the clear winner on both markets:
+
+```
+STOCKS (159 symbols, 11,498 rising-edge ML events)
+                                    n        win%   EV/trade   total R
+bias-aligned (former production)    613     44.7%   +0.079R     +48.4
+dStochCross alone                 2,974     49.7%   +0.190R    +566.3
+union (current production)        3,339     49.2%   +0.179R    +599.2   ← 12× total R
+... 9 other primitives tested, none beat the union
+
+CRYPTO TOP-10 (3,541 rising-edge events)
+bias-aligned (former production)    789     82.3%   +1.040R    +820.4
+dStochCross alone                   912     81.0%   +0.998R    +910.4
+union (current production)        1,517     81.9%   +1.024R   +1,553.1  ← 1.9× total R
+```
+
+### Why bias and Stoch are different on stocks vs crypto
+
+The bias scoring system (in `ScoringFunction.swift`) is a 6-layer composite (EMA position, ADX, RSI/MACD, VWAP, OBV/A/D, and on crypto: cross-asset + derivatives). On stocks the system has fewer confirmation channels (no derivatives, no cross-asset), making it more restrictive — bias fires on only ~5% of rising-edge ML stock bars. Stoch picks up the missing direction on the other ~25%. On crypto, all 5 confirmation lenses (technical + positioning + cross-asset) align together more often, so bias and Stoch agree 88% of the time when both fire.
+
+### Tested-but-rejected alternatives
+
+```
+hStochCross (4H Stoch alone)     stocks +0.047R   too noisy
+hMacdCross  (4H MACD alone)      stocks +0.107R   modest, fires less often than dStoch
+hEmaCross / dEmaCross            stocks +0.014-0.028R   fires on too many noise bars
+dStack (bull/bear EMA stack)     stocks +0.007R   stale state, not transition
+dDivergence (RSI divergence)     stocks −0.006R   contrarian, contradicts rising-edge ML
+bias AND Stoch agree (intersection) stocks +0.222R, n=90    high EV but tiny volume
+```
+
+Triple-confirmation cells (bias + Stoch + MACD all agreeing) untested — likely high EV at very low N. Reserved as a possible "priority alert" tier for future work.
+
+### Tested-but-rejected configuration
+
+A Stoch-only gate (i.e., bias-AND-Stoch as the notification filter) was shipped briefly on 2026-05-30 and rolled back the same day. `ml-training/notification_compare.py` showed it dropped total R by ~80% on both markets while making per-trade EV slightly worse. The earlier `dStochCross + ML → +0.129R` finding was measured on the full universe (no bias-alignment prefilter); once aligned-bullish/bearish is already required, Stoch becomes redundant and over-restricts. The union resolves this.
+
+### Coherence between worker + iOS
+
+The worker decides whether to notify based on the union primitive. The iOS prompt (treatment-conditional STOCH_CROSS block, now always active) has explicit rules for how the LLM should weigh Stoch direction relative to bias direction (agree → high conviction; contradict → flag tension; bias MIXED + Stoch decisive + ML≥65 → override auto-FLAT; both 'none' → bias drives). The result is a system where the notification gate and the LLM analysis see Stoch the same way.
+
 ## Known Remaining Issues (Low Severity)
 
 - No certificate pinning on network calls
 - Missing App Group entitlement on main app target (widget can't share data)
-- Worker: APNs tries sandbox first then production (doubles latency); JWT not cached per cron
+- Worker: APNs tries sandbox first then production (doubles latency). Transient-error fallback was improved 2026-05-30 (only conclusive token-level errors like 410 Unregistered now break the loop; 429/5xx still attempt prod). JWT now cached for 50 min per cron (was rebuilt per send pre-2026-05-30).
 - Parity fixtures (BTC/ETH/TSLA at 2026-05-04) still in use under v11/v13 — `expected.mlProbability` values were updated in-place via `marketscope-worker/scripts/update-fixture-ml.ts`. Feature-level parity assertions are still measured against the 2026-05-04 feature snapshots; capturing fresh fixtures at a current date is a low-priority follow-up.
 - Backtester: crypto regen ~7h at concurrency 8 (Binance rate-limit cascade); stocks regen ~3.5h across two passes (Yahoo TCP drops at concurrency 8). Section H/K of `/Volumes/External/Downloads/marketscope-postponed-work.md` documents the concurrency tuning + raw candle cache opportunity.
 - 72h persistence model (threshold 2.5 ATR) not yet retrained on fresh data — section F of postponed-work doc.
+- Schema drift: `derivatives_history` table has 4 columns (`large_buy_vol`, `large_sell_vol`, `large_buy_count`, `large_sell_count`) added out-of-band; `trade_outcomes.prompt_version` similarly added without a migration file. A fresh D1 created from `migrations/*.sql` alone would fail INSERTs. Migration file consolidation is a low-priority follow-up.
+- Derivatives D1 archive runs ~9× per day per symbol vs the intended 6.85× (3.5h gate). The `deriv_archive:all` KV blob occasionally evicts across overlapping crons, resetting per-symbol last-archive times. Storage cost minor (~700 extra rows/day across 76 symbols); fix is to move the per-symbol gate state from KV to D1.
+
+## Recent Architectural Decisions
+
+Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-05-30 — A/B collapse + Direction Primitive Architecture
+
+**Worker notification gate switched to bias-OR-Stoch union** (`marketscope-worker/src/index.ts`). Universal change, applies to all devices regardless of A/B bucket. Notification body now direction-explicit ("AAPL LONG — ML 73%"). Backed by `ml-training/direction_primitive_sweep.py` showing union beats 11 alternatives (including bias-alone) on total R captured.
+
+**Prompt STOCH_CROSS framing broadened** from "primary only when MIXED" to "co-equal direction primitive with 4 explicit rules" (`AnalysisPrompt.swift`). Required to make iOS analyses coherent with the worker's new union notification semantics.
+
+**A/B test collapsed** (`OutcomeTracker.swift`): `baselinePromptVersion = treatmentPromptVersion = "2026-05-30-stoch-direction"`. Rationale: n=1 user can't generate statistical power; the asymmetric UX created by the worker change (baseline users got Stoch-routed notifications their old prompt couldn't interpret) wasn't worth tolerating. Historical `prompt_version` tags preserved on resolved outcomes; new outcomes uniformly tagged.
+
+**Failed experiment, then rolled back same day:** Stoch-cross gate added on top of bias-alignment as a notification filter (intersection). `ml-training/notification_compare.py` measured this and showed −80% total R captured. Rollback committed; resulting state (union) is the right interpretation of the standalone Stoch+ML backtest finding.
+
+### 2026-05-30 — Treatment prompt bundle (six changes)
+
+Bundled into prompt version `"2026-05-30-stoch-direction"` (which after the A/B collapse is now the universal prompt). Changes:
+- STOCH_CROSS direction signal + conviction envelope override for biases_MIXED
+- LONG_CONFIRMATION gate (relStrengthVsSpy ≥ 1 AND dRsiDelta ≥ 1; stocks only)
+- BB extreme inversion ("DO NOT short BB touches")
+- Aligned_bearish SHORT restriction (stocks only — crypto SHORTs are +0.95R EV, would be wrong to restrict)
+- TRANSITIONING regime conviction boost
+- MACRO_CONTEXT interpretive labels (DXY/SPY/VIX)
+
+Backtest scripts that motivated these: `setup_execution_backtest_v3.py` (5-fold WF on stocks + crypto), `setup_execution_indicator_sweep.py`, `fold5_investigation.py`, `fold5_feature_diagnostic.py`.
+
+### 2026-05-30 — Crypto setup-execution backtest validation
+
+Ran `setup_execution_backtest_v3_crypto.py` on 75 cryptos. Aggregate finding: crypto aligned_bullish + ML high → +0.777R EV (vs +0.122R on stocks, ~6× better). Crypto SHORTs work (+0.952R EV in every fold including 2022 bear) where stock SHORTs structurally lose. Driven by crypto bias having derivatives + cross-asset confirmation channels stocks lack. Top-10-liquid restriction (`crypto_top10.py`) preserved the edge (slightly stronger), disproving the survivorship-bias hypothesis.
+
+### 2026-05-30 — Setup-execution backtest infrastructure built
+
+`ml-training/setup_execution_backtest_v1/v2/v3.py` series. v1 used 24h summary stats (pessimistic/optimistic bounds). v2 added bar-by-bar fill resolution via D1 OHLC cache (`fetch_stock_candles.py`, `fetch_crypto_candles.py`). v3 added 5-fold walk-forward CV. This is now the canonical methodology for any strategy-level backtest in `ml-training/`.
+
+### 2026-05-29 — Code review + critical/high/medium fixes
+
+Full code review across iOS + worker. Fixed 6 critical (alert 401 handling, score_history batching + real dailyScore, SettingsView state desync, symbol-switch race, runFullAnalysis UI guard, AlertsStore debounce) + 6 high (`/history` POST auth, `/darkpool` rate-limit, watchlist symbol sanitize, candle Y-axis with setup lines, async OutcomeTracker reads, pending-setup entry-zone formula) + 5 medium (M3 JWT caching, M4 APNs transient retry, M5 Promise.allSettled, M9 outcome index migration, M10 momentum-pill accessibility). Detailed commits 6f4ece4, 35b312e, 4f3597d.
+
+### 2026-05-29 — A/B testing infrastructure landed
+
+`promptVersion` TaskLocal, deterministic UTF-8 byte-parity bucketing on (deviceId, day), `OutcomeDashboardView` A/B section with chi-square verdict. See "A/B Testing Infrastructure" section above for current state (collapsed 2026-05-30).
+
+### 2026-05-29 — Pre-computed flags expansion
+
+Worn levels with FLIP_ROLE detection, sector strength, insider cluster, earnings proximity hard-wired into conviction envelope, Active Trade State continuous values + concrete Action line. See "Pre-Computed Flags" section.
+
+### 2026-05-04 → 2026-05-29 — ML model retrains (v11 crypto, v13 stocks)
+
+v11 crypto: LightGBM d4 t150, 77 symbols, 136K bars, 62% WF accuracy, top-bucket 76.3%. v13 stocks: XGBoost d5 t100, 159 symbols, 228K bars, 64.7% WF accuracy, top-bucket 79.9%. Both calibrated via isotonic regression with cap at 0.85. Worker↔BacktestEngine parity holds at 1e-7 (345/345 tests). See "ML Scoring Pipeline" section.
+
+### Older — Phase 5 ML serving consolidation (worker as single source of truth)
+
+iOS reads displayed ML from worker `/ml-predict?symbol=…` (cron-cached, 5-min KV TTL). Local `MLScoring.predict` retained only for `BacktestEngine`. No local fallback in production — UI shows "—" on cache miss.
+
+## How to keep this doc current
+
+When making a material change to architecture, prompt logic, ML pipeline, notification gating, or A/B configuration:
+
+1. Update the relevant in-line section (Pre-Computed Flags, Notifications, A/B Infrastructure, etc.).
+2. Add a dated entry to "Recent Architectural Decisions" at the top of that section. Include: what changed, where (file path), why (one paragraph with rationale + supporting data if relevant), and what was rolled back / superseded if applicable.
+3. If the change adds new ml-training scripts, add their paths to the Files reference table.
+4. If the change closes a known issue, remove it from "Known Remaining Issues".
+
+The doc is auto-loaded into every Claude Code session, so it's the right place for knowledge that should persist between sessions. Treat it like a system-level changelog — future sessions read this to catch up quickly.
