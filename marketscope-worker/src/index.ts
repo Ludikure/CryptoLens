@@ -2446,22 +2446,22 @@ async function processDeviceNotifications(
 
   // Notify gate. Records score_history regardless (so the user's history endpoint sees
   // every cron), but only adds to triggered if (a) the symbol just crossed up through
-  // ML_THRESHOLD on this cron, (b) the daily Stochastic RSI has a confirmed crossover
-  // direction (dStochCross != 0 — momentum direction has played out), and (c) the
-  // atomic D1 claim succeeds. Continued elevation doesn't re-fire.
+  // ML_THRESHOLD on this cron and (b) the atomic D1 claim succeeds. Continued elevation
+  // doesn't re-fire — the user is paged once per crossing event, not every cron the
+  // probability stays above threshold.
   //
-  // Stoch gate justification: ML quality alone fires on ~24% of bars but doesn't speak
-  // to direction. Combining with dStochCross != 0 keeps only setups where momentum
-  // direction is signaled. Backtest validates this combination (+0.129R EV stocks /
-  // +0.842R EV top-10 crypto vs +0.122R / +0.852R for plain aligned_bullish + ML).
-  // Expected reduction: ~75% fewer notifications, but each notification carries
-  // materially stronger trade-quality signal.
+  // NOTE 2026-05-30: a Stoch-cross gate was briefly added here and rolled back. The
+  // ml-training/notification_compare.py backtest showed the Stoch filter dropped total
+  // R captured by ~80% (both stocks and crypto top-10) while making per-trade EV slightly
+  // *worse* — for stock LONGs specifically it flipped a +0.146R bucket to -0.014R. The
+  // earlier "dStochCross + ML" finding was measured before bias-alignment filtering;
+  // once aligned_bullish/bearish is already required, Stoch adds no marginal information
+  // and just throws away setups.
   for (const symbol of watchlist) {
     const pred = predictions.get(symbol);
     if (!pred) continue;
     const inWindow = pred.isCrypto ? notifyFlags.inCryptoNotifyWindow : notifyFlags.inStockNotifyWindow;
     if (!inWindow || !pred.crossed || !pushToken) continue;
-    if (pred.dStochCross === 0) continue;  // Require Stoch cross to have played out
     // Atomic claim: insert if absent, otherwise overwrite only if the prior claim has
     // expired. `meta.changes === 1` means we won (either fresh insert or expired-claim
     // takeover); `0` means another concurrent caller already holds an unexpired claim.
@@ -2471,10 +2471,7 @@ async function processDeviceNotifications(
        WHERE notif_claims.expires_at < ?4`
     ).bind(pushToken, symbol, expiresAt, now).run();
     if ((claim.meta.changes ?? 0) === 0) continue;
-    // Direction inferred from Stoch cross sign (1 = LONG, -1 = SHORT). The gate above
-    // ensures non-zero, so we always have a directional hint by the time we get here.
-    const dir = pred.dStochCross > 0 ? 'LONG' : 'SHORT';
-    triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb, direction: dir });
+    triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb, direction: '' });
   }
 
   // Score history per watchlisted symbol (one row per cron, even if not notified).
@@ -2564,23 +2561,13 @@ async function processDeviceNotifications(
   // (they all cleared 70%) to keep the title scannable.
   const tickers = triggered.map(t => t.symbol.replace('USDT', ''));
   let title: string;
-  let body: string;
   if (triggered.length === 1) {
     const t = triggered[0];
-    title = `${tickers[0]} ${t.direction} — ML ${Math.round(t.mlProb * 100)}% + Stoch cross`;
-    body = `Daily Stoch crossed ${t.direction === 'LONG' ? 'bullish' : 'bearish'} with ML quality confirmed. Open the app for the full setup.`;
+    title = `${tickers[0]} — Setup conditions favorable (ML ${Math.round(t.mlProb * 100)}%)`;
   } else {
-    // Group by direction so the user sees the mix at a glance
-    const longs = triggered.filter(t => t.direction === 'LONG').map(t => t.symbol.replace('USDT', ''));
-    const shorts = triggered.filter(t => t.direction === 'SHORT').map(t => t.symbol.replace('USDT', ''));
-    const parts = [
-      longs.length ? `LONG: ${longs.join(', ')}` : '',
-      shorts.length ? `SHORT: ${shorts.join(', ')}` : '',
-    ].filter(Boolean);
-    title = `${triggered.length} setups confirmed`;
-    body = parts.join(' | ');
+    title = `${triggered.length} setups favorable: ${tickers.join(', ')}`;
   }
-  const result = await sendAPNs(env, pushToken, title, body);
+  const result = await sendAPNs(env, pushToken, title, `Open the app for the directional analysis.`);
   if (result === 'unregistered') {
     await deleteDevice(env, deviceId);
     return;
