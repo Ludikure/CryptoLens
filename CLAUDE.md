@@ -559,6 +559,26 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-05-31 — 🚧 IN PROGRESS: Web app migration (Cloudflare Pages + dedup Swift→Worker)
+
+**A multi-phase migration is underway and PARTIALLY COMPLETE. If resuming: read the plan at `~/.claude/plans/goofy-knitting-turing.md`, then `git log --oneline` for the latest, then continue from "Next step" below.**
+
+Goal: add a browser-accessible **web app** (React + Vite + lightweight-charts on Cloudflare Pages, full parity), **keep the iOS app**, and **eliminate duplicate logic** by moving the analysis brain (indicators + prompt building) into the Worker so both clients are thin. Notifications via a Telegram bot. AI Gateway for LLM observability. Cost impact ~zero (Pages/AI-Gateway/Telegram free).
+
+Phases (see plan file for detail):
+- **Phase 0 — AI Gateway** ✅ DONE (commit 5849e26, deployed). `aiGatewayURL()` routes /analyze through a CF AI Gateway when `AI_GATEWAY_BASE` is set; currently empty (inactive). **Manual step pending the user: create a gateway in Dashboard→AI→AI Gateway named `marketscope`, set `AI_GATEWAY_BASE = "https://gateway.ai.cloudflare.com/v1/a14bb8d9f546f17633ad8a7f22863cfe/marketscope"` in wrangler.toml, redeploy.**
+- **Phase 1 — shared analysis brain on the Worker** 🚧 ~80% done:
+  - `src/scoring-ios.ts` ✅ — faithful port of ScoringFunction.swift (granular bias + signed score). The existing `scoring.ts` computeScore is a SIMPLIFIED 3-way scorer (ML gate only); scoring-ios is the exact one for display/parity (commit 3085951).
+  - `src/indicators-full.ts` ✅ — port of IndicatorEngine.computeAll (series + S/R + Fib + patterns + structure + VP), reuses scoring-full.ts math + scoring-ios bias (commit a4cff53).
+  - `GET /indicators?symbol=` ✅ — live, verified end-to-end on BTCUSDT (commit 0e9223e). Serves the full IndicatorResult across daily/4H/1H. crossAsset/derivatives default 0 (full-analysis supplies them).
+  - `src/prompt.ts` 🚧 — `systemPrompt` (byte-extracted to `prompt-system.json` via `scripts/extract_system_prompt.py`), `classifyArchetype`, `useTighterBands`, `parseSetups` DONE (commit b76b2f8). **`buildUserPrompt` NOT done — the ~2,090-line pre-computed-flags core (AnalysisPrompt.swift lines 551–2640).**
+  - **NEXT STEP:** port `buildUserPrompt` (AnalysisPrompt.swift 551–2640) → `prompt.ts`; add `POST /full-analysis` (candles → indicators-full → enrichment → prompt → LLM via gateway → parseSetups → register outcome); add a prompt-text parity test (capture Swift output for a fixture symbol). Post A/B-collapse, the `isTreatment` path is always active — port only that branch.
+- **Phase 2 — React web app** (Cloudflare Pages, full parity) — NOT started. Web is a thin client over the Worker; chart via lightweight-charts. Most data needs already met by `/indicators` + existing endpoints.
+- **Phase 3 — Telegram notifications** — NOT started.
+- **Phase 4 — migrate iOS onto the shared brain** (AnalysisService calls /indicators + /full-analysis, delete Swift prompt building) — NOT started; completes the dedup.
+
+All work committed + green (365/365 worker tests). Parity discipline: indicator scalars + bias come from parity-tested paths; display series are visual-only; the prompt port needs a captured Swift fixture for byte parity.
+
 ### 2026-05-31 — Live calibration monitor + dead-man's-switch + position sizing
 
 Three gaps closed from a system-wide audit. (1) **ML quality calibration monitor** — the cron samples each symbol's ML Win ~once/20h into `ml_calibration` D1 and grades it 24h later against realized goodR (≥1.5 ATR move in 24h, direction-agnostic); `/ml-calibration` serves realized-vs-predicted by bucket; iOS `MLCalibrationService` + dashboard card. Companion to the direction scoreboard — drift detector for the core quality gate. (2) **Dead-man's-switch** — cron stamps `cron:heartbeat` KV each full pass; public `/cron-health` returns 503 when stale (>10 min) for an external uptime monitor; iOS `CronHealthService` shows a stale banner. (3) **Position sizing** — `AnalysisPrompt.swift` POSITION SIZING flag couples ML Win × direction conviction: high quality + undecided direction (pUp~50%) → HALF size (the direction-agnostic ML Win is a likely-move-but-coin-flip-entry, not a high-confidence trade); hard cap 1.25× given leverage. Motivated by the S/R investigation's broader finding that the measured edge is ML + direction + bands, plus the "ML Win ≠ profit" realization.
