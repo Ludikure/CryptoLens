@@ -120,7 +120,7 @@ export interface FullFeatures {
 // first `period` values, then exponential smoothing for each subsequent point. Seeding from
 // values[0] (the previous implementation) drifted noticeably for long lookbacks like the
 // 200-EMA where the warmup transient never fully decayed across 300 daily bars.
-function emaArray(values: number[], period: number): number[] {
+export function emaArray(values: number[], period: number): number[] {
     if (values.length < period) return [];
     const k = 2 / (period + 1);
     let initial = 0;
@@ -167,14 +167,14 @@ function smaArray(values: number[], period: number): number[] {
  *   - EMA 20/50/200:     2dp  (ComputeAll.swift)
  *   - volumeRatio:       2dp  (ComputeAll.swift)
  */
-function r2(x: number): number {
+export function r2(x: number): number {
     return Math.round(x * 100) / 100;
 }
 function r4(x: number): number {
     return Math.round(x * 10000) / 10000;
 }
 
-function computeRSI(closes: number[], period: number = 14): number[] {
+export function computeRSI(closes: number[], period: number = 14): number[] {
     const rsiValues: number[] = new Array(closes.length).fill(50);
     if (closes.length < period + 1) return rsiValues;
 
@@ -197,7 +197,7 @@ function computeRSI(closes: number[], period: number = 14): number[] {
     return rsiValues;
 }
 
-function computeMACD(closes: number[]): { macdLine: number[]; signalLine: number[]; histogram: number[]; crossover: number } {
+export function computeMACD(closes: number[]): { macdLine: number[]; signalLine: number[]; histogram: number[]; crossover: number } {
     const ema12 = emaArray(closes, 12);
     const ema26 = emaArray(closes, 26);
     // RAW macd/signal kept full precision so histogram = r2(rawMacd - rawSignal).
@@ -327,7 +327,7 @@ function computeStochRSI(closes: number[], rsiPeriod: number = 14, stochPeriod: 
     return { k: r2(k), d: r2(d), crossover };
 }
 
-function computeBollingerBands(closes: number[], period: number = 20, stdDev: number = 2): { percentB: number; squeeze: boolean; bandwidth: number } {
+export function computeBollingerBands(closes: number[], period: number = 20, stdDev: number = 2): { percentB: number; squeeze: boolean; bandwidth: number } {
     if (closes.length < period) return { percentB: 0.5, squeeze: false, bandwidth: 0 };
 
     const window = closes.slice(-period);
@@ -370,7 +370,7 @@ function computeBollingerBands(closes: number[], period: number = 20, stdDev: nu
     return { percentB: r4(percentB), squeeze, bandwidth: r4(bandwidth) };
 }
 
-function computeVolumeRatio(volumes: number[], period: number = 20): number {
+export function computeVolumeRatio(volumes: number[], period: number = 20): number {
     if (volumes.length < period) return 1.0;
     const avg = volumes.slice(-period).reduce((a, b) => a + b, 0) / period;
     // Round to 2dp to match iOS ComputeAll.swift line 98.
@@ -408,7 +408,7 @@ function marketStructureLabel(candles: Candle[], lookback: number = 3): 'bullish
     return 'range';
 }
 
-function computeVWAP(candles: Candle[], period: number = 20): number | null {
+export function computeVWAP(candles: Candle[], period: number = 20): number | null {
     if (candles.length < period) return null;
     const recent = candles.slice(-period);
     let cumPV = 0, cumVol = 0;
@@ -427,7 +427,7 @@ function computeVWAP(candles: Candle[], period: number = 20): number | null {
 //   bullish = price made a lower low while RSI made a higher low
 //   bearish = price made a higher high while RSI made a lower high
 // Worker previously used a simple slope comparison which produced different signals.
-function detectDivergence(closes: number[], rsiValues: number[], lookback: number = 20): number {
+export function detectDivergence(closes: number[], rsiValues: number[], lookback: number = 20): number {
     if (closes.length < lookback || rsiValues.length < lookback) return 0;
     const rc = closes.slice(-lookback);
     const rr = rsiValues.slice(-lookback);
@@ -461,7 +461,7 @@ function detectDivergence(closes: number[], rsiValues: number[], lookback: numbe
     return 0;
 }
 
-function computeOBVTrend(candles: Candle[], lookback: number = 10): boolean {
+export function computeOBVTrend(candles: Candle[], lookback: number = 10): boolean {
     if (candles.length < lookback + 1) return false;
     let obv = 0;
     const obvValues: number[] = [0];
@@ -474,7 +474,7 @@ function computeOBVTrend(candles: Candle[], lookback: number = 10): boolean {
     return obvValues[n - 1] > obvValues[n - lookback];
 }
 
-function computeADLineTrend(candles: Candle[], lookback: number = 10): boolean {
+export function computeADLineTrend(candles: Candle[], lookback: number = 10): boolean {
     if (candles.length < lookback + 1) return false;
     let adLine = 0;
     const values: number[] = [0];
@@ -488,7 +488,7 @@ function computeADLineTrend(candles: Candle[], lookback: number = 10): boolean {
     return values[n - 1] > values[n - lookback];
 }
 
-function computeATRPercentile(candles: Candle[], atrPeriod: number = 14): number {
+export function computeATRPercentile(candles: Candle[], atrPeriod: number = 14): number {
     if (candles.length < atrPeriod + 50) return 50;
     const atrValues: number[] = [];
     for (let i = atrPeriod; i < candles.length; i++) {
@@ -771,7 +771,7 @@ export interface MacroSignals {
 }
 
 // Volume Profile: POC, Value Area High/Low from candle volume distribution
-function computeVolumeProfile(candles: Candle[], atr: number): { poc: number; vah: number; val: number } | null {
+export function computeVolumeProfile(candles: Candle[], atr: number): { poc: number; vah: number; val: number } | null {
     if (candles.length < 10 || atr <= 0) return null;
     let rangeHigh = -Infinity, rangeLow = Infinity;
     for (const c of candles) { rangeHigh = Math.max(rangeHigh, c.high); rangeLow = Math.min(rangeLow, c.low); }
