@@ -262,6 +262,12 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
     rawAtrPctile = ((rank < 0 ? sorted.length : rank) / sorted.length) * 100;
   }
   const volScalar = Math.max(0.75, Math.min(1.35, 0.75 + (rawAtrPctile / 100) * 0.6));
+  // ATR percentile (daily Vol Regime flag) — mirrors VolatilityRegime.atrPercentile.
+  // Returns null below period+30 bars (Swift returns nil). Label from the unrounded pct.
+  const atrPercentile = candles.length >= 44 ? Math.round(rawAtrPctile) : null;
+  const atrPercentileLabel = candles.length >= 44
+    ? (rawAtrPctile < 20 ? 'contracting — breakout likely' : rawAtrPctile > 80 ? 'expanded — mean reversion likely' : 'normal')
+    : null;
 
   const obvRising = opts.isCrypto ? false : computeOBVTrend(candles);
   const adAccum = opts.isCrypto ? false : computeADLineTrend(candles);
@@ -294,6 +300,7 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
   const tail = <T>(a: T[], n = 50) => a.slice(-n);
   return {
     timeframe: opts.timeframe, label: opts.label, price: current,
+    atrPercentile, atrPercentileLabel,
     rsi, stochRSI: stoch.result, macd: { histogram: r2(macdHist), crossover: crossStr(macd.crossover) },
     adx: adx?.result ?? null, bollingerBands: bb,
     atr: { atr: r2(atrVal), atrPercent: r2(atrVal / current * 100) },

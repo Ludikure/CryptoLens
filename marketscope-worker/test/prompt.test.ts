@@ -1,5 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { systemPrompt, classifyArchetype, useTighterBands, parseSetups, formatPrice } from '../src/prompt';
+import { systemPrompt, classifyArchetype, useTighterBands, parseSetups, formatPrice, buildUserPrompt, type PromptIndicator } from '../src/prompt';
+import { computeFullIndicators } from '../src/indicators-full';
+import type { Candle } from '../src/scoring-full';
+
+// Deterministic synthetic candles (no Math.random — banned in scripts; keep tests reproducible).
+function synthCandles(n: number, startMs: number, stepMs: number, base = 100): Candle[] {
+  const out: Candle[] = [];
+  let price = base;
+  for (let i = 0; i < n; i++) {
+    const drift = Math.sin(i / 9) * 2 + i * 0.03;       // mild trend + wave
+    const open = price;
+    const close = base + drift;
+    const high = Math.max(open, close) + 0.6;
+    const low = Math.min(open, close) - 0.6;
+    const volume = 1000 + (i % 7) * 120;
+    out.push({ time: startMs + i * stepMs, open, high, low, close, volume });
+    price = close;
+  }
+  return out;
+}
 
 describe('prompt.ts (AnalysisPrompt port)', () => {
   it('systemPrompt returns the byte-extracted text per market', () => {
@@ -44,5 +63,50 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(formatPrice(2.5)).toBe('$2.50');
     expect(formatPrice(0.4263)).toBe('$0.4263');
     expect(formatPrice(0.0000123)).toBe('$0.000012');
+  });
+
+  it('buildUserPrompt runs end-to-end over real computeFullIndicators output (crypto)', () => {
+    const NOW = 1748736000000; // fixed (2025-06-01T00:00:00Z) — scripts can't use Date.now()
+    const DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+    daily.mlWinProbability = 0.72; daily.mlPersistenceProbability = 0.64; daily.mlDirectionUp = 0.68;
+
+    const { prompt, newState } = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      sentiment: { athChangePercentage: -12.3, priceChangePercentage24h: 1.2 },
+      prevState: { regime: 'RANGING' }, settings: { accountSize: 25000, riskPercent: 2 },
+    });
+
+    expect(prompt.startsWith('Symbol: BTCUSDT')).toBe(true);
+    expect(prompt).toContain('=== PRE-COMPUTED FLAGS');
+    expect(prompt).toContain('STOCH_CROSS:');           // treatment branch active
+    expect(prompt).toContain('DIRECTION MODEL: P(up 24h) = 68%');
+    expect(prompt).toContain('ML Bucket: TOP (ML_WIN 72%)');
+    expect(prompt).toContain('Momentum Alignment:');
+    expect(prompt).toContain('=== RECENT CANDLES ===');
+    expect(prompt).toContain('Next 4H Close:');
+    // Stateful: regime recomputed + returned for persistence
+    expect(typeof newState.regime).toBe('string');
+    expect(['TRENDING', 'TRANSITIONING', 'RANGING']).toContain(newState.regime);
+  });
+
+  it('buildUserPrompt handles a stock (no crossAsset/derivatives) without throwing', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 200), { timeframe: tf, label, isCrypto: false }) as unknown as PromptIndicator;
+    const indicators = [mk(230, DAY, 'Daily (1D)', '1d'), mk(230, H4, '4H', '4h'), mk(120, H1, '1H', '1h')];
+    indicators[0].mlWinProbability = 0.55;
+    const { prompt } = buildUserPrompt({
+      symbol: 'AAPL', nowMs: NOW, indicators,
+      stockInfo: { marketState: 'CLOSED', fiftyTwoWeekLow: 150, fiftyTwoWeekHigh: 260, earningsDate: NOW + 5 * DAY },
+    });
+    expect(prompt.startsWith('Symbol: AAPL')).toBe(true);
+    expect(prompt).toContain('ML Bucket: MARGINAL (ML_WIN 55%)');
+    expect(prompt).toContain('Earnings Proximity: 5d');
+    expect(prompt).toContain('Next Daily Close:');
   });
 });
