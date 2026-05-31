@@ -44,6 +44,25 @@ BacktestEngine parity asserted at **1e-7** (345/345 tests, `parity-vs-backtest.t
 `calibrate_v13_stocks.py` (XGB d5 t100, reads `csv_exports_v13/`). Both write worker + iOS
 JSONs. CSV regen via Node-CLI `marketscope-worker/scripts/runBacktest.ts`.
 
+## Feature ablation — volume-profile features are dead weight
+`ml-training/ablation_vp.py`. Dropping the 6 volume-profile features (vpDistToPocATR,
+vpAbovePoc, vpVAWidth, vpInValueArea, vpDistToVAH_ATR, vpDistToVAL_ATR) and retraining on the
+frozen holdout:
+```
+            full(111)  drop-VP(105)   control: drop random-6
+crypto AUC  0.7070     0.7066 (-0.48e-3)   mean -1.91e-3, range[-5.05,-0.55]  ← VP hurts LESS than random
+stock  AUC  0.6858     0.6852 (-0.62e-3)   mean -2.01e-3, range[-6.69,+0.79]
+top-20% goodR unchanged (crypto -0.16pp, stock +0.17pp)
+```
+Removing all 6 costs ~0.0005 AUC — *less* than dropping a random 6 — and top-bucket
+reliability is unchanged. Importance is mid-to-low (vpAbovePoc dead-last 109/111 on stock);
+`vpInValueArea` ranks high (8/111 stock) but ablation shows it's **redundant** (model recovers
+the signal from correlated features). Verdict: the VP features don't earn their place —
+redundant, not harmful. Removable for simpler feature computation, but needs a retrain +
+parity re-cert, so optional cleanup not a fix. Consistent with `docs/research/strategy-levels.md`
+Finding 7 (volume-at-price carries no unique signal). SCOPE: the 6 *spatial* VP features only;
+the 10 volume-*flow* features (volume ratio, OBV, taker, A/D, dark-pool) were not ablated.
+
 ## Full-precision tree extraction gotcha
 `get_dump`/`trees_to_dataframe` **round** leaf values (~1e-1 error over 100 trees). Must
 parse `save_model` JSON where **leaf output is in `split_conditions[i]`** (not
