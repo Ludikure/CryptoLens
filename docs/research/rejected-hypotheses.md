@@ -60,6 +60,17 @@ real**: swing levels hold +4.3pp vs random lines on both markets (so the *detect
 only the *strength scoring* was decoration). Acted on: neutralized prompt tags + removed the
 `entry_at_worn_level_4+_tests` conviction downgrade. Full write-up: [[strategy-levels]].
 
+## Fibonacci ratios as special S/R — REJECTED (location artifact)
+`ml-training/level_validation_fib.py`. Fib levels hold +6.7pp (crypto) vs a far random line
+— but vs **random retracement ratios in the same leg** they win by **+0.1pp** (450k samples).
+The edge is being a mid-range line, not the Fibonacci ratio; 0.618 "best" was noise. Golden
+ratio = pareidolia. Fib levels redundant with the swings they're built from. [[strategy-levels]]
+
+## HTF level folklore (weekly > daily > 4H) — REJECTED
+`ml-training/level_validation_htf.py`. Daily closes are the strongest class; "weekly is
+stronger S/R" is false — weekly close middling (good on stocks, weak crypto +3.0pp), weekly
+high/low weak-to-random on crypto (+0.3pp). Higher TF ≠ stronger level. [[strategy-levels]]
+
 ## Recency-weighted direction training — REJECTED
 Time-decay sample weighting (used for the *quality* model) biases a *direction* model
 toward UP in a bull market. The crypto + stock direction models use **uniform weights**.

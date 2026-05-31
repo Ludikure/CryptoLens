@@ -68,6 +68,24 @@ Conclusion: adding **daily closes** as a level source is defensible (best class,
 edge over existing 4H swings). Adding **weekly** is not justified — weekly close helps only
 on stocks, weekly H/L not at all on crypto. NOT YET IMPLEMENTED — pending decision.
 
+## Finding 5 — Fibonacci ratios add NOTHING (location artifact)
+`ml-training/level_validation_fib.py`. Fib retracement levels first looked great (crypto
++6.7pp, even beating 4H swings), with 0.618 nominally best. But the ratios were nearly
+flat (0.236 ≈ 0.618) — the tell. The decisive control: **random retracement ratios in the
+same legs**.
+```
+                        CRYPTO          STOCK
+fib (all ratios)        91.6% +6.7pp    85.1% +6.5pp
+RANDOM ratio same leg   91.6% +6.6pp    84.9% +6.3pp
+fib beats random ratio  +0.1pp          +0.2pp   ← zero, on 450k/240k samples
+```
+The entire apparent edge is the **mid-range location** (any line inside a recent swing
+range holds +6.6pp over a far random line), NOT the Fibonacci ratios (+0.1pp = noise).
+0.618 "best" was noise; golden-ratio mysticism is pareidolia. Fib levels are valid
+mid-range levels but add nothing over the swings they're computed from — redundant, not
+harmful (unlike the worn tags, no false signal — except the "Fibonacci" *label* may make
+the LLM over-weight ordinary levels). Candidate: de-emphasize the Fib framing in the prompt.
+
 ## Actions taken (2026-05-31)
 - **Neutralized** the prompt strength tags in `AnalysisPrompt.swift`: `WORN_Nx_distrust` /
   `FRESH_1x_strongest_reaction` / `RECENT_Nx` → neutral `tested_Nx` fact; `FLIP_ROLE` kept
