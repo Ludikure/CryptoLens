@@ -7,10 +7,27 @@ struct OutcomeDashboardView: View {
     @State private var liveSetups: [TrackedSetup] = []
     @State private var versionComparison: [String: VersionStats] = [:]
     @State private var directionReport: DirectionAccuracyService.Report?
+    @State private var calibration: MLCalibrationService.Report?
+    @State private var cronStale: Bool?
 
     var body: some View {
         List {
             if let stats {
+                // Pipeline health (dead-man's-switch). Only surfaces when stale — a healthy
+                // cron is the silent default.
+                if cronStale == true {
+                    Section {
+                        Label("ML pipeline appears STALE — the worker cron may be down. ML scores and notifications won't update until it recovers.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote).foregroundStyle(.red)
+                    }
+                }
+
+                // ML quality-model live calibration — predicted vs realized goodR by bucket.
+                if let cal = calibration, (cal.resolved > 0 || cal.pending > 0) {
+                    calibrationSection(cal)
+                }
+
                 // Live trades
                 if !liveSetups.isEmpty {
                     Section("Live Trades") {
@@ -114,12 +131,16 @@ struct OutcomeDashboardView: View {
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
             directionReport = await DirectionAccuracyService.fetch()
+            calibration = await MLCalibrationService.fetch()
+            cronStale = await CronHealthService.isStale()
         }
         .refreshable {
             stats = OutcomeTracker.stats()
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
             directionReport = await DirectionAccuracyService.fetch()
+            calibration = await MLCalibrationService.fetch()
+            cronStale = await CronHealthService.isStale()
         }
         .toolbar {
             if let s = stats {
@@ -132,6 +153,44 @@ struct OutcomeDashboardView: View {
                     ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
                 }
             }
+        }
+    }
+
+    // MARK: - ML quality-model calibration
+
+    @ViewBuilder
+    private func calibrationSection(_ cal: MLCalibrationService.Report) -> some View {
+        Section {
+            if cal.resolved == 0 {
+                statRow("Calibration", value: "pending", color: .secondary)
+            } else {
+                // header
+                HStack {
+                    Text("Bucket").foregroundStyle(.secondary)
+                    Spacer()
+                    Text("predicted → realized").foregroundStyle(.secondary)
+                }
+                .font(.caption2)
+                ForEach(cal.buckets.filter { $0.n > 0 }) { b in
+                    HStack {
+                        Text(b.label + "%").font(.caption)
+                        Spacer()
+                        Text(String(format: "%.0f%% → %.0f%%", b.predicted, b.realized))
+                            .font(.caption)
+                        Text(String(format: "(%+.0f)", b.gap))
+                            .font(.caption2)
+                            .foregroundStyle(abs(b.gap) <= 5 ? .green : abs(b.gap) <= 10 ? .orange : .red)
+                        Text("n=\(b.n)").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            if cal.pending > 0 {
+                statRow("Awaiting 24h grade", value: "\(cal.pending)", color: .blue)
+            }
+        } header: {
+            Text("ML Quality Calibration — Live")
+        } footer: {
+            Text("Is the ML Win model still honest in the wild? Each predicted-probability bucket vs the realized rate of a ≥1.5 ATR move within 24h (the model's direction-agnostic target). Gap within ±5 = well-calibrated; a persistent large gap = drift. Builds over time.")
         }
     }
 

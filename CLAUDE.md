@@ -91,6 +91,8 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 | `/sentiment` | GET | none (public) | Fear & Greed proxy (cached 10min) |
 | `/darkpool?symbol=…` | GET | none (IP rate-limited 60/min) | FINRA dark pool ratio + Z-score |
 | `/direction-accuracy` | GET | required | Live forward track record of the dual-gate direction model (universe-wide, not per-device). Overall accuracy + by-confidence-band + recent graded signals + pending count. Reads `direction_signals` D1 |
+| `/ml-calibration` | GET | required | Live calibration of the ML *quality* model: realized goodR rate by predicted-probability bucket. Drift detector. Reads `ml_calibration` D1 |
+| `/cron-health` | GET | none (public) | Dead-man's-switch: returns **503** when the cron heartbeat is stale (>10 min), 200 otherwise. Point an external uptime monitor here. Reads `cron:heartbeat` KV |
 | `/debug/features` | GET | required | Read `debug:<sym>_features` KV for parity investigation |
 | `/debug/backfill-derivatives` | POST | required (X-App-ID gated) | One-off derivatives backfill from Binance to D1 |
 
@@ -119,6 +121,7 @@ Migrations under `marketscope-worker/migrations/*.sql`. **Note:** Some columns a
 | `notif_claims` | 005 | push_token+symbol PK, expires_at | `idx_notif_claims_expires(expires_at)` |
 | `pending_setups` | OOB (lazy `CREATE IF NOT EXISTS` at `index.ts:219`) | id PK, device_id, symbol, direction, entry, atr, ml_at_registration, expires_at, registered_at, notified | `idx_pending_setups_symbol`, `idx_pending_setups_device` (both lazy) |
 | `direction_signals` | OOB (lazy `CREATE IF NOT EXISTS`, `ensureDirectionSignalsTable`) | id PK, symbol, fired_at, entry_price, ml_win, p_up, predicted_dir, model_version, is_crypto, resolve_at, resolved, exit_price, fwd_return, actual_dir, correct | `idx_dirsig_unresolved(resolved, resolve_at)`, `idx_dirsig_symbol(symbol, fired_at DESC)` (both lazy) |
+| `ml_calibration` | OOB (lazy `CREATE IF NOT EXISTS`, `ensureCalibrationTable`) | id PK, symbol, is_crypto, logged_at, entry_price, atr_price, predicted_prob, resolve_at, resolved, fav_r, good_r | `idx_cal_unresolved(resolved, resolve_at)`, `idx_cal_symbol(symbol)` (both lazy) |
 
 **Schema drift items** (low-severity, but flagged): `trade_outcomes.prompt_version`, four `derivatives_history.large_*` columns, and the entire `pending_setups` table aren't in any migration file. Consolidation to a `006_schema_drift.sql` is in the postponed-work doc.
 
@@ -555,6 +558,14 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-05-31 — Live calibration monitor + dead-man's-switch + position sizing
+
+Three gaps closed from a system-wide audit. (1) **ML quality calibration monitor** — the cron samples each symbol's ML Win ~once/20h into `ml_calibration` D1 and grades it 24h later against realized goodR (≥1.5 ATR move in 24h, direction-agnostic); `/ml-calibration` serves realized-vs-predicted by bucket; iOS `MLCalibrationService` + dashboard card. Companion to the direction scoreboard — drift detector for the core quality gate. (2) **Dead-man's-switch** — cron stamps `cron:heartbeat` KV each full pass; public `/cron-health` returns 503 when stale (>10 min) for an external uptime monitor; iOS `CronHealthService` shows a stale banner. (3) **Position sizing** — `AnalysisPrompt.swift` POSITION SIZING flag couples ML Win × direction conviction: high quality + undecided direction (pUp~50%) → HALF size (the direction-agnostic ML Win is a likely-move-but-coin-flip-entry, not a high-confidence trade); hard cap 1.25× given leverage. Motivated by the S/R investigation's broader finding that the measured edge is ML + direction + bands, plus the "ML Win ≠ profit" realization.
+
+### 2026-05-31 — S/R subsystem fully characterized (see docs/research/strategy-levels.md)
+
+Exhaustive teardown of the support/resistance subsystem. **Levels are real locations** (+4-6pp hold vs random; daily closes best) but **level *strength* is unrankable** — six metrics tested (test-count, flip-role, timeframe, Fibonacci ratio, formation volume, volume-at-price), NONE predict hold/break. **Snapping targets to levels LOWERS EV** (win-rate illusion). **Volume-profile features don't earn their place** in the model (ablation within noise). Acted on: neutralized the WORN/FLIP prompt strength tags + removed the `entry_at_worn_level_4+_tests` conviction downgrade (false signal). Scripts: `ml-training/level_validation*.py`, `setup_execution_snap_test.py`, `volume_at_level.py`, `ablation_vp.py`. Full findings + the rejected-hypotheses graveyard in `docs/research/`.
 
 ### 2026-05-30 — Crypto direction model + live dual-gate validation
 

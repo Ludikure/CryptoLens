@@ -92,6 +92,17 @@ export default {
       return json({ status: 'ok' });
     }
 
+    // Dead-man's-switch for the cron pipeline. Public (no auth) so an external uptime
+    // monitor can poll it. Returns 503 when the cron heartbeat is stale (> 10 min, i.e.
+    // several missed minute-crons) — the whole ML + notification pipeline is down.
+    if (path === '/cron-health') {
+      const hb = await env.ALERTS.get('cron:heartbeat');
+      const ageMs = hb ? Date.now() - Number(hb) : null;
+      const stale = ageMs === null || ageMs > 10 * 60 * 1000;
+      return json({ ok: !stale, heartbeatAgeSec: ageMs === null ? null : Math.round(ageMs / 1000) },
+                  stale ? 503 : 200);
+    }
+
     // Block non-app traffic — require app identifier header on all endpoints
     const appId = request.headers.get('X-App-ID');
     if (appId !== 'marketscope-ios') {
@@ -1428,6 +1439,34 @@ export default {
       }
     }
 
+    // Live calibration of the ML quality model: realized goodR rate by predicted-probability
+    // bucket. If predicted-70% bars hit ~70% in the wild, the model is still honest; large
+    // gaps = drift. Universe-wide, forward, out-of-sample. See ml_calibration logging/grading.
+    if (path === '/ml-calibration' && request.method === 'GET') {
+      try {
+        const buckets = await env.DB.prepare(`
+          SELECT
+            CASE
+              WHEN predicted_prob < 0.30 THEN '00-30'
+              WHEN predicted_prob < 0.50 THEN '30-50'
+              WHEN predicted_prob < 0.60 THEN '50-60'
+              WHEN predicted_prob < 0.70 THEN '60-70'
+              ELSE '70-85' END as bucket,
+            COUNT(*) as n,
+            AVG(predicted_prob) * 100 as predicted,
+            AVG(good_r) * 100 as realized
+          FROM ml_calibration WHERE resolved = 1
+          GROUP BY bucket ORDER BY bucket`).all();
+        const overall = await env.DB.prepare(
+          'SELECT COUNT(*) as resolved, SUM(CASE WHEN resolved=0 THEN 1 ELSE 0 END) as pending FROM ml_calibration'
+        ).first();
+        const pend = await env.DB.prepare('SELECT COUNT(*) as n FROM ml_calibration WHERE resolved = 0').first();
+        return json({ buckets: buckets.results ?? [], resolved: (overall?.resolved as number) ?? 0, pending: (pend?.n as number) ?? 0 });
+      } catch (e) {
+        return json({ buckets: [], resolved: 0, pending: 0 });
+      }
+    }
+
     return json({ error: 'Not found' }, 404);
   },
 
@@ -1961,6 +2000,9 @@ async function checkAllDeviceScores(env: Env) {
       console.log(`[score] device ${deviceId} error: ${e}`);
     }
   }
+
+  // Dead-man's-switch heartbeat — stamped only after a full pass completes.
+  await stampHeartbeat(env);
 }
 
 // ─── Dual-gate direction live-validation ──────────────────────────────────────
@@ -2037,6 +2079,39 @@ async function logDirectionSignals(env: Env, predictions: Map<string, SymbolPred
     await env.DB.batch(inserts);
     console.log(`[dirsignal] logged ${inserts.length} new dual-gate signal(s)`);
   }
+}
+
+// ─── ML quality-model live calibration ────────────────────────────────────────
+// The direction scoreboard validates the direction head live. This does the same for the
+// QUALITY model (ML Win): log a sample of predictions and grade them against realized goodR
+// (max favorable excursion >= 1.5 ATR in 24h, direction-agnostic — the model's actual
+// target). Tells us whether predicted-70% bars really hit ~70% in the wild, or whether the
+// model has drifted. One sample per symbol per ~20h keeps D1 writes bounded.
+
+const CAL_LOG_INTERVAL_MS = 20 * 3600 * 1000;
+const CAL_HORIZON_MS = 24 * 3600 * 1000;
+const CAL_GOODR_ATR = 1.5;
+
+let calTableReady = false;
+async function ensureCalibrationTable(env: Env) {
+  if (calTableReady) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ml_calibration (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL, is_crypto INTEGER NOT NULL,
+    logged_at INTEGER NOT NULL, entry_price REAL NOT NULL, atr_price REAL NOT NULL,
+    predicted_prob REAL NOT NULL, resolve_at INTEGER NOT NULL,
+    resolved INTEGER NOT NULL DEFAULT 0, fav_r REAL, good_r INTEGER
+  )`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cal_unresolved ON ml_calibration(resolved, resolve_at)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_cal_symbol ON ml_calibration(symbol)`).run();
+  calTableReady = true;
+}
+
+// Dead-man's-switch: the cron stamps a heartbeat each successful pass; /cron-health returns
+// 503 when it goes stale so an external uptime monitor (UptimeRobot etc.) can alert. A dead
+// cron can't push, so detection is external-on-read by design.
+async function stampHeartbeat(env: Env) {
+  try { await env.ALERTS.put('cron:heartbeat', String(Date.now())); } catch {}
 }
 
 // Grade every signal whose 24h horizon has elapsed against the current price.
@@ -2350,6 +2425,27 @@ async function computeSymbolPredictions(
     prevSnapshotsRaw ? JSON.parse(prevSnapshotsRaw) : {};
   const newSnapshots: typeof prevSnapshots = {};
 
+  // Calibration: load the per-symbol last-log gate + any rows due for grading. Logging and
+  // resolution happen inside the loop (resolution needs the 4H candle history for the max
+  // excursion). Inserts/updates are batched after the loop.
+  await ensureCalibrationTable(env);
+  const nowCal = Date.now();
+  const calLogged: Record<string, number> = JSON.parse((await env.ALERTS.get('cal_logged:all')) || '{}');
+  const calDueBySymbol = new Map<string, Array<{ id: number; logged_at: number; entry_price: number; atr_price: number }>>();
+  try {
+    const due = await env.DB.prepare(
+      'SELECT id, symbol, logged_at, entry_price, atr_price FROM ml_calibration WHERE resolved = 0 AND resolve_at <= ? LIMIT 300'
+    ).bind(nowCal).all();
+    for (const r of due.results || []) {
+      const s = r.symbol as string;
+      if (!calDueBySymbol.has(s)) calDueBySymbol.set(s, []);
+      calDueBySymbol.get(s)!.push({ id: r.id as number, logged_at: r.logged_at as number,
+        entry_price: r.entry_price as number, atr_price: r.atr_price as number });
+    }
+  } catch (e) { console.log(`[cal] due-load err ${e}`); }
+  const calInserts: D1PreparedStatement[] = [];
+  const calUpdates: D1PreparedStatement[] = [];
+
   for (const symbol of allSymbols) {
     try {
       const isCrypto = symbol.endsWith('USDT');
@@ -2642,10 +2738,47 @@ async function computeSymbolPredictions(
         atrPrice,
         pUp,
       });
+
+      // Calibration log: sample this symbol's ML Win at most once per ~20h.
+      if (atrPrice > 0 && last4HClose > 0 && (nowCal - (calLogged[symbol] || 0) >= CAL_LOG_INTERVAL_MS)) {
+        calInserts.push(env.DB.prepare(
+          `INSERT INTO ml_calibration (symbol, is_crypto, logged_at, entry_price, atr_price, predicted_prob, resolve_at, resolved)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0)`
+        ).bind(symbol, isCrypto ? 1 : 0, nowCal, last4HClose, atrPrice, mlProb, nowCal + CAL_HORIZON_MS));
+        calLogged[symbol] = nowCal;
+      }
+      // Calibration grade: any due rows for this symbol → max excursion over [logged, resolve]
+      // from the 4H candle history (direction-agnostic, matches the goodR target).
+      const due = calDueBySymbol.get(symbol);
+      if (due && fourHCandles.length) {
+        for (const row of due) {
+          let maxHigh = -Infinity, minLow = Infinity;
+          for (const c of fourHCandles) {
+            const t = (c as { time?: number }).time ?? 0;
+            if (t > row.logged_at && t <= row.logged_at + CAL_HORIZON_MS) {
+              if (c.high > maxHigh) maxHigh = c.high;
+              if (c.low < minLow) minLow = c.low;
+            }
+          }
+          if (maxHigh === -Infinity || row.atr_price <= 0) continue;  // no bars yet — grade next cron
+          const favR = Math.max(maxHigh - row.entry_price, row.entry_price - minLow) / row.atr_price;
+          calUpdates.push(env.DB.prepare(
+            'UPDATE ml_calibration SET resolved = 1, fav_r = ?, good_r = ? WHERE id = ?'
+          ).bind(favR, favR >= CAL_GOODR_ATR ? 1 : 0, row.id));
+        }
+      }
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);
     }
   }
+
+  // Flush calibration inserts/updates + the per-symbol log gate (batched, once per cron).
+  try {
+    if (calInserts.length) await env.DB.batch(calInserts);
+    if (calUpdates.length) await env.DB.batch(calUpdates);
+    if (calInserts.length) await env.ALERTS.put('cal_logged:all', JSON.stringify(calLogged), { expirationTtl: 86400 * 3 });
+    if (calInserts.length || calUpdates.length) console.log(`[cal] +${calInserts.length} logged, ${calUpdates.length} graded`);
+  } catch (e) { console.log(`[cal] flush err ${e}`); }
 
   // Save ML snapshots for next cron's rate-of-change deltas
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });

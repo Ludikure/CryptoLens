@@ -741,6 +741,31 @@ enum AnalysisPrompt {
                     lines.append("  Dedicated calibrated direction head (111 features), validated to beat the raw bias/Stoch primitives. When ML_WIN >= 70% and it reads STRONG LONG/SHORT (pUp >= 65% or <= 35%), treat direction as HIGH-confidence and commit. Near 50% (45-55%) direction is genuinely uncertain — defer to structure or stay FLAT. If it disagrees with bias/Stoch AND ML_WIN >= 70%, weight the model — it is more accurate than the raw primitives.")
                 }
 
+                // POSITION SIZING — couples trade quality (ML_WIN) with direction conviction.
+                // The key lesson: ML_WIN is direction-AGNOSTIC (P of a >=1.5 ATR move either
+                // way), so a high ML_WIN with an UNDECIDED direction is NOT a high-confidence
+                // trade — it's a likely move with a coin-flip entry. Size for that. Crypto uses
+                // the direction head; stocks defer direction sizing to the LLM's structural read.
+                // Hard cap 1.25x given the account runs leverage (false-confidence + leverage =
+                // ruin risk). Output is a multiplier on the user's base risk (e.g. 2%/trade).
+                if let mlWin = daily.mlWinProbability {
+                    let qualityOK = mlWin >= 0.60
+                    var mult = 1.0
+                    var reason: String
+                    if let pUp = daily.mlDirectionUp {            // crypto: have a direction signal
+                        let conf = abs(pUp - 0.5)
+                        if !qualityOK { mult = 0.0; reason = "ML_WIN < 60% — below quality threshold, no trade" }
+                        else if conf < 0.10 { mult = 0.5; reason = "quality high but direction UNDECIDED (pUp \(Int((pUp*100).rounded()))%) — likely move, coin-flip entry: HALF size, or pass unless structure gives a clear side" }
+                        else if conf < 0.20 { mult = 0.75; reason = "moderate direction conviction — 0.75x" }
+                        else { mult = (mlWin >= 0.70) ? 1.0 : 0.75; reason = mlWin >= 0.70 ? "strong quality + strong direction — full size (up to 1.25x only if structural conviction is HIGH)" : "strong direction but ML_WIN 60-70% — 0.75x" }
+                    } else {                                      // stocks: no direction head
+                        if !qualityOK { mult = 0.0; reason = "ML_WIN < 60% — no trade" }
+                        else { mult = (mlWin >= 0.70) ? 1.0 : 0.75; reason = "stock — size off quality + your structural direction read (no direction model); cap 1.0x" }
+                    }
+                    let multTxt = mult == 0 ? "NO TRADE" : String(format: "%.2gx base risk", mult)
+                    lines.append("POSITION SIZING: \(multTxt) — \(reason). Cap 1.25x. This is a guardrail, not a license to exceed your risk plan.")
+                }
+
                 // LONG confirmation gate. Backtest: requiring relStrengthVsSpy >= 1 AND
                 // dRsiDelta >= 1 lifts aligned_bullish + ML EV from +0.122R to +0.171R
                 // and rescues fold-5 from -0.069R to +0.067R. Approximations used:
