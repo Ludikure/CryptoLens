@@ -5,6 +5,7 @@ import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './sc
 import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
+import { computeFullIndicators } from './indicators-full';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -938,6 +939,27 @@ export default {
       const entry = (JSON.parse(cached) as Record<string, any>)[symbol];
       if (!entry) return json({ error: 'No cached prediction', symbol }, 404);
       return json(entry);
+    }
+
+    // Full display indicators across daily/4H/1H — the shared analysis brain (no LLM). Both
+    // the web app and (Phase 4) iOS render from this single implementation. crossAsset +
+    // derivatives default to 0 here; /full-analysis supplies them for exact daily-crypto bias.
+    if (path === '/indicators' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const isCrypto = symbol.endsWith('USDT');
+      try {
+        const { daily, fourH, oneH } = await fetchAllTimeframes(symbol, isCrypto);
+        if (!daily.length) return json({ error: 'No candles', symbol }, 404);
+        return json({
+          symbol, isCrypto, timestamp: Date.now(),
+          daily: computeFullIndicators(daily as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }),
+          fourH: fourH.length ? computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) : null,
+          oneH: oneH.length ? computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) : null,
+        });
+      } catch (e) {
+        return json({ error: `Indicator compute failed: ${e}`, symbol }, 502);
+      }
     }
 
     if (path === '/ml-models/version') {
@@ -3044,6 +3066,41 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
     })).filter((c: ScoreCandle) => c.close > 0);
     return dropInProgress(candles, '1d');
   }
+}
+
+// Fetch all three timeframes for the /indicators endpoint. Crypto: Binance klines direct.
+// Stock: Yahoo daily + 1H, 4H aggregated from 1H (mirrors the cron + iOS). In-progress dropped.
+async function fetchBinanceKlines(symbol: string, interval: string, limit: number): Promise<ScoreCandle[]> {
+  const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+  if (!resp.ok) return [];
+  const data = await resp.json() as any[];
+  return dropInProgress(data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })), interval);
+}
+async function fetchYahooCandlesTF(symbol: string, interval: string, range: string): Promise<ScoreCandle[]> {
+  const resp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  if (!resp.ok) return [];
+  const data = await resp.json() as any;
+  const r = data?.chart?.result?.[0];
+  if (!r?.timestamp) return [];
+  const ts = r.timestamp, q = r.indicators.quote[0];
+  const out: ScoreCandle[] = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (q.open?.[i] != null && q.close?.[i] != null) out.push({ time: ts[i] * 1000, open: q.open[i], high: q.high[i], low: q.low[i], close: q.close[i], volume: q.volume[i] || 0 });
+  }
+  return dropInProgress(out, interval);
+}
+async function fetchAllTimeframes(symbol: string, isCrypto: boolean): Promise<{ daily: ScoreCandle[]; fourH: ScoreCandle[]; oneH: ScoreCandle[] }> {
+  if (isCrypto) {
+    const [daily, fourH, oneH] = await Promise.all([
+      fetchBinanceKlines(symbol, '1d', 260), fetchBinanceKlines(symbol, '4h', 300), fetchBinanceKlines(symbol, '1h', 300),
+    ]);
+    return { daily, fourH, oneH };
+  }
+  const [daily, oneH] = await Promise.all([
+    fetchYahooCandlesTF(symbol, '1d', '1y'), fetchYahooCandlesTF(symbol, '1h', '6mo'),
+  ]);
+  const fourH = oneH.length ? dropInProgress(aggregate1HTo4H_ET(oneH as FullCandle[]), '4h') : [];
+  return { daily, fourH, oneH };
 }
 
 // === D1 Candle Archive ===
