@@ -3,7 +3,8 @@
 // positioning (DerivativesService + PositioningAnalyzer) and macro (FRED via the /macro cache).
 // Stock fundamentals / sentiment / cross-asset / economic events are layered in subsequently.
 
-import type { DerivativesData, PositioningSnapshot, MacroSnapshot, SpotPressure } from './prompt';
+import type { DerivativesData, PositioningSnapshot, MacroSnapshot, SpotPressure, CoinInfo, CrossAssetContext } from './prompt';
+import { emaArray } from './scoring-full';
 
 interface Env { ALERTS: KVNamespace; }
 
@@ -168,6 +169,80 @@ export async function fetchSpotPressureEnrichment(symbol: string): Promise<SpotP
     if (!Array.isArray(klines)) return null;
     return computeSpotPressure(klines, depth);
   } catch { return null; }
+}
+
+// ── Sentiment (CoinInfo, crypto) — CoinGecko coin market_data → the 4 fields the prompt prints ──
+const GECKO_IDS: Record<string, string> = { btc: 'bitcoin', eth: 'ethereum', sol: 'solana', xrp: 'ripple', bnb: 'binancecoin', ada: 'cardano', doge: 'dogecoin', avax: 'avalanche-2', dot: 'polkadot', link: 'chainlink' };
+export function parseCoinInfo(coinGecko: any): CoinInfo | null {
+  const md = coinGecko?.market_data;
+  if (!md) return null;
+  const ath = num(md.ath_change_percentage?.usd);
+  return {
+    athChangePercentage: ath ?? 0,
+    priceChangePercentage24h: num(md.price_change_percentage_24h),
+    priceChangePercentage7d: num(md.price_change_percentage_7d),
+    priceChangePercentage30d: num(md.price_change_percentage_30d),
+  };
+}
+export async function fetchSentimentEnrichment(env: Env, symbol: string): Promise<CoinInfo | null> {
+  const cacheKey = `cache:sentiment:${symbol}`;
+  try {
+    const cached = await env.ALERTS.get(cacheKey);
+    if (cached) { const p = JSON.parse(cached); if (Date.now() - p.timestamp < 600_000) return parseCoinInfo(p.data); }
+  } catch { /* ignore */ }
+  try {
+    const coinId = symbol.replace('USDT', '').toLowerCase();
+    const geckoId = GECKO_IDS[coinId] || coinId;
+    const resp = await fetch(`https://api.coingecko.com/api/v3/coins/${geckoId}?localization=false&tickers=false&market_data=true&community_data=false&developer_data=false`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    try { await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 600 }); } catch { /* ignore */ }
+    return parseCoinInfo(data);
+  } catch { return null; }
+}
+
+// ── Cross-asset (crypto, BTC perspective) — AnalysisService.buildCrossAssetContext port ──
+// DXY + SPY daily directional signal vs EMA20; DXY is INVERTED (DXY up = bearish for BTC).
+const YAHOO_CHART = 'https://query1.finance.yahoo.com/v8/finance/chart';
+export function directionalSignal(closes: number[]): { signal: number; trend: string; price: number; ema20: number } {
+  const ema = emaArray(closes, 20);
+  const price = closes[closes.length - 1], ema20 = ema[ema.length - 1];
+  if (price == null || ema20 == null || !(price > 0)) return { signal: 0, trend: 'unknown', price: 0, ema20: 0 };
+  const distPct = (price - ema20) / ema20 * 100;
+  const recent = ema.slice(-5);
+  if (distPct > 0.5) {
+    const rising = recent.length >= 2 && recent[recent.length - 1] > recent[0];
+    return rising ? { signal: 1, trend: 'up', price, ema20 } : { signal: 0, trend: 'flat', price, ema20 };
+  } else if (distPct < -0.5) {
+    const falling = recent.length >= 2 && recent[recent.length - 1] < recent[0];
+    return falling ? { signal: -1, trend: 'down', price, ema20 } : { signal: 0, trend: 'flat', price, ema20 };
+  }
+  return { signal: 0, trend: 'flat', price, ema20 };
+}
+export function buildCrossAsset(dxyCloses: number[], spyCloses: number[]): CrossAssetContext | null {
+  if (dxyCloses.length < 25 || spyCloses.length < 25) return null;
+  const dxy = directionalSignal(dxyCloses), spy = directionalSignal(spyCloses);
+  const dxySignal = -dxy.signal, spySignal = spy.signal;
+  const combined = Math.max(-2, Math.min(2, dxySignal + spySignal));
+  const parts: string[] = [];
+  if (dxySignal !== 0) parts.push(`DXY ${dxy.trend} (${dxySignal > 0 ? 'tailwind' : 'headwind'})`);
+  if (spySignal !== 0) parts.push(`SPY ${spy.trend} (${spySignal > 0 ? 'risk-on' : 'risk-off'})`);
+  const summary = parts.length === 0 ? 'Cross-asset: neutral'
+    : `Cross-asset: ${parts.join(', ')} → ${combined > 0 ? '+' : ''}${combined} for BTC`;
+  return { summary, dxyPrice: dxy.price, dxyEma20: dxy.ema20, dxyTrend: dxy.trend, spyPrice: spy.price, spyEma20: spy.ema20, spyTrend: spy.trend };
+}
+async function fetchYahooDailyCloses(symbol: string): Promise<number[]> {
+  try {
+    const r = await fetch(`${YAHOO_CHART}/${encodeURIComponent(symbol)}?interval=1d&range=3mo`, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' } });
+    if (!r.ok) return [];
+    const j = await r.json() as any;
+    const closes = j?.chart?.result?.[0]?.indicators?.quote?.[0]?.close;
+    return Array.isArray(closes) ? closes.filter((c: any) => typeof c === 'number' && !isNaN(c)) : [];
+  } catch { return []; }
+}
+export async function fetchCrossAssetEnrichment(): Promise<CrossAssetContext | null> {
+  const [dxy, spy] = await Promise.all([fetchYahooDailyCloses('DX-Y.NYB'), fetchYahooDailyCloses('SPY')]);
+  return buildCrossAsset(dxy, spy);
 }
 
 // Macro snapshot from the /macro cache (FRED + DXY). Best-effort — returns null if uncached.

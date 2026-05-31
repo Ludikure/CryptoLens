@@ -384,8 +384,8 @@ export interface PromptIndicator {
   addv?: { averageDollarVolume: number; liquidity: string } | null;
 }
 
-interface CoinInfo { priceChangePercentage24h?: number | null; priceChangePercentage7d?: number | null; priceChangePercentage30d?: number | null; athChangePercentage: number; }
-interface CrossAssetContext { summary: string; dxyPrice: number; dxyEma20: number; dxyTrend: string; spyPrice: number; spyEma20: number; spyTrend: string; }
+export interface CoinInfo { priceChangePercentage24h?: number | null; priceChangePercentage7d?: number | null; priceChangePercentage30d?: number | null; athChangePercentage: number; }
+export interface CrossAssetContext { summary: string; dxyPrice: number; dxyEma20: number; dxyTrend: string; spyPrice: number; spyEma20: number; spyTrend: string; }
 interface DataQuality { promptSection?: string | null; missingEnrichments: string[]; }
 interface InsiderTx { date: number; isBuy: boolean; name: string; shares: number; value: number; }
 interface StockInfo {

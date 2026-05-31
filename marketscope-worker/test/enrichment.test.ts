@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDerivatives, analyzePositioning, computeSpotPressure } from '../src/enrichment';
+import { parseDerivatives, analyzePositioning, computeSpotPressure, parseCoinInfo, directionalSignal, buildCrossAsset } from '../src/enrichment';
 
 // Raw Binance fapi shapes (as the /derivatives proxy returns them).
 const raw = {
@@ -61,5 +61,36 @@ describe('enrichment — DerivativesService + PositioningAnalyzer port', () => {
     expect(sp.cvdTrend).toBe('Rising');                                  // secondHalf >> firstHalf*1.2
     expect(sp.bookRatio).toBeCloseTo(8 / 10, 6);                         // 0.8
     expect(sp.bookLabel).toBe('Strong Bid Support');                     // >0.6
+  });
+
+  it('parseCoinInfo maps CoinGecko market_data → CoinInfo', () => {
+    const gecko = { market_data: {
+      ath_change_percentage: { usd: -12.34 },
+      price_change_percentage_24h: 1.5, price_change_percentage_7d: -3.2, price_change_percentage_30d: 8.7,
+    } };
+    const c = parseCoinInfo(gecko)!;
+    expect(c.athChangePercentage).toBeCloseTo(-12.34, 6);
+    expect(c.priceChangePercentage24h).toBeCloseTo(1.5, 6);
+    expect(c.priceChangePercentage7d).toBeCloseTo(-3.2, 6);
+    expect(c.priceChangePercentage30d).toBeCloseTo(8.7, 6);
+    expect(parseCoinInfo({})).toBeNull();
+  });
+
+  it('directionalSignal + buildCrossAsset mirror computeDirectionalSignal', () => {
+    // Rising series: price well above a rising EMA20 → signal +1, trend "up".
+    const rising = Array.from({ length: 30 }, (_, i) => 100 + i * 2);
+    const up = directionalSignal(rising);
+    expect(up.signal).toBe(1); expect(up.trend).toBe('up');
+    // Falling series → -1 / "down".
+    const falling = Array.from({ length: 30 }, (_, i) => 200 - i * 2);
+    const down = directionalSignal(falling);
+    expect(down.signal).toBe(-1); expect(down.trend).toBe('down');
+
+    // DXY rising (bearish for BTC → dxySignal -1) + SPY rising (risk-on → +1) → combined 0.
+    const ca = buildCrossAsset(rising, rising)!;
+    expect(ca.summary).toContain('DXY up (headwind)');     // DXY inverted
+    expect(ca.summary).toContain('SPY up (risk-on)');
+    expect(ca.summary).toContain('→ 0 for BTC');           // -1 + 1
+    expect(buildCrossAsset([1, 2, 3], rising)).toBeNull(); // <25 bars
   });
 });
