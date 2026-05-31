@@ -21,6 +21,7 @@ enum WorkerMLService {
         let q75: Double?                     // predicted q75 of fwdMaxFavR (ATR) → adaptive TP2
         let confident: Bool?                 // conformal abstention gate
         let metaDirection: Int?              // +1/-1/0 the meta head was conditioned on
+        let pUp: Double?                     // direction model: calibrated P(up in 24h)
     }
 
     enum FetchError: Error {
@@ -74,6 +75,7 @@ enum WorkerMLService {
             let q75: Double?
             let confident: Bool?
             let metaDirection: Int?
+            let pUp: Double?
         }
         guard let body = try? JSONDecoder().decode(Body.self, from: data) else {
             throw FetchError.decode
@@ -86,7 +88,8 @@ enum WorkerMLService {
             probabilityMeta: body.probabilityMeta,
             q75: body.q75,
             confident: body.confident,
-            metaDirection: body.metaDirection
+            metaDirection: body.metaDirection,
+            pUp: body.pUp
         )
     }
 }

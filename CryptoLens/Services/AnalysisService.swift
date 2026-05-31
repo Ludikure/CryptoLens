@@ -532,6 +532,7 @@ class AnalysisService: ObservableObject {
             tf1ML.mlQ75 = workerML?.q75
             tf1ML.mlConfident = workerML?.confident
             tf1ML.mlMetaDirection = workerML?.metaDirection
+            tf1ML.mlDirectionUp = workerML?.pUp
             #if DEBUG
             // Local feature dump for parity-vs-canonical investigations only. Constructed in
             // DEBUG builds so we can compare what the iOS live path would have produced vs
@@ -713,6 +714,7 @@ class AnalysisService: ObservableObject {
             tf1.mlQ75 = workerML2?.q75
             tf1.mlConfident = workerML2?.confident
             tf1.mlMetaDirection = workerML2?.metaDirection
+            tf1.mlDirectionUp = workerML2?.pUp
 
             // Candle staleness check: how old is the latest candle?
             if let latestCandle = tf3.candles.last {
