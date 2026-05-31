@@ -51,7 +51,7 @@ async function authedFetch(path: string, init: RequestInit = {}, retry = true): 
   return res;
 }
 
-import type { IndicatorsResponse, FullAnalysisResponse } from './types';
+import type { IndicatorsResponse, FullAnalysisResponse, DirectionAccuracy, MlCalibration } from './types';
 
 export async function getIndicators(symbol: string): Promise<IndicatorsResponse> {
   const res = await authedFetch(`/indicators?symbol=${encodeURIComponent(symbol)}`);
@@ -70,6 +70,18 @@ export async function runFullAnalysis(symbol: string): Promise<FullAnalysisRespo
     try { const e = await res.json(); if (e?.error) msg = e.error; } catch { /* ignore */ }
     throw new Error(msg);
   }
+  return res.json();
+}
+
+export async function getDirectionAccuracy(): Promise<DirectionAccuracy> {
+  const res = await authedFetch('/direction-accuracy');
+  if (!res.ok) throw new Error(`direction-accuracy failed (${res.status})`);
+  return res.json();
+}
+
+export async function getMlCalibration(): Promise<MlCalibration> {
+  const res = await authedFetch('/ml-calibration');
+  if (!res.ok) throw new Error(`ml-calibration failed (${res.status})`);
   return res.json();
 }
 

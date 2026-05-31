@@ -40,3 +40,21 @@ export interface FullAnalysisResponse {
   bias: { daily: string; fourH: string | null; oneH: string | null };
   error?: string;
 }
+
+// /direction-accuracy — live dual-gate direction-model track record (universe-wide, forward).
+export interface DirectionAccuracy {
+  overall: { resolved: number; correct?: number; accuracy: number | null; longs?: number; shorts?: number };
+  byConfidence: Array<{ band: string; n: number; accuracy: number }>;
+  byDirection: Array<{ predicted_dir: number; n: number; accuracy: number }>;
+  bySymbol: Array<{ symbol: string; n: number; correct: number; accuracy: number; longs: number; long_correct: number; shorts: number; short_correct: number }>;
+  pending: number;
+  recent: Array<{ symbol: string; fired_at: number; p_up: number; predicted_dir: number; ml_win: number; fwd_return: number; correct: number }>;
+  backtestBaseline: number;
+}
+
+// /ml-calibration — realized goodR rate by predicted-probability bucket (drift detector).
+export interface MlCalibration {
+  buckets: Array<{ bucket: string; n: number; predicted: number; realized: number }>;
+  resolved: number;
+  pending: number;
+}

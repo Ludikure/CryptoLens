@@ -5,6 +5,7 @@ import { ChartPanel } from './components/ChartPanel';
 import { SubPanels } from './components/SubPanels';
 import { IndicatorTable } from './components/IndicatorTable';
 import { AnalysisView } from './components/AnalysisView';
+import { Dashboard } from './components/Dashboard';
 import { formatPrice, pct, biasClass } from './format';
 
 const QUICK = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'AAPL', 'NVDA', 'TSLA'];
@@ -21,6 +22,7 @@ export function App() {
   const [anaErr, setAnaErr] = useState<string | null>(null);
   const [anaLoading, setAnaLoading] = useState(false);
   const [chartTF, setChartTF] = useState<TFKey>('daily');
+  const [view, setView] = useState<'markets' | 'scoreboard'>('markets');
 
   const load = useCallback(async (sym: string) => {
     setIndLoading(true); setIndErr(null); setAnalysis(null); setAnaErr(null);
@@ -51,12 +53,22 @@ export function App() {
     <div className="app">
       <header>
         <h1>MarketScope</h1>
-        <form onSubmit={submit} className="search">
-          <input value={input} onChange={e => setInput(e.target.value)} placeholder="Symbol (BTCUSDT, AAPL…)" spellCheck={false} />
-          <button type="submit">Load</button>
-        </form>
+        <nav className="views">
+          <button className={view === 'markets' ? 'on' : ''} onClick={() => setView('markets')}>Markets</button>
+          <button className={view === 'scoreboard' ? 'on' : ''} onClick={() => setView('scoreboard')}>Scoreboard</button>
+        </nav>
+        {view === 'markets' && (
+          <form onSubmit={submit} className="search">
+            <input value={input} onChange={e => setInput(e.target.value)} placeholder="Symbol (BTCUSDT, AAPL…)" spellCheck={false} />
+            <button type="submit">Load</button>
+          </form>
+        )}
       </header>
 
+      {view === 'scoreboard' && <Dashboard />}
+
+      {view === 'markets' && (
+      <>
       <div className="quick">
         {QUICK.map(s => <button key={s} className={s === symbol ? 'on' : ''} onClick={() => { setInput(s); setSymbol(s); }}>{s}</button>)}
       </div>
@@ -94,6 +106,8 @@ export function App() {
 
           {analysis && <AnalysisView result={analysis} />}
         </>
+      )}
+      </>
       )}
 
       <footer>Thin client over the MarketScope Worker — indicators, ML &amp; prompt all server-side.</footer>
