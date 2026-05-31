@@ -1040,8 +1040,15 @@ export default {
         const stateKey = `prompt:${symbol}`;
         let prevState: PromptState = {};
         try { const s = await env.ALERTS.get(stateKey); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh state */ }
+        // Position-sizing inputs from the client (web Settings / iOS). Coerced + bounded so
+        // the CANDIDATE SETUPS sizing uses the user's real risk budget instead of the $500 default.
+        const settings = {
+          accountSize: Number.isFinite(body.accountSize) && body.accountSize > 0 ? body.accountSize : undefined,
+          riskPercent: Number.isFinite(body.riskPercent) && body.riskPercent > 0 ? Math.min(body.riskPercent, 100) : undefined,
+          conformalGateEnabled: body.conformalGateEnabled === true,
+        };
         const { prompt, newState } = buildUserPrompt({
-          symbol, nowMs: Date.now(), indicators, outcomeHistory, prevState,
+          symbol, nowMs: Date.now(), indicators, outcomeHistory, prevState, settings,
           derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
         });
         try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }

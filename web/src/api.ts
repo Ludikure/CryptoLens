@@ -59,11 +59,11 @@ export async function getIndicators(symbol: string): Promise<IndicatorsResponse>
   return res.json();
 }
 
-export async function runFullAnalysis(symbol: string): Promise<FullAnalysisResponse> {
+export async function runFullAnalysis(symbol: string, opts?: { accountSize?: number; riskPercent?: number }): Promise<FullAnalysisResponse> {
   const res = await authedFetch('/full-analysis', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ symbol }),
+    body: JSON.stringify({ symbol, ...opts }),
   });
   if (!res.ok) {
     let msg = `analysis failed (${res.status})`;

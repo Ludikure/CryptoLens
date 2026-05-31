@@ -6,9 +6,10 @@ import { SubPanels } from './components/SubPanels';
 import { IndicatorTable } from './components/IndicatorTable';
 import { AnalysisView } from './components/AnalysisView';
 import { Dashboard } from './components/Dashboard';
+import { SettingsView } from './components/SettingsView';
+import { getSettings, getWatchlist, setWatchlist } from './settings';
 import { formatPrice, pct, biasClass } from './format';
 
-const QUICK = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'AAPL', 'NVDA', 'TSLA'];
 type TFKey = 'daily' | 'fourH' | 'oneH';
 const TF_LABELS: Record<TFKey, string> = { daily: 'Daily', fourH: '4H', oneH: '1H' };
 
@@ -22,7 +23,8 @@ export function App() {
   const [anaErr, setAnaErr] = useState<string | null>(null);
   const [anaLoading, setAnaLoading] = useState(false);
   const [chartTF, setChartTF] = useState<TFKey>('daily');
-  const [view, setView] = useState<'markets' | 'scoreboard'>('markets');
+  const [view, setView] = useState<'markets' | 'scoreboard' | 'settings'>('markets');
+  const [watchlist, setWatch] = useState<string[]>(() => getWatchlist());
 
   const load = useCallback(async (sym: string) => {
     setIndLoading(true); setIndErr(null); setAnalysis(null); setAnaErr(null);
@@ -39,10 +41,20 @@ export function App() {
 
   const analyze = async () => {
     setAnaLoading(true); setAnaErr(null);
-    try { setAnalysis(await runFullAnalysis(symbol)); }
+    try {
+      const s = getSettings();
+      setAnalysis(await runFullAnalysis(symbol, { accountSize: s.accountSize, riskPercent: s.riskPercent }));
+    }
     catch (e) { setAnaErr((e as Error).message); }
     finally { setAnaLoading(false); }
   };
+
+  const inWatchlist = watchlist.includes(symbol);
+  const toggleWatch = () => {
+    const next = inWatchlist ? watchlist.filter(s => s !== symbol) : [...watchlist, symbol];
+    setWatch(next); setWatchlist(next);
+  };
+  const removeFromWatch = (s: string) => { const next = watchlist.filter(x => x !== s); setWatch(next); setWatchlist(next); };
 
   const submit = (e: React.FormEvent) => { e.preventDefault(); const s = input.trim().toUpperCase(); if (s) setSymbol(s); };
   const daily = ind?.daily;
@@ -56,6 +68,7 @@ export function App() {
         <nav className="views">
           <button className={view === 'markets' ? 'on' : ''} onClick={() => setView('markets')}>Markets</button>
           <button className={view === 'scoreboard' ? 'on' : ''} onClick={() => setView('scoreboard')}>Scoreboard</button>
+          <button className={view === 'settings' ? 'on' : ''} onClick={() => setView('settings')}>Settings</button>
         </nav>
         {view === 'markets' && (
           <form onSubmit={submit} className="search">
@@ -66,11 +79,18 @@ export function App() {
       </header>
 
       {view === 'scoreboard' && <Dashboard />}
+      {view === 'settings' && <SettingsView />}
 
       {view === 'markets' && (
       <>
       <div className="quick">
-        {QUICK.map(s => <button key={s} className={s === symbol ? 'on' : ''} onClick={() => { setInput(s); setSymbol(s); }}>{s}</button>)}
+        {watchlist.map(s => (
+          <span key={s} className={`pill ${s === symbol ? 'on' : ''}`}>
+            <button className="pill-sym" onClick={() => { setInput(s); setSymbol(s); }}>{s}</button>
+            <button className="pill-x" title="Remove" onClick={() => removeFromWatch(s)}>×</button>
+          </span>
+        ))}
+        {!inWatchlist && <button className="pill-add" onClick={toggleWatch} title={`Add ${symbol}`}>+ {symbol}</button>}
       </div>
 
       {indLoading && <div className="status">Loading {symbol}…</div>}
