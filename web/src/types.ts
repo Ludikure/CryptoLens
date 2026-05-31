@@ -17,6 +17,9 @@ export interface IndicatorTF {
   atrPercentile: number | null; atrPercentileLabel: string | null;
   candles: Candle[];
   ema20Series: number[]; ema50Series: number[]; ema200Series: number[];
+  rsiSeries: number[]; stochKSeries: number[]; stochDSeries: number[];
+  macdHistSeries: number[]; macdLineSeries: number[]; macdSignalSeries: number[];
+  adxSeries: number[]; volumeRatioSeries: number[];
 }
 
 export interface IndicatorsResponse {

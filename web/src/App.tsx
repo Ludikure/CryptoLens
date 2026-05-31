@@ -2,11 +2,14 @@ import { useEffect, useState, useCallback } from 'react';
 import { getIndicators, runFullAnalysis } from './api';
 import type { IndicatorsResponse, FullAnalysisResponse } from './types';
 import { ChartPanel } from './components/ChartPanel';
+import { SubPanels } from './components/SubPanels';
 import { IndicatorTable } from './components/IndicatorTable';
 import { AnalysisView } from './components/AnalysisView';
 import { formatPrice, pct, biasClass } from './format';
 
 const QUICK = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'AAPL', 'NVDA', 'TSLA'];
+type TFKey = 'daily' | 'fourH' | 'oneH';
+const TF_LABELS: Record<TFKey, string> = { daily: 'Daily', fourH: '4H', oneH: '1H' };
 
 export function App() {
   const [symbol, setSymbol] = useState(() => localStorage.getItem('last_symbol') || 'BTCUSDT');
@@ -17,6 +20,7 @@ export function App() {
   const [analysis, setAnalysis] = useState<FullAnalysisResponse | null>(null);
   const [anaErr, setAnaErr] = useState<string | null>(null);
   const [anaLoading, setAnaLoading] = useState(false);
+  const [chartTF, setChartTF] = useState<TFKey>('daily');
 
   const load = useCallback(async (sym: string) => {
     setIndLoading(true); setIndErr(null); setAnalysis(null); setAnaErr(null);
@@ -40,6 +44,8 @@ export function App() {
 
   const submit = (e: React.FormEvent) => { e.preventDefault(); const s = input.trim().toUpperCase(); if (s) setSymbol(s); };
   const daily = ind?.daily;
+  const tfByKey: Record<TFKey, typeof daily | null | undefined> = { daily: ind?.daily, fourH: ind?.fourH, oneH: ind?.oneH };
+  const chartTf = tfByKey[chartTF] ?? ind?.daily ?? null;
 
   return (
     <div className="app">
@@ -68,7 +74,14 @@ export function App() {
             <div className="tag muted">{daily.bullPercent != null ? pct(daily.bullPercent - 50, 0) + ' tilt' : ''}</div>
           </div>
 
-          <ChartPanel tf={daily} setup={analysis?.setups?.[0] ?? null} />
+          <div className="tf-bar">
+            {(Object.keys(TF_LABELS) as TFKey[]).map(k => (
+              <button key={k} className={k === chartTF ? 'on' : ''} disabled={!tfByKey[k]} onClick={() => setChartTF(k)}>{TF_LABELS[k]}</button>
+            ))}
+          </div>
+
+          {chartTf && <ChartPanel tf={chartTf} setup={analysis?.setups?.[0] ?? null} />}
+          {chartTf && <SubPanels tf={chartTf} />}
 
           <IndicatorTable daily={daily} fourH={ind!.fourH} oneH={ind!.oneH} />
 

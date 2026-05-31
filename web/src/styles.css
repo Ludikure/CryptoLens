@@ -26,7 +26,17 @@ header h1 { font-size: 20px; margin: 0; letter-spacing: 0.5px; }
 .tag.muted, .muted { color: var(--muted); }
 .bull { color: var(--bull); } .bear { color: var(--bear); } .neutral { color: var(--muted); }
 
+.tf-bar { display: flex; gap: 6px; margin: 12px 0 6px; }
+.tf-bar button { background: var(--panel); border: 1px solid var(--line); color: var(--muted); padding: 4px 14px; border-radius: 7px; cursor: pointer; font-size: 13px; }
+.tf-bar button.on { border-color: var(--accent); color: var(--accent); }
+.tf-bar button:disabled { opacity: 0.4; cursor: default; }
+
 .chart { height: 360px; width: 100%; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+
+.subpanels { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.subpanel-row { position: relative; }
+.subpanel-label { position: absolute; top: 4px; left: 8px; z-index: 2; font-size: 11px; color: var(--muted); letter-spacing: 0.5px; pointer-events: none; }
+.subpanel { height: 120px; width: 100%; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 
 table.indicators { width: 100%; border-collapse: collapse; margin: 14px 0; }
 table.indicators th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 6px 8px; }
