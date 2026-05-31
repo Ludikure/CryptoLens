@@ -60,6 +60,13 @@ real**: swing levels hold +4.3pp vs random lines on both markets (so the *detect
 only the *strength scoring* was decoration). Acted on: neutralized prompt tags + removed the
 `entry_at_worn_level_4+_tests` conviction downgrade. Full write-up: [[strategy-levels]].
 
+## Volume as a level-strength signal — REJECTED
+`ml-training/volume_at_level.py` (daily OHLCV w/ volume). Neither formation volume (swing-bar
+vol vs avg) nor volume-at-price (volume-profile node) predicts hold/break: ±1-2pp across
+within-symbol terciles, non-monotonic, inconsistent sign (crypto high-formation-vol holds
+−2pp). The "high-volume node = strong S/R" thesis fails. SIXTH and final strength metric to
+fall — level strength is unrankable. [[strategy-levels]]
+
 ## Fibonacci ratios as special S/R — REJECTED (location artifact)
 `ml-training/level_validation_fib.py`. Fib levels hold +6.7pp (crypto) vs a far random line
 — but vs **random retracement ratios in the same leg** they win by **+0.1pp** (450k samples).

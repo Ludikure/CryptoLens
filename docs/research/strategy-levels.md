@@ -107,6 +107,30 @@ disproves naive snapping; casts doubt on snapping generally. Before any producti
 port the actual picker and A/B vs pure ATR — but the burden of proof is now on the picker.
 Relates to the flagged `levelStrength` weight (`AnalysisPrompt.swift:2156`).
 
+## Finding 7 — VOLUME doesn't predict level strength either (the capstone)
+`ml-training/volume_at_level.py` on freshly-fetched daily OHLCV with volume
+(`fetch_daily_volume.py` → Binance + Yahoo; data gitignored). Two volume notions, both the
+strongest-mechanism candidates for "level strength," within-symbol terciles:
+```
+CRYPTO (21k levels, base 90.7%)        STOCK (52k, base 87.3%)
+ formation vol  lo91.6 mid90.8 hi89.5   lo87.6 mid86.9 hi87.3   high−low -0.2pp
+                high−low -2.0pp
+ vol-at-price   lo89.7 mid91.4 hi90.9   lo87.8 mid87.0 hi86.9   high−low -0.9pp
+                high−low +1.1pp
+```
+Flat — ±1-2pp, non-monotonic, inconsistent sign. The volume-profile "high-volume node =
+strong S/R" thesis does not hold. **Six strength metrics now tested — test-count, flip,
+timeframe, Fib ratio, formation volume, volume-at-price — and NONE predict hold/break.**
+
+## The verdict on level "strength"
+Level *strength* as conventionally conceived in TA is a **myth in this data** — levels
+cannot be ranked by reliability. Only two things about S/R are real:
+1. Being an actual structure location beats random by +4-6pp (modest, consistent).
+2. For targets, do NOT snap to levels — it trades EV for win rate (Finding 6).
+Everything else (how many tests, flip, timeframe, Fib, volume) is noise.
+Caveat: strength tested vs the *binary* hold/break; not vs reaction magnitude or EV — but
+the binary is dead flat across all six metrics and bounce-magnitude splits were flat too.
+
 ## Actions taken (2026-05-31)
 - **Neutralized** the prompt strength tags in `AnalysisPrompt.swift`: `WORN_Nx_distrust` /
   `FRESH_1x_strongest_reaction` / `RECENT_Nx` → neutral `tested_Nx` fact; `FLIP_ROLE` kept

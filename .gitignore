@@ -19,3 +19,5 @@ ml-training/insider_history.json
 # OHLC caches for the setup-execution backtests — regeneratable via fetch_*_candles.py
 ml-training/stock_candles_4h.csv.gz
 ml-training/crypto_candles_4h.csv.gz
+ml-training/daily_candles_crypto.csv.gz
+ml-training/daily_candles_stock.csv.gz
