@@ -16,7 +16,16 @@ enum DirectionAccuracyService {
         let pending: Int            // logged but not yet 24h old
         let backtestBaseline: Double
         let byConfidence: [ConfidenceBand]
+        let longSide: SideStats?    // graded long signals (nil until at least one resolves)
+        let shortSide: SideStats?   // graded short signals
         let recent: [Signal]
+    }
+
+    /// Accuracy of one predicted side, graded independently. Directional models can be
+    /// lopsided (one side near-perfect, the other near chance) — pooling hides that.
+    struct SideStats {
+        let n: Int
+        let accuracy: Double
     }
 
     struct ConfidenceBand: Identifiable {
@@ -52,17 +61,24 @@ enum DirectionAccuracyService {
         struct Body: Decodable {
             struct Overall: Decodable { let resolved: Int?; let accuracy: Double?; let longs: Int?; let shorts: Int? }
             struct Band: Decodable { let band: String; let n: Int; let accuracy: Double? }
+            struct Dir: Decodable { let predicted_dir: Int; let n: Int; let accuracy: Double? }
             struct Recent: Decodable {
                 let symbol: String; let fired_at: Double; let p_up: Double
                 let predicted_dir: Int; let ml_win: Double; let fwd_return: Double?; let correct: Int?
             }
             let overall: Overall
             let byConfidence: [Band]
+            let byDirection: [Dir]?
             let pending: Int
             let recent: [Recent]
             let backtestBaseline: Double
         }
         guard let body = try? JSONDecoder().decode(Body.self, from: data) else { return nil }
+
+        func side(_ dir: Int) -> SideStats? {
+            guard let d = body.byDirection?.first(where: { $0.predicted_dir == dir }) else { return nil }
+            return SideStats(n: d.n, accuracy: d.accuracy ?? 0)
+        }
 
         return Report(
             resolved: body.overall.resolved ?? 0,
@@ -74,6 +90,8 @@ enum DirectionAccuracyService {
             byConfidence: body.byConfidence.map {
                 ConfidenceBand(band: $0.band, n: $0.n, accuracy: $0.accuracy ?? 0)
             },
+            longSide: side(1),
+            shortSide: side(-1),
             recent: body.recent.map {
                 Signal(symbol: $0.symbol,
                        firedAt: Date(timeIntervalSince1970: $0.fired_at / 1000),

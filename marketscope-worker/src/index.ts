@@ -1382,6 +1382,14 @@ export default {
           FROM direction_signals WHERE resolved = 1
           GROUP BY band ORDER BY band DESC
         `).all();
+        // Accuracy split by predicted side. Directional models are often asymmetric
+        // (e.g. shorts harder than longs in an up-drifting regime), and the holdout was
+        // short-skewed — so pooled accuracy can mask a weak side. -1 = short, +1 = long.
+        const byDirection = await env.DB.prepare(`
+          SELECT predicted_dir, COUNT(*) as n, AVG(correct) * 100 as accuracy
+          FROM direction_signals WHERE resolved = 1
+          GROUP BY predicted_dir
+        `).all();
         const pending = await env.DB.prepare(
           'SELECT COUNT(*) as n FROM direction_signals WHERE resolved = 0'
         ).first();
@@ -1393,13 +1401,14 @@ export default {
         return json({
           overall: overall ?? { resolved: 0, correct: 0, accuracy: null, longs: 0, shorts: 0 },
           byConfidence: byConfidence.results ?? [],
+          byDirection: byDirection.results ?? [],
           pending: (pending?.n as number) ?? 0,
           recent: recent.results ?? [],
           backtestBaseline: 94.7,   // frozen-holdout dual-gate accuracy for reference
         });
       } catch (e) {
         // Table not created yet (no cron has fired a signal) — return an empty shell.
-        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], pending: 0, recent: [], backtestBaseline: 94.7 });
+        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], byDirection: [], pending: 0, recent: [], backtestBaseline: 94.7 });
       }
     }
 

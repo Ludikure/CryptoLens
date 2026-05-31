@@ -152,7 +152,10 @@ struct OutcomeDashboardView: View {
             } else {
                 statRow("Live Accuracy", value: "pending", color: .secondary)
             }
-            statRow("Long / Short", value: "\(dir.longs) / \(dir.shorts)")
+            // Per-side accuracy — graded longs vs shorts separately. Shows "pending"
+            // until at least one signal on that side resolves.
+            sideRow("Long", dir.longSide)
+            sideRow("Short", dir.shortSide)
             if dir.pending > 0 {
                 statRow("Awaiting 24h grade", value: "\(dir.pending)", color: .blue)
             }
@@ -171,7 +174,25 @@ struct OutcomeDashboardView: View {
         } header: {
             Text("Direction Model — Live (crypto)")
         } footer: {
-            Text("Every dual-gate signal (ML Win ≥70% + direction model ≥70% confident) logged across all crypto symbols and graded on the realized 24h direction. Forward, out-of-sample — pre-cost, like the backtest. Builds up over time.")
+            Text("Every dual-gate signal (ML Win ≥70% + direction model ≥70% confident) logged across all crypto symbols and graded on the realized 24h direction. Long and short tracked separately. Forward, out-of-sample — pre-cost, like the backtest. Builds up over time.")
+        }
+    }
+
+    // One per-side accuracy row. "pending" until a signal on that side is graded.
+    @ViewBuilder
+    private func sideRow(_ label: String, _ side: DirectionAccuracyService.SideStats?) -> some View {
+        if let s = side, s.n > 0 {
+            HStack {
+                Text(label).foregroundStyle(.secondary)
+                Spacer()
+                Text(String(format: "%.0f%%", s.accuracy))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(s.accuracy >= 70 ? .green : s.accuracy >= 55 ? .orange : .red)
+                Text("(n=\(s.n))").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .font(.subheadline)
+        } else {
+            statRow(label, value: "pending", color: .secondary)
         }
     }
 
