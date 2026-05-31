@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { createChart, ColorType, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts';
+import { createChart, ColorType, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp } from 'lightweight-charts';
 import type { IndicatorTF, TradeSetup } from '../types';
 
 // Candlestick chart with EMA overlays + S/R and setup price lines. The hard pan/zoom/crosshair
@@ -8,13 +8,18 @@ export function ChartPanel({ tf, setup }: { tf: IndicatorTF; setup?: TradeSetup 
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  // Track per-render artifacts so we can tear them down imperatively before re-adding. Relying on
+  // effect-cleanup timing left the *previous* symbol's S/R price lines on the series, which pinned
+  // the auto-scale to (e.g.) BTC's ~$74k range — so ETH's ~$2k candles rendered off-screen.
+  const overlaysRef = useRef<ISeriesApi<'Line'>[]>([]);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
 
   useEffect(() => {
     if (!ref.current) return;
     const chart = createChart(ref.current, {
       layout: { background: { type: ColorType.Solid, color: '#0b0e14' }, textColor: '#9aa4b2' },
       grid: { vertLines: { color: '#1c2230' }, horzLines: { color: '#1c2230' } },
-      rightPriceScale: { borderColor: '#1c2230' },
+      rightPriceScale: { borderColor: '#1c2230', autoScale: true },
       timeScale: { borderColor: '#1c2230', timeVisible: true },
       crosshair: { mode: 0 },
       autoSize: true,
@@ -24,29 +29,36 @@ export function ChartPanel({ tf, setup }: { tf: IndicatorTF; setup?: TradeSetup 
       upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
       wickUpColor: '#26a69a', wickDownColor: '#ef5350',
     });
-    return () => { chart.remove(); chartRef.current = null; candleRef.current = null; };
+    return () => { chart.remove(); chartRef.current = null; candleRef.current = null; overlaysRef.current = []; priceLinesRef.current = []; };
   }, []);
 
   useEffect(() => {
     const chart = chartRef.current, candle = candleRef.current;
     if (!chart || !candle) return;
 
+    // Tear down the previous symbol's overlays + price lines FIRST (imperative, not via cleanup).
+    priceLinesRef.current.forEach(pl => { try { candle.removePriceLine(pl); } catch { /* gone */ } });
+    overlaysRef.current.forEach(o => { try { chart.removeSeries(o); } catch { /* gone */ } });
+    priceLinesRef.current = [];
+    overlaysRef.current = [];
+
     const data = tf.candles
       .map(c => ({ time: Math.floor(c.time / 1000) as UTCTimestamp, open: c.open, high: c.high, low: c.low, close: c.close }))
       .sort((a, b) => a.time - b.time);
     candle.setData(data);
+    if (!data.length) return;
 
     // EMA overlays aligned to the right edge of the candle window.
-    const overlays: ISeriesApi<'Line'>[] = [];
     const addEMA = (series: number[], color: string) => {
       if (!series?.length) return;
       const slice = series.slice(-data.length);
-      const pts = slice.map((v, i) => ({ time: data[data.length - slice.length + i].time, value: v }))
+      const pts = slice
+        .map((v, i) => ({ time: data[data.length - slice.length + i].time, value: v }))
         .filter(p => p.value != null && !isNaN(p.value));
       if (!pts.length) return;
       const ls = chart.addLineSeries({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
       ls.setData(pts);
-      overlays.push(ls);
+      overlaysRef.current.push(ls);
     };
     addEMA(tf.ema20Series, '#5b8def');
     addEMA(tf.ema50Series, '#f0a020');
@@ -63,10 +75,13 @@ export function ChartPanel({ tf, setup }: { tf: IndicatorTF; setup?: TradeSetup 
       lines.push({ price: setup.tp1, color: '#26a69a', title: 'TP1' });
       if (setup.tp2 != null) lines.push({ price: setup.tp2, color: '#26a69a', title: 'TP2' });
     }
-    const priceLines = lines.map(l => candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: l.title }));
-    chart.timeScale().fitContent();
+    for (const l of lines) {
+      priceLinesRef.current.push(candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: l.title }));
+    }
 
-    return () => { priceLines.forEach(pl => candle.removePriceLine(pl)); overlays.forEach(o => chart.removeSeries(o)); };
+    // Force a fresh fit on both axes so a new symbol's range is shown, not the prior scale.
+    chart.timeScale().fitContent();
+    chart.priceScale('right').applyOptions({ autoScale: true });
   }, [tf, setup]);
 
   return <div className="chart" ref={ref} />;
