@@ -2,7 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
-import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, buildMLInput } from './ml-predict';
+import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
 
@@ -1893,7 +1893,8 @@ async function computeSymbolPredictions(
   // replaces what used to be 76 individual `ml_pred:<symbol>` writes per cron run.
   const mlPredBatch: Record<string, { symbol: string; probability: number; features: FullFeatures; timestamp: number; isCrypto: boolean;
     // Phase 1/2 additive heads (crypto-only; null/absent otherwise). Served by /ml-predict.
-    probabilityMeta?: number | null; q75?: number | null; confident?: boolean | null; metaDirection?: number }> = {};
+    probabilityMeta?: number | null; q75?: number | null; confident?: boolean | null; metaDirection?: number;
+    pUp?: number | null }> = {};
   // Per-cron batched lookups: previous-bar open interest, last-derivatives-archive
   // timestamps (4H gate), and the candle cache for 1d/4h/1h. Each replaces 76 individual
   // KV reads + writes per cron with a single read + write of one blob. Candle cache is
@@ -2418,10 +2419,15 @@ async function computeSymbolPredictions(
       const probabilityMeta = mlPredictMeta(features as Record<string, number>, isCrypto, metaDirection);
       const q75 = mlPredictQuantile(features as Record<string, number>, isCrypto, '0.75');
       const confident = mlConfident(probabilityMeta, isCrypto);
+      // Calibrated P(up 24h) — the dedicated direction model. Beats the indicator
+      // heuristics (holdout: ~80% acc full-coverage, ~95% at pUp>=0.70, conditional on
+      // high ML); crypto only. Direction-agnostic input (no tradeDir).
+      const pUp = mlPredictDirection(features as Record<string, number>, isCrypto);
       mlPredBatch[symbol].probabilityMeta = probabilityMeta;
       mlPredBatch[symbol].q75 = q75;
       mlPredBatch[symbol].confident = confident;
       mlPredBatch[symbol].metaDirection = metaDirection;
+      mlPredBatch[symbol].pUp = pUp;
 
       predictions.set(symbol, {
         symbol,

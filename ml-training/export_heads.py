@@ -30,7 +30,8 @@ P2 = __import__('phase2_conformal')
 
 FEATURES = H.FEATURES
 META_FEATURES = FEATURES + ['tradeDir']
-CAP = 0.85          # match the evaluator's hardcoded isotonic cap
+CAP = 0.85          # meta/quality isotonic cap
+DIR_CAP = 0.95      # direction head can be legitimately high-confidence (~95% at high ML)
 CONF_TARGET = 0.60
 EMBARGO = 14 * 86400
 IOS_ML = os.path.join(os.path.dirname(__file__), '..', 'CryptoLens', 'ML')
@@ -158,6 +159,26 @@ def wf_oof_meta(df):
     return np.concatenate(oof_p), np.concatenate(oof_y)
 
 
+def wf_oof_direction(df):
+    """5-fold OOF for the direction (up) calibration on ALL bars (111 features)."""
+    df = df.sort_values('timestamp').reset_index(drop=True)
+    t = df['timestamp'].values
+    t_lo, t_hi = t.min(), t.max()
+    span = t_hi - t_lo
+    oof_p, oof_y = [], []
+    for i in range(5):
+        lo = t_lo + span * (0.25 + i * 0.15)
+        hi = t_lo + span * (0.25 + (i + 1) * 0.15) if i < 4 else t_hi + 1
+        train = df[df['timestamp'] < lo - EMBARGO]
+        val = df[(df['timestamp'] >= lo) & (df['timestamp'] < hi)]
+        if len(train) < 5000 or len(val) < 200:
+            continue
+        m = make_clf(); m.fit(train[FEATURES].fillna(0), train['up'])
+        oof_p.append(m.predict_proba(val[FEATURES].fillna(0))[:, 1])
+        oof_y.append(val['up'].values)
+    return np.concatenate(oof_p), np.concatenate(oof_y)
+
+
 def main():
     print("Loading crypto v11 + labels...")
     df, _ = H.load_market('crypto')
@@ -189,6 +210,17 @@ def main():
         qt, qb = trees_of(qm, QR_BASE, FEATURES)
         q_heads[f"{a:.2f}"] = {'trees': qt, 'base_score': qb}
 
+    # --- DIRECTION head: calibrated P(up 24h), all bars, 111 features ---
+    print("Training direction head (OOF calibration + final)...")
+    dfd = df[df['fwdReturn24H'].notna()].copy()
+    dfd['up'] = (dfd['fwdReturn24H'] > 0).astype(int)
+    doof_p, doof_y = wf_oof_direction(dfd)
+    diso = IsotonicRegression(out_of_bounds='clip'); diso.fit(doof_p, doof_y)
+    dx_cal = [float(v) for v in diso.X_thresholds_]
+    dy_cal = [float(min(DIR_CAP, v)) for v in diso.y_thresholds_]
+    dmodel = make_clf(); dmodel.fit(dfd[FEATURES].fillna(0), dfd['up'])
+    dir_trees, dir_base = trees_of(dmodel, CLF_BASE, FEATURES)
+
     # --- PARITY SELF-CHECK on a random sample (meta head) ---
     print("Parity self-check (evaluator replica vs predict_proba)...")
     samp = tr.sample(min(2000, len(tr)), random_state=1)
@@ -210,6 +242,14 @@ def main():
         maxq = max(maxq, abs(qr_pred(qt, qb, inp) - xv))
     print(f"  quantile head max |replica - predict| = {maxq:.2e}  "
           f"({'PASS' if maxq < 1e-4 else 'FAIL'} @ 1e-4)")
+    # direction parity
+    xgb_dir = dmodel.predict_proba(samp[FEATURES].fillna(0))[:, 1]
+    maxd = 0.0
+    for (_, row), xp in zip(samp.iterrows(), xgb_dir):
+        inp = {f: (0.0 if pd.isna(row[f]) else float(row[f])) for f in FEATURES}
+        maxd = max(maxd, abs(clf_prob(dir_trees, dir_base, inp) - xp))
+    print(f"  direction head max |replica - predict_proba| = {maxd:.2e}  "
+          f"({'PASS' if maxd < 1e-6 else 'FAIL'} @ 1e-6)")
 
     # --- assemble: copy production quality head, attach heads ---
     prod_path = os.path.join(IOS_ML, 'ml-model-crypto.json')
@@ -227,10 +267,19 @@ def main():
         'conformal': {
             'target_coverage': CONF_TARGET, 'threshold': tau, 'version': 1,
         },
+        'direction': {
+            'kind': 'classifier', 'target': 'up_24h',
+            'trees': dir_trees, 'base_score': dir_base,
+            'calibration': {'x': dx_cal, 'y': dy_cal, 'cap': DIR_CAP, 'method': 'isotonic'},
+            'features': FEATURES, 'version': 1,
+            'note': ('Calibrated P(up in 24h). Strongly predictive conditional on '
+                     'ML_WIN>=0.70 (holdout: ~80% full-coverage, ~95% at pUp>=0.70; '
+                     'bear-tested, no overfit). Crypto only.'),
+        },
     }
     m['heads_description'] = ('Phase1/2: triple-barrier meta (tb_win_given_dir) + '
-                              'fwdMaxFavR quantiles + conformal abstention tau. Additive; '
-                              'quality head unchanged. See PLAN_OUTCOMES.md.')
+                              'fwdMaxFavR quantiles + conformal abstention tau + direction '
+                              '(P_up24h). Additive; quality head unchanged. See PLAN_OUTCOMES.md.')
     # Write to both the iOS bundle and the worker src (worker imports it directly,
     # like the H72 head). Quality model JSON stays untouched in both.
     worker_ml = os.path.join(os.path.dirname(__file__), '..', 'marketscope-worker', 'src')

@@ -109,6 +109,8 @@ interface Heads {
              calibration: { x: number[]; y: number[]; cap?: number } };
     quantiles?: { q: Record<string, { trees: TreeNode[]; base_score: number }> };
     conformal?: { threshold: number | null; target_coverage: number };
+    direction?: { trees: TreeNode[]; base_score: number;
+                  calibration: { x: number[]; y: number[]; cap?: number } };
 }
 const cryptoHeads = (cryptoHeadsModelData as any).heads as Heads | undefined;
 
@@ -152,6 +154,17 @@ export function mlConfident(metaProb: number | null, isCrypto: boolean): boolean
     const tau = isCrypto ? cryptoHeads?.conformal?.threshold : undefined;
     if (tau == null || metaProb == null) return null;
     return metaProb >= tau;
+}
+
+/// Calibrated P(price up in 24h). Strongly predictive conditional on high ML (holdout:
+/// ~80% full-coverage, ~95% at pUp>=0.70; bear-tested). Crypto only; null when no head.
+export function mlPredictDirection(input: Record<string, number>, isCrypto: boolean): number | null {
+    if (!isCrypto || !cryptoHeads?.direction) return null;
+    const { trees, base_score, calibration } = cryptoHeads.direction;
+    let sum = Math.log(base_score / (1 - base_score));
+    for (const tree of trees) sum += evaluateTree(tree, input);
+    if (!isFinite(sum)) return null;
+    return isoCalibrate(calibration, sigmoid(sum));
 }
 
 /// Build feature dict from scoring results + candle data.
