@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { systemPrompt, classifyArchetype, useTighterBands, parseSetups } from '../src/prompt';
+import { systemPrompt, classifyArchetype, useTighterBands, parseSetups, formatPrice } from '../src/prompt';
 
 describe('prompt.ts (AnalysisPrompt port)', () => {
   it('systemPrompt returns the byte-extracted text per market', () => {
@@ -37,5 +37,12 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(s[0].tp2).toBe(69000);
     expect(parseSetups('no json here []')).toEqual([]);
     expect(parseSetups('```json\n[]\n```')).toEqual([]);
+  });
+
+  it('formatPrice matches iOS Formatters.formatPrice', () => {
+    expect(formatPrice(73884.38)).toBe('$73,884.38');
+    expect(formatPrice(2.5)).toBe('$2.50');
+    expect(formatPrice(0.4263)).toBe('$0.4263');
+    expect(formatPrice(0.0000123)).toBe('$0.000012');
   });
 });
