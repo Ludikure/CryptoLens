@@ -6,6 +6,7 @@ struct OutcomeDashboardView: View {
     @State private var stats: OutcomeStats?
     @State private var liveSetups: [TrackedSetup] = []
     @State private var versionComparison: [String: VersionStats] = [:]
+    @State private var directionReport: DirectionAccuracyService.Report?
 
     var body: some View {
         List {
@@ -21,6 +22,13 @@ struct OutcomeDashboardView: View {
                             }
                         }
                     }
+                }
+
+                // Live forward track record of the dual-gate direction model (crypto).
+                // Worker-logged across the whole universe, graded 24h later — the
+                // out-of-sample test of the backtest's ~94.7%.
+                if let dir = directionReport, (dir.resolved > 0 || dir.pending > 0) {
+                    directionSection(dir)
                 }
 
                 // A/B comparison — baseline vs treatment slice of the same archive
@@ -102,11 +110,13 @@ struct OutcomeDashboardView: View {
             stats = OutcomeTracker.stats()
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
+            directionReport = await DirectionAccuracyService.fetch()
         }
         .refreshable {
             stats = OutcomeTracker.stats()
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
+            directionReport = await DirectionAccuracyService.fetch()
         }
         .toolbar {
             if let s = stats {
@@ -119,6 +129,49 @@ struct OutcomeDashboardView: View {
                     ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
                 }
             }
+        }
+    }
+
+    // MARK: - Direction model live track record
+
+    @ViewBuilder
+    private func directionSection(_ dir: DirectionAccuracyService.Report) -> some View {
+        Section {
+            if let acc = dir.accuracy, dir.resolved > 0 {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Live Accuracy").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(String(format: "%.0f%%", acc))
+                        .font(.title3).fontWeight(.bold)
+                        .foregroundStyle(acc >= 70 ? .green : acc >= 55 ? .orange : .red)
+                    Text("vs \(String(format: "%.0f%%", dir.backtestBaseline)) backtest")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                .font(.subheadline)
+                statRow("Graded signals", value: "\(dir.resolved)")
+            } else {
+                statRow("Live Accuracy", value: "pending", color: .secondary)
+            }
+            statRow("Long / Short", value: "\(dir.longs) / \(dir.shorts)")
+            if dir.pending > 0 {
+                statRow("Awaiting 24h grade", value: "\(dir.pending)", color: .blue)
+            }
+
+            // Accuracy by the model's own confidence band — does higher conviction
+            // actually mean higher accuracy live, the way it does in the backtest?
+            ForEach(dir.byConfidence.filter { $0.n > 0 }) { band in
+                HStack {
+                    Text("  pUp \(band.band)").font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(String(format: "%.0f%% (n=%d)", band.accuracy, band.n))
+                        .font(.caption2)
+                        .foregroundStyle(band.accuracy >= 70 ? .green : .secondary)
+                }
+            }
+        } header: {
+            Text("Direction Model — Live (crypto)")
+        } footer: {
+            Text("Every dual-gate signal (ML Win ≥70% + direction model ≥70% confident) logged across all crypto symbols and graded on the realized 24h direction. Forward, out-of-sample — pre-cost, like the backtest. Builds up over time.")
         }
     }
 

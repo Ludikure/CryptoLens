@@ -1355,6 +1355,54 @@ export default {
       return json({ bySymbol: summary.results, overall });
     }
 
+    // Live forward track record for the dual-gate direction model. Universe-wide (not
+    // per-device) — these signals are logged by the cron across all crypto symbols and
+    // graded 24h later. This is the number that tells us whether the backtest's ~94%
+    // holds out-of-sample. See logDirectionSignals/resolveDirectionSignals.
+    if (path === '/direction-accuracy' && request.method === 'GET') {
+      try {
+        const overall = await env.DB.prepare(`
+          SELECT
+            COUNT(*) as resolved,
+            SUM(correct) as correct,
+            AVG(correct) * 100 as accuracy,
+            SUM(CASE WHEN predicted_dir = 1 THEN 1 ELSE 0 END) as longs,
+            SUM(CASE WHEN predicted_dir = -1 THEN 1 ELSE 0 END) as shorts
+          FROM direction_signals WHERE resolved = 1
+        `).first();
+        const byConfidence = await env.DB.prepare(`
+          SELECT
+            CASE
+              WHEN p_up >= 0.90 OR p_up <= 0.10 THEN '90+'
+              WHEN p_up >= 0.80 OR p_up <= 0.20 THEN '80-90'
+              ELSE '70-80'
+            END as band,
+            COUNT(*) as n,
+            AVG(correct) * 100 as accuracy
+          FROM direction_signals WHERE resolved = 1
+          GROUP BY band ORDER BY band DESC
+        `).all();
+        const pending = await env.DB.prepare(
+          'SELECT COUNT(*) as n FROM direction_signals WHERE resolved = 0'
+        ).first();
+        const recent = await env.DB.prepare(`
+          SELECT symbol, fired_at, p_up, predicted_dir, ml_win, fwd_return, correct
+          FROM direction_signals WHERE resolved = 1
+          ORDER BY resolve_at DESC LIMIT 20
+        `).all();
+        return json({
+          overall: overall ?? { resolved: 0, correct: 0, accuracy: null, longs: 0, shorts: 0 },
+          byConfidence: byConfidence.results ?? [],
+          pending: (pending?.n as number) ?? 0,
+          recent: recent.results ?? [],
+          backtestBaseline: 94.7,   // frozen-holdout dual-gate accuracy for reference
+        });
+      } catch (e) {
+        // Table not created yet (no cron has fired a signal) — return an empty shell.
+        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], pending: 0, recent: [], backtestBaseline: 94.7 });
+      }
+    }
+
     return json({ error: 'Not found' }, 404);
   },
 
@@ -1803,6 +1851,10 @@ interface SymbolPrediction {
   // ATR in price units (atrPercent × close / 100), used to define the entry-zone width
   // (default 0.3 × ATR around the entry price).
   atrPrice: number;
+  // Calibrated P(up 24h) from the crypto direction head (null for stocks — no model).
+  // Carried here so the dual-gate live-validation logger (logDirectionSignals) can read
+  // it alongside mlProb + crossed without re-reading the KV blob.
+  pUp: number | null;
 }
 
 /// Combine daily + 4H bias labels into the alignment string. Mirrors
@@ -1864,12 +1916,134 @@ async function checkAllDeviceScores(env: Env) {
 
   const predictions = await computeSymbolPredictions(env, allSymbols);
 
+  // Live validation of the dual-gate direction claim ("~94% directional accuracy
+  // when ML Win >= 70% AND the direction model is >= 70% confident"). Independent of
+  // the LLM/setup path — this logs the raw model signal at fire time and grades it
+  // 24h later against the realized forward price, accumulating a forward, out-of-sample
+  // track record across the whole crypto universe. Both calls are fault-isolated so a
+  // schema hiccup never blocks notifications.
+  try {
+    await resolveDirectionSignals(env, predictions);
+    await logDirectionSignals(env, predictions);
+  } catch (e) {
+    console.log(`[dirsignal] error: ${e}`);
+  }
+
   for (const [deviceId, watchlist] of watchlistsByDevice) {
     try {
       await processDeviceNotifications(env, deviceId, watchlist, predictions);
     } catch (e) {
       console.log(`[score] device ${deviceId} error: ${e}`);
     }
+  }
+}
+
+// ─── Dual-gate direction live-validation ──────────────────────────────────────
+// The crypto direction head claims ~94% directional accuracy at high confidence on
+// the frozen backtest holdout. These two passes turn that into a *live*, forward
+// track record so we can see whether it holds out-of-sample (and net of nothing —
+// this measures the raw 24h direction sign, the same quantity the backtest measured).
+
+const DIR_SIGNAL_HORIZON_MS = 24 * 3600 * 1000;  // grade 24h after firing
+const DIR_PUP_GATE = 0.70;                        // |conviction| threshold (>=.70 long / <=.30 short)
+const DIR_MODEL_VERSION = 'crypto-dir-1';
+
+let dirTableReady = false;
+async function ensureDirectionSignalsTable(env: Env) {
+  if (dirTableReady) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS direction_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    fired_at INTEGER NOT NULL,
+    entry_price REAL NOT NULL,
+    ml_win REAL NOT NULL,
+    p_up REAL NOT NULL,
+    predicted_dir INTEGER NOT NULL,
+    model_version TEXT NOT NULL,
+    is_crypto INTEGER NOT NULL,
+    resolve_at INTEGER NOT NULL,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    exit_price REAL,
+    fwd_return REAL,
+    actual_dir INTEGER,
+    correct INTEGER
+  )`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_dirsig_unresolved ON direction_signals(resolved, resolve_at)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_dirsig_symbol ON direction_signals(symbol, fired_at DESC)`).run();
+  dirTableReady = true;
+}
+
+// Log a new signal whenever the dual gate fires on a rising ML edge. Deduped: at most
+// one *open* (unresolved) signal per symbol at a time, so a symbol whose ML chatters
+// across 0.70 doesn't spam overlapping rows for the same move.
+async function logDirectionSignals(env: Env, predictions: Map<string, SymbolPrediction>) {
+  await ensureDirectionSignalsTable(env);
+  const now = Date.now();
+
+  const fired: SymbolPrediction[] = [];
+  for (const pred of predictions.values()) {
+    if (!pred.crossed) continue;                       // rising edge through ML 0.70
+    if (pred.pUp == null) continue;                    // crypto-only (direction model)
+    if (pred.last4HClose <= 0) continue;
+    const confident = pred.pUp >= DIR_PUP_GATE || pred.pUp <= 1 - DIR_PUP_GATE;
+    if (!confident) continue;                          // direction model must commit
+    fired.push(pred);
+  }
+  if (!fired.length) return;
+
+  // Skip symbols that already have an open signal (dedupe overlapping crosses).
+  const openRows = await env.DB.prepare(
+    'SELECT DISTINCT symbol FROM direction_signals WHERE resolved = 0'
+  ).all();
+  const open = new Set((openRows.results || []).map(r => r.symbol as string));
+
+  const inserts = [];
+  for (const p of fired) {
+    if (open.has(p.symbol)) continue;
+    const dir = p.pUp! >= DIR_PUP_GATE ? 1 : -1;
+    inserts.push(env.DB.prepare(
+      `INSERT INTO direction_signals
+        (symbol, fired_at, entry_price, ml_win, p_up, predicted_dir, model_version, is_crypto, resolve_at, resolved)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+    ).bind(p.symbol, now, p.last4HClose, p.mlProb, p.pUp, dir, DIR_MODEL_VERSION,
+           p.isCrypto ? 1 : 0, now + DIR_SIGNAL_HORIZON_MS));
+  }
+  if (inserts.length) {
+    await env.DB.batch(inserts);
+    console.log(`[dirsignal] logged ${inserts.length} new dual-gate signal(s)`);
+  }
+}
+
+// Grade every signal whose 24h horizon has elapsed against the current price.
+// fwd_return = exit/entry - 1; correct = predicted_dir matches the realized sign.
+// Uses the live price from this cron's predictions (the symbol is in ARCHIVE_CRYPTO so
+// it's always recomputed); rows whose symbol is absent this cron are simply graded on
+// the next cron that has it.
+async function resolveDirectionSignals(env: Env, predictions: Map<string, SymbolPrediction>) {
+  await ensureDirectionSignalsTable(env);
+  const now = Date.now();
+  const due = await env.DB.prepare(
+    'SELECT id, symbol, entry_price, predicted_dir FROM direction_signals WHERE resolved = 0 AND resolve_at <= ? LIMIT 200'
+  ).bind(now).all();
+  if (!due.results || !due.results.length) return;
+
+  const updates = [];
+  for (const row of due.results) {
+    const symbol = row.symbol as string;
+    const pred = predictions.get(symbol);
+    if (!pred || pred.last4HClose <= 0) continue;       // no price this cron — grade later
+    const entry = row.entry_price as number;
+    const exit = pred.last4HClose;
+    const fwd = exit / entry - 1;
+    const actualDir = fwd > 0 ? 1 : (fwd < 0 ? -1 : 0);
+    const correct = actualDir === (row.predicted_dir as number) ? 1 : 0;
+    updates.push(env.DB.prepare(
+      'UPDATE direction_signals SET resolved = 1, exit_price = ?, fwd_return = ?, actual_dir = ?, correct = ? WHERE id = ?'
+    ).bind(exit, fwd, actualDir, correct, row.id as number));
+  }
+  if (updates.length) {
+    await env.DB.batch(updates);
+    console.log(`[dirsignal] resolved ${updates.length} signal(s)`);
   }
 }
 
@@ -2441,6 +2615,7 @@ async function computeSymbolPredictions(
         last4HLow,
         last4HClose,
         atrPrice,
+        pUp,
       });
     } catch (e) {
       console.log(`[score] ${symbol} error: ${e}`);

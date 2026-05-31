@@ -78,6 +78,7 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 | `/candles/crypto` | GET | none (public) | Crypto candles (variable TTL) |
 | `/sentiment` | GET | none (public) | Fear & Greed proxy (cached 10min) |
 | `/darkpool?symbol=…` | GET | none (IP rate-limited 60/min) | FINRA dark pool ratio + Z-score |
+| `/direction-accuracy` | GET | required | Live forward track record of the dual-gate direction model (universe-wide, not per-device). Overall accuracy + by-confidence-band + recent graded signals + pending count. Reads `direction_signals` D1 |
 | `/debug/features` | GET | required | Read `debug:<sym>_features` KV for parity investigation |
 | `/debug/backfill-derivatives` | POST | required (X-App-ID gated) | One-off derivatives backfill from Binance to D1 |
 
@@ -105,6 +106,7 @@ Migrations under `marketscope-worker/migrations/*.sql`. **Note:** Some columns a
 | `short_interest_history` | 004 | symbol+date PK, short_volume, total_volume, short_ratio, short_zscore | `idx_short_lookup(symbol, date DESC)` |
 | `notif_claims` | 005 | push_token+symbol PK, expires_at | `idx_notif_claims_expires(expires_at)` |
 | `pending_setups` | OOB (lazy `CREATE IF NOT EXISTS` at `index.ts:219`) | id PK, device_id, symbol, direction, entry, atr, ml_at_registration, expires_at, registered_at, notified | `idx_pending_setups_symbol`, `idx_pending_setups_device` (both lazy) |
+| `direction_signals` | OOB (lazy `CREATE IF NOT EXISTS`, `ensureDirectionSignalsTable`) | id PK, symbol, fired_at, entry_price, ml_win, p_up, predicted_dir, model_version, is_crypto, resolve_at, resolved, exit_price, fwd_return, actual_dir, correct | `idx_dirsig_unresolved(resolved, resolve_at)`, `idx_dirsig_symbol(symbol, fired_at DESC)` (both lazy) |
 
 **Schema drift items** (low-severity, but flagged): `trade_outcomes.prompt_version`, four `derivatives_history.large_*` columns, and the entire `pending_setups` table aren't in any migration file. Consolidation to a `006_schema_drift.sql` is in the postponed-work doc.
 
@@ -578,6 +580,16 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-05-30 — Crypto direction model + live dual-gate validation
+
+**Crypto direction head shipped + a forward live-validation loop.** A dedicated XGBoost direction model (target `up = fwdReturn24H > 0`, 111 features, uniform weights) was trained, parity-proven (1.25e-07), and deployed as `heads.direction` in `ml-model-crypto.heads.json`. The cron computes `pUp = mlPredictDirection(features, isCrypto)` per symbol; iOS reads it via `/ml-predict` → `IndicatorResult.mlDirectionUp` → both the LLM prompt (DIRECTION MODEL line) and the indicators table (`IndicatorTableView` "Direction" row, crypto-only). Holdout: ~80% direction accuracy at ML≥0.70 full-coverage, ~94.7% at pUp≥0.70 (60% of high-ML bars), holds through the 2022 bear.
+
+**Leakage audited, not assumed** (`ml-training/direction_leak_audit.py`): max feature↔target corr 0.273; label-shift decay 79.6→70.3→62.7→52.6→50.8% as the predicted horizon pushes out (genuine momentum fade, not a leak); shuffled-target null collapses to 50.1%. Three independent kill-tests, all clean.
+
+**Stock direction model tested and REJECTED** (`ml-training/direction_model_compare.py`): same recipe yields chance on stocks (selection 62.4% → holdout 53.0%, flat across all 5 regime folds, actively wrong at pUp≥0.60). No stock direction head ships — `mlPredictDirection` returns null for stocks, the prompt/table hide the row. Confirms the bimodal thesis at the model level (crypto momentum-driven, stocks efficient).
+
+**Live dual-gate validation loop** (`marketscope-worker/src/index.ts`): new `direction_signals` D1 table (lazy-created). The cron `logDirectionSignals` records every dual-gate fire (rising-edge ML≥0.70 AND pUp≥0.70/≤0.30) with entry price + predicted dir, deduped to one open signal per symbol. `resolveDirectionSignals` grades each against the realized price 24h later (`fwd_return`, `correct`). `/direction-accuracy` (GET, auth) serves the aggregate; iOS `DirectionAccuracyService` + `OutcomeDashboardView` "Direction Model — Live (crypto)" section display live accuracy vs the 94.7% backtest baseline, broken out by confidence band. This is the out-of-sample, forward test of the backtest claim — accumulates autonomously across the universe whether or not the app is open. Frequency (`ml-training/dual_gate_frequency.py`): ~6.6 dual-gate signals/month per crypto symbol on the holdout, short-skewed in the current regime; pre-cost. Residual caveats remain survivorship + execution, not leakage.
 
 ### 2026-05-30 — A/B collapse + Direction Primitive Architecture
 
