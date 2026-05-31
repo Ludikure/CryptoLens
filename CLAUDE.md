@@ -12,6 +12,18 @@ MarketScope is an iOS app for multi-timeframe technical analysis of crypto and s
 - **Project generator:** XcodeGen (`project.yml`)
 - **Xcode project:** `MarketScope.xcodeproj` (not `CryptoLens.xcodeproj`)
 
+## Research Vault (`docs/research/`)
+
+The empirical "why" layer — backtest findings, EV measurements, model decisions, and the
+**rejected-hypotheses graveyard** — lives in `docs/research/` as linked markdown (start at
+`docs/research/README.md`; openable as an Obsidian vault). **This doc (CLAUDE.md) is the
+current-state operational reference; the vault is the deep archive + reasoning.** Before
+re-proposing an experiment, check `docs/research/rejected-hypotheses.md`. When a research
+finding changes, update the relevant note *and* the one-line summary here. Key entry points:
+`edge-methodology`, `edge-direction-primitive`, `edge-crypto-direction-model`,
+`edge-stock-direction-rejected`, `live-validation`, `ml-model-versions`, `ml-additive-heads`,
+`strategy-targets-bands`, `rejected-hypotheses`.
+
 ## Build & Run
 
 ```bash
@@ -442,13 +454,9 @@ Fixes landed during the parity push (commits `2ead207`, `e0f6ea1`, `5fe608d`, `7
 - Lookahead fix on stock daily features (gap/relStrength/beta/52week now use post-drop daily slices — see `Backtest & Training` section)
 - Worker temporal features (`hourBucket`, `isWeekend`, `dayOfWeek`, `earningsProximity`) use the fixture's `evalTimestampMs` instead of `Date.now()` so tests reproduce iOS canonical at the bar boundary
 
-### Model Comparison Results (v10 era — kept for historical reference)
+### Model Comparison Results
 
-Tested 10 configurations (7 XGBoost + 3 LightGBM) during the v10 selection. All within 72.9-73.4% crypto, 66.0-66.5% stocks **on each version's own training data**. Selected hyperparameters carried forward into v11/v13:
-- Crypto: LGB d4 t150 — selected for top-bucket reliability under v10's training distribution. v11 retained the same hyperparameters and ships at 76.3% top-bucket on fresh data.
-- Stocks: XGB d5 t100 — same recipe. v13 retains it and ships at 79.9% top-bucket on fresh data.
-
-Deeper models (d5) and more trees (t200) showed diminishing returns. LightGBM d4 = d5 accuracy, confirming d4 captures all useful interactions.
+Crypto LGB d4 t150, stocks XGB d5 t100 (deeper/more-trees showed diminishing returns; d4 = d5 accuracy). Carried from v10 selection into v11/v13. **Full reliability tables, the "own-data vs fresh-data" accuracy trap, and parity details: `docs/research/ml-model-versions.md`.**
 
 ## UI Enhancements (2026-04-25)
 
@@ -523,44 +531,11 @@ Implementation lives in `marketscope-worker/src/index.ts` (notification gate) an
 
 ### Why this primitive
 
-`ml-training/direction_primitive_sweep.py` tested 12 direction primitives on 4.4 years of bars (rising-edge ML cross + each primitive → bar-by-bar fill resolution). The union of bias OR dStochCross was the clear winner on both markets:
+`ml-training/direction_primitive_sweep.py` tested 12 direction primitives; the union of bias OR dStochCross won on **total R captured** on both markets (stocks 12× / crypto 1.9× the former bias-alone production), per-trade EV nearly identical — it wins by firing more often without diluting EV. Leakage-free re-validation (`edge_revalidate.py`) reproduced the per-trade numbers within ~0.03R and held through the 2022-bear fold. **Full sweep tables, the leaky-vs-clean comparison, and why bias differs on stocks (~5% fire, no derivatives/cross-asset) vs crypto (88% bias∩Stoch agreement): `docs/research/edge-direction-primitive.md`.**
 
-```
-STOCKS (159 symbols, 11,498 rising-edge ML events)
-                                    n        win%   EV/trade   total R
-bias-aligned (former production)    613     44.7%   +0.079R     +48.4
-dStochCross alone                 2,974     49.7%   +0.190R    +566.3
-union (current production)        3,339     49.2%   +0.179R    +599.2   ← 12× total R
-... 9 other primitives tested, none beat the union
+### Tested-but-rejected
 
-CRYPTO TOP-10 (3,541 rising-edge events)
-bias-aligned (former production)    789     82.3%   +1.040R    +820.4
-dStochCross alone                   912     81.0%   +0.998R    +910.4
-union (current production)        1,517     81.9%   +1.024R   +1,553.1  ← 1.9× total R
-```
-
-**Re-validation (2026-05-30, leakage-free — `ml-training/edge_revalidate.py`):** the sweep above pools symbols and splits by row index with a 48-*row* purge, which leaks across correlated symbols (48 rows ≈ 0 time when 159 symbols share each bar). A clean re-run (split by *timestamp*, 14-day time embargo, 5 folds spanning the 2022 bear) reproduced the per-trade numbers within ~0.03R: dStoch stocks +0.190→**+0.189R**, crypto top-10 +0.998→**+0.995R**, union/bias total-R multiple 12×→**18.7×** (stocks) / **1.9×** (crypto). The leakage is real but immaterial here — it only affects which bars the ML model selects; each trade's R resolves from genuinely-future candles in a separate file, and `fwdMaxFavR` is direction-agnostic (`max(high−price, price−low)/atr`), so no circularity. The crypto edge is also regime-robust, not bull-only: dStoch is +0.91R in the 2022-bear fold, positive every fold, longs and shorts. **The real residual risk is survivorship bias (the symbol set only contains instruments that exist today; the top-10 restriction maximizes rather than removes it) and unmodeled execution (slippage, perp funding) — not leakage.**
-
-### Why bias and Stoch are different on stocks vs crypto
-
-The bias scoring system (in `ScoringFunction.swift`) is a 6-layer composite (EMA position, ADX, RSI/MACD, VWAP, OBV/A/D, and on crypto: cross-asset + derivatives). On stocks the system has fewer confirmation channels (no derivatives, no cross-asset), making it more restrictive — bias fires on only ~5% of rising-edge ML stock bars. Stoch picks up the missing direction on the other ~25%. On crypto, all 5 confirmation lenses (technical + positioning + cross-asset) align together more often, so bias and Stoch agree 88% of the time when both fire.
-
-### Tested-but-rejected alternatives
-
-```
-hStochCross (4H Stoch alone)     stocks +0.047R   too noisy
-hMacdCross  (4H MACD alone)      stocks +0.107R   modest, fires less often than dStoch
-hEmaCross / dEmaCross            stocks +0.014-0.028R   fires on too many noise bars
-dStack (bull/bear EMA stack)     stocks +0.007R   stale state, not transition
-dDivergence (RSI divergence)     stocks −0.006R   contrarian, contradicts rising-edge ML
-bias AND Stoch agree (intersection) stocks +0.222R, n=90    high EV but tiny volume
-```
-
-Triple-confirmation cells (bias + Stoch + MACD all agreeing) untested — likely high EV at very low N. Reserved as a possible "priority alert" tier for future work.
-
-### Tested-but-rejected configuration
-
-A Stoch-only gate (i.e., bias-AND-Stoch as the notification filter) was shipped briefly on 2026-05-30 and rolled back the same day. `ml-training/notification_compare.py` showed it dropped total R by ~80% on both markets while making per-trade EV slightly worse. The earlier `dStochCross + ML → +0.129R` finding was measured on the full universe (no bias-alignment prefilter); once aligned-bullish/bearish is already required, Stoch becomes redundant and over-restricts. The union resolves this.
+The full graveyard — rejected direction primitives (hStochCross, hMacdCross, dEmaCross, dStack, dDivergence, the bias∩Stoch intersection), the Stoch-only notification gate (shipped + rolled back same-day for −80% R), the stock direction model, the exhaustion gate, ML phases 4/5/6 — with the killing numbers: **`docs/research/rejected-hypotheses.md`. Check it before re-proposing anything.**
 
 ### Coherence between worker + iOS
 
