@@ -38,6 +38,19 @@ export interface Env {
   FRED_API_KEY: string;
   TIINGO_API_KEY: string;
   ALPHAVANTAGE_API_KEY: string;
+  // Optional Cloudflare AI Gateway base, e.g.
+  // https://gateway.ai.cloudflare.com/v1/<account_id>/<gateway_name>
+  // When set, /analyze routes provider calls through the gateway (observability + caching +
+  // fallback). When empty/unset, calls go direct — backward compatible.
+  AI_GATEWAY_BASE?: string;
+}
+
+/// Route an upstream LLM call through Cloudflare AI Gateway when AI_GATEWAY_BASE is set,
+/// else return the direct provider URL. The gateway URL shape is
+/// `<base>/<provider-slug>/<upstream-path>` (host swapped, path preserved).
+function aiGatewayURL(env: Env, providerSlug: string, upstreamPath: string, directURL: string): string {
+  const base = env.AI_GATEWAY_BASE?.replace(/\/+$/, '');
+  return base ? `${base}/${providerSlug}/${upstreamPath}` : directURL;
 }
 
 interface Alert {
@@ -320,7 +333,7 @@ export default {
           const DEEPSEEK_MODELS = ['deepseek-reasoner', 'deepseek-chat'];
           const model = DEEPSEEK_MODELS.includes(body.model) ? body.model : 'deepseek-reasoner';
 
-          const resp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+          const resp = await fetch(aiGatewayURL(env, 'deepseek', 'v1/chat/completions', 'https://api.deepseek.com/v1/chat/completions'), {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
@@ -356,7 +369,7 @@ export default {
           const model = GEMINI_MODELS.includes(body.model) ? body.model : 'gemini-2.5-flash';
 
           // Note: Gemini requires API key in URL (no header auth). Server-to-server only.
-          const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, {
+          const resp = await fetch(aiGatewayURL(env, 'google-ai-studio', `v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`), {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
@@ -403,7 +416,7 @@ export default {
           // + economic events + news can push past that on busy macro days. The
           // `context-1m-2025-08-07` beta unlocks 1M context (input + thinking + output).
           // Cheap header, no behaviour change for smaller prompts.
-          const resp = await fetch('https://api.anthropic.com/v1/messages', {
+          const resp = await fetch(aiGatewayURL(env, 'anthropic', 'v1/messages', 'https://api.anthropic.com/v1/messages'), {
             method: 'POST',
             headers: {
               'x-api-key': env.CLAUDE_API_KEY,
