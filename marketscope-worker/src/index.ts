@@ -79,8 +79,13 @@ const TIINGO_IEX = 'https://api.tiingo.com/iex';
 const TIINGO_DAILY = 'https://api.tiingo.com/tiingo/daily';
 const ALPHAVANTAGE_BASE = 'https://www.alphavantage.co/query';
 
+// Wildcard origin: the API is token-authed via the X-Auth-Token *header* (no cookies), so
+// CORS '*' carries no CSRF risk — a cross-origin site still can't act without a valid token.
+// Needed so the browser web app (marketscope-web.pages.dev) and the iOS capacitor app can
+// both call the Worker. iOS was the only origin before; the hardcoded capacitor value
+// blocked the web app entirely.
 const CORS = {
-  'Access-Control-Allow-Origin': 'capacitor://com.ludikure.CryptoLens',
+  'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, X-Device-ID, X-Auth-Token, X-App-ID',
 };
@@ -165,7 +170,10 @@ export default {
 
         // New device — rate limit by IP
         const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-        const ipLimited = await checkRateLimit(env, `reg-ip:${ip}`, 3, 86400);
+        // 20/24h per IP (was 3). The web app registers once per browser and persists the
+        // token, but cache-clears / multiple browsers / a shared household IP made 3 too tight
+        // — a single afternoon of testing exhausted it. Still anti-abuse, just web-friendly.
+        const ipLimited = await checkRateLimit(env, `reg-ip:${ip}`, 20, 86400);
         if (ipLimited) return json({ error: 'Too many registrations. Try again tomorrow.' }, 429);
 
         const token = crypto.randomUUID() + '-' + crypto.randomUUID();
