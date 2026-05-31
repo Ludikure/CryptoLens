@@ -89,6 +89,23 @@ struct IndicatorTableView: View {
                             .foregroundStyle(color)
                     } else { dash }
                 }
+                // Direction model — crypto only (returns nil for stocks, where 24h
+                // direction is unpredictable; the row shows "—" there).
+                if results.contains(where: { $0.mlDirectionUp != nil }) {
+                    row("Direction", tooltip: "Crypto-only ML direction head. Calibrated P(up over 24h). At ML Win ≥70% this is ~95% accurate (94.7% holdout, holds through the 2022 bear). ≥65% → strong long, ≤35% → strong short, mid = no directional edge. Stocks show — (direction unpredictable). Separate from ML Win, which only answers trade-or-not.") { r in
+                        if let up = r.mlDirectionUp {
+                            let pct = Int(up * 100)
+                            let lean: String = up >= 0.65 ? "↑ Long" : up <= 0.35 ? "↓ Short" :
+                                               up >= 0.55 ? "↑ lean" : up <= 0.45 ? "↓ lean" : "flat"
+                            let color: Color = up >= 0.65 ? .green : up <= 0.35 ? .red :
+                                               up >= 0.55 ? Color.green.opacity(0.7) :
+                                               up <= 0.45 ? Color.red.opacity(0.7) : .secondary
+                            Text("\(pct)% \(lean)")
+                                .fontWeight(up >= 0.65 || up <= 0.35 ? .bold : .regular)
+                                .foregroundStyle(color)
+                        } else { dash }
+                    }
+                }
                 row("RSI", tooltip: Tooltips.rsi) { r in
                     if let rsi = r.rsi {
                         Text(String(format: "%.1f", rsi))
