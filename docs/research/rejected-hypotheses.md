@@ -52,6 +52,14 @@ constants set equal. Infra preserved (`promptVersion` TaskLocal, deterministic b
 to restart if user count grows. The worker's union-notification change had also created an
 asymmetric UX for baseline users whose prompt couldn't interpret Stoch-routed notifications.
 
+## S/R strength tags (WORN / FLIP_ROLE) — REJECTED as predictors
+`ml-training/level_validation.py`, 58k+ retests. Test-count and FLIP_ROLE do **not** predict
+hold vs break — 3+-tested levels hold as often as fresh (crypto 88.7% vs 89.1%), flip is
+flat/backwards. The `WORN_Nx_distrust` rule had no basis. **But the levels themselves are
+real**: swing levels hold +4.3pp vs random lines on both markets (so the *detection* stays;
+only the *strength scoring* was decoration). Acted on: neutralized prompt tags + removed the
+`entry_at_worn_level_4+_tests` conviction downgrade. Full write-up: [[strategy-levels]].
+
 ## Recency-weighted direction training — REJECTED
 Time-decay sample weighting (used for the *quality* model) biases a *direction* model
 toward UP in a bull market. The crypto + stock direction models use **uniform weights**.

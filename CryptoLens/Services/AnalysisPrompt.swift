@@ -1288,15 +1288,20 @@ enum AnalysisPrompt {
                 lines.append("Vol Regime: ATR_PERCENTILE_\(pctInt) → \(implication)")
             }
 
-            // Phase E3 — Worn Levels (4H structure levels within 2× ATR of current price)
-            // Tags now include direction (RES/SUP) and FLIP_ROLE detection: a level that
-            // appears as both a recent swing high AND a swing low has been broken and
-            // retested in the opposite role — typically a stronger structure than a
-            // never-broken level because it survived a battle in both directions.
+            // Phase E3 — Structure Levels (4H swing levels within 2× ATR of current price),
+            // tagged with direction (RES/SUP) and raw test count as NEUTRAL metadata.
+            // A level-validation backtest (ml-training/level_validation.py, 58k retests;
+            // docs/research/strategy-levels.md) found that test-count and flip-role do NOT
+            // predict hold-vs-break — heavily-tested ("worn") and "flipped" levels hold no
+            // more or less often than fresh ones. So the former WORN_Nx_distrust /
+            // FRESH_1x_strongest_reaction strength tags were dropped: they fed the LLM a
+            // signal the data doesn't support. Test count and FLIP are shown as plain facts.
+            // (Swing levels DO hold ~4.3pp more than random price lines, so the levels are
+            // real locations — they just can't be ranked by these tags.)
             if let ms = fourH.marketStructure, !ms.levelTests.isEmpty,
                let currentPrice = indicators.first?.price, currentPrice > 0,
                let atr = fourH.atr?.atr, atr > 0 {
-                var wornEntries = [String]()
+                var structureEntries = [String]()
                 let flipThreshold = atr * 0.15  // tight clustering — match the swing-grouping logic
                 for level in ms.levelTests.prefix(8) {
                     let atrDist = abs(level.price - currentPrice) / atr
@@ -1307,22 +1312,21 @@ enum AnalysisPrompt {
                     else if level.price < currentPrice { direction = "SUP" }
                     else { direction = "AT" }
 
-                    // Flip-role: level price within tight threshold of BOTH a recent
-                    // swing high AND a recent swing low → was broken and reclaimed.
+                    // Flip: level price within tight threshold of BOTH a recent swing high
+                    // AND a recent swing low (was broken and reclaimed). Kept as a neutral
+                    // structural descriptor — NOT a strength signal (validation: doesn't
+                    // predict hold/break).
                     let appearsAsHigh = ms.swingHighs.contains { abs($0 - level.price) < flipThreshold }
                     let appearsAsLow = ms.swingLows.contains { abs($0 - level.price) < flipThreshold }
                     let isFlipRole = appearsAsHigh && appearsAsLow
 
-                    var tags: [String] = []
-                    if isFlipRole { tags.append("FLIP_ROLE") }
-                    if level.tests >= 4 { tags.append("WORN_\(level.tests)x_distrust") }
-                    else if level.tests >= 2 { tags.append("RECENT_\(level.tests)x") }
-                    else { tags.append("FRESH_1x_strongest_reaction") }
+                    var tags: [String] = ["tested_\(level.tests)x"]
+                    if isFlipRole { tags.append("FLIP") }
 
-                    wornEntries.append("\(direction) \(Formatters.formatPrice(level.price)) [\(tags.joined(separator: ","))]")
+                    structureEntries.append("\(direction) \(Formatters.formatPrice(level.price)) [\(tags.joined(separator: ","))]")
                 }
-                if !wornEntries.isEmpty {
-                    lines.append("Worn Levels (4H, within 2× ATR of price): \(wornEntries.joined(separator: " | "))")
+                if !structureEntries.isEmpty {
+                    lines.append("Structure Levels (4H, within 2× ATR of price): \(structureEntries.joined(separator: " | "))")
                 }
             }
 
@@ -1497,11 +1501,11 @@ enum AnalysisPrompt {
                 // `confident` bars. Not-confident → cap LOW (= no trade) so the A/B archive
                 // measures the abstention's effect on resolved-R.
                 if envConformalNotConfident { moderateBlocks.append("conformal_abstain_not_confident_cap_LOW") }
-                // Worn level downgrade: check if any IN_PLAY 4H level has 4+ tests
-                if let ms = fourH.marketStructure, let cp = indicators.first?.price, cp > 0, let a = fourH.atr?.atr, a > 0 {
-                    let nearWorn = ms.levelTests.contains { abs($0.price - cp) / a <= 1.0 && $0.tests >= 4 }
-                    if nearWorn { downgrade.append("entry_at_worn_level_4+_tests") }
-                }
+                // Worn-level downgrade REMOVED (2026-05-31). It capped conviction when
+                // entering near a 4+-tested level, on the premise that worn levels break
+                // more. The level-validation backtest (ml-training/level_validation.py,
+                // docs/research/strategy-levels.md) disproved that: 4+-tested levels hold as
+                // often as fresh ones, so the downgrade was penalizing trades for no reason.
 
                 // E5 — Earnings proximity (stocks). Hard caps applied via envelope so
                 // the LLM can't override with "but the technicals are clean."
