@@ -7,6 +7,7 @@ import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
+import { fetchDerivativesEnrichment, fetchMacroEnrichment } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -1016,11 +1017,22 @@ export default {
           outcomeHistory = (res.results as any[]).map(r => ({ direction: r.direction, entry: r.entry_price, outcome: r.outcome, mlProb: r.ml_probability, conviction: r.conviction }));
         } catch { /* best-effort */ }
 
+        // Enrichment (additive, best-effort, parallel). Crypto: Binance derivatives + positioning.
+        // Both markets: macro (FRED/DXY from the /macro cache). The rest of the enrichment
+        // (sentiment/stockInfo/stockSentiment/cross-asset/economic events) is layered in next.
+        const [deriv, macro] = await Promise.all([
+          isCrypto ? fetchDerivativesEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
+          fetchMacroEnrichment(env).catch(() => null),
+        ]);
+
         // Stateful prompt build — KV-backed prevState (regime staleness, kill durations, naked POC).
         const stateKey = `prompt:${symbol}`;
         let prevState: PromptState = {};
         try { const s = await env.ALERTS.get(stateKey); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh state */ }
-        const { prompt, newState } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, outcomeHistory, prevState });
+        const { prompt, newState } = buildUserPrompt({
+          symbol, nowMs: Date.now(), indicators, outcomeHistory, prevState,
+          derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro,
+        });
         try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
 
         if (prompt.length > MAX_PROMPT_CHARS) return json({ error: 'Prompt too large' }, 413);
