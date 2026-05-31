@@ -29,6 +29,9 @@ struct OutcomeDashboardView: View {
                 // out-of-sample test of the backtest's ~94.7%.
                 if let dir = directionReport, (dir.resolved > 0 || dir.pending > 0) {
                     directionSection(dir)
+                    if !dir.bySymbol.isEmpty {
+                        directionBySymbolSection(dir)
+                    }
                 }
 
                 // A/B comparison — baseline vs treatment slice of the same archive
@@ -194,6 +197,47 @@ struct OutcomeDashboardView: View {
         } else {
             statRow(label, value: "pending", color: .secondary)
         }
+    }
+
+    // Per-instrument accuracy — which coins the model reads well, most-evidenced first.
+    // Each row: symbol, overall accuracy + n, and the long/short split underneath.
+    @ViewBuilder
+    private func directionBySymbolSection(_ dir: DirectionAccuracyService.Report) -> some View {
+        Section {
+            ForEach(dir.bySymbol) { s in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack {
+                        Text(s.symbol.replacingOccurrences(of: "USDT", with: ""))
+                            .fontWeight(.semibold)
+                        Spacer()
+                        Text(String(format: "%.0f%%", s.accuracy))
+                            .fontWeight(.semibold)
+                            .foregroundStyle(s.accuracy >= 70 ? .green : s.accuracy >= 55 ? .orange : .red)
+                        Text("(\(s.correct)/\(s.n))").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    .font(.subheadline)
+                    HStack(spacing: 10) {
+                        if s.longs > 0 {
+                            Text("L \(s.longCorrect)/\(s.longs) (\(pctStr(s.longCorrect, s.longs)))")
+                                .foregroundStyle(.secondary)
+                        }
+                        if s.shorts > 0 {
+                            Text("S \(s.shortCorrect)/\(s.shorts) (\(pctStr(s.shortCorrect, s.shorts)))")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption2)
+                }
+            }
+        } header: {
+            Text("By Instrument — Live (crypto)")
+        } footer: {
+            Text("Graded dual-gate signals per symbol (correct/total), with the long (L) and short (S) split. Most-evidenced symbols first. Small samples swing — weight by n.")
+        }
+    }
+
+    private func pctStr(_ correct: Int, _ total: Int) -> String {
+        total > 0 ? String(format: "%.0f%%", Double(correct) / Double(total) * 100) : "—"
     }
 
     // MARK: - A/B comparison

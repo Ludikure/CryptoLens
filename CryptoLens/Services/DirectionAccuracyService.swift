@@ -18,7 +18,22 @@ enum DirectionAccuracyService {
         let byConfidence: [ConfidenceBand]
         let longSide: SideStats?    // graded long signals (nil until at least one resolves)
         let shortSide: SideStats?   // graded short signals
+        let bySymbol: [SymbolStats] // per-instrument breakdown, most-evidenced first
         let recent: [Signal]
+    }
+
+    /// Per-instrument accuracy. Lets you see which coins the model reads well vs poorly,
+    /// with the long/short split per symbol (a coin can be strong short / weak long).
+    struct SymbolStats: Identifiable {
+        let symbol: String
+        let n: Int
+        let correct: Int
+        let accuracy: Double
+        let longs: Int
+        let longCorrect: Int
+        let shorts: Int
+        let shortCorrect: Int
+        var id: String { symbol }
     }
 
     /// Accuracy of one predicted side, graded independently. Directional models can be
@@ -62,6 +77,10 @@ enum DirectionAccuracyService {
             struct Overall: Decodable { let resolved: Int?; let accuracy: Double?; let longs: Int?; let shorts: Int? }
             struct Band: Decodable { let band: String; let n: Int; let accuracy: Double? }
             struct Dir: Decodable { let predicted_dir: Int; let n: Int; let accuracy: Double? }
+            struct Sym: Decodable {
+                let symbol: String; let n: Int; let correct: Int?; let accuracy: Double?
+                let longs: Int?; let long_correct: Int?; let shorts: Int?; let short_correct: Int?
+            }
             struct Recent: Decodable {
                 let symbol: String; let fired_at: Double; let p_up: Double
                 let predicted_dir: Int; let ml_win: Double; let fwd_return: Double?; let correct: Int?
@@ -69,6 +88,7 @@ enum DirectionAccuracyService {
             let overall: Overall
             let byConfidence: [Band]
             let byDirection: [Dir]?
+            let bySymbol: [Sym]?
             let pending: Int
             let recent: [Recent]
             let backtestBaseline: Double
@@ -80,6 +100,24 @@ enum DirectionAccuracyService {
             return SideStats(n: d.n, accuracy: d.accuracy ?? 0)
         }
 
+        // Build the sub-arrays in separate statements — a single Report(...) literal with
+        // all of these inline closures blows the Swift type-checker's time budget.
+        let bands: [ConfidenceBand] = body.byConfidence.map {
+            ConfidenceBand(band: $0.band, n: $0.n, accuracy: $0.accuracy ?? 0)
+        }
+        let symbols: [SymbolStats] = (body.bySymbol ?? []).map { (s: Body.Sym) -> SymbolStats in
+            SymbolStats(symbol: s.symbol, n: s.n, correct: s.correct ?? 0,
+                        accuracy: s.accuracy ?? 0,
+                        longs: s.longs ?? 0, longCorrect: s.long_correct ?? 0,
+                        shorts: s.shorts ?? 0, shortCorrect: s.short_correct ?? 0)
+        }
+        let recentSignals: [Signal] = body.recent.map {
+            Signal(symbol: $0.symbol,
+                   firedAt: Date(timeIntervalSince1970: $0.fired_at / 1000),
+                   pUp: $0.p_up, predictedDir: $0.predicted_dir, mlWin: $0.ml_win,
+                   fwdReturn: $0.fwd_return ?? 0, correct: ($0.correct ?? 0) == 1)
+        }
+
         return Report(
             resolved: body.overall.resolved ?? 0,
             accuracy: body.overall.accuracy,
@@ -87,17 +125,11 @@ enum DirectionAccuracyService {
             shorts: body.overall.shorts ?? 0,
             pending: body.pending,
             backtestBaseline: body.backtestBaseline,
-            byConfidence: body.byConfidence.map {
-                ConfidenceBand(band: $0.band, n: $0.n, accuracy: $0.accuracy ?? 0)
-            },
+            byConfidence: bands,
             longSide: side(1),
             shortSide: side(-1),
-            recent: body.recent.map {
-                Signal(symbol: $0.symbol,
-                       firedAt: Date(timeIntervalSince1970: $0.fired_at / 1000),
-                       pUp: $0.p_up, predictedDir: $0.predicted_dir, mlWin: $0.ml_win,
-                       fwdReturn: $0.fwd_return ?? 0, correct: ($0.correct ?? 0) == 1)
-            }
+            bySymbol: symbols,
+            recent: recentSignals
         )
     }
 }

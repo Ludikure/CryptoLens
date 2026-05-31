@@ -1390,6 +1390,21 @@ export default {
           FROM direction_signals WHERE resolved = 1
           GROUP BY predicted_dir
         `).all();
+        // Per-instrument breakdown — which symbols the model reads well vs poorly.
+        // longs/shorts split per symbol too, so a symbol that's great short / weak long
+        // is visible. Ordered by sample size so the most-evidenced symbols lead.
+        const bySymbol = await env.DB.prepare(`
+          SELECT symbol,
+            COUNT(*) as n,
+            SUM(correct) as correct,
+            AVG(correct) * 100 as accuracy,
+            SUM(CASE WHEN predicted_dir = 1 THEN 1 ELSE 0 END) as longs,
+            SUM(CASE WHEN predicted_dir = 1 THEN correct ELSE 0 END) as long_correct,
+            SUM(CASE WHEN predicted_dir = -1 THEN 1 ELSE 0 END) as shorts,
+            SUM(CASE WHEN predicted_dir = -1 THEN correct ELSE 0 END) as short_correct
+          FROM direction_signals WHERE resolved = 1
+          GROUP BY symbol ORDER BY n DESC
+        `).all();
         const pending = await env.DB.prepare(
           'SELECT COUNT(*) as n FROM direction_signals WHERE resolved = 0'
         ).first();
@@ -1402,13 +1417,14 @@ export default {
           overall: overall ?? { resolved: 0, correct: 0, accuracy: null, longs: 0, shorts: 0 },
           byConfidence: byConfidence.results ?? [],
           byDirection: byDirection.results ?? [],
+          bySymbol: bySymbol.results ?? [],
           pending: (pending?.n as number) ?? 0,
           recent: recent.results ?? [],
           backtestBaseline: 94.7,   // frozen-holdout dual-gate accuracy for reference
         });
       } catch (e) {
         // Table not created yet (no cron has fired a signal) — return an empty shell.
-        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], byDirection: [], pending: 0, recent: [], backtestBaseline: 94.7 });
+        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], byDirection: [], bySymbol: [], pending: 0, recent: [], backtestBaseline: 94.7 });
       }
     }
 
