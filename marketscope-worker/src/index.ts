@@ -6,6 +6,7 @@ import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident,
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
+import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -959,6 +960,96 @@ export default {
         });
       } catch (e) {
         return json({ error: `Indicator compute failed: ${e}`, symbol }, 502);
+      }
+    }
+
+    // Full analysis — the shared brain end-to-end: candles → indicators → STATEFUL prompt
+    // (buildUserPrompt, KV-backed regime/kill-duration/nakedPOC state) → LLM via the AI Gateway
+    // → parsed setups. Both the web app and (Phase 4) iOS call this instead of building the
+    // prompt client-side. v1 supplies the ML overlay + outcome history; richer enrichment
+    // (derivatives/sentiment/macro/stockInfo) is layered in next — all optional in the builder.
+    if (path === '/full-analysis' && request.method === 'POST') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const limited = await checkRateLimit(env, `analyze:${deviceId}`, RATE_LIMIT_ANALYZE);
+      if (limited) return json({ error: 'Rate limited. Max 30 analyses per hour.' }, 429);
+
+      let body: any = {};
+      try { body = await request.json(); } catch { /* allow empty body; symbol may be in query */ }
+      const symbol = sanitizeSymbol(body.symbol || url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const isCrypto = symbol.endsWith('USDT');
+
+      try {
+        const { daily, fourH, oneH } = await fetchAllTimeframes(symbol, isCrypto);
+        if (!daily.length) return json({ error: 'No candles', symbol }, 404);
+        const indicators: PromptIndicator[] = [computeFullIndicators(daily as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
+        if (fourH.length) indicators.push(computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
+        if (oneH.length) indicators.push(computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
+
+        // ML overlay onto the daily indicator (cron-cached ml_preds:all; best-effort).
+        try {
+          const cached = await env.ALERTS.get('ml_preds:all');
+          if (cached) {
+            const e = (JSON.parse(cached) as Record<string, any>)[symbol];
+            if (e) {
+              const d = indicators[0];
+              d.mlWinProbability = e.probability ?? null;
+              d.mlPersistenceProbability = e.probabilityH72 ?? null;
+              d.mlDirectionUp = e.pUp ?? null;
+              d.mlConfident = e.confident ?? null;
+              d.mlMetaDirection = e.metaDirection ?? null;
+              d.mlMetaProbability = e.probabilityMeta ?? null;
+              d.mlQ75 = e.q75 ?? null;
+            }
+          }
+        } catch { /* ML overlay best-effort — prompt degrades gracefully without it */ }
+
+        // Outcome feedback loop — last resolved trades for this device+symbol+model.
+        let outcomeHistory: Array<{ direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null }> = [];
+        try {
+          const modelVersion = isCrypto ? 11 : 13;
+          const res = await env.DB.prepare(
+            `SELECT direction, entry_price, outcome, ml_probability, conviction FROM trade_outcomes
+             WHERE device_id = ? AND symbol = ? AND model_version = ? AND outcome IS NOT NULL
+             ORDER BY opened_at DESC LIMIT 10`
+          ).bind(deviceId, symbol, modelVersion).all();
+          outcomeHistory = (res.results as any[]).map(r => ({ direction: r.direction, entry: r.entry_price, outcome: r.outcome, mlProb: r.ml_probability, conviction: r.conviction }));
+        } catch { /* best-effort */ }
+
+        // Stateful prompt build — KV-backed prevState (regime staleness, kill durations, naked POC).
+        const stateKey = `prompt:${symbol}`;
+        let prevState: PromptState = {};
+        try { const s = await env.ALERTS.get(stateKey); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh state */ }
+        const { prompt, newState } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, outcomeHistory, prevState });
+        try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
+
+        if (prompt.length > MAX_PROMPT_CHARS) return json({ error: 'Prompt too large' }, 413);
+        const system = systemPrompt(isCrypto);
+
+        if (!env.CLAUDE_API_KEY) return json({ error: 'AI not configured' }, 503);
+        const model = ALLOWED_MODELS.includes(body.model) ? body.model : 'claude-sonnet-4-6';
+        const resp = await fetch(aiGatewayURL(env, 'anthropic', 'v1/messages', 'https://api.anthropic.com/v1/messages'), {
+          method: 'POST',
+          headers: { 'x-api-key': env.CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'context-1m-2025-08-07', 'content-type': 'application/json' },
+          body: JSON.stringify({ model, max_tokens: 4000, temperature: 0, system, messages: [{ role: 'user', content: prompt }] }),
+        });
+        if (!resp.ok) {
+          const code = resp.status;
+          if (code === 429) return json({ error: 'AI service busy. Try again shortly.' }, 429);
+          if (code >= 500) return json({ error: 'AI service temporarily unavailable' }, 502);
+          return json({ error: `AI error (${code})` }, code);
+        }
+        const result = await resp.json() as any;
+        const text = result?.content?.[0]?.text || '';
+        const setups = parseSetups(text);
+
+        return json({
+          symbol, isCrypto, timestamp: Date.now(), model, analysis: text, setups,
+          ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null },
+          bias: { daily: indicators[0].bias, fourH: indicators[1]?.bias ?? null, oneH: indicators[2]?.bias ?? null },
+        });
+      } catch (e) {
+        return json({ error: `Full analysis failed: ${e}`, symbol }, 500);
       }
     }
 
