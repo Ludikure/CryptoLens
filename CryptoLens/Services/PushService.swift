@@ -150,8 +150,8 @@ enum PushService {
                 NSLog("[MarketScope] ensureAuth /register attempt %d → network error (no response)", attempt)
                 continue  // network error → retry
             }
-            let bodyStr = String(data: data, encoding: .utf8) ?? ""
-            NSLog("[MarketScope] ensureAuth /register attempt %d → HTTP %d body=%@", attempt, http.statusCode, String(bodyStr.prefix(120)))
+            // Log the status only — NOT the body (it contains the auth token).
+            NSLog("[MarketScope] ensureAuth /register attempt %d → HTTP %d", attempt, http.statusCode)
             if (200...299).contains(http.statusCode),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let serverToken = json["authToken"] as? String {
