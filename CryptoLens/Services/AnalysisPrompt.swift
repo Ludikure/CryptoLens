@@ -167,7 +167,8 @@ enum AnalysisPrompt {
         conviction / call FLAT.
 
         DIRECTIONAL EVIDENCE FRAMEWORK:
-        The next 4H bar's direction is ~50/50 absent structural evidence (empirical, 235K stock bars). Recent direction is NOT a reliable predictor — direction confidence comes from multi-timeframe alignment, S/R / VWAP / volume profile positioning, vol regime, exhaustion vs continuation signals at key levels, and (crypto) derivatives positioning.
+        For STOCKS the next bar's direction is ~50/50 absent structural evidence (empirical, 235K stock bars) — recent direction is NOT a reliable predictor there; confidence comes from multi-timeframe alignment, S/R / VWAP / volume-profile positioning, vol regime, exhaustion vs continuation at key levels.
+        CRYPTO is different at HIGH ML. On the frozen holdout (incl. the 2022 bear, and momentum-lag-tested so it's real persistence, not leakage), directional accuracy at ML_WIN ≥ 70% is ~76% from the daily Stoch cross alone, ~79% for bias∪Stoch, and ~94% when bias AND the daily Stoch AGREE — far above the ~52% balanced base rate (stocks stay at chance under the same test). Mechanism: crypto is momentum-driven; high ML selects big-move bars where a fresh Stoch cross is a directional initiator. So for crypto + ML_WIN ≥ 70% with aligned momentum, treat direction as HIGH-confidence and commit; when momentum conflicts, ML is lower, or it's a stock, fall back to the structural workflow below. (Caveat: measured on surviving symbols and on net-24h direction — live, after stops/funding, somewhat lower.)
         Workflow: (1) read momentum from recent candles + Price Action Summary, (2) test whether structural evidence confirms continuation, suggests reversal, or stays neutral, (3) commit to a thesis only when structural evidence supports one.
 
         Per-timeframe role: Daily = prevailing momentum (close sequence, EMA slope). 4H = continuing or exhausting (volume trend, RSI direction, MACD hist). 1H = entry timing (Stoch RSI crosses, candle patterns at levels).
@@ -696,7 +697,7 @@ enum AnalysisPrompt {
                 treatmentStochCross4H = fourH.stochRSI?.crossover ?? "none"
                 lines.append("STOCH_CROSS: daily=\(treatmentStochCrossDaily) | 4H=\(treatmentStochCross4H)")
                 lines.append("  Rules:")
-                lines.append("  - When STOCH_CROSS direction AGREES with bias direction: high-confidence directional setup, lean in (HIGH conviction permitted if other gates pass).")
+                lines.append("  - When STOCH_CROSS direction AGREES with bias direction: high-confidence directional setup. CRYPTO at ML_WIN ≥ 70%: agreement is ~94% directionally accurate on the holdout (bear-tested, momentum-lag-confirmed) — permit HIGH conviction and lean in, don't hedge to MODERATE on direction uncertainty alone. STOCKS: agreement is only marginally directional at high ML — keep the usual structural evidence burden, no automatic conviction boost.")
                 lines.append("  - When STOCH_CROSS direction CONTRADICTS bias direction (e.g., aligned_bullish + bearish Stoch cross): flag the tension in BULL/BEAR cases; cap conviction at MODERATE unless structural evidence (S/R confluence, volume) strongly supports the bias direction.")
                 lines.append("  - When bias is MIXED but STOCH_CROSS direction is decisive (both timeframes agree) AND ML >= 65: treat STOCH_CROSS as the primary direction signal, override auto-FLAT — this is the catalyst-driven setup case where Daily lags 4H/1H momentum.")
                 lines.append("  - When STOCH_CROSS is 'none' on both timeframes: bias drives direction, treat as before.")
