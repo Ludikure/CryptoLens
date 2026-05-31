@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseDerivatives, analyzePositioning } from '../src/enrichment';
+import { parseDerivatives, analyzePositioning, computeSpotPressure } from '../src/enrichment';
 
 // Raw Binance fapi shapes (as the /derivatives proxy returns them).
 const raw = {
@@ -45,5 +45,21 @@ describe('enrichment — DerivativesService + PositioningAnalyzer port', () => {
     // smart money divergence: retail long (66>55) vs top traders not long (48<55) → signal present
     expect(p.signals.some(s => s.message.startsWith('Smart money divergence'))).toBe(true);
     expect(p.signals.some(s => s.message.startsWith('Aggressive buying'))).toBe(true);
+  });
+
+  it('computeSpotPressure mirrors SpotPressureAnalyzer', () => {
+    // Binance kline: [openTime,o,h,l,c, volume(5), closeTime,quoteVol,trades, takerBuyBase(9), ...]
+    // 4 bars, rising taker-buy share in the back half → CVD Rising, aggressive buying.
+    const k = (vol: number, takerBuy: number) => [0, '0', '0', '0', '0', String(vol), 0, '0', 0, String(takerBuy), '0', '0'];
+    const klines = [k(100, 45), k(100, 48), k(100, 70), k(100, 72)];  // back half much more buy-heavy
+    const depth = { bids: [['100', '8']], asks: [['101', '2']] };       // bid-heavy book
+    const sp = computeSpotPressure(klines, depth)!;
+    expect(sp).not.toBeNull();
+    expect(sp.takerBuyRatio).toBeCloseTo((45 + 48 + 70 + 72) / 400, 6);  // 0.5875
+    expect(sp.takerBuyLabel).toBe('Aggressive Buying');                  // >0.55
+    expect(sp.cvd24h).toBeCloseTo((45 - 55) + (48 - 52) + (70 - 30) + (72 - 28), 6);
+    expect(sp.cvdTrend).toBe('Rising');                                  // secondHalf >> firstHalf*1.2
+    expect(sp.bookRatio).toBeCloseTo(8 / 10, 6);                         // 0.8
+    expect(sp.bookLabel).toBe('Strong Bid Support');                     // >0.6
   });
 });

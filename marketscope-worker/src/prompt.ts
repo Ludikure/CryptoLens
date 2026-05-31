@@ -405,7 +405,7 @@ export interface PositioningSnapshot { fundingSentiment: string; oiTrend: string
 interface StockSentimentData { vix?: number | null; vixLevel: string; vixChange?: number | null; shortPercentOfFloat?: number | null; shortRatio?: number | null; fiftyTwoWeekPosition: number; putCallRatio?: number | null; }
 interface EconomicEvent { title: string; country: string; isHighImpact: boolean; isUpcoming: boolean; isRecentlyReleased: boolean; date: number; actual?: string | null; forecast?: string | null; surprise?: string | null; previous?: string | null; }
 export interface MacroSnapshot { macroRegime?: string | null; vix?: number | null; treasury10Y?: number | null; treasury2Y?: number | null; yieldSpread?: number | null; fedFundsRate?: number | null; usdIndex?: number | null; }
-interface SpotPressure { takerBuyRatio: number; takerBuyLabel: string; cvd24h: number; cvdTrend: string; bookRatio?: number | null; bookLabel?: string | null; }
+export interface SpotPressure { takerBuyRatio: number; takerBuyLabel: string; cvd24h: number; cvdTrend: string; bookRatio?: number | null; bookLabel?: string | null; }
 interface OutcomeHistoryItem { direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null; }
 interface ActiveSetup { direction: string; entry: number; risk: number; tp1: number; mlProbability?: number | null; entryHitTimeMs: number; maxFavorable: number; maxAdverse: number; tp1Hit: boolean; partialTaken: boolean; breakevenActivated: boolean; }
 

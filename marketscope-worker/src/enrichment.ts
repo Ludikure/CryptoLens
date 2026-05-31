@@ -3,7 +3,7 @@
 // positioning (DerivativesService + PositioningAnalyzer) and macro (FRED via the /macro cache).
 // Stock fundamentals / sentiment / cross-asset / economic events are layered in subsequently.
 
-import type { DerivativesData, PositioningSnapshot, MacroSnapshot } from './prompt';
+import type { DerivativesData, PositioningSnapshot, MacroSnapshot, SpotPressure } from './prompt';
 
 interface Env { ALERTS: KVNamespace; }
 
@@ -122,6 +122,52 @@ export async function fetchDerivativesEnrichment(env: Env, symbol: string): Prom
   const derivatives = parseDerivatives(raw);
   if (!derivatives) return null;
   return { derivatives, positioning: analyzePositioning(derivatives) };
+}
+
+// ── SpotPressureAnalyzer.analyze (crypto) — faithful port ──
+// Taker buy ratio + CVD from 24×1h klines (kline[9] = taker buy base vol), order-book
+// imbalance from depth. Fetches its own data from Binance (same source as iOS).
+const BINANCE_DATA = 'https://data-api.binance.vision/api/v3';
+export function computeSpotPressure(klines: any[], depth: any): SpotPressure | null {
+  let totalVolume = 0, totalTakerBuy = 0;
+  const deltas: number[] = [];
+  for (const k of klines) {
+    if (!Array.isArray(k) || k.length < 10) continue;
+    const vol = num(k[5]), tb = num(k[9]);
+    if (vol == null || tb == null) continue;
+    totalVolume += vol; totalTakerBuy += tb;
+    deltas.push(tb - (vol - tb));
+  }
+  if (!(totalVolume > 0) || deltas.length === 0) return null;
+  const buyRatio = totalTakerBuy / totalVolume;
+  const buyLabel = buyRatio > 0.55 ? 'Aggressive Buying' : buyRatio < 0.45 ? 'Aggressive Selling' : 'Neutral';
+  const cvd = deltas.reduce((a, b) => a + b, 0);
+  const half = Math.floor(deltas.length / 2);
+  const firstHalf = deltas.slice(0, half).reduce((a, b) => a + b, 0);
+  const secondHalf = deltas.slice(deltas.length - half).reduce((a, b) => a + b, 0);
+  const cvdTrend = secondHalf > firstHalf * 1.2 ? 'Rising' : secondHalf < firstHalf * 0.8 ? 'Falling' : 'Flat';
+  let bookRatio: number | null = null, bookLabel: string | null = null;
+  const bids = depth?.bids, asks = depth?.asks;
+  if (Array.isArray(bids) && Array.isArray(asks)) {
+    const bidQty = bids.reduce((a: number, b: any) => a + (num(b?.[1]) ?? 0), 0);
+    const askQty = asks.reduce((a: number, b: any) => a + (num(b?.[1]) ?? 0), 0);
+    const total = bidQty + askQty;
+    if (total > 0) {
+      bookRatio = bidQty / total;
+      bookLabel = bookRatio > 0.6 ? 'Strong Bid Support' : bookRatio < 0.4 ? 'Heavy Ask Pressure' : 'Balanced';
+    }
+  }
+  return { takerBuyRatio: buyRatio, takerBuyLabel: buyLabel, cvd24h: cvd, cvdTrend, bookRatio, bookLabel };
+}
+export async function fetchSpotPressureEnrichment(symbol: string): Promise<SpotPressure | null> {
+  try {
+    const [klines, depth] = await Promise.all([
+      fetch(`${BINANCE_DATA}/klines?symbol=${symbol}&interval=1h&limit=24`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${BINANCE_DATA}/depth?symbol=${symbol}&limit=20`).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    if (!Array.isArray(klines)) return null;
+    return computeSpotPressure(klines, depth);
+  } catch { return null; }
 }
 
 // Macro snapshot from the /macro cache (FRED + DXY). Best-effort — returns null if uncached.
