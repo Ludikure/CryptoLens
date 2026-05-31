@@ -86,6 +86,27 @@ mid-range levels but add nothing over the swings they're computed from — redun
 harmful (unlike the worn tags, no false signal — except the "Fibonacci" *label* may make
 the LLM over-weight ordinary levels). Candidate: de-emphasize the Fib framing in the prompt.
 
+## Finding 6 — snapping targets to S/R LOWERS EV (the one that matters)
+`ml-training/setup_execution_snap_test.py`. Everything above is hold-rate (secondary);
+this is EV. Same swing-reversal entries, two target schemes, full execution model (50% at
+TP1 → BE stop → runner to TP2):
+```
+                  CRYPTO                    STOCK
+  ATR band   EV -0.0010R  win 40.4%    EV +0.0309R  win 41.1%
+  snap S/R   EV -0.0051R  win 49.2%    EV +0.0160R  win 47.0%
+  snap−ATR   -0.0040R/trade            -0.0149R/trade
+```
+**Snapping raises win rate but lowers EV on both markets.** Snapping pulls the target
+closer → hit it more often, but each win is smaller; the fixed ATR target's bigger runners
+more than pay for its lower hit rate. So for target placement, S/R-snapping is a *drag* —
+the bands do the work. "Put your TP at the next resistance" is the wrong instinct for EV.
+
+Caveats: generic swing entries (near-zero edge — the *comparison* is the valid part, not
+the absolute EV); naive nearest-level snap, not the app's 3-layer quality picker. Strongly
+disproves naive snapping; casts doubt on snapping generally. Before any production change,
+port the actual picker and A/B vs pure ATR — but the burden of proof is now on the picker.
+Relates to the flagged `levelStrength` weight (`AnalysisPrompt.swift:2156`).
+
 ## Actions taken (2026-05-31)
 - **Neutralized** the prompt strength tags in `AnalysisPrompt.swift`: `WORN_Nx_distrust` /
   `FRESH_1x_strongest_reaction` / `RECENT_Nx` → neutral `tested_Nx` fact; `FLIP_ROLE` kept
