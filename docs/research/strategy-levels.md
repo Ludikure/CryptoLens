@@ -42,6 +42,32 @@ real, not luck. The detection is valid: levels are genuine entry/target **locati
 price process (volatility/mean-reversion); structure adds only a few points. Levels are
 worth using as locations, not as a powerful filter. Don't over-weight them.
 
+## Finding 4 — higher-timeframe levels: daily wins, weekly folklore fails
+`ml-training/level_validation_htf.py` tested daily-close + weekly (close/high/low) classes
+vs the 4H swing baseline and random, all through the identical forward-outcome logic.
+```
+CRYPTO (vs random 85.6%)            STOCK (vs random 79.9%)
+  daily close   91.4%  +5.8  best     weekly close  85.9%  +5.9  best
+  4H swing      89.8%  +4.2            daily close   85.6%  +5.7
+  weekly close  88.6%  +3.0            weekly low    85.6%  +5.6
+  weekly low    87.1%  +1.5            4H swing      85.1%  +5.1
+  weekly high   85.9%  +0.3  ~random   weekly high   85.1%  +5.1
+```
+Takeaways:
+- **Daily closes are the strongest class**, beating the 4H swings the app already uses
+  (+5.8 vs +4.2pp crypto; +5.7 vs +5.1 stock). The one genuinely actionable find.
+- **"Weekly > daily > 4H" is FALSE.** On crypto it's daily > 4H > weekly. Higher TF ≠
+  stronger level.
+- **Weekly highs/lows are weak-to-random on crypto** (weekly high +0.3pp = noise). Crypto
+  trends 24/7 and blows through weekly extremes — consistent with the momentum thesis
+  ([[edge-crypto-direction-model]]). Stocks (mean-reverting) respect weekly levels fine.
+- Still a minor effect overall — everything in an 85-91% band over an 80-86% floor; which
+  timeframe barely matters.
+
+Conclusion: adding **daily closes** as a level source is defensible (best class, marginal
+edge over existing 4H swings). Adding **weekly** is not justified — weekly close helps only
+on stocks, weekly H/L not at all on crypto. NOT YET IMPLEMENTED — pending decision.
+
 ## Actions taken (2026-05-31)
 - **Neutralized** the prompt strength tags in `AnalysisPrompt.swift`: `WORN_Nx_distrust` /
   `FRESH_1x_strongest_reaction` / `RECENT_Nx` → neutral `tested_Nx` fact; `FLIP_ROLE` kept
