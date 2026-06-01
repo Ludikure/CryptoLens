@@ -388,7 +388,7 @@ export interface CoinInfo { priceChangePercentage24h?: number | null; priceChang
 export interface CrossAssetContext { summary: string; dxyPrice: number; dxyEma20: number; dxyTrend: string; spyPrice: number; spyEma20: number; spyTrend: string; }
 interface DataQuality { promptSection?: string | null; missingEnrichments: string[]; }
 interface InsiderTx { date: number; isBuy: boolean; name: string; shares: number; value: number; }
-interface StockInfo {
+export interface StockInfo {
   marketState: string; peRatio?: number | null; eps?: number | null; dividendYield?: number | null;
   fiftyTwoWeekLow: number; fiftyTwoWeekHigh: number; sector?: string | null; earningsDate?: number | null;
   analystTargetMean?: number | null; analystCount?: number | null; analystRating?: string | null;
@@ -402,7 +402,7 @@ interface StockInfo {
 }
 export interface DerivativesData { fundingRatePercent: number; avgFundingRate: number; openInterestUSD: number; oiChange4h?: number | null; oiChange24h?: number | null; globalLongPercent: number; globalShortPercent: number; topTraderLongPercent: number; topTraderShortPercent: number; takerBuySellRatio: number; takerBuyVolume: number; }
 export interface PositioningSnapshot { fundingSentiment: string; oiTrend: string; crowding: string; crowdingCode: string; smartMoneyBias: string; takerPressure: string; squeezeRisk: { level: string; direction: string }; signals: Array<{ strength: string; message: string }>; }
-interface StockSentimentData { vix?: number | null; vixLevel: string; vixChange?: number | null; shortPercentOfFloat?: number | null; shortRatio?: number | null; fiftyTwoWeekPosition: number; putCallRatio?: number | null; }
+export interface StockSentimentData { vix?: number | null; vixLevel: string; vixChange?: number | null; shortPercentOfFloat?: number | null; shortRatio?: number | null; fiftyTwoWeekPosition: number; putCallRatio?: number | null; }
 interface EconomicEvent { title: string; country: string; isHighImpact: boolean; isUpcoming: boolean; isRecentlyReleased: boolean; date: number; actual?: string | null; forecast?: string | null; surprise?: string | null; previous?: string | null; }
 export interface MacroSnapshot { macroRegime?: string | null; vix?: number | null; treasury10Y?: number | null; treasury2Y?: number | null; yieldSpread?: number | null; fedFundsRate?: number | null; usdIndex?: number | null; }
 export interface SpotPressure { takerBuyRatio: number; takerBuyLabel: string; cvd24h: number; cvdTrend: string; bookRatio?: number | null; bookLabel?: string | null; }

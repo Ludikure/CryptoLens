@@ -68,6 +68,16 @@ export interface MarketData {
   macro: { vix?: number | null; treasury10Y?: number | null; treasury2Y?: number | null; yieldSpread?: number | null; fedFundsRate?: number | null; usdIndex?: number | null } | null;
   fearGreed: { value: number; label: string } | null;
   economicEvents?: EconomicEventItem[];
+  stockInfo?: {
+    marketState: string; peRatio: number | null; eps: number | null; dividendYield: number | null;
+    fiftyTwoWeekLow: number; fiftyTwoWeekHigh: number; sector: string | null; earningsDate: number | null;
+    analystTargetMean: number | null; analystCount: number | null; analystRating: string | null;
+    revenueGrowthYoY: number | null; earningsGrowthYoY: number | null; beta: number | null;
+    exDividendDate: number | null; dividendRate: number | null;
+  } | null;
+  stockSentiment?: {
+    vix: number | null; vixLevel: string; shortPercentOfFloat: number | null; shortRatio: number | null; fiftyTwoWeekPosition: number; putCallRatio: number | null;
+  } | null;
 }
 
 export interface EconomicEventItem {

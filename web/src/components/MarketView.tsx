@@ -29,9 +29,43 @@ export function MarketView({ symbol }: { symbol: string }) {
   if (!m) return null;
 
   const d = m.derivatives, p = m.positioning, sp = m.spotPressure, s = m.sentiment, ca = m.crossAsset, mac = m.macro, fg = m.fearGreed;
+  const si = m.stockInfo, ss = m.stockSentiment;
+  const earnDays = si?.earningsDate != null ? Math.round((si.earningsDate - Date.now()) / 86400000) : null;
 
   return (
     <div className="market-view">
+      {si && (
+        <section className="card">
+          <h2>Fundamentals</h2>
+          <Row k="Market state" v={si.marketState} />
+          {si.peRatio != null && <Row k="P/E" v={si.peRatio.toFixed(1)} />}
+          {si.eps != null && <Row k="EPS" v={`$${si.eps.toFixed(2)}`} />}
+          {si.sector && <Row k="Sector" v={si.sector} />}
+          <Row k="52-week range" v={`${formatPrice(si.fiftyTwoWeekLow)} – ${formatPrice(si.fiftyTwoWeekHigh)}`} />
+          {si.beta != null && <Row k="Beta" v={si.beta.toFixed(2)} cls={si.beta > 1.5 ? 'bear' : si.beta < 0.8 ? 'bull' : ''} />}
+          {si.dividendYield != null && si.dividendYield > 0 && <Row k="Dividend yield" v={`${si.dividendYield.toFixed(2)}%`} />}
+          {earnDays != null && <Row k="Earnings" v={`${earnDays >= 0 ? `in ${earnDays}d` : 'recent'}`} cls={earnDays >= 0 && earnDays <= 7 ? 'bear' : ''} />}
+          {si.revenueGrowthYoY != null && <Row k="Revenue growth YoY" v={pct(si.revenueGrowthYoY)} cls={si.revenueGrowthYoY >= 0 ? 'bull' : 'bear'} />}
+        </section>
+      )}
+
+      {si && si.analystCount != null && si.analystCount > 0 && (
+        <section className="card">
+          <h2>Analysts</h2>
+          <Row k="Coverage" v={`${si.analystCount} analysts`} />
+          {si.analystRating && <Row k="Consensus" v={si.analystRating.replace('_', ' ')} cls={/buy/i.test(si.analystRating) ? 'bull' : /sell/i.test(si.analystRating) ? 'bear' : ''} />}
+          {si.analystTargetMean != null && <Row k="Mean target" v={formatPrice(si.analystTargetMean)} />}
+        </section>
+      )}
+
+      {ss && si && (
+        <section className="card">
+          <h2>Stock Sentiment</h2>
+          <Row k="52-week position" v={`${ss.fiftyTwoWeekPosition.toFixed(0)}%`} cls={ss.fiftyTwoWeekPosition >= 80 ? 'bull' : ss.fiftyTwoWeekPosition <= 20 ? 'bear' : ''} />
+          {ss.shortPercentOfFloat != null && <Row k="Short % of float" v={`${ss.shortPercentOfFloat.toFixed(1)}%`} cls={ss.shortPercentOfFloat > 20 ? 'bear' : ''} />}
+          {ss.shortRatio != null && <Row k="Days to cover" v={ss.shortRatio.toFixed(1)} />}
+        </section>
+      )}
       {fg && (
         <section className="card">
           <h2>Fear &amp; Greed</h2>
@@ -119,7 +153,7 @@ export function MarketView({ symbol }: { symbol: string }) {
       {!d && !sp && !s && !ca && !fg && (mac == null) && (
         <div className="status muted">No market data available for {symbol}.</div>
       )}
-      {!m.isCrypto && <div className="muted small" style={{ marginTop: 8 }}>Derivatives, spot pressure, sentiment &amp; Fear/Greed are crypto-only. Stock fundamentals are coming to the web app.</div>}
+      {!m.isCrypto && <div className="muted small" style={{ marginTop: 8 }}>Derivatives, spot pressure &amp; Fear/Greed are crypto-only.</div>}
     </div>
   );
 }

@@ -3,10 +3,13 @@
 // positioning (DerivativesService + PositioningAnalyzer) and macro (FRED via the /macro cache).
 // Stock fundamentals / sentiment / cross-asset / economic events are layered in subsequently.
 
-import type { DerivativesData, PositioningSnapshot, MacroSnapshot, SpotPressure, CoinInfo, CrossAssetContext } from './prompt';
+import type { DerivativesData, PositioningSnapshot, MacroSnapshot, SpotPressure, CoinInfo, CrossAssetContext, StockInfo, StockSentimentData } from './prompt';
 import { emaArray } from './scoring-full';
 
 interface Env { ALERTS: KVNamespace; }
+
+const YAHOO = 'https://query1.finance.yahoo.com';
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
 
 const FAPI = 'https://fapi.binance.com';
 const num = (s: unknown): number | null => { const v = typeof s === 'string' ? parseFloat(s) : typeof s === 'number' ? s : NaN; return isNaN(v) ? null : v; };
@@ -309,6 +312,100 @@ export async function fetchFearGreed(): Promise<{ value: number; label: string }
     const v = parseInt(d.value, 10);
     return isNaN(v) ? null : { value: v, label: String(d.value_classification ?? '') };
   } catch { return null; }
+}
+
+// ── Stock fundamentals + sentiment (Yahoo quoteSummary) — port of YahooFinanceService ──
+// Shares the same yahoo-crumb KV cache the /yahoo/summary endpoint uses.
+async function getYahooCrumb(env: Env): Promise<{ cookie: string; crumb: string } | null> {
+  try {
+    const cached = await env.ALERTS.get('cache:yahoo-crumb');
+    if (cached) { const p = JSON.parse(cached); if (Date.now() - p.timestamp < 1800_000) return p.data; }
+  } catch { /* ignore */ }
+  try {
+    const fc = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': UA }, redirect: 'manual' });
+    const a3 = (fc.headers.get('set-cookie') || '').match(/A3=([^;]+)/);
+    if (!a3) return null;
+    const cookie = `A3=${a3[1]}`;
+    const cr = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', { headers: { 'User-Agent': UA, 'Cookie': cookie } });
+    if (!cr.ok) return null;
+    const crumb = await cr.text();
+    if (!crumb || crumb.includes('Unauthorized')) return null;
+    const result = { cookie, crumb };
+    try { await env.ALERTS.put('cache:yahoo-crumb', JSON.stringify({ data: result, timestamp: Date.now() }), { expirationTtl: 1800 }); } catch { /* ignore */ }
+    return result;
+  } catch { return null; }
+}
+const rawNum = (n: any): number | null => { const v = n?.raw ?? n; return typeof v === 'number' && !isNaN(v) ? v : null; };
+const vixLabel = (vix: number): string => vix > 30 ? 'High' : vix > 20 ? 'Elevated' : vix < 15 ? 'Low' : 'Normal';
+
+export async function fetchStockEnrichment(env: Env, symbol: string): Promise<{ stockInfo: StockInfo; stockSentiment: StockSentimentData } | null> {
+  const modules = 'price,summaryDetail,defaultKeyStatistics,financialData,calendarEvents,assetProfile';
+  const cacheKey = `cache:yahoo-summary:${symbol}:${modules}`;
+  let qs: any = null;
+  try {
+    const cached = await env.ALERTS.get(cacheKey);
+    if (cached) { const p = JSON.parse(cached); if (Date.now() - p.timestamp < 300_000) qs = p.data; }
+  } catch { /* ignore */ }
+  if (!qs) {
+    const auth = await getYahooCrumb(env);
+    const headers: Record<string, string> = { 'User-Agent': UA };
+    if (auth) headers['Cookie'] = auth.cookie;
+    const crumbParam = auth ? `&crumb=${encodeURIComponent(auth.crumb)}` : '';
+    try {
+      const r = await fetch(`${YAHOO}/v10/finance/quoteSummary/${symbol}?modules=${modules}${crumbParam}`, { headers });
+      if (!r.ok) return null;
+      qs = await r.json();
+      try { await env.ALERTS.put(cacheKey, JSON.stringify({ data: qs, timestamp: Date.now() }), { expirationTtl: 600 }); } catch { /* ignore */ }
+    } catch { return null; }
+  }
+  const res = qs?.quoteSummary?.result?.[0];
+  if (!res) return null;
+  const price = res.price ?? {}, sd = res.summaryDetail ?? {}, ks = res.defaultKeyStatistics ?? {}, fd = res.financialData ?? {}, ce = res.calendarEvents ?? {}, ap = res.assetProfile ?? {};
+
+  const ms = price.marketState as string | undefined;
+  const marketState = ms === 'REGULAR' ? 'OPEN' : (ms || 'CLOSED');
+  const low = rawNum(sd.fiftyTwoWeekLow), high = rawNum(sd.fiftyTwoWeekHigh);
+  const curPrice = rawNum(price.regularMarketPrice) ?? rawNum(fd.currentPrice);
+  const earningsArr = ce?.earnings?.earningsDate;
+  const earningsSec = Array.isArray(earningsArr) && earningsArr.length ? rawNum(earningsArr[0]) : null;
+  const exDivSec = rawNum(ce.exDividendDate) ?? rawNum(sd.exDividendDate);
+  const dy = rawNum(sd.dividendYield);
+  const revG = rawNum(fd.revenueGrowth), earnG = rawNum(fd.earningsGrowth);
+
+  const stockInfo: StockInfo = {
+    marketState,
+    peRatio: rawNum(sd.trailingPE),
+    eps: rawNum(ks.trailingEps),
+    dividendYield: dy != null ? dy * 100 : null,
+    fiftyTwoWeekLow: low ?? 0,
+    fiftyTwoWeekHigh: high ?? 0,
+    sector: ap.sector ?? null,
+    earningsDate: earningsSec != null ? earningsSec * 1000 : null,
+    analystTargetMean: rawNum(fd.targetMeanPrice),
+    analystCount: rawNum(fd.numberOfAnalystOpinions),
+    analystRating: fd.recommendationKey ?? null,
+    revenueGrowthYoY: revG != null ? revG * 100 : null,
+    earningsGrowthYoY: earnG != null ? earnG * 100 : null,
+    beta: rawNum(sd.beta) ?? rawNum(ks.beta),
+    exDividendDate: exDivSec != null ? exDivSec * 1000 : null,
+    dividendRate: rawNum(sd.dividendRate),
+    exDividendWarning: exDivSec != null ? (exDivSec * 1000 - Date.now()) / 86400000 <= 5 && exDivSec * 1000 >= Date.now() : null,
+  };
+
+  // VIX from the macro cache; 52w position + short interest from Yahoo.
+  const macro = await fetchMacroEnrichment(env);
+  const pos = (curPrice != null && low != null && high != null && high > low) ? (curPrice - low) / (high - low) * 100 : 0;
+  const shortPct = rawNum(ks.shortPercentOfFloat);
+  const stockSentiment: StockSentimentData = {
+    vix: macro?.vix ?? null,
+    vixLevel: macro?.vix != null ? vixLabel(macro.vix) : 'Normal',
+    vixChange: null,
+    shortPercentOfFloat: shortPct != null ? shortPct * 100 : null,
+    shortRatio: rawNum(ks.shortRatio),
+    fiftyTwoWeekPosition: pos,
+    putCallRatio: null,   // needs the options chain — omitted for v1
+  };
+  return { stockInfo, stockSentiment };
 }
 
 // Macro snapshot from the /macro cache (FRED + DXY). Best-effort — returns null if uncached.
