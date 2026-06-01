@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react';
 import { getDirectionAccuracy, getMlCalibration } from '../api';
 import type { DirectionAccuracy, MlCalibration } from '../types';
+import { formatPrice } from '../format';
 
 const acc = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(1) + '%');
 const dirLabel = (d: number) => (d === 1 ? 'LONG' : d === -1 ? 'SHORT' : '—');
+const dirCls = (d: number) => (d === 1 ? 'bull' : d === -1 ? 'bear' : '');
+const pctOf = (v: number) => Math.round(v * 100) + '%';
+const fwd = (v: number | null | undefined) => (v == null ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(2) + '%');
+const inHrs = (resolveAt: number) => { const h = (resolveAt - Date.now()) / 3600000; return h <= 0 ? 'grading' : h < 1 ? `${Math.round(h * 60)}m` : `${h.toFixed(1)}h`; };
 
 // Live scoreboards — both endpoints are universe-wide + forward, accumulating from the cron
 // whether or not anyone opens the app. The direction model's frozen-holdout baseline is 94.7%.
@@ -75,7 +80,44 @@ export function Dashboard() {
             )}
           </>
         ) : (
-          <div className="muted">No resolved direction signals yet ({dir?.pending ?? 0} pending). Signals fire when ML ≥ 70% AND pUp ≥ 70% / ≤ 30%, and grade 24h later.</div>
+          <div className="muted">No resolved signals yet. Signals fire when ML ≥ 70% AND pUp ≥ 70% / ≤ 30%, and grade 24h later.</div>
+        )}
+
+        {/* Open (pending) signals — which coins are live now + their predicted direction */}
+        {dir && dir.pendingSignals && dir.pendingSignals.length > 0 && (
+          <>
+            <h3 className="sub">Open signals ({dir.pendingSignals.length}) — awaiting 24h grade</h3>
+            <table className="grid">
+              <thead><tr><th>Symbol</th><th>Dir</th><th>pUp</th><th>ML</th><th>Entry</th><th>Resolves</th></tr></thead>
+              <tbody>{dir.pendingSignals.map((s, i) => (
+                <tr key={i}>
+                  <td>{s.symbol}</td>
+                  <td className={dirCls(s.predicted_dir)}>{dirLabel(s.predicted_dir)}</td>
+                  <td>{pctOf(s.p_up)}</td><td>{pctOf(s.ml_win)}</td>
+                  <td>{formatPrice(s.entry_price)}</td><td className="muted">{inHrs(s.resolve_at)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </>
+        )}
+
+        {/* Recently graded */}
+        {dir && dir.recent && dir.recent.length > 0 && (
+          <>
+            <h3 className="sub">Recently graded</h3>
+            <table className="grid">
+              <thead><tr><th>Symbol</th><th>Dir</th><th>pUp</th><th>Result</th><th>24h move</th></tr></thead>
+              <tbody>{dir.recent.slice(0, 15).map((s, i) => (
+                <tr key={i}>
+                  <td>{s.symbol}</td>
+                  <td className={dirCls(s.predicted_dir)}>{dirLabel(s.predicted_dir)}</td>
+                  <td>{pctOf(s.p_up)}</td>
+                  <td className={s.correct ? 'bull' : 'bear'}>{s.correct ? '✓ correct' : '✗ wrong'}</td>
+                  <td className={s.fwd_return >= 0 ? 'bull' : 'bear'}>{fwd(s.fwd_return)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </>
         )}
       </section>
 

@@ -1633,6 +1633,13 @@ export default {
         const pending = await env.DB.prepare(
           'SELECT COUNT(*) as n FROM direction_signals WHERE resolved = 0'
         ).first();
+        // The open signals themselves — which symbols are being tracked + their predicted
+        // direction, so the UI can show "what's live right now", not just a count.
+        const pendingSignals = await env.DB.prepare(`
+          SELECT symbol, fired_at, entry_price, p_up, predicted_dir, ml_win, resolve_at
+          FROM direction_signals WHERE resolved = 0
+          ORDER BY fired_at DESC LIMIT 50
+        `).all();
         const recent = await env.DB.prepare(`
           SELECT symbol, fired_at, p_up, predicted_dir, ml_win, fwd_return, correct
           FROM direction_signals WHERE resolved = 1
@@ -1644,12 +1651,13 @@ export default {
           byDirection: byDirection.results ?? [],
           bySymbol: bySymbol.results ?? [],
           pending: (pending?.n as number) ?? 0,
+          pendingSignals: pendingSignals.results ?? [],
           recent: recent.results ?? [],
           backtestBaseline: 94.7,   // frozen-holdout dual-gate accuracy for reference
         });
       } catch (e) {
         // Table not created yet (no cron has fired a signal) — return an empty shell.
-        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], byDirection: [], bySymbol: [], pending: 0, recent: [], backtestBaseline: 94.7 });
+        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], byDirection: [], bySymbol: [], pending: 0, pendingSignals: [], recent: [], backtestBaseline: 94.7 });
       }
     }
 

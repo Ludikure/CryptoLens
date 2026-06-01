@@ -93,6 +93,7 @@ export interface DirectionAccuracy {
   byDirection: Array<{ predicted_dir: number; n: number; accuracy: number }>;
   bySymbol: Array<{ symbol: string; n: number; correct: number; accuracy: number; longs: number; long_correct: number; shorts: number; short_correct: number }>;
   pending: number;
+  pendingSignals: Array<{ symbol: string; fired_at: number; entry_price: number; p_up: number; predicted_dir: number; ml_win: number; resolve_at: number }>;
   recent: Array<{ symbol: string; fired_at: number; p_up: number; predicted_dir: number; ml_win: number; fwd_return: number; correct: number }>;
   backtestBaseline: number;
 }
