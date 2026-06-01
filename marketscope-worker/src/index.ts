@@ -1090,6 +1090,13 @@ export default {
         });
         try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
 
+        // Dry-run: return the built prompt (no LLM call) so the server prompt can be inspected /
+        // diffed against the iOS prompt for parity. Cheap (no Claude tokens).
+        if (body.promptOnly === true) {
+          const sections = (prompt.match(/^=== .* ===$/gm) || []).map(s => s.replace(/=/g, '').trim());
+          return json({ symbol, isCrypto, length: prompt.length, sectionCount: sections.length, sections, prompt });
+        }
+
         if (prompt.length > MAX_PROMPT_CHARS) return json({ error: 'Prompt too large' }, 413);
         const system = systemPrompt(isCrypto);
 
