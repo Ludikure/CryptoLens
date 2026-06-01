@@ -27,17 +27,22 @@ function align(times: UTCTimestamp[], series: number[]) {
 function Panel({ tf, draw }: { tf: IndicatorTF; draw: (chart: IChartApi, tf: IndicatorTF, times: UTCTimestamp[]) => (() => void) }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+  // Previous draw's series-teardown. Called at the TOP of the next data effect (tf change) —
+  // NOT as an effect cleanup. On unmount we only run chart.remove(), which disposes the series
+  // wholesale; calling removeSeries() on an already-disposed chart throws and would black-screen
+  // the app when a panel is toggled off.
+  const teardownRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!ref.current) return;
     const chart = createChart(ref.current, baseOpts);
     chartRef.current = chart;
-    return () => { chart.remove(); chartRef.current = null; };
+    return () => { teardownRef.current = null; try { chart.remove(); } catch { /* already gone */ } chartRef.current = null; };
   }, []);
   useEffect(() => {
     const chart = chartRef.current; if (!chart) return;
-    const cleanup = draw(chart, tf, sortedTimes(tf.candles));
+    if (teardownRef.current) { try { teardownRef.current(); } catch { /* ignore */ } teardownRef.current = null; }
+    teardownRef.current = draw(chart, tf, sortedTimes(tf.candles));
     chart.timeScale().fitContent();
-    return cleanup;
   }, [tf, draw]);
   return <div className="subpanel" ref={ref} />;
 }
