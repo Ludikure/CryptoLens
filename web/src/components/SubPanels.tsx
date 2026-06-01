@@ -85,7 +85,8 @@ const drawADX = (chart: IChartApi, tf: IndicatorTF, times: UTCTimestamp[]) => {
   return () => { chart.removeSeries(adx); chart.removeSeries(plus); chart.removeSeries(minus); };
 };
 const drawVolume = (chart: IChartApi, tf: IndicatorTF, _times: UTCTimestamp[]) => {
-  const vol = chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+  // type:'volume' → compact axis labels (40M, 1.5B) instead of "40000000.00".
+  const vol = chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: { type: 'volume' } });
   const candles = [...tf.candles].sort((a, b) => a.time - b.time);
   vol.setData(candles.map(c => ({ time: Math.floor(c.time / 1000) as UTCTimestamp, value: c.volume, color: c.close >= c.open ? 'rgba(38,166,154,0.6)' : 'rgba(239,83,80,0.6)' })));
   return () => chart.removeSeries(vol);
