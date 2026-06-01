@@ -194,6 +194,22 @@ function candlePatterns(o: number[], h: number[], l: number[], c: number[]) {
   return out;
 }
 
+// Full-precision MACD series for DISPLAY only. computeMACD rounds to 2dp to match the iOS
+// ML-feature path (parity) — which zeroes out sub-cent assets (DOGE MACD ~0.0001 → 0.00 → a
+// flat chart line). The display series are visual-only (no 1e-7 parity), so keep full precision
+// here. Same math as computeMACD minus the r2 rounding; crossover/scalar still come from computeMACD.
+function macdSeriesFull(closes: number[]): { macdLine: number[]; signalLine: number[]; histogram: number[] } {
+  const ema12 = emaArray(closes, 12), ema26 = emaArray(closes, 26);
+  const minLen = Math.min(ema12.length, ema26.length);
+  if (minLen === 0) return { macdLine: [], signalLine: [], histogram: [] };
+  const a12 = ema12.slice(ema12.length - minLen), a26 = ema26.slice(ema26.length - minLen);
+  const rawMacd = a12.map((v, i) => v - a26[i]);
+  const rawSignal = emaArray(rawMacd, 9);
+  const sigLen = rawSignal.length;
+  const macdT = rawMacd.slice(rawMacd.length - sigLen);
+  return { macdLine: macdT, signalLine: rawSignal, histogram: macdT.map((v, i) => v - rawSignal[i]) };
+}
+
 function bollingerBandsFull(closes: number[], period = 20, k = 2) {
   const scalar = computeBollingerBands(closes, period, k);
   if (closes.length < period) return { ...scalar, upper: null as number | null, middle: null as number | null, lower: null as number | null };
@@ -222,6 +238,7 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
   const divNum = rsiArr.length >= 50 ? detectDivergence(closes.slice(-50), rsiArr.slice(-50)) : 0;
   const divergence = crossStr(divNum);
   const macd = computeMACD(closes);
+  const macdF = macdSeriesFull(closes);   // full-precision series for the chart (sub-cent assets)
   const macdHist = last(macd.histogram) ?? 0;
   const bb = bollingerBandsFull(closes);
   const atrVal = candles.length >= 15 ? computeATR(candles) : current * 0.01;
@@ -311,7 +328,7 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
     adLine: opts.isCrypto ? null : { trend: adAccum ? 'Accumulation' : 'Distribution' },
     candles: tail(candles),
     rsiSeries: tail(rsiArr), stochKSeries: tail(stoch.kValues), stochDSeries: tail(stoch.dValues),
-    macdHistSeries: tail(macd.histogram), macdLineSeries: tail(macd.macdLine), macdSignalSeries: tail(macd.signalLine),
+    macdHistSeries: tail(macdF.histogram), macdLineSeries: tail(macdF.macdLine), macdSignalSeries: tail(macdF.signalLine),
     adxSeries: adx ? tail(adx.adxSeries) : [], plusDISeries: adx ? tail(adx.plusDISeries) : [], minusDISeries: adx ? tail(adx.minusDISeries) : [],
     ema20Series: tail(ema20A), ema50Series: tail(ema50A), ema200Series: tail(ema200A),
     volumeRatioSeries: (() => { const out: number[] = []; if (volumes.length >= 20) for (let i = 19; i < volumes.length; i++) { const avg = volumes.slice(i - 19, i + 1).reduce((a, b) => a + b, 0) / 20; out.push(avg > 0 ? volumes[i] / avg : 1); } return tail(out); })(),
