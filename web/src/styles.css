@@ -56,6 +56,10 @@ table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
 .tag.muted, .muted { color: var(--muted); }
 .bull { color: var(--bull); } .bear { color: var(--bear); } .neutral { color: var(--muted); }
+.refresh { background: var(--panel); border: 1px solid var(--line); color: var(--muted); width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 15px; }
+.refresh:hover { border-color: var(--accent); color: var(--accent); }
+.refresh:disabled { opacity: 0.5; cursor: default; }
+.updated { font-size: 12px; }
 
 .tf-bar { display: flex; gap: 6px; margin: 12px 0 6px; }
 .tf-bar button { background: var(--panel); border: 1px solid var(--line); color: var(--muted); padding: 4px 14px; border-radius: 7px; cursor: pointer; font-size: 13px; }
@@ -103,3 +107,25 @@ table.setups td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .markdown code { background: #0c1018; padding: 1px 4px; border-radius: 4px; }
 
 footer { color: var(--muted); font-size: 12px; text-align: center; margin: 28px 0 8px; }
+
+/* Phones */
+@media (max-width: 640px) {
+  .app { padding: 12px; }
+  header { gap: 10px; }
+  header h1 { font-size: 18px; }
+  .search { margin-left: 0; width: 100%; }
+  .search input { width: 100%; }
+  .views { width: 100%; }
+  .views button { flex: 1; }
+  .price-header .px { font-size: 20px; }
+  .chart { height: 300px; }
+  .subpanel { height: 100px; }
+  /* Indicator table: let it scroll horizontally rather than crush 3 columns */
+  table.indicators { display: block; overflow-x: auto; white-space: nowrap; }
+  .indicators .rows { gap: 2px 8px; font-size: 13px; }
+  table.indicators td { min-width: 150px; }
+  .big-stats { gap: 14px; }
+  .big-stats b { font-size: 17px; }
+  table.grid { font-size: 13px; }
+  table.grid th, table.grid td { padding: 5px 6px; }
+}

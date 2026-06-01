@@ -104,6 +104,8 @@ export function App() {
             <div className={`tag ${biasClass(daily.bias)}`}>{daily.bias}</div>
             {daily.atrPercentile != null && <div className="tag muted">ATR {Math.round(daily.atrPercentile)}%</div>}
             <div className="tag muted">{daily.bullPercent != null ? pct(daily.bullPercent - 50, 0) + ' tilt' : ''}</div>
+            <button className="refresh" onClick={() => load(symbol)} disabled={indLoading} title="Refresh data">↻</button>
+            {ind!.timestamp && <span className="updated muted">as of {new Date(ind!.timestamp).toLocaleTimeString()}</span>}
           </div>
 
           <div className="tf-bar">
