@@ -65,6 +65,9 @@ table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .chart { height: 360px; width: 100%; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 
 .subpanels { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.subpanel-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+.subpanel-toggles button { background: var(--panel); border: 1px solid var(--line); color: var(--muted); padding: 3px 12px; border-radius: 999px; cursor: pointer; font-size: 12px; }
+.subpanel-toggles button.on { border-color: var(--accent); color: var(--accent); }
 .subpanel-row { position: relative; }
 .subpanel-label { position: absolute; top: 4px; left: 8px; z-index: 2; font-size: 11px; color: var(--muted); letter-spacing: 0.5px; pointer-events: none; }
 .subpanel { height: 120px; width: 100%; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }

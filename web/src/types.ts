@@ -19,7 +19,7 @@ export interface IndicatorTF {
   ema20Series: number[]; ema50Series: number[]; ema200Series: number[];
   rsiSeries: number[]; stochKSeries: number[]; stochDSeries: number[];
   macdHistSeries: number[]; macdLineSeries: number[]; macdSignalSeries: number[];
-  adxSeries: number[]; volumeRatioSeries: number[];
+  adxSeries: number[]; plusDISeries: number[]; minusDISeries: number[]; volumeRatioSeries: number[];
 }
 
 export interface IndicatorsResponse {
