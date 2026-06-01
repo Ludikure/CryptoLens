@@ -7,7 +7,7 @@ import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
-import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed } from './enrichment';
+import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -983,18 +983,19 @@ export default {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       if (!symbol) return json({ error: 'Missing symbol' }, 400);
       const isCrypto = symbol.endsWith('USDT');
-      const [deriv, spotPressure, sentiment, crossAsset, macro, fearGreed] = await Promise.all([
+      const [deriv, spotPressure, sentiment, crossAsset, macro, fearGreed, economicEvents] = await Promise.all([
         isCrypto ? fetchDerivativesEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
         isCrypto ? fetchSpotPressureEnrichment(symbol).catch(() => null) : Promise.resolve(null),
         isCrypto ? fetchSentimentEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
         isCrypto ? fetchCrossAssetEnrichment().catch(() => null) : Promise.resolve(null),
         fetchMacroEnrichment(env).catch(() => null),
         isCrypto ? fetchFearGreed().catch(() => null) : Promise.resolve(null),
+        fetchEconomicEvents(Date.now()).catch(() => []),
       ]);
       return json({
         symbol, isCrypto, timestamp: Date.now(),
         derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null,
-        spotPressure, sentiment, crossAsset, macro, fearGreed,
+        spotPressure, sentiment, crossAsset, macro, fearGreed, economicEvents,
       });
     }
 
@@ -1054,12 +1055,14 @@ export default {
         // Enrichment (additive, best-effort, parallel). Crypto: Binance derivatives + positioning.
         // Both markets: macro (FRED/DXY from the /macro cache). The rest of the enrichment
         // (sentiment/stockInfo/stockSentiment/cross-asset/economic events) is layered in next.
-        const [deriv, macro, spotPressure, sentiment, crossAsset] = await Promise.all([
+        const nowMs = Date.now();
+        const [deriv, macro, spotPressure, sentiment, crossAsset, economicEvents] = await Promise.all([
           isCrypto ? fetchDerivativesEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
           fetchMacroEnrichment(env).catch(() => null),
           isCrypto ? fetchSpotPressureEnrichment(symbol).catch(() => null) : Promise.resolve(null),
           isCrypto ? fetchSentimentEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
           isCrypto ? fetchCrossAssetEnrichment().catch(() => null) : Promise.resolve(null),
+          fetchEconomicEvents(nowMs).catch(() => []),   // both markets — macro events drive the Macro Risk flag + kill
         ]);
 
         // Stateful prompt build — KV-backed prevState (regime staleness, kill durations, naked POC).
@@ -1074,7 +1077,7 @@ export default {
           conformalGateEnabled: body.conformalGateEnabled === true,
         };
         const { prompt, newState } = buildUserPrompt({
-          symbol, nowMs: Date.now(), indicators, outcomeHistory, prevState, settings,
+          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents,
           derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
         });
         try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }

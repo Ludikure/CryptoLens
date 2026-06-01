@@ -245,6 +245,59 @@ export async function fetchCrossAssetEnrichment(): Promise<CrossAssetContext | n
   return buildCrossAsset(dxy, spy);
 }
 
+// ── Economic calendar (FairEconomy) — port of EconomicCalendarService ──
+// The server prompt was blind to macro events (ISM/CPI/Fed/NFP), so it missed the Macro Risk
+// flag + macro_event_within_4h kill that iOS computes. This restores parity for BOTH markets.
+export interface EconomicEventOut {
+  title: string; country: string; impact: string;
+  isHighImpact: boolean; isUpcoming: boolean; isRecentlyReleased: boolean;
+  date: number; actual: string | null; forecast: string | null; previous: string | null; surprise: string | null;
+}
+// ms of ET-midnight-today: subtract the ET wall-clock elapsed-since-midnight from now (tz-safe).
+function etStartOfDayMs(nowMs: number): number {
+  const dtf = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const p = dtf.formatToParts(new Date(nowMs));
+  const get = (t: string) => +p.find(x => x.type === t)!.value;
+  let hh = get('hour'); if (hh === 24) hh = 0;
+  return nowMs - ((hh * 3600 + get('minute') * 60 + get('second')) * 1000);
+}
+function surpriseOf(actual: string | null, forecast: string | null): string | null {
+  if (!actual || !forecast) return null;
+  const a = parseFloat(actual.replace(/%/g, '').replace(/K/g, ''));
+  const e = parseFloat(forecast.replace(/%/g, '').replace(/K/g, ''));
+  if (isNaN(a) || isNaN(e)) return null;
+  if (a > e * 1.01) return 'BEAT';
+  if (a < e * 0.99) return 'MISS';
+  return 'IN-LINE';
+}
+export async function fetchEconomicEvents(nowMs: number): Promise<EconomicEventOut[]> {
+  try {
+    const r = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json', { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' } });
+    if (!r.ok) return [];
+    const arr = await r.json() as any[];
+    if (!Array.isArray(arr)) return [];
+    const etMidnight = etStartOfDayMs(nowMs);
+    const out: EconomicEventOut[] = [];
+    for (const it of arr) {
+      const title = it?.title, dateStr = it?.date, impact = it?.impact, country = it?.country;
+      if (!title || !dateStr || !impact || !country) continue;
+      const date = Date.parse(dateStr);
+      if (isNaN(date)) continue;
+      const delta = date - nowMs;
+      const isUpcoming = delta > 0 && delta < 48 * 3600 * 1000;
+      const isRecentlyReleased = delta <= 0 && date >= etMidnight;
+      if (!(isRecentlyReleased || isUpcoming || delta > 0)) continue;   // released-today or upcoming only
+      const forecast = it.forecast ?? null, previous = it.previous ?? null, actual = it.actual ?? null;
+      out.push({
+        title, country, impact, isHighImpact: impact === 'High', isUpcoming, isRecentlyReleased, date,
+        actual: actual || null, forecast: forecast || null, previous: previous || null, surprise: surpriseOf(actual || null, forecast || null),
+      });
+    }
+    out.sort((a, b) => a.date - b.date);
+    return out;
+  } catch { return []; }
+}
+
 // Crypto Fear & Greed index (alternative.me). Returns {value 0-100, label}.
 export async function fetchFearGreed(): Promise<{ value: number; label: string } | null> {
   try {

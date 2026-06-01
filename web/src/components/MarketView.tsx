@@ -86,6 +86,24 @@ export function MarketView({ symbol }: { symbol: string }) {
         </section>
       )}
 
+      {m.economicEvents && m.economicEvents.filter(e => e.isHighImpact && (e.isUpcoming || e.isRecentlyReleased)).length > 0 && (
+        <section className="card">
+          <h2>Economic Calendar (high-impact)</h2>
+          {m.economicEvents.filter(e => e.isHighImpact && (e.isUpcoming || e.isRecentlyReleased)).slice(0, 8).map((e, i) => {
+            const hrs = (e.date - Date.now()) / 3600000;
+            const when = e.isRecentlyReleased ? 'released' : hrs < 1 ? `${Math.round(hrs * 60)}m` : `${hrs.toFixed(1)}h`;
+            return (
+              <div className="mrow econ" key={i}>
+                <span>{e.isRecentlyReleased ? '✅' : '⏳'} {e.title} <span className="muted small">({e.country})</span></span>
+                <b className="small">
+                  {e.actual ? <>act {e.actual} {e.surprise && <span className={e.surprise === 'BEAT' ? 'bull' : e.surprise === 'MISS' ? 'bear' : 'muted'}>{e.surprise}</span>}</> : <>{e.forecast ? `fc ${e.forecast}` : ''} <span className="muted">{when}</span></>}
+                </b>
+              </div>
+            );
+          })}
+        </section>
+      )}
+
       {mac && (
         <section className="card">
           <h2>Macro</h2>

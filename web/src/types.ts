@@ -67,6 +67,13 @@ export interface MarketData {
   crossAsset: { summary: string; dxyTrend: string; spyTrend: string; dxyPrice: number; spyPrice: number } | null;
   macro: { vix?: number | null; treasury10Y?: number | null; treasury2Y?: number | null; yieldSpread?: number | null; fedFundsRate?: number | null; usdIndex?: number | null } | null;
   fearGreed: { value: number; label: string } | null;
+  economicEvents?: EconomicEventItem[];
+}
+
+export interface EconomicEventItem {
+  title: string; country: string; impact: string;
+  isHighImpact: boolean; isUpcoming: boolean; isRecentlyReleased: boolean;
+  date: number; actual: string | null; forecast: string | null; previous: string | null; surprise: string | null;
 }
 
 // /direction-accuracy — live dual-gate direction-model track record (universe-wide, forward).
