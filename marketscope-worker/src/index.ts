@@ -1076,8 +1076,12 @@ export default {
           riskPercent: Number.isFinite(body.riskPercent) && body.riskPercent > 0 ? Math.min(body.riskPercent, 100) : undefined,
           conformalGateEnabled: body.conformalGateEnabled === true,
         };
+        // Active tracked trades (Active Trade State / C8). The client (iOS) sends its open
+        // positions so the server prompt can emit the same "manage this trade" section the
+        // local path does — the one piece the worker can't know on its own.
+        const activeSetups = Array.isArray(body.activeSetups) ? body.activeSetups : [];
         const { prompt, newState } = buildUserPrompt({
-          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents,
+          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups,
           derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
         });
         try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
