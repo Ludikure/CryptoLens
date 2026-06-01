@@ -7,7 +7,7 @@ import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
-import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment } from './enrichment';
+import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -970,6 +970,29 @@ export default {
       } catch (e) {
         return json({ error: `Indicator compute failed: ${e}`, symbol }, 502);
       }
+    }
+
+    // Market data bundle — the parsed enrichment (no LLM, no indicators) that powers the web
+    // app's Market tab: derivatives positioning, spot pressure, sentiment, cross-asset, macro,
+    // Fear & Greed. Reuses the same enrichment.ts builders /full-analysis uses. All best-effort
+    // + parallel; crypto-only fields are null for stocks.
+    if (path === '/market' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const isCrypto = symbol.endsWith('USDT');
+      const [deriv, spotPressure, sentiment, crossAsset, macro, fearGreed] = await Promise.all([
+        isCrypto ? fetchDerivativesEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
+        isCrypto ? fetchSpotPressureEnrichment(symbol).catch(() => null) : Promise.resolve(null),
+        isCrypto ? fetchSentimentEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
+        isCrypto ? fetchCrossAssetEnrichment().catch(() => null) : Promise.resolve(null),
+        fetchMacroEnrichment(env).catch(() => null),
+        isCrypto ? fetchFearGreed().catch(() => null) : Promise.resolve(null),
+      ]);
+      return json({
+        symbol, isCrypto, timestamp: Date.now(),
+        derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null,
+        spotPressure, sentiment, crossAsset, macro, fearGreed,
+      });
     }
 
     // Full analysis — the shared brain end-to-end: candles → indicators → STATEFUL prompt

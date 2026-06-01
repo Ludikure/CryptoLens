@@ -47,6 +47,27 @@ export interface FullAnalysisResponse {
   error?: string;
 }
 
+// /market — parsed enrichment for the Market tab (no LLM). Crypto-only fields null for stocks.
+export interface MarketData {
+  symbol: string; isCrypto: boolean; timestamp: number;
+  derivatives: {
+    fundingRatePercent: number; avgFundingRate: number; openInterestUSD: number;
+    oiChange4h: number | null; oiChange24h: number | null;
+    globalLongPercent: number; globalShortPercent: number;
+    topTraderLongPercent: number; topTraderShortPercent: number; takerBuySellRatio: number;
+  } | null;
+  positioning: {
+    fundingSentiment: string; oiTrend: string; crowding: string; smartMoneyBias: string;
+    takerPressure: string; squeezeRisk: { level: string; direction: string };
+    signals: Array<{ strength: string; message: string }>;
+  } | null;
+  spotPressure: { takerBuyRatio: number; takerBuyLabel: string; cvd24h: number; cvdTrend: string; bookRatio: number | null; bookLabel: string | null } | null;
+  sentiment: { priceChangePercentage24h?: number | null; priceChangePercentage7d?: number | null; priceChangePercentage30d?: number | null; athChangePercentage: number } | null;
+  crossAsset: { summary: string; dxyTrend: string; spyTrend: string; dxyPrice: number; spyPrice: number } | null;
+  macro: { vix?: number | null; treasury10Y?: number | null; treasury2Y?: number | null; yieldSpread?: number | null; fedFundsRate?: number | null; usdIndex?: number | null } | null;
+  fearGreed: { value: number; label: string } | null;
+}
+
 // /direction-accuracy — live dual-gate direction-model track record (universe-wide, forward).
 export interface DirectionAccuracy {
   overall: { resolved: number; correct?: number; accuracy: number | null; longs?: number; shorts?: number };

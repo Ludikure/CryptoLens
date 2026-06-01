@@ -29,6 +29,16 @@ table.grid th { text-align: left; color: var(--muted); font-weight: 600; padding
 table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .small { font-size: 12px; }
 
+.market-view { display: flex; flex-direction: column; gap: 14px; margin-top: 16px; }
+.mrow { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 3px 0; font-variant-numeric: tabular-nums; }
+.mrow > span { color: var(--muted); }
+.mrow > b { text-align: right; }
+.fg { display: flex; align-items: baseline; gap: 12px; }
+.fg-val { font-size: 34px; font-weight: 800; }
+.signals { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.sig { font-size: 13px; color: var(--text); }
+.sig-strength { color: var(--accent); font-weight: 700; font-size: 11px; text-transform: uppercase; margin-right: 6px; }
+
 .quick { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; align-items: center; }
 .pill { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .pill.on { border-color: var(--accent); }

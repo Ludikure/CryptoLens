@@ -7,6 +7,7 @@ import { IndicatorTable } from './components/IndicatorTable';
 import { AnalysisView } from './components/AnalysisView';
 import { Dashboard } from './components/Dashboard';
 import { SettingsView } from './components/SettingsView';
+import { MarketView } from './components/MarketView';
 import { getSettings, getWatchlist, setWatchlist } from './settings';
 import { formatPrice, pct, biasClass } from './format';
 
@@ -24,7 +25,7 @@ export function App() {
   const [anaErr, setAnaErr] = useState<string | null>(null);
   const [anaLoading, setAnaLoading] = useState(false);
   const [chartTF, setChartTF] = useState<TFKey>('daily');
-  const [view, setView] = useState<'markets' | 'scoreboard' | 'settings'>('markets');
+  const [view, setView] = useState<'chart' | 'market' | 'scoreboard' | 'settings'>('chart');
   const [watchlist, setWatch] = useState<string[]>(() => getWatchlist());
 
   const load = useCallback(async (sym: string) => {
@@ -69,11 +70,12 @@ export function App() {
       <header>
         <h1>MarketScope</h1>
         <nav className="views">
-          <button className={view === 'markets' ? 'on' : ''} onClick={() => setView('markets')}>Markets</button>
+          <button className={view === 'chart' ? 'on' : ''} onClick={() => setView('chart')}>Chart</button>
+          <button className={view === 'market' ? 'on' : ''} onClick={() => setView('market')}>Market</button>
           <button className={view === 'scoreboard' ? 'on' : ''} onClick={() => setView('scoreboard')}>Scoreboard</button>
           <button className={view === 'settings' ? 'on' : ''} onClick={() => setView('settings')}>Settings</button>
         </nav>
-        {view === 'markets' && (
+        {(view === 'chart' || view === 'market') && (
           <form onSubmit={submit} className="search">
             <input value={input} onChange={e => setInput(e.target.value)} placeholder="Symbol (BTCUSDT, AAPL…)" spellCheck={false} />
             <button type="submit">Load</button>
@@ -84,8 +86,7 @@ export function App() {
       {view === 'scoreboard' && <Dashboard />}
       {view === 'settings' && <SettingsView />}
 
-      {view === 'markets' && (
-      <>
+      {(view === 'chart' || view === 'market') && (
       <div className="quick">
         {watchlist.map(s => (
           <span key={s} className={`pill ${s === symbol ? 'on' : ''}`}>
@@ -95,7 +96,12 @@ export function App() {
         ))}
         {!inWatchlist && <button className="pill-add" onClick={toggleWatch} title={`Add ${symbol}`}>+ {symbol}</button>}
       </div>
+      )}
 
+      {view === 'market' && <MarketView symbol={symbol} />}
+
+      {view === 'chart' && (
+      <>
       {indLoading && <div className="status">Loading {symbol}…</div>}
       {indErr && <div className="status err">Failed to load {symbol}: {indErr}</div>}
 

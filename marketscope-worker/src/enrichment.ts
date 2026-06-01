@@ -245,6 +245,19 @@ export async function fetchCrossAssetEnrichment(): Promise<CrossAssetContext | n
   return buildCrossAsset(dxy, spy);
 }
 
+// Crypto Fear & Greed index (alternative.me). Returns {value 0-100, label}.
+export async function fetchFearGreed(): Promise<{ value: number; label: string } | null> {
+  try {
+    const r = await fetch('https://api.alternative.me/fng/?limit=1');
+    if (!r.ok) return null;
+    const j = await r.json() as any;
+    const d = j?.data?.[0];
+    if (!d) return null;
+    const v = parseInt(d.value, 10);
+    return isNaN(v) ? null : { value: v, label: String(d.value_classification ?? '') };
+  } catch { return null; }
+}
+
 // Macro snapshot from the /macro cache (FRED + DXY). Best-effort — returns null if uncached.
 export async function fetchMacroEnrichment(env: Env): Promise<MacroSnapshot | null> {
   try {

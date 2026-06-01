@@ -51,7 +51,7 @@ async function authedFetch(path: string, init: RequestInit = {}, retry = true): 
   return res;
 }
 
-import type { IndicatorsResponse, FullAnalysisResponse, DirectionAccuracy, MlCalibration, MlPredict } from './types';
+import type { IndicatorsResponse, FullAnalysisResponse, DirectionAccuracy, MlCalibration, MlPredict, MarketData } from './types';
 
 export async function getIndicators(symbol: string): Promise<IndicatorsResponse> {
   const res = await authedFetch(`/indicators?symbol=${encodeURIComponent(symbol)}`);
@@ -79,6 +79,12 @@ export async function getMlPredict(symbol: string): Promise<MlPredict | null> {
   const res = await authedFetch(`/ml-predict?symbol=${encodeURIComponent(symbol)}`);
   if (res.status === 404) return null;
   if (!res.ok) return null;
+  return res.json();
+}
+
+export async function getMarket(symbol: string): Promise<MarketData> {
+  const res = await authedFetch(`/market?symbol=${encodeURIComponent(symbol)}`);
+  if (!res.ok) throw new Error(`market failed (${res.status})`);
   return res.json();
 }
 
