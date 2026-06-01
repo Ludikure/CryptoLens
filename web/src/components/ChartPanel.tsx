@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { createChart, ColorType, type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp } from 'lightweight-charts';
 import type { IndicatorTF, TradeSetup } from '../types';
+import { priceFormatFor } from '../format';
 
 // Candlestick chart with EMA overlays + S/R and setup price lines. The hard pan/zoom/crosshair
 // work comes from lightweight-charts (the reason we picked it over rebuilding the iOS Canvas).
@@ -47,6 +48,8 @@ export function ChartPanel({ tf, setup }: { tf: IndicatorTF; setup?: TradeSetup 
       .sort((a, b) => a.time - b.time);
     candle.setData(data);
     if (!data.length) return;
+    // Precision from price magnitude so low-priced assets (DOGE etc.) aren't shown at coarse 2dp.
+    candle.applyOptions({ priceFormat: priceFormatFor(data.map(d => d.close)) });
 
     // EMA overlays aligned to the right edge of the candle window.
     const addEMA = (series: number[], color: string) => {

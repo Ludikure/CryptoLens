@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createChart, ColorType, LineStyle, type IChartApi, type UTCTimestamp } from 'lightweight-charts';
 import type { IndicatorTF } from '../types';
+import { priceFormatFor } from '../format';
 
 const baseOpts = {
   layout: { background: { type: ColorType.Solid, color: '#0b0e14' }, textColor: '#9aa4b2' },
@@ -54,11 +55,14 @@ const drawRSI = (chart: IChartApi, tf: IndicatorTF, times: UTCTimestamp[]) => {
   return () => chart.removeSeries(line);
 };
 const drawMACD = (chart: IChartApi, tf: IndicatorTF, times: UTCTimestamp[]) => {
-  const hist = chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+  // Magnitude-aware format so tiny-magnitude MACD (low-priced assets like DOGE) isn't flattened
+  // to a single tick by the default minMove (0.01).
+  const pf = priceFormatFor([...tf.macdHistSeries, ...tf.macdLineSeries, ...tf.macdSignalSeries]);
+  const hist = chart.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: pf });
   hist.setData(align(times, tf.macdHistSeries).map(p => ({ ...p, color: p.value >= 0 ? '#26a69a' : '#ef5350' })));
-  const macd = chart.addLineSeries({ color: '#5b8def', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  const macd = chart.addLineSeries({ color: '#5b8def', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: pf });
   macd.setData(align(times, tf.macdLineSeries));
-  const sig = chart.addLineSeries({ color: '#f0a020', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  const sig = chart.addLineSeries({ color: '#f0a020', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: pf });
   sig.setData(align(times, tf.macdSignalSeries));
   return () => { chart.removeSeries(hist); chart.removeSeries(macd); chart.removeSeries(sig); };
 };
