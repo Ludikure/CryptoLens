@@ -28,6 +28,12 @@ export interface IndicatorsResponse {
   error?: string;
 }
 
+// /ml-predict — the cron-cached ML for a symbol (5-min TTL). 404 when no cron has scored it.
+export interface MlPredict {
+  symbol: string; probability: number; probabilityH72?: number | null; pUp?: number | null;
+  timestamp: number; isCrypto: boolean;
+}
+
 export interface TradeSetup {
   direction: string; entry: number; stopLoss: number; tp1: number; tp2: number | null;
   reasoning?: string; suggestedQty?: number;

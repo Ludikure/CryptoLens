@@ -51,7 +51,7 @@ async function authedFetch(path: string, init: RequestInit = {}, retry = true): 
   return res;
 }
 
-import type { IndicatorsResponse, FullAnalysisResponse, DirectionAccuracy, MlCalibration } from './types';
+import type { IndicatorsResponse, FullAnalysisResponse, DirectionAccuracy, MlCalibration, MlPredict } from './types';
 
 export async function getIndicators(symbol: string): Promise<IndicatorsResponse> {
   const res = await authedFetch(`/indicators?symbol=${encodeURIComponent(symbol)}`);
@@ -70,6 +70,15 @@ export async function runFullAnalysis(symbol: string, opts?: { accountSize?: num
     try { const e = await res.json(); if (e?.error) msg = e.error; } catch { /* ignore */ }
     throw new Error(msg);
   }
+  return res.json();
+}
+
+// Cron-cached ML for a symbol. Returns null on 404 (no cron has scored it — e.g. a stock not
+// on any watchlist) so the UI can simply omit ML rather than error.
+export async function getMlPredict(symbol: string): Promise<MlPredict | null> {
+  const res = await authedFetch(`/ml-predict?symbol=${encodeURIComponent(symbol)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) return null;
   return res.json();
 }
 

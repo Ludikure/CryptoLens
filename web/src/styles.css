@@ -56,6 +56,7 @@ table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); }
 .tag.muted, .muted { color: var(--muted); }
 .bull { color: var(--bull); } .bear { color: var(--bear); } .neutral { color: var(--muted); }
+.tag.ml { font-weight: 700; border-color: var(--accent); }
 .refresh { background: var(--panel); border: 1px solid var(--line); color: var(--muted); width: 30px; height: 30px; border-radius: 8px; cursor: pointer; font-size: 15px; }
 .refresh:hover { border-color: var(--accent); color: var(--accent); }
 .refresh:disabled { opacity: 0.5; cursor: default; }

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getIndicators, runFullAnalysis } from './api';
-import type { IndicatorsResponse, FullAnalysisResponse } from './types';
+import { getIndicators, runFullAnalysis, getMlPredict } from './api';
+import type { IndicatorsResponse, FullAnalysisResponse, MlPredict } from './types';
 import { ChartPanel } from './components/ChartPanel';
 import { SubPanels } from './components/SubPanels';
 import { IndicatorTable } from './components/IndicatorTable';
@@ -19,6 +19,7 @@ export function App() {
   const [ind, setInd] = useState<IndicatorsResponse | null>(null);
   const [indErr, setIndErr] = useState<string | null>(null);
   const [indLoading, setIndLoading] = useState(false);
+  const [ml, setMl] = useState<MlPredict | null>(null);
   const [analysis, setAnalysis] = useState<FullAnalysisResponse | null>(null);
   const [anaErr, setAnaErr] = useState<string | null>(null);
   const [anaLoading, setAnaLoading] = useState(false);
@@ -27,12 +28,14 @@ export function App() {
   const [watchlist, setWatch] = useState<string[]>(() => getWatchlist());
 
   const load = useCallback(async (sym: string) => {
-    setIndLoading(true); setIndErr(null); setAnalysis(null); setAnaErr(null);
+    setIndLoading(true); setIndErr(null); setAnalysis(null); setAnaErr(null); setMl(null);
     try {
       const data = await getIndicators(sym);
       if (data.error) throw new Error(data.error);
       setInd(data);
       localStorage.setItem('last_symbol', sym);
+      // ML is cron-cached separately (best-effort; null when no cron has scored this symbol).
+      getMlPredict(sym).then(m => { if (m && m.symbol === sym) setMl(m); }).catch(() => {});
     } catch (e) { setIndErr((e as Error).message); setInd(null); }
     finally { setIndLoading(false); }
   }, []);
@@ -103,6 +106,9 @@ export function App() {
             <div className="px">{formatPrice(daily.price)}</div>
             <div className={`tag ${biasClass(daily.bias)}`}>{daily.bias}</div>
             {daily.atrPercentile != null && <div className="tag muted">ATR {Math.round(daily.atrPercentile)}%</div>}
+            {ml && <div className={`tag ml ${ml.probability >= 0.6 ? 'bull' : ml.probability >= 0.5 ? '' : 'bear'}`}>ML {Math.round(ml.probability * 100)}%</div>}
+            {ml?.probabilityH72 != null && <div className="tag muted">72h {Math.round(ml.probabilityH72 * 100)}%</div>}
+            {ml?.pUp != null && <div className={`tag ${ml.pUp >= 0.55 ? 'bull' : ml.pUp <= 0.45 ? 'bear' : 'muted'}`}>↑{Math.round(ml.pUp * 100)}%</div>}
             <div className="tag muted">{daily.bullPercent != null ? pct(daily.bullPercent - 50, 0) + ' tilt' : ''}</div>
             <button className="refresh" onClick={() => load(symbol)} disabled={indLoading} title="Refresh data">↻</button>
             {ind!.timestamp && <span className="updated muted">as of {new Date(ind!.timestamp).toLocaleTimeString()}</span>}
