@@ -1058,10 +1058,24 @@ export default {
 
         if (!env.CLAUDE_API_KEY) return json({ error: 'AI not configured' }, 503);
         const model = ALLOWED_MODELS.includes(body.model) ? body.model : 'claude-sonnet-4-6';
+        // Sonnet + extended thinking by default (8000-token budget — matches the iOS
+        // "recommended" setting). Client can override via thinkingBudget, or pass 0 to disable.
+        // Thinking requires temperature 1 and max_tokens > budget; the response content array
+        // then leads with a `thinking` block, so the answer is the first `text` block.
+        const thinkingBudget = body.thinkingBudget === 0 ? 0
+          : (Number.isFinite(body.thinkingBudget) && body.thinkingBudget >= 1024 ? body.thinkingBudget : 8000);
+        const reqBody: Record<string, unknown> = {
+          model,
+          max_tokens: thinkingBudget ? thinkingBudget + 4000 : 4000,
+          temperature: thinkingBudget ? 1 : 0,
+          system,
+          messages: [{ role: 'user', content: prompt }],
+        };
+        if (thinkingBudget) reqBody.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
         const resp = await fetch(aiGatewayURL(env, 'anthropic', 'v1/messages', 'https://api.anthropic.com/v1/messages'), {
           method: 'POST',
           headers: { 'x-api-key': env.CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'context-1m-2025-08-07', 'content-type': 'application/json' },
-          body: JSON.stringify({ model, max_tokens: 4000, temperature: 0, system, messages: [{ role: 'user', content: prompt }] }),
+          body: JSON.stringify(reqBody),
         });
         if (!resp.ok) {
           const code = resp.status;
@@ -1070,7 +1084,7 @@ export default {
           return json({ error: `AI error (${code})` }, code);
         }
         const result = await resp.json() as any;
-        const text = result?.content?.[0]?.text || '';
+        const text = (Array.isArray(result?.content) ? result.content.find((c: any) => c.type === 'text')?.text : '') || '';
         const setups = parseSetups(text);
 
         return json({
