@@ -959,10 +959,13 @@ export default {
       if (!symbol) return json({ error: 'Missing symbol' }, 400);
       const isCrypto = symbol.endsWith('USDT');
       try {
-        const { daily, fourH, oneH } = await fetchAllTimeframes(symbol, isCrypto);
+        const [{ daily, fourH, oneH }, livePrice] = await Promise.all([
+          fetchAllTimeframes(symbol, isCrypto),
+          fetchLivePrice(symbol, isCrypto).catch(() => null),
+        ]);
         if (!daily.length) return json({ error: 'No candles', symbol }, 404);
         return json({
-          symbol, isCrypto, timestamp: Date.now(),
+          symbol, isCrypto, timestamp: Date.now(), livePrice,
           daily: computeFullIndicators(daily as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }),
           fourH: fourH.length ? computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) : null,
           oneH: oneH.length ? computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) : null,
@@ -3247,6 +3250,27 @@ async function fetchYahooCandlesTF(symbol: string, interval: string, range: stri
   }
   return dropInProgress(out, interval);
 }
+// Live (current) price for display. Indicators are computed on CLOSED candles (in-progress
+// dropped), so daily.price is the previous daily close — stale by up to a day for the header.
+// This returns the real-time ticker so the web header matches iOS's live price.
+async function fetchLivePrice(symbol: string, isCrypto: boolean): Promise<number | null> {
+  try {
+    if (isCrypto) {
+      const r = await fetch(`${BINANCE_SPOT}/ticker/price?symbol=${symbol}`);
+      if (!r.ok) return null;
+      const j = await r.json() as any;
+      const p = parseFloat(j?.price);
+      return isNaN(p) ? null : p;
+    }
+    const r = await fetch(`${YAHOO_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' } });
+    if (!r.ok) return null;
+    const j = await r.json() as any;
+    const meta = j?.chart?.result?.[0]?.meta;
+    const p = meta?.regularMarketPrice ?? meta?.previousClose;
+    return typeof p === 'number' && !isNaN(p) ? p : null;
+  } catch { return null; }
+}
+
 async function fetchAllTimeframes(symbol: string, isCrypto: boolean): Promise<{ daily: ScoreCandle[]; fourH: ScoreCandle[]; oneH: ScoreCandle[] }> {
   if (isCrypto) {
     const [daily, fourH, oneH] = await Promise.all([

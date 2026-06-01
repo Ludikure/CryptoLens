@@ -109,7 +109,7 @@ export function App() {
         <>
           <div className="price-header">
             <div className="sym">{ind!.symbol}</div>
-            <div className="px">{formatPrice(daily.price)}</div>
+            <div className="px">{formatPrice(ind!.livePrice ?? daily.price)}</div>
             <div className={`tag ${biasClass(daily.bias)}`}>{daily.bias}</div>
             {daily.atrPercentile != null && <div className="tag muted">ATR {Math.round(daily.atrPercentile)}%</div>}
             {ml && <div className={`tag ml ${ml.probability >= 0.6 ? 'bull' : ml.probability >= 0.5 ? '' : 'bear'}`}>ML {Math.round(ml.probability * 100)}%</div>}

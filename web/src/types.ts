@@ -24,6 +24,7 @@ export interface IndicatorTF {
 
 export interface IndicatorsResponse {
   symbol: string; isCrypto: boolean; timestamp: number;
+  livePrice?: number | null;   // real-time ticker (indicators use closed candles → daily.price is the last close)
   daily: IndicatorTF; fourH: IndicatorTF | null; oneH: IndicatorTF | null;
   error?: string;
 }
