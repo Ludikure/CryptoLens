@@ -67,7 +67,7 @@ table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .tf-bar button.on { border-color: var(--accent); color: var(--accent); }
 .tf-bar button:disabled { opacity: 0.4; cursor: default; }
 
-.chart { height: 360px; width: 100%; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.chart { height: 480px; width: 100%; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 
 .subpanels { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
 .subpanel-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -75,7 +75,7 @@ table.grid td { padding: 5px 8px; border-bottom: 1px solid var(--line); }
 .subpanel-toggles button.on { border-color: var(--accent); color: var(--accent); }
 .subpanel-row { position: relative; }
 .subpanel-label { position: absolute; top: 4px; left: 8px; z-index: 2; font-size: 11px; color: var(--muted); letter-spacing: 0.5px; pointer-events: none; }
-.subpanel { height: 120px; width: 100%; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.subpanel { height: 160px; width: 100%; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 
 table.indicators { width: 100%; border-collapse: collapse; margin: 14px 0; }
 table.indicators th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 6px 8px; }
@@ -119,8 +119,8 @@ footer { color: var(--muted); font-size: 12px; text-align: center; margin: 28px 
   .views { width: 100%; }
   .views button { flex: 1; }
   .price-header .px { font-size: 20px; }
-  .chart { height: 300px; }
-  .subpanel { height: 100px; }
+  .chart { height: 420px; }
+  .subpanel { height: 140px; }
   /* Indicator table: let it scroll horizontally rather than crush 3 columns */
   table.indicators { display: block; overflow-x: auto; white-space: nowrap; }
   .indicators .rows { gap: 2px 8px; font-size: 13px; }
