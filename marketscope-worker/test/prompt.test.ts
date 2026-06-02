@@ -83,8 +83,9 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
 
     expect(prompt.startsWith('Symbol: BTCUSDT')).toBe(true);
     expect(prompt).toContain('=== PRE-COMPUTED FLAGS');
-    expect(prompt).toContain('STOCH_CROSS:');           // treatment branch active
-    expect(prompt).toContain('DIRECTION MODEL: P(up 24h) = 68%');
+    expect(prompt).toContain('STOCH_CROSS (momentum context only, NOT directional)');  // direction stripped
+    expect(prompt).not.toContain('DIRECTION MODEL');    // pUp head removed (leak)
+    expect(prompt).toContain('ML_WIN is a VOLATILITY signal');
     expect(prompt).toContain('ML Bucket: TOP (ML_WIN 72%)');
     expect(prompt).toContain('Momentum Alignment:');
     expect(prompt).toContain('=== RECENT CANDLES ===');

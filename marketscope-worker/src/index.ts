@@ -3173,22 +3173,19 @@ async function processDeviceNotifications(
   // keeps the original wording with the ML% so a glance at the lock screen still tells
   // the user the conviction; multi-symbol case lists tickers without per-symbol probs
   // (they all cleared 70%) to keep the title scannable.
+  // ML_WIN is a VOLATILITY signal — a ≥1.5 ATR move is likely; the DIRECTION is not predicted
+  // (the old LONG/SHORT label came from bias/Stoch, which clean-data validation showed are
+  // ~chance for next-24h crypto direction). So notifications announce the move-likelihood, not a side.
   const tickers = triggered.map(t => t.symbol.replace('USDT', ''));
   let title: string;
   let body: string;
   if (triggered.length === 1) {
     const t = triggered[0];
-    title = `${tickers[0]} ${t.direction} — ML ${Math.round(t.mlProb * 100)}%`;
-    body = `Open the app for the full directional analysis.`;
+    title = `${tickers[0]} — ML ${Math.round(t.mlProb * 100)}% · big move likely`;
+    body = `Elevated probability of a ≥1.5 ATR move (direction not predicted). Open the app to read structure and pick a side.`;
   } else {
-    // Group by direction so the lock-screen view shows LONG/SHORT split at a glance.
-    const longs = triggered.filter(t => t.direction === 'LONG').map(t => t.symbol.replace('USDT', ''));
-    const shorts = triggered.filter(t => t.direction === 'SHORT').map(t => t.symbol.replace('USDT', ''));
-    const parts: string[] = [];
-    if (longs.length) parts.push(`LONG: ${longs.join(', ')}`);
-    if (shorts.length) parts.push(`SHORT: ${shorts.join(', ')}`);
-    title = `${triggered.length} setups favorable`;
-    body = parts.join(' | ');
+    title = `${triggered.length} symbols: big move likely`;
+    body = `ML ≥ 70%: ${tickers.join(', ')} — direction is your call.`;
   }
   const result = await sendAPNs(env, pushToken, title, body);
   if (result === 'unregistered') {

@@ -404,7 +404,14 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
         // computeAllFeatures, not the full history. The percentile-style features
         // (atrPercentile, volScalar downstream) rank current ATR against the population
         // sliced in here; full-history population produced ~25pp drift vs Swift's 300.
-        const dailyFull = sliceUpTo(dailyAll, evalTime);
+        // LEAK FIX: drop the in-progress DAY. At an intraday 4H bar, the current day's daily
+        // candle is the COMPLETE day — it contains the 4H bars *after* this one (the rest of
+        // today), which overlap the 24h forward label. Live drops the in-progress daily
+        // (dropInProgress); the backtest must too. Without this, daily features (dRsi/dRsiDelta/
+        // dStochCross/dBBPercentB…) encode the answer. Crypto-fatal because price is continuous
+        // (the leaked daily close ≈ the forward price); stocks were spared by overnight gaps.
+        // Subtracting one day keeps only days fully closed before this bar — matching live.
+        const dailyFull = sliceUpTo(dailyAll, evalTime - 86_400_000);
         const dailySlice = dailyFull.slice(Math.max(0, dailyFull.length - 300));
         const fourHSlice = fourHAll.slice(Math.max(0, i + 1 - 300), i + 1);
         const oneHFull = sliceUpTo(oneHAll, evalTime);

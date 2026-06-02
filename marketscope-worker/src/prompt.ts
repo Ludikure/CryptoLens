@@ -511,45 +511,27 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     if (isTreatment) {
       treatmentStochCrossDaily = daily.stochRSI?.crossover ?? 'none';
       treatmentStochCross4H = fourH.stochRSI?.crossover ?? 'none';
-      L(`STOCH_CROSS: daily=${treatmentStochCrossDaily} | 4H=${treatmentStochCross4H}`);
-      L('  Rules:');
-      L('  - When STOCH_CROSS direction AGREES with bias direction: high-confidence directional setup. CRYPTO at ML_WIN ≥ 70%: agreement is ~94% directionally accurate on the holdout (bear-tested, momentum-lag-confirmed) — permit HIGH conviction and lean in, don\'t hedge to MODERATE on direction uncertainty alone. STOCKS: agreement is only marginally directional at high ML — keep the usual structural evidence burden, no automatic conviction boost.');
-      L('  - When STOCH_CROSS direction CONTRADICTS bias direction (e.g., aligned_bullish + bearish Stoch cross): flag the tension in BULL/BEAR cases; cap conviction at MODERATE unless structural evidence (S/R confluence, volume) strongly supports the bias direction.');
-      L('  - When bias is MIXED but STOCH_CROSS direction is decisive (both timeframes agree) AND ML >= 65: treat STOCH_CROSS as the primary direction signal, override auto-FLAT — this is the catalyst-driven setup case where Daily lags 4H/1H momentum.');
-      L('  - When STOCH_CROSS is \'none\' on both timeframes: bias drives direction, treat as before.');
-      L('  Backtest basis: dStoch + ML high captured +0.190R/trade on stocks (vs +0.079R for bias alone) and +0.998R on crypto top-10 (vs +1.040R for bias). Roughly co-equal on crypto, materially better on stocks.');
-
-      if (daily.mlConfident != null && daily.mlMetaDirection != null && daily.mlMetaDirection !== 0) {
-        const mp = daily.mlMetaProbability != null ? iTrunc(round(daily.mlMetaProbability * 100)) : -1;
-        const dirStr = daily.mlMetaDirection === 1 ? 'LONG' : 'SHORT';
-        const gateOn = settings.conformalGateEnabled === true;
-        if (daily.mlConfident) L(`CONFORMAL: CONFIDENT (${dirStr}, meta ${mp}%) — cleared the triple-barrier + conformal bar (calibrated >=60% win). Trade-worthy; proceed if other gates pass.`);
-        else if (gateOn) { envConformalNotConfident = true; L(`CONFORMAL: NOT CONFIDENT (${dirStr}, meta ${mp}%) — below the conformal abstention threshold. The validated gate ABSTAINS here: prefer NO SETUP unless structural evidence is exceptional. Conviction capped LOW.`); }
-        else L(`CONFORMAL: NOT CONFIDENT (${dirStr}, meta ${mp}%) — below the conformal abstention threshold (informational; gate disabled). Holdout: gating here lifted EV/trade +0.245R→+0.754R at 1/3 the exposure.`);
-      }
-
-      if (daily.mlDirectionUp != null) {
-        const pUp = daily.mlDirectionUp, pct = iTrunc(round(pUp * 100));
-        const lean = pUp >= 0.65 ? 'STRONG LONG' : pUp >= 0.55 ? 'lean LONG' : pUp <= 0.35 ? 'STRONG SHORT' : pUp <= 0.45 ? 'lean SHORT' : 'no clear direction';
-        L(`DIRECTION MODEL: P(up 24h) = ${pct}% → ${lean}.`);
-        L('  Dedicated calibrated direction head (111 features), validated to beat the raw bias/Stoch primitives. When ML_WIN >= 70% and it reads STRONG LONG/SHORT (pUp >= 65% or <= 35%), treat direction as HIGH-confidence and commit. Near 50% (45-55%) direction is genuinely uncertain — defer to structure or stay FLAT. If it disagrees with bias/Stoch AND ML_WIN >= 70%, weight the model — it is more accurate than the raw primitives.');
-      }
+      // DIRECTION IS NOT PREDICTABLE (2026-06-01). A data leak (in-progress daily candle, now
+      // fixed) inflated every crypto direction signal — the direction model (pUp), the daily
+      // Stoch cross, and bias. On clean, leak-free data they all collapse to ~chance: next-24h
+      // crypto direction is ~50% even at high ML_WIN. The pUp head, the CONFORMAL/meta direction,
+      // and the "94% / +0.998R Stoch" claims were all artifacts. ML_WIN is a VOLATILITY signal
+      // (a ≥1.5 ATR move is likely) — it says nothing about which way. So: do NOT pick a side
+      // from ML signals. STOCH_CROSS is shown only as weak momentum context.
+      L(`STOCH_CROSS (momentum context only, NOT directional): daily=${treatmentStochCrossDaily} | 4H=${treatmentStochCross4H}`);
+      L('  A Stoch crossover does NOT predict next-24h direction (validated ~51% = coin flip on clean data). Do not raise conviction or pick a side on it.');
 
       if (daily.mlWinProbability != null) {
+        // Sizing is gated ONLY by quality (ML_WIN). Direction is NOT predictable from ML
+        // (validated ~chance), so the model can't size by direction — the side, if any, must
+        // come from the LLM's own structural read, and is inherently a coin-flip-ish bet.
         const mlWin = daily.mlWinProbability, qualityOK = mlWin >= 0.60;
-        let mult = 1.0, reason: string;
-        if (daily.mlDirectionUp != null) {
-          const pUp = daily.mlDirectionUp, conf = Math.abs(pUp - 0.5);
-          if (!qualityOK) { mult = 0.0; reason = 'ML_WIN < 60% — below quality threshold, no trade'; }
-          else if (conf < 0.10) { mult = 0.5; reason = `quality high but direction UNDECIDED (pUp ${iTrunc(round(pUp * 100))}%) — likely move, coin-flip entry: HALF size, or pass unless structure gives a clear side`; }
-          else if (conf < 0.20) { mult = 0.75; reason = 'moderate direction conviction — 0.75x'; }
-          else { mult = mlWin >= 0.70 ? 1.0 : 0.75; reason = mlWin >= 0.70 ? 'strong quality + strong direction — full size (up to 1.25x only if structural conviction is HIGH)' : 'strong direction but ML_WIN 60-70% — 0.75x'; }
-        } else {
-          if (!qualityOK) { mult = 0.0; reason = 'ML_WIN < 60% — no trade'; }
-          else { mult = mlWin >= 0.70 ? 1.0 : 0.75; reason = 'stock — size off quality + your structural direction read (no direction model); cap 1.0x'; }
-        }
+        let mult: number, reason: string;
+        if (!qualityOK) { mult = 0.0; reason = 'ML_WIN < 60% — below quality threshold, no trade'; }
+        else if (mlWin >= 0.70) { mult = 0.75; reason = 'high move-quality (≥1.5 ATR move likely) but direction is a coin flip — size for a direction-uncertain bet (0.75x), or trade direction-agnostic (breakout either way). Only go full size if YOUR structural read gives a genuinely clear side'; }
+        else { mult = 0.5; reason = 'marginal quality + unknowable direction — half size or pass'; }
         const multTxt = mult === 0 ? 'NO TRADE' : `${g2(mult)}x base risk`;
-        L(`POSITION SIZING: ${multTxt} — ${reason}. Cap 1.25x. This is a guardrail, not a license to exceed your risk plan.`);
+        L(`POSITION SIZING: ${multTxt} — ${reason}. Cap 1.0x. ML_WIN is a VOLATILITY signal, not a directional one.`);
       }
 
       const relStrApprox = stockInfo?.relativeStrength1d;
@@ -913,10 +895,9 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (mlPct != null && mlPct < 50) autoFlat.push(`ML_WIN_${mlPct}%<50`);
       if (envAnyKilled) autoFlat.push('ANY_KILLED=true');
       if (envDivergenceEscalated) autoFlat.push('divergence_escalated_6+_candles');
-      if (envAlignment === 'MIXED') {
-        const stochOverride = isTreatment && (mlPct ?? 0) >= 65 && treatmentStochCrossDaily !== 'none' && treatmentStochCrossDaily === treatmentStochCross4H;
-        if (!stochOverride) autoFlat.push('biases_MIXED');
-      }
+      // biases_MIXED → auto-FLAT. (The old "Stoch agreement overrides this" exemption was
+      // removed — Stoch direction is noise, so it can't rescue a mixed-bias setup.)
+      if (envAlignment === 'MIXED') autoFlat.push('biases_MIXED');
       if (envMacroRisk === 'IMMINENT') autoFlat.push('macro_IMMINENT');
       if (isTreatment) {
         if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'FAIL') autoFlat.push('treatment_long_confirm_FAIL');

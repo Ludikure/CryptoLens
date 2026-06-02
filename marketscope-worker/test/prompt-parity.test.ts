@@ -60,8 +60,7 @@ describe('prompt parity — structural completeness', () => {
     const required = [
       'Symbol: BTCUSDT',
       '=== PRE-COMPUTED FLAGS',
-      'STOCH_CROSS:',
-      'DIRECTION MODEL: P(up 24h)',
+      'STOCH_CROSS (momentum context only, NOT directional)',
       'POSITION SIZING:',
       'Bias Feasibility:',
       'Likely Failure Modes',
