@@ -156,15 +156,19 @@ export function mlConfident(metaProb: number | null, isCrypto: boolean): boolean
     return metaProb >= tau;
 }
 
-/// Calibrated P(price up in 24h). Strongly predictive conditional on high ML (holdout:
-/// ~80% full-coverage, ~95% at pUp>=0.70; bear-tested). Crypto only; null when no head.
-export function mlPredictDirection(input: Record<string, number>, isCrypto: boolean): number | null {
-    if (!isCrypto || !cryptoHeads?.direction) return null;
-    const { trees, base_score, calibration } = cryptoHeads.direction;
-    let sum = Math.log(base_score / (1 - base_score));
-    for (const tree of trees) sum += evaluateTree(tree, input);
-    if (!isFinite(sum)) return null;
-    return isoCalibrate(calibration, sigmoid(sum));
+/// DROPPED (2026-06-02). The direction head's ~80%/~95% holdout accuracy was an ARTIFACT
+/// of a data leak: the backtest's daily slice included the in-progress (current-day) daily
+/// candle, so daily features (dRsi/dRsiDelta/dStochCross/dBBPercentB) saw the rest of the
+/// day — overlapping the 24h forward label. Live drops the in-progress daily; the backtest
+/// didn't. Fixed in runBacktest.ts; on clean data crypto direction is ~50% (coin flip) even
+/// at high ML_WIN, confirmed by the live forward test (3/7 correct). The leak was crypto-
+/// fatal (continuous 24/7 price → leaked daily close ≈ forward price) and stock-spared
+/// (overnight gaps decorrelate) — which is exactly why direction "worked" only for crypto.
+/// We no longer claim a direction edge. ML_WIN (direction-AGNOSTIC quality) survives clean
+/// (top-bucket ~76% vs ~51% base) and is the only real signal. Returns null unconditionally;
+/// callers already handle null (prompt/table hide the row, direction-signals logging skips).
+export function mlPredictDirection(_input: Record<string, number>, _isCrypto: boolean): number | null {
+    return null;
 }
 
 /// Build feature dict from scoring results + candle data.

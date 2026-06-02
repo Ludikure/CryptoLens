@@ -28,16 +28,18 @@ describe('Phase 1/2 heads — worker TS vs Python export reference', () => {
         expect(mlConfident(meta, true)).toBe(false);
     });
 
-    it('direction head matches Python reference (calibrated pUp)', () => {
-        const pUp = mlPredictDirection(zero, true);
-        expect(pUp).not.toBeNull();
-        expect(pUp!).toBeCloseTo(0.6706263423, 6);
+    it('direction head is DROPPED — always null (leak-invalidated 2026-06-02)', () => {
+        // The crypto direction head was retired after the daily-in-progress-candle leak
+        // was found: clean-data crypto direction is ~50% (coin flip) even at high ML_WIN,
+        // confirmed by the live forward test (3/7). mlPredictDirection now returns null
+        // unconditionally. See ml-predict.ts for the full rationale.
+        expect(mlPredictDirection(zero, true)).toBeNull();
+        expect(mlPredictDirection(zero, false)).toBeNull();
     });
 
     it('heads are crypto-only / direction-gated (null otherwise)', () => {
         expect(mlPredictMeta(zero, false, 1)).toBeNull();   // stock
         expect(mlPredictMeta(zero, true, 0)).toBeNull();    // no direction
         expect(mlPredictQuantile(zero, false, '0.75')).toBeNull();
-        expect(mlPredictDirection(zero, false)).toBeNull(); // stock
     });
 });
