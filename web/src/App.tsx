@@ -114,14 +114,9 @@ export function App() {
             {daily.atrPercentile != null && <div className="tag muted">ATR {Math.round(daily.atrPercentile)}%</div>}
             {ml && <div className={`tag ml ${ml.probability >= 0.6 ? 'bull' : ml.probability >= 0.5 ? '' : 'bear'}`}>ML {Math.round(ml.probability * 100)}%</div>}
             {ml?.probabilityH72 != null && <div className="tag muted">72h {Math.round(ml.probabilityH72 * 100)}%</div>}
-            {ml?.pUp != null
-              ? (() => {
-                  const up = ml.pUp >= 0.5;                       // show the dominant side + its probability
-                  const conf = Math.round((up ? ml.pUp : 1 - ml.pUp) * 100);
-                  const cls = ml.pUp >= 0.55 ? 'bull' : ml.pUp <= 0.45 ? 'bear' : 'muted';
-                  return <div className={`tag ${cls}`} title="ML direction model: P(up in 24h)">Dir {up ? '↑' : '↓'}{conf}%</div>;
-                })()
-              : ml && <div className="tag muted" title="The ML direction model is crypto-only (stock direction tested ≈ chance)">Dir n/a</div>}
+            {/* Direction tag removed: the pUp head was a data-leak artifact (~chance on clean data).
+                ML is a volatility signal, not a directional one. The Scoreboard keeps the live
+                track record as the evidence. */}
             <div className="tag muted">{daily.bullPercent != null ? pct(daily.bullPercent - 50, 0) + ' tilt' : ''}</div>
             <button className="refresh" onClick={() => load(symbol)} disabled={indLoading} title="Refresh data">↻</button>
             {ind!.timestamp && <span className="updated muted">as of {new Date(ind!.timestamp).toLocaleTimeString()}</span>}
