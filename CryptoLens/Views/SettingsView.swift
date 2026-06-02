@@ -9,7 +9,7 @@ struct SettingsView: View {
     @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
     @AppStorage("experiments_enabled") private var experimentsEnabled: Bool = true
     @AppStorage("conformal_gate_enabled") private var conformalGate: Bool = false
-    @AppStorage("use_server_analysis") private var serverAnalysis: Bool = false
+    @AppStorage("use_server_analysis") private var serverAnalysis: Bool = true
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
@@ -170,7 +170,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Analysis Engine")
                 } footer: {
-                    Text("When ON, the AI analysis is built and run entirely on the MarketScope Worker (the shared brain used by the web app) — Sonnet with extended thinking — instead of building the prompt on-device. The chart and indicators are unchanged. This is the migration toward a single source of truth; run a few analyses and compare before relying on it. OFF (default): the on-device prompt + your selected provider/model are used, exactly as before.")
+                    Text("ON (default): the AI analysis is built and run entirely on the MarketScope Worker (the shared brain used by the web app) — Sonnet with extended thinking — which carries the honest, leak-free directional framing. The chart and indicators are unchanged. Turn OFF to fall back to the on-device prompt + your selected provider/model (note: the on-device prompt still uses the older directional language).")
                 }
 
                 Section("Data") {
