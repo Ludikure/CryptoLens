@@ -44,15 +44,8 @@ struct MarketScopeApp: App {
     @State private var showWhatsNew = false
 
     init() {
-        // Server analysis is the default engine now: the shared-brain prompt (worker) is the
-        // single source of truth and carries the honest, leak-free directional framing. Register
-        // the default ON for fresh installs, and force it on once for existing installs (n=1
-        // migration) so everyone moves onto the cleaned server prompt.
-        UserDefaults.standard.register(defaults: ["use_server_analysis": true])
-        if !UserDefaults.standard.bool(forKey: "server_default_migrated_v1") {
-            UserDefaults.standard.set(true, forKey: "use_server_analysis")
-            UserDefaults.standard.set(true, forKey: "server_default_migrated_v1")
-        }
+        // Analysis runs entirely on the shared-brain Worker (Phase 4 complete) — no on-device
+        // engine, no toggle. The Worker is the single source of truth for the prompt + LLM.
         BackgroundRefreshManager.register()
         AlertsStore.requestPermission()
         PushService.ensureRegistered()

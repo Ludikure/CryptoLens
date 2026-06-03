@@ -875,52 +875,20 @@ class AnalysisService: ObservableObject {
 
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
-            // Phase-4 migration (flag-gated, default OFF): when enabled, the prompt + LLM run
-            // server-side via /full-analysis (Sonnet + extended thinking) — the shared brain —
-            // instead of building the prompt locally. Indicators (tf1/tf2/tf3) are still computed
-            // locally above for the chart/table + outcome tracking; only prompt-building moves.
-            // Default OFF means zero change to live behavior until the user opts in (Settings).
-            if UserDefaults.standard.bool(forKey: "use_server_analysis") {
-                aiLoadingPhase = .waitingForResponse
-                loadingStatus = "Analyzing (server · Sonnet thinking)…"
-                do {
-                    let r = try await WorkerFullAnalysisService.analyze(symbol: symbol)
-                    aiLoadingPhase = .parsingResponse
-                    claudeAnalysis = r.markdown
-                    tradeSetups = r.setups
-                } catch {
-                    // Don't silently fall back — the user explicitly chose server mode.
-                    claudeAnalysis = "Server analysis failed: \(error.localizedDescription).\n\nTurn off Server Analysis in Settings to use the local engine."
-                    tradeSetups = []
-                }
-            } else if let provider = aiProvider {
-                aiLoadingPhase = .waitingForResponse
-                loadingStatus = "Analyzing with \(provider.displayName)..."
-                let response = try await AnalysisPrompt.$promptVersion.withValue(assignedVersion) {
-                    try await provider.analyze(
-                        indicators: [tf1, tf2, tf3],
-                        sentiment: sentiment,
-                        symbol: symbol,
-                        market: market,
-                        stockInfo: stockInfo,
-                        derivatives: derivData,
-                        positioning: positioning,
-                        stockSentiment: stockSentiment,
-                        economicEvents: events,
-                        macro: macroSnapshot,
-                        weeklyContext: weeklyContext,
-                        spyContext: spyContext,
-                        spotPressure: spotPressure,
-                        dataQuality: dataQuality,
-                        crossAsset: crossAsset,
-                        outcomeHistory: outcomeHistory
-                    )
-                }
+            // iOS runs entirely on the shared-brain Worker (Phase 4 complete): the prompt is built
+            // and the LLM (Sonnet + extended thinking) runs server-side via /full-analysis. The
+            // indicators (tf1/tf2/tf3) are still computed locally above for the chart/table +
+            // outcome tracking; only the prompt-building + LLM call live on the Worker now. No
+            // on-device fallback — the cron dead-man's-switch (/cron-health) covers worker uptime.
+            aiLoadingPhase = .waitingForResponse
+            loadingStatus = "Analyzing (server · Sonnet thinking)…"
+            do {
+                let r = try await WorkerFullAnalysisService.analyze(symbol: symbol)
                 aiLoadingPhase = .parsingResponse
-                claudeAnalysis = response.markdown
-                tradeSetups = response.setups
-            } else {
-                claudeAnalysis = "API key not configured. Set it in Settings to get AI analysis."
+                claudeAnalysis = r.markdown
+                tradeSetups = r.setups
+            } catch {
+                claudeAnalysis = "Analysis failed: \(error.localizedDescription). Check your connection and try again."
                 tradeSetups = []
             }
 

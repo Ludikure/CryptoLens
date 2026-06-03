@@ -9,7 +9,6 @@ struct SettingsView: View {
     @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
     @AppStorage("experiments_enabled") private var experimentsEnabled: Bool = true
     @AppStorage("conformal_gate_enabled") private var conformalGate: Bool = false
-    @AppStorage("use_server_analysis") private var serverAnalysis: Bool = true
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
@@ -162,16 +161,6 @@ struct SettingsView: View {
                     Text("When ON, crypto setups must clear the worker's conformal confidence gate (calibrated ≥60% win) and use the adaptive q75 runner target. On a frozen-holdout backtest this lifted EV/trade from +0.245R to +0.754R while trading ~1/3 as often. OFF (default): the conformal status is shown as info only and does not affect setups. Watch the effect in Outcome Tracking.")
                 }
 
-                Section {
-                    Toggle("Server analysis (beta)", isOn: $serverAnalysis)
-                        .onChange(of: serverAnalysis) {
-                            UserDefaults.standard.set(serverAnalysis, forKey: "use_server_analysis")
-                        }
-                } header: {
-                    Text("Analysis Engine")
-                } footer: {
-                    Text("ON (default): the AI analysis is built and run entirely on the MarketScope Worker (the shared brain used by the web app) — Sonnet with extended thinking — which carries the honest, leak-free directional framing. The chart and indicators are unchanged. Turn OFF to fall back to the on-device prompt + your selected provider/model (note: the on-device prompt still uses the older directional language).")
-                }
 
                 Section("Data") {
                     NavigationLink("Outcome Tracking") {
