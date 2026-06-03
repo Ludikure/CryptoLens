@@ -1,5 +1,18 @@
 # Crypto direction model
 
+> 🚨 **RETRACTED 2026-06-02 — THIS ENTIRE RESULT WAS A DATA LEAK.** The 94.7% holdout
+> accuracy below was an artifact of the daily in-progress-candle leak: the backtest's daily
+> feature slice included the current-day candle, leaking the forward price into `dRsi/dRsiDelta/
+> dStochCross/dBBPercentB`. Full mechanism + three confirmations: [[edge-leak-daily-candle]].
+> On clean data crypto direction is **~50% (coin flip)** even at high ML; the live forward
+> test resolved **3/7**; barrier-ordering shows first-passage pinned at the random-walk null.
+> The `pUp` head is **dropped** (`mlPredictDirection` returns null, deployed `93a6cc67`). The
+> leakage audit below (which "passed") **missed the leak** because it tested the *target*
+> (label-shift, shuffle, correlation) but not the *feature construction* — a cautionary tale:
+> a clean target-side audit does not rule out a feature-side time leak. What's real and how we
+> trade it instead: [[strategy-variance-harvest]]. Everything below is preserved as the
+> historical (wrong) record.
+
 A dedicated ML head predicting **direction** (`up = fwdReturn24H > 0`), not just trade
 quality. Crypto only — stocks failed the same test ([[edge-stock-direction-rejected]]).
 Built + validated 2026-05-30. Scripts: `crypto_direction_model.py`, `export_heads.py`,

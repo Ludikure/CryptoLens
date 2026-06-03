@@ -5,6 +5,32 @@ re-proposing anything** — "did we try X?" lives here. Methodology for all of t
 [[edge-methodology]]. When something here gets revived and works, move it to its own note
 and link back.
 
+## ⚠️ Crypto direction prediction — RETRACTED, was a leak (2026-06-02)
+The [[edge-crypto-direction-model]] (94.7% dual-gate, `pUp` head) **and** the indicator
+direction edge were artifacts of the daily in-progress-candle leak ([[edge-leak-daily-candle]]).
+Clean: crypto direction ~50% even at ML≥85%; first-passage ordering pinned at the random-walk
+null (`barrier_ordering.py`); live forward test 3/7. **Do not re-attempt direction/timing
+prediction without first confirming the higher-TF slice drops the in-progress bar.** The real
+edge is variance, not direction: [[strategy-variance-harvest]].
+
+## Strategy structures that DON'T monetize the variance edge (2026-06-02)
+On clean data + Binance fees, tail-gated convex baseline = single-shot trailing +0.060R/signal
+([[strategy-variance-harvest]]). What failed against it:
+```
+fixed +1.5R/-1R bracket        EV→0 gross at the 40% random-walk null, negative after costs
+ML_WIN gating (vs tail gate)   −0.110 vs −0.061  (predicts the body that hits your stop)
+blind re-entry after stop      −0.031 .. −0.061  (re-bets the random entry direction)
+wide fixed targets (TP 8/12)   only 1-4% ever fill — a non-binding cap, not a level reached
+```
+What *did* beat it (kept, in [[strategy-variance-harvest]]): pyramiding into winners (+0.216),
+breakout-reset re-entry (+0.157). The difference is start-vs-continuation: blind re-entry
+re-bets the random start; pyramiding/breakout press an *established* (mildly persisting) move.
+
+## Tradeable at Coinbase Intro-1 fees — REJECTED (2026-06-02)
+The variance-harvest strategy is net-negative (−0.04..−0.07R) at Coinbase derivative fees
+(~0.23-0.28% round-trip); break-even is ~0.165%. Viable only on a cheaper venue (Binance
+regular ~0.06-0.13%). Not a model problem — a cost-tier problem. `strategy_stop_sweep.py`.
+
 ## Direction primitives (vs the [[edge-direction-primitive]] union)
 Sweep: `ml-training/direction_primitive_sweep.py`, re-validated `edge_revalidate.py`.
 ```

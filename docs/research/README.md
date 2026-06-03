@@ -21,10 +21,17 @@ for the graph/backlink view). Links use `[[note-name]]` wikilink syntax.
 
 ### Edge & direction
 - [[edge-methodology]] — frozen holdout, timestamp-split WF, the leakage trap. Read first.
-- [[edge-direction-primitive]] — bias ∪ dStoch union; the 12-primitive sweep.
-- [[edge-crypto-direction-model]] — dedicated direction head, 94.7% holdout, leakage audit.
-- [[edge-stock-direction-rejected]] — same recipe → chance on stocks. The kill-test.
+- [[edge-leak-daily-candle]] — 🚨 the in-progress-candle leak that
+  faked crypto direction. Read alongside the two notes below — it retracts them.
+- [[edge-direction-primitive]] — bias ∪ dStoch union; the 12-primitive sweep. ⚠️ leak-tainted.
+- [[edge-crypto-direction-model]] — dedicated direction head, 94.7% holdout. ⚠️ RETRACTED (leak).
+- [[edge-stock-direction-rejected]] — same recipe → chance on stocks. The kill-test (clean).
 - [[live-validation]] — the dual-gate scoreboard: turning backtest into a forward record.
+
+### What the signal actually is
+- [[strategy-variance-harvest]] — 🟢 the current truth: ML_WIN predicts *magnitude not
+  direction*; barrier-ordering, shuffle-null, conditional-drift; the convex/trailing/pyramiding
+  strategy; asymmetric downside-cascade drift + upside convexity; fees/venue decide viability.
 
 ### ML models
 - [[ml-model-versions]] — v11 crypto / v13 stock, reliability tables, the "own-data" trap.
