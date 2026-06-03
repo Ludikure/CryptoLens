@@ -2399,6 +2399,16 @@ async function computeSymbolPredictions(
   const prevOIMap: Record<string, number> = prevOIBatchRaw ? JSON.parse(prevOIBatchRaw) : {};
   const derivArchiveBatchRaw = await env.ALERTS.get('deriv_archive:all');
   const derivArchiveMap: Record<string, number> = derivArchiveBatchRaw ? JSON.parse(derivArchiveBatchRaw) : {};
+  // Dense OI/price snapshots for a future HOMEMADE liquidation heatmap (every ~20 min per
+  // symbol). Captures the heatmap inputs — live OI level + mark price + funding + positioning —
+  // so that over months we accumulate the OI-vs-price history needed to model liquidation
+  // clusters ourselves (the data Coinglass gates behind $699/mo), collected free going forward.
+  const oiSnapBatchRaw = await env.ALERTS.get('oi_snap:all');
+  const oiSnapMap: Record<string, number> = oiSnapBatchRaw ? JSON.parse(oiSnapBatchRaw) : {};
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS oi_snapshots (symbol TEXT NOT NULL, timestamp INTEGER NOT NULL, open_interest REAL, mark_price REAL, funding_rate REAL, long_percent REAL, basis_pct REAL, PRIMARY KEY (symbol, timestamp))').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_oi_snap ON oi_snapshots(symbol, timestamp DESC)').run();
+  } catch {}
   const candles1dRaw = await env.ALERTS.get('candles:all:1d');
   const candles4hRaw = await env.ALERTS.get('candles:all:4h');
   const candles1hRaw = await env.ALERTS.get('candles:all:1h');
@@ -2865,6 +2875,24 @@ async function computeSymbolPredictions(
             derivArchiveMap[symbol] = Date.now();
           } catch {}
         }
+
+        // Dense OI/price snapshot (~every 20 min) → oi_snapshots, for the homemade heatmap.
+        // Fetch LIVE current OI (the 4H-stat `openInterest` above is too coarse) and pair it
+        // with the live mark price, so ΔOI between snapshots can be attributed to the price it
+        // was opened at — the raw material for estimating where liquidation levels cluster.
+        const lastSnap = oiSnapMap[symbol];
+        if (markPrice > 0 && (!lastSnap || Date.now() - lastSnap > 20 * 60 * 1000)) {
+          try {
+            const oiResp = await fetch(`${FAPI}/fapi/v1/openInterest?symbol=${symbol}`);
+            const liveOI = oiResp.ok ? parseFloat(((await oiResp.json()) as any).openInterest) : 0;
+            if (liveOI > 0) {
+              await env.DB.prepare(
+                'INSERT OR REPLACE INTO oi_snapshots (symbol, timestamp, open_interest, mark_price, funding_rate, long_percent, basis_pct) VALUES (?, ?, ?, ?, ?, ?, ?)'
+              ).bind(symbol, Math.floor(Date.now() / 1000), liveOI, markPrice, fundingRate, longPct, basisPct).run();
+              oiSnapMap[symbol] = Date.now();
+            }
+          } catch {}
+        }
       }
       const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
@@ -3014,6 +3042,7 @@ async function computeSymbolPredictions(
   await env.ALERTS.put('ml_preds:all', JSON.stringify(mlPredBatch), { expirationTtl: 300 });
   await env.ALERTS.put('prev_oi:all', JSON.stringify(prevOIMap), { expirationTtl: 86400 });
   await env.ALERTS.put('deriv_archive:all', JSON.stringify(derivArchiveMap), { expirationTtl: 14400 });
+  await env.ALERTS.put('oi_snap:all', JSON.stringify(oiSnapMap), { expirationTtl: 14400 });
   if (candlesDirty['1d']) await env.ALERTS.put('candles:all:1d', JSON.stringify(candles1dMap), { expirationTtl: 300 });
   if (candlesDirty['4h']) await env.ALERTS.put('candles:all:4h', JSON.stringify(candles4hMap), { expirationTtl: 300 });
   if (candlesDirty['1h']) await env.ALERTS.put('candles:all:1h', JSON.stringify(candles1hMap), { expirationTtl: 300 });
