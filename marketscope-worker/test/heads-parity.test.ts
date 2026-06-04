@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection } from '../src/ml-predict';
+import { mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket } from '../src/ml-predict';
 
 // Worker↔Python parity for the Phase 1/2 additive heads (crypto-only). These heads
 // are NOT computed by BacktestEngine, so they can't use the worker↔BacktestEngine
@@ -41,5 +41,22 @@ describe('Phase 1/2 heads — worker TS vs Python export reference', () => {
         expect(mlPredictMeta(zero, false, 1)).toBeNull();   // stock
         expect(mlPredictMeta(zero, true, 0)).toBeNull();    // no direction
         expect(mlPredictQuantile(zero, false, '0.75')).toBeNull();
+    });
+
+    // Tail head: P(fwdMaxFavR >= 4 ATR in 24h) — the dedicated big-move gauge (2026-06-04).
+    // Reference computed by ml-training/train_tail_head.py on the all-zero input against the
+    // exact embedded heads.tail trees + isotonic calibration (cap 0.60).
+    it('tail head matches Python reference (calibrated, crypto)', () => {
+        const t = mlPredictTail(zero, true);
+        expect(t).not.toBeNull();
+        expect(t!).toBeCloseTo(0.1654135338, 6);
+    });
+
+    it('tail head is crypto-only; buckets map to the exported thresholds', () => {
+        expect(mlPredictTail(zero, false)).toBeNull();      // stocks have no tail head
+        expect(tailRiskBucket(0.15)).toBe('HIGH');          // >= 0.10
+        expect(tailRiskBucket(0.085)).toBe('ELEVATED');     // >= 0.079
+        expect(tailRiskBucket(0.05)).toBe('NORMAL');
+        expect(tailRiskBucket(null)).toBeNull();
     });
 });

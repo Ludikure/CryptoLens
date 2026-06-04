@@ -2,7 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
-import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, buildMLInput } from './ml-predict';
+import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
@@ -1033,6 +1033,7 @@ export default {
               const d = indicators[0];
               d.mlWinProbability = e.probability ?? null;
               d.mlPersistenceProbability = e.probabilityH72 ?? null;
+              d.mlBigMoveProb = e.bigMoveProb ?? null;
               d.mlDirectionUp = e.pUp ?? null;
               d.mlConfident = e.confident ?? null;
               d.mlMetaDirection = e.metaDirection ?? null;
@@ -1133,7 +1134,7 @@ export default {
 
         return json({
           symbol, isCrypto, timestamp: Date.now(), model, analysis: text, setups,
-          ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null },
+          ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: indicators[0].mlBigMoveProb ?? null },
           bias: { daily: indicators[0].bias, fourH: indicators[1]?.bias ?? null, oneH: indicators[2]?.bias ?? null },
         });
       } catch (e) {
@@ -2389,6 +2390,7 @@ async function computeSymbolPredictions(
   // replaces what used to be 76 individual `ml_pred:<symbol>` writes per cron run.
   const mlPredBatch: Record<string, { symbol: string; probability: number; features: FullFeatures; timestamp: number; isCrypto: boolean;
     // Phase 1/2 additive heads (crypto-only; null/absent otherwise). Served by /ml-predict.
+    probabilityH72?: number | null; bigMoveProb?: number | null;
     probabilityMeta?: number | null; q75?: number | null; confident?: boolean | null; metaDirection?: number;
     pUp?: number | null }> = {};
   // Per-cron batched lookups: previous-bar open interest, last-derivatives-archive
@@ -2910,6 +2912,9 @@ async function computeSymbolPredictions(
       // 72h persistence: probability of >= 2.5 ATR favorable move within 72h.
       // Different question than mlProb — runner-hold confidence vs trade-quality gate.
       const mlProbH72 = mlPredictH72(features as Record<string, number>, isCrypto);
+      // Big-move/tail head: P(>=4 ATR move in 24h). The dedicated huge-move gauge ML_WIN
+      // can't be (ML_WIN targets >=1.5 ATR). Crypto-only → null for stocks. See ml-predict.ts.
+      const mlBigMove = mlPredictTail(features as Record<string, number>, isCrypto);
 
       newSnapshots[symbol] = {
         dRsi: features.dRsi, dAdx: features.dAdx,
@@ -2929,7 +2934,7 @@ async function computeSymbolPredictions(
       // cron instead of 76 times.
       // probabilityH72 is the runner-hold persistence score; kept alongside the existing
       // `probability` field so old iOS clients can ignore it cleanly (additive change).
-      mlPredBatch[symbol] = { symbol, probability: mlProb, probabilityH72: mlProbH72, features, timestamp: Date.now(), isCrypto };
+      mlPredBatch[symbol] = { symbol, probability: mlProb, probabilityH72: mlProbH72, bigMoveProb: mlBigMove, features, timestamp: Date.now(), isCrypto };
 
       // Debug: dump features for comparison with iOS
       if (symbol === 'BTCUSDT' || symbol === 'ETHUSDT' || symbol === 'TSLA' || symbol === 'NVDA') {

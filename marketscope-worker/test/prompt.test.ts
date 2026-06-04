@@ -88,6 +88,7 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     const fourH = mk(230, H4, '4H', '4h');
     const oneH = mk(120, H1, '1H', '1h');
     daily.mlWinProbability = 0.72; daily.mlPersistenceProbability = 0.64; daily.mlDirectionUp = 0.68;
+    daily.mlBigMoveProb = 0.12;   // HIGH tail bucket (>= 0.10)
 
     const { prompt, newState } = buildUserPrompt({
       symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
@@ -101,6 +102,7 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(prompt).not.toContain('DIRECTION MODEL');    // pUp head removed (leak)
     expect(prompt).toContain('ML_WIN is a VOLATILITY signal');
     expect(prompt).toContain('Environment Risk:');        // computed trend-risk flag (ML_WIN-independent)
+    expect(prompt).toContain('Big-Move Risk: HIGH');       // learned tail head surfaced
     expect(prompt).toContain('ML_WIN Context:');           // ATR-normalization caveat emitted
     expect(prompt).toContain('ML Bucket: TOP (ML_WIN 72%)');
     expect(prompt).toContain('Momentum Alignment:');

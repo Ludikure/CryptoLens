@@ -1,0 +1,93 @@
+"""Tail head: P(fwdMaxFavR >= 4.0 ATR in 24h). A dedicated big-move/risk gauge to sit
+alongside ML_WIN (which targets >=1.5 ATR and structurally can't flag the huge moves).
+Embeds heads.tail into the CLEAN ml-model-crypto.json (worker + iOS) — clean lineage,
+separate from the leak-era ml-model-crypto.heads.json. Emits the all-zero parity
+reference (for heads-parity.test.ts) + the HIGH/ELEVATED bucket thresholds."""
+import os, json, numpy as np, pandas as pd, lightgbm as lgb
+from sklearn.isotonic import IsotonicRegression
+from sklearn.metrics import roc_auc_score
+from calibrate_v12_crypto_clean import FEATURES, CRYPTO_SYMBOLS, extract_trees
+
+TAIL=4.0; CAP=0.60
+WORKER='/Users/bojanmihovilovic/CryptoLens/marketscope-worker/src/ml-model-crypto.json'
+IOS='/Users/bojanmihovilovic/CryptoLens/CryptoLens/ML/ml-model-crypto.json'
+
+parts=[]
+for s in CRYPTO_SYMBOLS:
+    p=f'csv_exports_v11_fixed/{s}USDT.csv'
+    if not os.path.isfile(p): continue
+    df=pd.read_csv(p)
+    if 'fwdMaxFavR' not in df: continue
+    df=df[df['fwdMaxFavR'].notna()].copy(); df['symbol']=s
+    df['date']=pd.to_datetime(df['timestamp'],unit='s').dt.date
+    parts.append(df.groupby('date').tail(1))
+d=pd.concat(parts,ignore_index=True).sort_values('timestamp').reset_index(drop=True)
+for f in FEATURES:
+    if f not in d.columns: d[f]=0.0
+X,y=d[FEATURES],(d['fwdMaxFavR']>=TAIL).astype(int).values
+n=len(d); print(f"{n:,} bars, tail(>= {TAIL} ATR) base={y.mean()*100:.1f}%")
+
+def mk():
+    return lgb.LGBMClassifier(max_depth=4,n_estimators=150,learning_rate=0.03,subsample=0.8,
+        colsample_bytree=0.8,min_child_samples=10,reg_alpha=0.1,reg_lambda=1.0,random_state=42,verbose=-1)
+
+# WF OOF -> isotonic calibration breakpoints (cap 0.60)
+oof=np.full(n,np.nan)
+for k in range(1,4):
+    cut=int(n*k/4); ve=int(n*(k+1)/4)
+    trI=np.arange(0,cut-48); vaI=np.arange(cut,ve)
+    if len(trI)<500: continue
+    m=mk(); m.fit(X.iloc[trI],y[trI]); oof[vaI]=m.predict_proba(X.iloc[vaI])[:,1]
+mask=~np.isnan(oof)
+iso=IsotonicRegression(out_of_bounds='clip'); iso.fit(oof[mask],y[mask])
+x_cal=iso.X_thresholds_.tolist(); y_cal=np.minimum(iso.y_thresholds_,CAP).tolist()
+print(f"OOF AUC={roc_auc_score(y[mask],oof[mask]):.3f}, {len(x_cal)} cal breakpoints")
+
+# Final model on ALL data -> trees in worker JSON format
+final=mk(); final.fit(X,y)
+trees,base_score=extract_trees(final,is_lgb=True)
+
+# --- replicate the TS evaluator EXACTLY for parity reference + bucketing ---
+def eval_tree(node,inp):
+    if 'leaf' in node: return node['leaf']
+    val=inp.get(node['split'],0.0)
+    nid=node['yes'] if val<node['split_condition'] else node['no']
+    for c in node['children']:
+        if c['nodeid']==nid: return eval_tree(c,inp)
+    return 0.0
+def iso_cal(raw):
+    x,yv=x_cal,y_cal
+    if raw<=x[0]: return yv[0]
+    if raw>=x[-1]: return min(CAP,yv[-1])
+    lo=0
+    for i in range(1,len(x)):
+        if x[i]>raw: lo=i-1; break
+    t=(raw-x[lo])/(x[lo+1]-x[lo])
+    return max(0.0,min(CAP,yv[lo]+t*(yv[lo+1]-yv[lo]))) 
+def predict(inp):
+    s=np.log(base_score/(1-base_score))+sum(eval_tree(t,inp) for t in trees)
+    return iso_cal(1/(1+np.exp(-s)))
+
+ref=predict({})  # all-zero input == empty dict (evaluateTree defaults missing to 0)
+print(f"\nPARITY REFERENCE (all-zero input): mlPredictTail = {ref:.10f}")
+
+# bucket thresholds from calibrated full-data predictions
+cal_all=np.array([predict(r) for r in d[FEATURES].to_dict('records')])
+q70,q90=np.quantile(cal_all,[.70,.90])
+print(f"BUCKET THRESHOLDS: ELEVATED >= {q70:.4f}, HIGH >= {q90:.4f}")
+print(f"  base tail rate {y.mean()*100:.1f}% | NORMAL<{q70:.3f} | ELEVATED [{q70:.3f},{q90:.3f}) | HIGH>={q90:.3f}")
+
+# --- embed heads.tail into both clean model JSONs ---
+head={'trees':trees,'base_score':base_score,'threshold':TAIL,
+      'target':f'fwdMaxFavR>={TAIL}','calibration':{'x':x_cal,'y':y_cal,'cap':CAP,'method':'isotonic'},
+      'buckets':{'elevated':round(float(q70),4),'high':round(float(q90),4)},
+      'base_rate':round(float(y.mean()),4),'n_samples':int(n),
+      'description':f'Big-move/tail risk head: P(fwdMaxFavR>={TAIL} ATR in 24h). LightGBM d4 t150, '
+                    f'clean csv_exports_v11_fixed. OOF AUC ~0.65. Sits alongside ML_WIN; aimed at the '
+                    f'huge moves ML_WIN (>=1.5 ATR target) structurally under-flags.'}
+for path in (WORKER,IOS):
+    if not os.path.isfile(path): print(f"  SKIP missing {path}"); continue
+    j=json.load(open(path))
+    j.setdefault('heads',{})['tail']=head
+    json.dump(j,open(path,'w'))
+    print(f"  wrote heads.tail -> {path} ({len(trees)} trees)")

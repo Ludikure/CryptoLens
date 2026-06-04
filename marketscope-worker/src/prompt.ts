@@ -377,6 +377,7 @@ export interface PromptIndicator {
   atrPercentile: number | null; atrPercentileLabel: string | null;
   // ML overlay (supplied by /full-analysis from the cron/ml-predict path; daily TF carries these)
   mlWinProbability?: number | null; mlPersistenceProbability?: number | null; mlDirectionUp?: number | null;
+  mlBigMoveProb?: number | null;  // tail head: P(>=4 ATR move in 24h), crypto-only
   mlConfident?: boolean | null; mlMetaDirection?: number | null; mlMetaProbability?: number | null; mlQ75?: number | null;
   // Optional stock display extras (not yet computed by the worker; emitted when present)
   smaCross?: { status: string; recentCross?: string | null } | null;
@@ -525,6 +526,24 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     } else {
       envRisk = 'LOW';
       envReason = 'ranging / quiet — no dominant trend, mean-reversion regime';
+    }
+    // Learned big-move/tail head (crypto-only): P(>=4 ATR move in 24h). Supersedes the
+    // ADX/stretch heuristic as the big-move read when present, and can ESCALATE Environment
+    // Risk — a HIGH tail bucket in an otherwise-quiet tape is exactly the "ML_WIN says calm
+    // but an outsized move is brewing" case the heuristic can't see.
+    const bigMove = daily.mlBigMoveProb;
+    let bigMoveBucket: string | null = null;
+    if (bigMove != null) {
+      const baseRate = 0.064;  // tail base rate (matches head export)
+      bigMoveBucket = bigMove >= 0.10 ? 'HIGH' : bigMove >= 0.079 ? 'ELEVATED' : 'NORMAL';
+      const xBase = (bigMove / baseRate);
+      L(`Big-Move Risk: ${bigMoveBucket} (model: ${f(bigMove * 100, 0)}% chance of a >=4 ATR move in 24h, ${f(xBase, 1)}x the ${f(baseRate * 100, 0)}% base). Direction-agnostic — an outsized move is more likely than normal, EITHER way. This is the learned tail gauge ML_WIN (>=1.5 ATR) cannot provide.`);
+      // Escalate Environment Risk if the tail head fires while the heuristic read low.
+      if (bigMoveBucket === 'HIGH' && (envRisk === 'LOW' || envRisk === 'MODERATE')) {
+        envRisk = 'ELEVATED'; envReason = `${envReason}; tail model flags HIGH outsized-move risk (${f(xBase, 1)}x base) despite a calmer trend read`;
+      } else if (bigMoveBucket === 'HIGH' && envRisk === 'ELEVATED') {
+        envRisk = 'HIGH'; envReason = `${envReason}; tail model also flags HIGH outsized-move risk`;
+      }
     }
     L(`Environment Risk: ${envRisk} — ${envReason}.`);
     const trendDominates = adxMax >= 35 || stretchATR >= 2.5;

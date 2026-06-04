@@ -113,6 +113,12 @@ interface Heads {
                   calibration: { x: number[]; y: number[]; cap?: number } };
 }
 const cryptoHeads = (cryptoHeadsModelData as any).heads as Heads | undefined;
+// Tail head lives in the CLEAN main model (ml-model-crypto.json heads.tail), not the
+// leak-era heads file. Clean lineage (csv_exports_v11_fixed). See train_tail_head.py.
+const cryptoTailHead = (cryptoModelData as any).heads?.tail as
+    { trees: TreeNode[]; base_score: number;
+      calibration: { x: number[]; y: number[]; cap?: number };
+      buckets?: { elevated: number; high: number } } | undefined;
 
 function isoCalibrate(cal: { x: number[]; y: number[]; cap?: number }, rawProb: number): number {
     const { x, y } = cal; const cap = cal.cap ?? 0.85;
@@ -169,6 +175,32 @@ export function mlConfident(metaProb: number | null, isCrypto: boolean): boolean
 /// callers already handle null (prompt/table hide the row, direction-signals logging skips).
 export function mlPredictDirection(_input: Record<string, number>, _isCrypto: boolean): number | null {
     return null;
+}
+
+/// Big-move / tail-risk head: P(fwdMaxFavR >= 4 ATR in 24h). A dedicated gauge for the
+/// HUGE moves ML_WIN structurally under-flags — ML_WIN targets >=1.5 ATR (a near-coinflip
+/// "normal move?" question), so in a violent move it can read ~40% while a 5-ATR move lands.
+/// This head is aimed at the big moves directly: OOF AUC ~0.65, top decile ~2x base tail rate.
+/// Calibrated (isotonic, cap 0.60). Crypto-only; null when no tail head present (e.g. stocks).
+/// See ml-training/train_tail_head.py + predictability_test.py for the build + honest ceiling.
+export function mlPredictTail(input: Record<string, number>, isCrypto: boolean): number | null {
+    if (!isCrypto || !cryptoTailHead) return null;
+    const { trees, base_score, calibration } = cryptoTailHead;
+    let sum = Math.log(base_score / (1 - base_score));
+    for (const tree of trees) sum += evaluateTree(tree, input);
+    if (!isFinite(sum)) return null;
+    return isoCalibrate(calibration, sigmoid(sum));
+}
+
+/// Map a calibrated tail prob to a relative risk bucket using the head's exported thresholds
+/// (NORMAL / ELEVATED / HIGH ≈ bottom-70 / next-20 / top-10 percent of bars). The absolute
+/// prob is low even in HIGH (~12% / ~2x base) — these are rare events; this is a relative
+/// "outsized-move risk" ranking, not a probability of a specific move. null when no head.
+export function tailRiskBucket(prob: number | null): 'HIGH' | 'ELEVATED' | 'NORMAL' | null {
+    if (prob == null) return null;
+    const hi = cryptoTailHead?.buckets?.high ?? 0.10;
+    const el = cryptoTailHead?.buckets?.elevated ?? 0.079;
+    return prob >= hi ? 'HIGH' : prob >= el ? 'ELEVATED' : 'NORMAL';
 }
 
 /// Build feature dict from scoring results + candle data.
