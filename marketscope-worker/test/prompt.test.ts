@@ -21,16 +21,27 @@ function synthCandles(n: number, startMs: number, stepMs: number, base = 100): C
 }
 
 describe('prompt.ts (AnalysisPrompt port)', () => {
-  it('systemPrompt returns the byte-extracted text per market', () => {
+  it('systemPrompt is the risk-first reframe (leaked directional claim removed)', () => {
     const c = systemPrompt(true), s = systemPrompt(false);
-    expect(c.startsWith('You are MarketScope — a trader, not an analyst')).toBe(true);
-    expect(c).toContain('CRYPTO CONTEXT');
-    expect(c).toContain('DERIVATIVES POSITIONING');
-    expect(s).toContain('STOCK CONTEXT');
-    expect(s).toContain('MACRO CONTEXT');
-    expect(s).not.toContain('CRYPTO CONTEXT');
+    // role flipped: risk analyst, not trader
+    expect(c.startsWith('You are MarketScope — a RISK and VOLATILITY analyst')).toBe(true);
+    expect(c).not.toContain('a trader, not an analyst');
+    // the leaked crypto-direction claim must be gone
+    expect(c).not.toContain('HIGH-confidence and commit');
+    expect(c).not.toContain('treat direction as HIGH');
+    expect(c).toContain('DATA-LEAK ARTIFACT');
+    // risk-first output structure
+    expect(c).toContain('## Move Likelihood');
+    expect(c).toContain('## Risk Map');
+    expect(c).toContain('Direction (your read)');
+    expect(c).toContain('DERIVATIVES / SPOT');
+    // stock keeps news + market hours, drops crypto derivatives
+    expect(s.startsWith('You are MarketScope — a RISK and VOLATILITY analyst')).toBe(true);
+    expect(s).toContain('Recent News');
+    expect(s).toContain('9:30 AM');
+    expect(s).not.toContain('DERIVATIVES / SPOT');
     expect(c).not.toContain('\\(');  // no unresolved interpolations
-    expect(c.length).toBeGreaterThan(20000);
+    expect(c.length).toBeGreaterThan(5000);
   });
 
   it('useTighterBands: tighter by default, trending opt out', () => {
