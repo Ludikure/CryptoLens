@@ -559,6 +559,16 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-06-04 — Risk repositioning: Environment Risk headline + big-move/tail head (ML_WIN demoted)
+
+**Triggered by a real failure the user caught: ML_WIN read 25–40% across 2026-05-31→06-03 while BTC fell $73k→$64k in 4.2–5.6 ATR moves (every `ml_calibration` bar resolved goodR=1).** Pulled the live D1 series to confirm, then investigated whether a better model is achievable before building.
+
+**Finding (ml-training/retrain_diagnostic.py + predictability_test.py, 141K clean OOS bars):** ML_WIN is NOT broken — it is well-calibrated even in the high-ADX/high-ATR tail (top ADX decile: actual goodR 42.8% vs predicted 43.6%). goodR genuinely *falls* in strong trends because it is **ATR-normalized** (a ≥1.5-ATR move on top of already-high vol is genuinely less likely, ~42% vs ~62% calm). So a low ML_WIN in a violent trend is *correct but misleading* as a risk signal. A monotonic-constraint retrain is **rejected** (would force goodR up with ADX — backwards). The BTC streak was a true ~40% bar resolving 1 in an autocorrelated window. BUT the huge moves are *partially* predictable: a head aimed at ≥4 ATR moves holds AUC ~0.67 (vs the ≥1.5 model's 0.63 at that target), +4–5pp catch — real but modest (rare events; top decile ~2× base).
+
+**Shipped (deployed worker d9a9210e):**
+- **Environment Risk flag** (`prompt.ts buildUserPrompt`): HIGH/ELEVATED/MODERATE/LOW from regime + ADX(daily,4H) + price-stretch-from-200D-in-ATR — a *non-ATR-normalized* trend-danger read. Now the **output headline** (`prompt-system.json`, both markets); ML_WIN demoted to "Move Likelihood (secondary)" with an `ML_WIN Context` line (ATR-normalized, correctly-but-misleadingly low in trends; never "safe").
+- **Big-move/tail head** (`ml-training/train_tail_head.py`): LightGBM d4 t150, target `P(fwdMaxFavR>=4 ATR in 24h)`, clean `csv_exports_v11_fixed`, WF-OOF isotonic (cap 0.60), OOF AUC 0.646, monotonic calibration (20%+ bucket → 23.7% realized, 3.7× base). Embedded as `heads.tail` in the **clean** `ml-model-crypto.json` (worker + iOS) — separate from the leak-era heads file. `mlPredictTail()` + `tailRiskBucket()` in `ml-predict.ts` (1e-6 Python parity, all-zero ref 0.1654135338). Crypto-only (stocks → null). Cron writes `bigMoveProb` into `ml_preds:all`; `/ml-predict` + `/full-analysis` (`ml.bigMove`) serve it; folds into Environment Risk (a HIGH tail bucket escalates the headline — the "ML_WIN calm but outsized move brewing" case). Verified live: all 76 crypto symbols populated. **iOS/web "Big-move risk" UI label is the remaining step.** 379/379 worker tests green.
+
 ### 2026-06-02 — 🚨 DATA LEAK FOUND: crypto direction model DROPPED, honest ML_WIN retrained + deployed
 
 **The single most important correction in the project's history. The crypto direction edge (the "~94.7% at pUp≥0.70" claim, the `pUp` head, the entire 2026-05-30 dual-gate direction architecture) was an ARTIFACT OF A DATA LEAK. It is gone.**
