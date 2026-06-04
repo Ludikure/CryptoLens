@@ -496,6 +496,44 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L('Regime Changed: true');
     } else { L(`Regime: ${regime}`); L('Regime Changed: false'); }
 
+    // Phase 2b — ENVIRONMENT RISK (trend/volatility danger). Why this exists, verified on 141K
+    // clean bars (ml-training/retrain_diagnostic.py): ML_WIN is WELL-CALIBRATED even in the
+    // high-ADX/high-ATR tail (predicted within ~1-2pp of actual; if anything it slightly
+    // over-predicts there). It is NOT broken and does NOT "under-read" trends. The catch is that
+    // ML_WIN is ATR-NORMALIZED (goodR = >=1.5 ATR): when vol is already high, a 1.5-ATR bar is a
+    // LARGE absolute move, so a FURTHER such move is genuinely less likely (~42% in strong trends
+    // vs ~62% in calm). So a LOW ML_WIN in a violent trend is CORRECT but MISLEADING as a risk
+    // signal — the trend itself is the danger even though >=1.5-ATR-forward is unlikely. This flag
+    // is a SEPARATE, non-ATR-normalized trend-danger read (ADX + stretch) that leads the output so
+    // a correctly-low ML_WIN is not mistaken for "safe/quiet." (BTC 2026-06-01→03 was a true
+    // ~30-40% bar resolving 1 in an autocorrelated streak — a low-prob realization, not a defect.)
+    const adx4HVal = fourH.adx?.adx ?? 0;
+    const adxMax = Math.max(adxDaily, adx4HVal);
+    const dAtrVal = daily.atr?.atr ?? 0;
+    const stretchATR = (dAtrVal > 0 && daily.ema200 != null) ? Math.abs(daily.price - daily.ema200) / dAtrVal : 0;
+    const trendDir = maAlignment === 'bearish_stacked' ? 'down' : maAlignment === 'bullish_stacked' ? 'up' : 'mixed';
+    let envRisk: string, envReason: string;
+    if (adxMax >= 40 || (regime === 'TRENDING' && stretchATR >= 3)) {
+      envRisk = 'HIGH';
+      envReason = `violent ${trendDir}-trend (ADX ${f(adxMax, 0)}, price ${f(stretchATR, 1)} ATR from 200D) — momentum can carry far past prior extremes; fading it or holding against it is dangerous`;
+    } else if (adxMax >= 28 || regime === 'TRENDING' || stretchATR >= 2) {
+      envRisk = 'ELEVATED';
+      envReason = `directional ${trendDir}-trend in force (ADX ${f(adxMax, 0)}, ${f(stretchATR, 1)} ATR from 200D) — trend-continuation risk`;
+    } else if (regime === 'TRANSITIONING' || stretchATR >= 1) {
+      envRisk = 'MODERATE';
+      envReason = `${regime.toLowerCase()} — expansion possible, no dominant trend`;
+    } else {
+      envRisk = 'LOW';
+      envReason = 'ranging / quiet — no dominant trend, mean-reversion regime';
+    }
+    L(`Environment Risk: ${envRisk} — ${envReason}.`);
+    const trendDominates = adxMax >= 35 || stretchATR >= 2.5;
+    if (trendDominates) {
+      L('ML_WIN Context: in this strong trend a low ML_WIN is CORRECT but MISLEADING — ML_WIN is ATR-normalized, so a >=1.5-ATR move on top of already-high vol is genuinely less likely (~42% vs ~62% in calm). Do NOT read a low ML_WIN here as "safe/quiet"; the trend itself is the danger. Lead the risk read from Environment Risk + structure, not ML_WIN.');
+    } else {
+      L('ML_WIN Context: range/transition regime — ML_WIN reads as a normal move-likelihood gauge.');
+    }
+
     // Phase 2a — Counter-trend + bias
     const dailyBias = daily.bias, fourHBias = fourH.bias, oneHBias = oneH?.bias ?? 'Neutral';
     const dailyBearish = has(dailyBias, 'Bearish'), dailyBullish = has(dailyBias, 'Bullish');

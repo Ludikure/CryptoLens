@@ -30,8 +30,11 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(c).not.toContain('HIGH-confidence and commit');
     expect(c).not.toContain('treat direction as HIGH');
     expect(c).toContain('DATA-LEAK ARTIFACT');
-    // risk-first output structure
-    expect(c).toContain('## Move Likelihood');
+    // risk-first output structure — Environment Risk is now the headline, ML_WIN demoted
+    expect(c).toContain('## Environment Risk');
+    expect(c).toContain('## Move Likelihood (secondary)');
+    expect(c).toContain('ML_WIN Context');               // ATR-normalized: correctly-but-misleadingly low in trends
+    expect(c).toContain('ATR-normalized');
     expect(c).toContain('## Risk Map');
     expect(c).toContain('Direction (your read)');
     expect(c).toContain('DERIVATIVES / SPOT');
@@ -97,6 +100,8 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(prompt).toContain('STOCH_CROSS (momentum context only, NOT directional)');  // direction stripped
     expect(prompt).not.toContain('DIRECTION MODEL');    // pUp head removed (leak)
     expect(prompt).toContain('ML_WIN is a VOLATILITY signal');
+    expect(prompt).toContain('Environment Risk:');        // computed trend-risk flag (ML_WIN-independent)
+    expect(prompt).toContain('ML_WIN Context:');           // ATR-normalization caveat emitted
     expect(prompt).toContain('ML Bucket: TOP (ML_WIN 72%)');
     expect(prompt).toContain('Momentum Alignment:');
     expect(prompt).toContain('=== RECENT CANDLES ===');
