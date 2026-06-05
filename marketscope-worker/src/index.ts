@@ -2,7 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
-import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket, buildMLInput } from './ml-predict';
+import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket, tailRiskInfo, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
@@ -948,7 +948,9 @@ export default {
       if (!cached) return json({ error: 'No cached prediction', symbol }, 404);
       const entry = (JSON.parse(cached) as Record<string, any>)[symbol];
       if (!entry) return json({ error: 'No cached prediction', symbol }, 404);
-      return json(entry);
+      // Attach display-ready big-move risk (bucket + x-base multiple) so clients don't
+      // each hardcode the thresholds. Raw bigMoveProb stays for back-compat.
+      return json({ ...entry, bigMove: tailRiskInfo(entry.bigMoveProb) });
     }
 
     // Full display indicators across daily/4H/1H — the shared analysis brain (no LLM). Both
@@ -1134,7 +1136,7 @@ export default {
 
         return json({
           symbol, isCrypto, timestamp: Date.now(), model, analysis: text, setups,
-          ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: indicators[0].mlBigMoveProb ?? null },
+          ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: tailRiskInfo(indicators[0].mlBigMoveProb) },
           bias: { daily: indicators[0].bias, fourH: indicators[1]?.bias ?? null, oneH: indicators[2]?.bias ?? null },
         });
       } catch (e) {

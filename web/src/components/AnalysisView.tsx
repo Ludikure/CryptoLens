@@ -10,7 +10,13 @@ export function AnalysisView({ result }: { result: FullAnalysisResponse }) {
       <div className="ml-card">
         <div><span>ML Win</span><b>{mlPct(result.ml.win)}</b></div>
         <div><span>Persistence</span><b>{mlPct(result.ml.persistence)}</b></div>
-        {result.ml.directionUp != null && <div><span>P(up 24h)</span><b>{mlPct(result.ml.directionUp)}</b></div>}
+        {result.ml.bigMove && (() => {
+          const bm = result.ml.bigMove;
+          const color = bm.bucket === 'HIGH' ? '#e5484d' : bm.bucket === 'ELEVATED' ? '#f5a623' : undefined;
+          const label = bm.bucket === 'NORMAL' ? 'NORMAL' : `${bm.bucket} · ${bm.multiple.toFixed(1)}× norm`;
+          return <div title="Outsized-move (≥4 ATR) risk vs the ~6.4% base rate. Rare event → shown as a relative bucket (HIGH ≈ ~2× normal odds), not a probability. Direction-agnostic.">
+            <span>Big-move risk</span><b style={color ? { color } : undefined}>{label}</b></div>;
+        })()}
         <div><span>Bias</span><b className={biasClass(result.bias.daily)}>{result.bias.daily}</b></div>
         <div className="muted"><span>Model</span><b>{result.model}</b></div>
       </div>

@@ -528,6 +528,8 @@ class AnalysisService: ObservableObject {
             let workerML = await fetchWorkerML(symbol: symbol)
             tf1ML.mlWinProbability = workerML?.probability
             tf1ML.mlPersistenceProbability = workerML?.probabilityH72
+            tf1ML.mlBigMoveBucket = workerML?.bigMove?.bucket
+            tf1ML.mlBigMoveMultiple = workerML?.bigMove?.multiple
             tf1ML.mlMetaProbability = workerML?.probabilityMeta
             tf1ML.mlQ75 = workerML?.q75
             tf1ML.mlConfident = workerML?.confident
@@ -710,6 +712,8 @@ class AnalysisService: ObservableObject {
             let workerML2 = await fetchWorkerML(symbol: symbol)
             tf1.mlWinProbability = workerML2?.probability
             tf1.mlPersistenceProbability = workerML2?.probabilityH72
+            tf1.mlBigMoveBucket = workerML2?.bigMove?.bucket
+            tf1.mlBigMoveMultiple = workerML2?.bigMove?.multiple
             tf1.mlMetaProbability = workerML2?.probabilityMeta
             tf1.mlQ75 = workerML2?.q75
             tf1.mlConfident = workerML2?.confident

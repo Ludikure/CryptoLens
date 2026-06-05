@@ -43,7 +43,8 @@ export interface TradeSetup {
 export interface FullAnalysisResponse {
   symbol: string; isCrypto: boolean; timestamp: number; model: string;
   analysis: string; setups: TradeSetup[];
-  ml: { win: number | null; persistence: number | null; directionUp: number | null };
+  ml: { win: number | null; persistence: number | null; directionUp: number | null;
+        bigMove: { prob: number; bucket: 'HIGH' | 'ELEVATED' | 'NORMAL'; multiple: number } | null };
   bias: { daily: string; fourH: string | null; oneH: string | null };
   error?: string;
 }

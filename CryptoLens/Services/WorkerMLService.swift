@@ -11,9 +11,16 @@ import Foundation
 /// retry on the next refresh.
 enum WorkerMLService {
 
+    struct BigMove: Decodable {
+        let prob: Double         // calibrated P(>= 4 ATR move in 24h)
+        let bucket: String       // "HIGH" / "ELEVATED" / "NORMAL"
+        let multiple: Double     // prob ÷ base rate (the "1.7x normal" the UI shows)
+    }
+
     struct Prediction {
         let probability: Double              // 24h@1.5 ATR — trade-quality gate
         let probabilityH72: Double?          // 72h@2.5 ATR — runner-hold persistence
+        let bigMove: BigMove?                // tail head: outsized-move risk (crypto-only)
         let timestamp: Date
         let isCrypto: Bool
         // Phase 1/2 additive heads (crypto-only; nil otherwise). See PLAN_OUTCOMES.md.
@@ -69,6 +76,7 @@ enum WorkerMLService {
         struct Body: Decodable {
             let probability: Double
             let probabilityH72: Double?
+            let bigMove: BigMove?
             let timestamp: TimeInterval
             let isCrypto: Bool
             let probabilityMeta: Double?
@@ -83,6 +91,7 @@ enum WorkerMLService {
         return Prediction(
             probability: body.probability,
             probabilityH72: body.probabilityH72,
+            bigMove: body.bigMove,
             timestamp: Date(timeIntervalSince1970: body.timestamp / 1000),
             isCrypto: body.isCrypto,
             probabilityMeta: body.probabilityMeta,

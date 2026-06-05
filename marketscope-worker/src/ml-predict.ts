@@ -118,7 +118,7 @@ const cryptoHeads = (cryptoHeadsModelData as any).heads as Heads | undefined;
 const cryptoTailHead = (cryptoModelData as any).heads?.tail as
     { trees: TreeNode[]; base_score: number;
       calibration: { x: number[]; y: number[]; cap?: number };
-      buckets?: { elevated: number; high: number } } | undefined;
+      buckets?: { elevated: number; high: number }; base_rate?: number } | undefined;
 
 function isoCalibrate(cal: { x: number[]; y: number[]; cap?: number }, rawProb: number): number {
     const { x, y } = cal; const cap = cal.cap ?? 0.85;
@@ -201,6 +201,16 @@ export function tailRiskBucket(prob: number | null): 'HIGH' | 'ELEVATED' | 'NORM
     const hi = cryptoTailHead?.buckets?.high ?? 0.10;
     const el = cryptoTailHead?.buckets?.elevated ?? 0.079;
     return prob >= hi ? 'HIGH' : prob >= el ? 'ELEVATED' : 'NORMAL';
+}
+
+/// Display-ready tail risk: bucket + how many times the base rate it is (the "1.7x normal"
+/// the UI shows instead of a confusing bare 10%). Single source of the thresholds/base rate
+/// (from the model JSON) so iOS + web don't each hardcode them. null when no head/prob.
+export function tailRiskInfo(prob: number | null | undefined):
+    { prob: number; bucket: 'HIGH' | 'ELEVATED' | 'NORMAL'; multiple: number } | null {
+    if (prob == null) return null;
+    const base = cryptoTailHead?.base_rate ?? 0.064;
+    return { prob, bucket: tailRiskBucket(prob)!, multiple: prob / base };
 }
 
 /// Build feature dict from scoring results + candle data.

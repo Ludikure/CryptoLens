@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket } from '../src/ml-predict';
+import { mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket, tailRiskInfo } from '../src/ml-predict';
 
 // Worker↔Python parity for the Phase 1/2 additive heads (crypto-only). These heads
 // are NOT computed by BacktestEngine, so they can't use the worker↔BacktestEngine
@@ -58,5 +58,16 @@ describe('Phase 1/2 heads — worker TS vs Python export reference', () => {
         expect(tailRiskBucket(0.085)).toBe('ELEVATED');     // >= 0.079
         expect(tailRiskBucket(0.05)).toBe('NORMAL');
         expect(tailRiskBucket(null)).toBeNull();
+    });
+
+    it('tailRiskInfo gives display bucket + x-base multiple', () => {
+        const hi = tailRiskInfo(0.106);
+        expect(hi).not.toBeNull();
+        expect(hi!.bucket).toBe('HIGH');
+        expect(hi!.multiple).toBeGreaterThan(1.5);            // ~1.66x the ~6.4% base
+        expect(hi!.multiple).toBeLessThan(1.8);
+        expect(tailRiskInfo(0.05)!.bucket).toBe('NORMAL');
+        expect(tailRiskInfo(null)).toBeNull();
+        expect(tailRiskInfo(undefined)).toBeNull();
     });
 });
