@@ -108,3 +108,22 @@ high/low weak-to-random on crypto (+0.3pp). Higher TF ≠ stronger level. [[stra
 Time-decay sample weighting (used for the *quality* model) biases a *direction* model
 toward UP in a bull market. The crypto + stock direction models use **uniform weights**.
 See `calibrate_direction_stocks.py` note + [[edge-crypto-direction-model]].
+
+## Liquidation zones predict BIG MOVES (magnitude, not direction) — REJECTED (2026-06-04)
+Follow-up to the heatmap *direction* null: do liquidation clusters predict big moves *either
+way* (the tail-head target)? `ml-training/liq_bigmove_test.py` + `liq_bigmove_auc.py` on the
+Coinglass set (25 majors, ~6mo 4H, real `long_liq`/`short_liq` + reconstructed ex-ante
+near-price fuel). Predicting a big RAW move (top-decile, ≥6.8%/24h), frozen holdout:
+**volatility alone AUC 0.824; vol + liquidation 0.812 (−0.012, *worse*); liquidation alone
+0.558 (~random).** Vol-controlled (near-fuel tercile within each vol half): more fuel →
+*fewer* big moves in both regimes (−1.5pp low-vol, −3.1pp high-vol) — backwards from the
+cascade-magnet thesis. Realized liquidation *spikes* (actual data, not reconstructed) also
+add nothing beyond vol. Mechanism: liquidations are the *effect* (the cascade IS the move),
+not a leading predictor; whatever positioning signal exists is already in OI/funding/vol
+features, and **volatility itself** (vol clustering) is the real big-move predictor — already
+in the tail head (`atrPercent`/`atrPercentile`/BB bandwidth). Implication: do NOT build a
+Coinglass liquidation feed into the model. Liquidation zones stay a **risk-map visual** (where
+a cascade *could* accelerate IF price reaches them), never a quantitative predictor. Caveat:
+6mo/25-symbol single-regime data + single-leverage (25×) reconstruction — but the realized-liq
+null is the reliable half. Consistent with the earlier heatmap-direction null
+([[edge-direction-primitive]]).
