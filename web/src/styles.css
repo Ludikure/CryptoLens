@@ -102,6 +102,11 @@ table.indicators td:last-child { border-right: none; }
 .analyze-bar .run:disabled { opacity: 0.6; cursor: default; }
 
 .analysis { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.risk-states { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.rs-chip { font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); cursor: help; }
+.rs-chip.rs-high { background: rgba(229,72,77,0.15); color: #e5484d; border-color: rgba(229,72,77,0.4); }
+.rs-chip.rs-medium { background: rgba(245,166,35,0.12); color: #f5a623; border-color: rgba(245,166,35,0.35); }
+.rs-chip.rs-low { color: var(--muted); }
 .risk-calc { padding: 4px 2px; }
 .risk-calc h3 { margin: 8px 0 12px; }
 .risk-inputs { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 14px; }

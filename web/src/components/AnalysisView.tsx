@@ -20,6 +20,15 @@ export function AnalysisView({ result }: { result: FullAnalysisResponse }) {
           </div>
         </div>
       )}
+      {result.riskStates && result.riskStates.length > 0 && (
+        <div className="risk-states">
+          {result.riskStates.map((rs, i) => (
+            <span key={i} className={`rs-chip rs-${rs.severity.toLowerCase()}`} title={rs.detail}>
+              {rs.state.replace(/_/g, ' ')} · {rs.severity}{rs.validated ? '' : ' ·ctx'}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="ml-card">
         <div><span>ML Win</span><b>{mlPct(result.ml.win)}</b></div>
         <div><span>Persistence</span><b>{mlPct(result.ml.persistence)}</b></div>

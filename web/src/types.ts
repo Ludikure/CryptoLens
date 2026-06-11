@@ -47,6 +47,7 @@ export interface FullAnalysisResponse {
         bigMove: { prob: number; bucket: 'HIGH' | 'ELEVATED' | 'NORMAL'; multiple: number } | null };
   vol: { horizons: Record<string, { sigma: number; s1: [number, number]; s2: [number, number]; s99: [number, number] }>;
          rv: { h24: number; d7: number; d30: number } } | null;
+  riskStates?: Array<{ state: string; severity: 'HIGH' | 'MEDIUM' | 'LOW'; detail: string; validated: boolean }>;
   bias: { daily: string; fourH: string | null; oneH: string | null };
   error?: string;
 }
