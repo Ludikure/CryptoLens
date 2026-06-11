@@ -93,8 +93,11 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     const { prompt, newState } = buildUserPrompt({
       symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
       sentiment: { athChangePercentage: -12.3, priceChangePercentage24h: 1.2 },
+      volForecast: { rv: { h24: 0.03, d7: 0.05, d30: 0.10 },
+        horizons: { '24h': { sigma: 0.025, s1: [63500, 66500], s2: [62000, 69000], s99: [60000, 71000] } } },
       prevState: { regime: 'RANGING' }, settings: { accountSize: 25000, riskPercent: 2 },
     });
+    expect(prompt).toContain('Expected 24h Range:');      // Phase 1 HAR-RV range surfaced
 
     expect(prompt.startsWith('Symbol: BTCUSDT')).toBe(true);
     expect(prompt).toContain('=== PRE-COMPUTED FLAGS');

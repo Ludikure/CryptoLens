@@ -422,6 +422,7 @@ export interface BuildPromptInput {
   outcomeHistory?: OutcomeHistoryItem[];
   archetypeRecord?: { wins: number; losses: number; total: number } | null;   // E7 (from D1 trade_outcomes)
   activeSetups?: ActiveSetup[];                                                // C8 (active tracked trades)
+  volForecast?: import('./vol').VolForecast | null;                            // Phase 1: HAR-RV expected range
   prevState?: PromptState; settings?: PromptSettings;
 }
 
@@ -546,6 +547,12 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       }
     }
     L(`Environment Risk: ${envRisk} — ${envReason}.`);
+    // Phase 1: HAR-RV expected range — the direction-agnostic "how big", calibrated bands.
+    const vf = input.volForecast;
+    if (vf?.horizons?.['24h']) {
+      const h = vf.horizons['24h'];
+      L(`Expected 24h Range: ${formatPrice(h.s1[0])}–${formatPrice(h.s1[1])} (1σ, ~68%) · ${formatPrice(h.s2[0])}–${formatPrice(h.s2[1])} (2σ, ~95%). Calibrated vol forecast (σ=${f(h.sigma * 100, 1)}%), direction-AGNOSTIC — the honest "how big", not which way. Bands are fat-tail-adjusted (empirical, not Gaussian).`);
+    }
     const trendDominates = adxMax >= 35 || stretchATR >= 2.5;
     if (trendDominates) {
       L('ML_WIN Context: in this strong trend a low ML_WIN is CORRECT but MISLEADING — ML_WIN is ATR-normalized, so a >=1.5-ATR move on top of already-high vol is genuinely less likely (~42% vs ~62% in calm). Do NOT read a low ML_WIN here as "safe/quiet"; the trend itself is the danger. Lead the risk read from Environment Risk + structure, not ML_WIN.');

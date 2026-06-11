@@ -7,6 +7,7 @@ import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
+import { forecastVol } from './vol';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -953,6 +954,25 @@ export default {
       return json({ ...entry, bigMove: tailRiskInfo(entry.bigMoveProb) });
     }
 
+    // Phase 1: HAR-RV expected-range forecast (direction-agnostic). No LLM, lightweight —
+    // powers the "Expected 24h range" UI line independent of a full analysis. Crypto-only.
+    if (path === '/vol' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const isCrypto = symbol.endsWith('USDT');
+      if (!isCrypto) return json({ error: 'Vol forecast is crypto-only for now', symbol }, 400);
+      try {
+        const closes = await fetchFapiCloses(symbol, 750);
+        const price = closes[closes.length - 1];
+        if (!price) return json({ error: 'No price', symbol }, 404);
+        const vf = forecastVol(closes, true, price);
+        if (!vf) return json({ error: 'Insufficient history for vol forecast', symbol }, 404);
+        return json({ symbol, price, ...vf, ts: Date.now() });
+      } catch (e) {
+        return json({ error: 'Vol forecast failed', symbol, detail: String(e) }, 500);
+      }
+    }
+
     // Full display indicators across daily/4H/1H — the shared analysis brain (no LLM). Both
     // the web app and (Phase 4) iOS render from this single implementation. crossAsset +
     // derivatives default to 0 here; /full-analysis supplies them for exact daily-crypto bias.
@@ -1026,6 +1046,16 @@ export default {
         if (fourH.length) indicators.push(computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
         if (oneH.length) indicators.push(computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
 
+        // Phase 1: HAR-RV expected-range forecast (crypto-only; needs 721+ 1H closes for rv_30d,
+        // so a dedicated deep fetch — fetchAllTimeframes only pulls 300). Best-effort.
+        let volForecast = null;
+        if (isCrypto) {
+          try {
+            const closes1h = await fetchFapiCloses(symbol, 750);
+            volForecast = forecastVol(closes1h, true, closes1h[closes1h.length - 1] ?? indicators[0].price);
+          } catch { /* vol forecast best-effort */ }
+        }
+
         // ML overlay onto the daily indicator (cron-cached ml_preds:all; best-effort).
         try {
           const cached = await env.ALERTS.get('ml_preds:all');
@@ -1087,7 +1117,7 @@ export default {
         // local path does — the one piece the worker can't know on its own.
         const activeSetups = Array.isArray(body.activeSetups) ? body.activeSetups : [];
         const { prompt, newState } = buildUserPrompt({
-          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups,
+          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast,
           derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
           stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
         });
@@ -1137,6 +1167,7 @@ export default {
         return json({
           symbol, isCrypto, timestamp: Date.now(), model, analysis: text, setups,
           ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: tailRiskInfo(indicators[0].mlBigMoveProb) },
+          vol: volForecast,
           bias: { daily: indicators[0].bias, fourH: indicators[1]?.bias ?? null, oneH: indicators[2]?.bias ?? null },
         });
       } catch (e) {
@@ -3290,6 +3321,16 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
 
 // Fetch all three timeframes for the /indicators endpoint. Crypto: Binance klines direct.
 // Stock: Yahoo daily + 1H, 4H aggregated from 1H (mirrors the cron + iOS). In-progress dropped.
+// 1H closes from Binance USDT-M FUTURES (fapi) for the vol forecast. fapi is reachable from
+// Cloudflare colos (spot data-api is geo-blocked) AND is the venue train_vol_v1.py trained on,
+// so RV components match the model. Drops the in-progress last bar. Returns [] on failure.
+async function fetchFapiCloses(symbol: string, limit: number): Promise<number[]> {
+  const resp = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=${limit}`);
+  if (!resp.ok) return [];
+  const data = await resp.json() as any[];
+  return data.map((k: any) => +k[4]).slice(0, -1);   // closes, drop in-progress
+}
+
 async function fetchBinanceKlines(symbol: string, interval: string, limit: number): Promise<ScoreCandle[]> {
   const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
   if (!resp.ok) return [];
