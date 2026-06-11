@@ -3321,21 +3321,47 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
 
 // Fetch all three timeframes for the /indicators endpoint. Crypto: Binance klines direct.
 // Stock: Yahoo daily + 1H, 4H aggregated from 1H (mirrors the cron + iOS). In-progress dropped.
-// 1H closes from Binance USDT-M FUTURES (fapi) for the vol forecast. fapi is reachable from
-// Cloudflare colos (spot data-api is geo-blocked) AND is the venue train_vol_v1.py trained on,
-// so RV components match the model. Drops the in-progress last bar. Returns [] on failure.
-async function fetchFapiCloses(symbol: string, limit: number): Promise<number[]> {
-  const resp = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=${limit}`);
+// Bybit USDT-perp klines — the fallback when Binance is geo-blocked from Cloudflare colos.
+// Same symbols (BTCUSDT), perp venue like the training data, up to 1000 bars/request. Bybit
+// returns newest-first, so we reverse to oldest-first; in-progress last bar dropped after.
+async function fetchBybitKlines(symbol: string, interval: string, limit: number): Promise<ScoreCandle[]> {
+  const iv = interval === '1h' ? '60' : interval === '4h' ? '240' : interval === '1d' ? 'D'
+           : interval === '1w' ? 'W' : interval === '15m' ? '15' : interval;
+  const resp = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${iv}&limit=${Math.min(limit, 1000)}`);
   if (!resp.ok) return [];
-  const data = await resp.json() as any[];
-  return data.map((k: any) => +k[4]).slice(0, -1);   // closes, drop in-progress
+  const data = await resp.json() as any;
+  const list = data?.result?.list;
+  if (!Array.isArray(list) || !list.length) return [];
+  // each: [startMs, open, high, low, close, volume, turnover]; list is newest-first
+  const candles = list.map((k: any[]) => ({ time: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })).reverse();
+  return dropInProgress(candles as FullCandle[], interval);
+}
+
+// 1H closes for the vol forecast. Binance fapi/spot klines are geo-blocked from Cloudflare
+// colos (only the lighter derivatives endpoints work), so fall back to Bybit. Drops the
+// in-progress last bar. Returns [] only if BOTH sources fail.
+async function fetchFapiCloses(symbol: string, limit: number): Promise<number[]> {
+  try {
+    const resp = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=${limit}`);
+    if (resp.ok) {
+      const data = await resp.json() as any[];
+      if (Array.isArray(data) && data.length) return data.map((k: any) => +k[4]).slice(0, -1);
+    }
+  } catch { /* fall through to Bybit */ }
+  return (await fetchBybitKlines(symbol, '1h', limit)).map(c => c.close);
 }
 
 async function fetchBinanceKlines(symbol: string, interval: string, limit: number): Promise<ScoreCandle[]> {
-  const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
-  if (!resp.ok) return [];
-  const data = await resp.json() as any[];
-  return dropInProgress(data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })), interval);
+  try {
+    const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+    if (resp.ok) {
+      const data = await resp.json() as any[];
+      if (Array.isArray(data) && data.length)
+        return dropInProgress(data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })), interval);
+    }
+  } catch { /* fall through to Bybit */ }
+  // Binance blocked/empty from this Cloudflare colo → Bybit fallback (same symbols).
+  return fetchBybitKlines(symbol, interval, limit);
 }
 async function fetchYahooCandlesTF(symbol: string, interval: string, range: string): Promise<ScoreCandle[]> {
   const resp = await fetch(`${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`, { headers: { 'User-Agent': 'Mozilla/5.0' } });
