@@ -7,7 +7,8 @@ import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
-import { forecastVol } from './vol';
+import { forecastVol, bandMultipliers } from './vol';
+import { positionRisk } from './risk-engine';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -970,6 +971,33 @@ export default {
         return json({ symbol, price, ...vf, ts: Date.now() });
       } catch (e) {
         return json({ error: 'Vol forecast failed', symbol, detail: String(e) }, 500);
+      }
+    }
+
+    // Phase 2+3: position risk calculator — stop quality (noise-hit), VaR/ES (fat-tail),
+    // liquidation distance, fee-aware breakeven. Combines the live 24h vol σ with a
+    // user-supplied position. Direction-agnostic. Crypto-only (needs the vol forecast).
+    if (path === '/risk' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol || !symbol.endsWith('USDT')) return json({ error: 'crypto symbol required' }, 400);
+      const num = (k: string) => { const v = parseFloat(url.searchParams.get(k) || ''); return isFinite(v) ? v : undefined; };
+      try {
+        const closes = await fetchFapiCloses(symbol, 750);
+        const price = closes[closes.length - 1];
+        if (!price) return json({ error: 'No price', symbol }, 404);
+        const vf = forecastVol(closes, true, price);
+        const mult = bandMultipliers('24h');
+        if (!vf || !mult) return json({ error: 'Insufficient history', symbol }, 404);
+        const sigma = vf.horizons['24h'].sigma;
+        const entry = num('entry') ?? price;
+        const risk = positionRisk({
+          entry, stop: num('stop'), positionValue: num('size') ?? 0,
+          leverage: num('leverage'), dir: (url.searchParams.get('dir') as 'long' | 'short') ?? 'long',
+          venue: url.searchParams.get('venue') ?? undefined,
+        }, sigma, mult);
+        return json({ symbol, price, entry, horizon: '24h', range: vf.horizons['24h'], risk, ts: Date.now() });
+      } catch (e) {
+        return json({ error: 'Risk calc failed', symbol, detail: String(e) }, 500);
       }
     }
 

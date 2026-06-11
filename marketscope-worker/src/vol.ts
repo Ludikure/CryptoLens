@@ -33,6 +33,12 @@ export function predictSigma(rv24: number, rv7d: number, rv30d: number, horizon:
     return s > 0 ? s : null;
 }
 
+/// Raw empirical band multipliers (× σ) for a horizon — used by the risk engine for VaR/ES
+/// fat-tail figures. s1=68%, s2=95%, s99=99%. null for unknown horizon.
+export function bandMultipliers(horizon: string): { s1: number; s2: number; s99: number } | null {
+    return CV.horizons[horizon]?.band_mult ?? null;
+}
+
 export interface VolBand { sigma: number; s1: [number, number]; s2: [number, number]; s99: [number, number]; }
 /// Convert a forecast σ (log-return scale) to price bands at `price`, using the horizon's
 /// empirical multipliers. Bands are multiplicative (exp) since σ is in log-return units.
