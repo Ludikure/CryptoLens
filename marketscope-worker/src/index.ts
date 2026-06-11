@@ -1004,6 +1004,15 @@ export default {
       }
     }
 
+    // Phase 5: current risk states for a symbol (cron-cached, no LLM). Powers state chips.
+    if (path === '/risk-states' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const cached = await env.ALERTS.get('risk_states:all');
+      const all = cached ? JSON.parse(cached) as Record<string, any> : {};
+      return json({ symbol, ...(all[symbol] ?? { names: [], high: [], detail: {} }), ts: Date.now() });
+    }
+
     // Phase 7: portfolio correlation — concentration risk across a watchlist. 90d daily-return
     // pairwise correlations + effective independent positions + β to benchmark (BTC for crypto).
     if (path === '/correlation' && request.method === 'GET') {
@@ -2239,6 +2248,10 @@ interface SymbolPrediction {
   // Carried here so the dual-gate live-validation logger (logDirectionSignals) can read
   // it alongside mlProb + crossed without re-reading the KV blob.
   pUp: number | null;
+  // Phase 5: discrete risk states this tick, and the validated-HIGH states that newly
+  // appeared since last tick (transition-into-HIGH → notification trigger).
+  riskStateNames: string[];
+  newHighStates: string[];
 }
 
 /// Combine daily + 4H bias labels into the alignment string. Mirrors
@@ -2483,6 +2496,10 @@ async function computeSymbolPredictions(
   allSymbols: string[],
 ): Promise<Map<string, SymbolPrediction>> {
   const predictions = new Map<string, SymbolPrediction>();
+  // Phase 5: previous-tick risk states (for transition-into-HIGH detection) + current accumulator.
+  let prevRiskStates: Record<string, { names: string[]; high: string[] }> = {};
+  try { const r = await env.ALERTS.get('risk_states:all'); if (r) prevRiskStates = JSON.parse(r); } catch { /* ignore */ }
+  const curRiskStates: Record<string, { names: string[]; high: string[]; detail: Record<string, string> }> = {};
   // Accumulates per-symbol ML predictions for a single batched KV write after the loop —
   // replaces what used to be 76 individual `ml_pred:<symbol>` writes per cron run.
   const mlPredBatch: Record<string, { symbol: string; probability: number; features: FullFeatures; timestamp: number; isCrypto: boolean;
@@ -3064,6 +3081,23 @@ async function computeSymbolPredictions(
       mlPredBatch[symbol].metaDirection = metaDirection;
       mlPredBatch[symbol].pUp = pUp;
 
+      // Phase 5: compute risk states from the feature dict; detect transitions INTO a HIGH
+      // validated state since last tick (the notification trigger).
+      const states = computeRiskStates({
+        isCrypto,
+        atrPercentile: features.atrPercentile,
+        bbSqueezeDaily: (features.dBBSqueeze ?? 0) > 0.5, bbSqueeze4h: (features.hBBSqueeze ?? 0) > 0.5,
+        bbPercentBDaily: features.dBBPercentB ?? null,
+        longPct: isCrypto ? features.longPctRaw : null,
+        fundingZ: isCrypto ? (features.fundingRateRaw ?? 0) * 4000 : null,   // raw rate → heuristic z
+        oiChangePct: isCrypto ? features.oiChangePct : null,
+      });
+      const highValidated = states.filter(s => s.severity === 'HIGH' && s.validated).map(s => s.state);
+      const prevHigh = prevRiskStates[symbol]?.high ?? [];
+      const newHighStates = highValidated.filter(s => !prevHigh.includes(s));
+      curRiskStates[symbol] = { names: states.map(s => s.state), high: highValidated,
+        detail: Object.fromEntries(states.map(s => [s.state, s.detail])) };
+
       predictions.set(symbol, {
         symbol,
         isCrypto,
@@ -3077,6 +3111,8 @@ async function computeSymbolPredictions(
         last4HClose,
         atrPrice,
         pUp,
+        riskStateNames: states.map(s => s.state),
+        newHighStates,
       });
 
       // Calibration log: sample this symbol's ML Win at most once per ~20h.
@@ -3130,6 +3166,9 @@ async function computeSymbolPredictions(
   // cron-cycle gaps. Candle blobs only flush when at least one symbol was missing —
   // saves writes during the ~4 of 5 crons where everything hits cache.
   await env.ALERTS.put('ml_preds:all', JSON.stringify(mlPredBatch), { expirationTtl: 300 });
+  // Phase 5: persist current risk states (powers /risk-states + next-tick transition detection).
+  // No TTL on the comparison set — a stale blob would just suppress a duplicate notification.
+  try { await env.ALERTS.put('risk_states:all', JSON.stringify(curRiskStates)); } catch { /* ignore */ }
   await env.ALERTS.put('prev_oi:all', JSON.stringify(prevOIMap), { expirationTtl: 86400 });
   await env.ALERTS.put('deriv_archive:all', JSON.stringify(derivArchiveMap), { expirationTtl: 14400 });
   await env.ALERTS.put('oi_snap:all', JSON.stringify(oiSnapMap), { expirationTtl: 14400 });
@@ -3183,6 +3222,21 @@ async function processDeviceNotifications(
   for (const symbol of watchlist) {
     const pred = predictions.get(symbol);
     if (!pred) continue;
+    // Phase 5: risk-state transition notification — fires once when a symbol newly enters a
+    // HIGH *validated* state (COMPRESSION/EVENT_WINDOW: vol-grounded). Independent of the ML
+    // cross below; 6h per-(token,symbol) cooldown. Honest "a big move may be brewing" heads-up.
+    if (pushToken && pred.newHighStates && pred.newHighStates.length) {
+      const cdKey = `riskstate-cd:${pushToken}:${symbol}`;
+      if (!(await env.ALERTS.get(cdKey))) {
+        const st = pred.newHighStates[0];
+        const msg = st === 'COMPRESSION' ? 'vol compressed — a sharp move is more likely soon'
+                  : st === 'EVENT_WINDOW' ? 'major event imminent — elevated event vol'
+                  : 'elevated risk condition';
+        const disp = symbol.endsWith('USDT') ? symbol.replace('USDT', '') : symbol;
+        await sendAPNs(env, pushToken, `${disp}: ${st.replace(/_/g, ' ')}`, msg);
+        await env.ALERTS.put(cdKey, '1', { expirationTtl: 21600 });
+      }
+    }
     // Real-time gate (2026-05-30): fire the instant a cross is detected, any hour,
     // protected only by the 3.5h per-(token,symbol) cooldown below. The previous fixed
     // notify-window gate (8/12/16/20/23:30 ET) silently DROPPED crosses that landed
