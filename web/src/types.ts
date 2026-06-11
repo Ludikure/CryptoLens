@@ -45,6 +45,8 @@ export interface FullAnalysisResponse {
   analysis: string; setups: TradeSetup[];
   ml: { win: number | null; persistence: number | null; directionUp: number | null;
         bigMove: { prob: number; bucket: 'HIGH' | 'ELEVATED' | 'NORMAL'; multiple: number } | null };
+  vol: { horizons: Record<string, { sigma: number; s1: [number, number]; s2: [number, number]; s99: [number, number] }>;
+         rv: { h24: number; d7: number; d30: number } } | null;
   bias: { daily: string; fourH: string | null; oneH: string | null };
   error?: string;
 }

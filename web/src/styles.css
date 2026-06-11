@@ -102,6 +102,13 @@ table.indicators td:last-child { border-right: none; }
 .analyze-bar .run:disabled { opacity: 0.6; cursor: default; }
 
 .analysis { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.vol-range { padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(127,127,127,0.05); }
+.vol-range-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 3px; }
+.vol-range-bands { font-size: 15px; }
+.vol-range-bands b { font-size: 16px; }
+.vol-range-bands .muted { color: var(--muted); font-size: 12px; }
+.vol-range-sep { margin: 0 8px; color: var(--muted); }
+.vol-sigma { margin-left: 10px; }
 .ml-card { display: flex; gap: 18px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .ml-card div { display: flex; flex-direction: column; }
 .ml-card span { color: var(--muted); font-size: 12px; }
