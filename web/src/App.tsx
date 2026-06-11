@@ -6,6 +6,7 @@ import { SubPanels } from './components/SubPanels';
 import { IndicatorTable } from './components/IndicatorTable';
 import { AnalysisView } from './components/AnalysisView';
 import { RiskCalculator } from './components/RiskCalculator';
+import { StressTest } from './components/StressTest';
 import { Dashboard } from './components/Dashboard';
 import { SettingsView } from './components/SettingsView';
 import { MarketView } from './components/MarketView';
@@ -26,7 +27,7 @@ export function App() {
   const [anaErr, setAnaErr] = useState<string | null>(null);
   const [anaLoading, setAnaLoading] = useState(false);
   const [chartTF, setChartTF] = useState<TFKey>('daily');
-  const [view, setView] = useState<'chart' | 'market' | 'risk' | 'scoreboard' | 'settings'>('chart');
+  const [view, setView] = useState<'chart' | 'market' | 'risk' | 'stress' | 'scoreboard' | 'settings'>('chart');
   const [watchlist, setWatch] = useState<string[]>(() => getWatchlist());
 
   const load = useCallback(async (sym: string) => {
@@ -74,6 +75,7 @@ export function App() {
           <button className={view === 'chart' ? 'on' : ''} onClick={() => setView('chart')}>Chart</button>
           <button className={view === 'market' ? 'on' : ''} onClick={() => setView('market')}>Market</button>
           <button className={view === 'risk' ? 'on' : ''} onClick={() => setView('risk')}>Risk</button>
+          <button className={view === 'stress' ? 'on' : ''} onClick={() => setView('stress')}>Stress</button>
           <button className={view === 'scoreboard' ? 'on' : ''} onClick={() => setView('scoreboard')}>Scoreboard</button>
           <button className={view === 'settings' ? 'on' : ''} onClick={() => setView('settings')}>Settings</button>
         </nav>
@@ -102,6 +104,7 @@ export function App() {
 
       {view === 'market' && <MarketView symbol={symbol} />}
       {view === 'risk' && <RiskCalculator symbol={symbol} />}
+      {view === 'stress' && <StressTest />}
 
       {view === 'chart' && (
       <>

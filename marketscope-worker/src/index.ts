@@ -963,8 +963,8 @@ export default {
       const isCrypto = symbol.endsWith('USDT');
       if (!isCrypto) return json({ error: 'Vol forecast is crypto-only for now', symbol }, 400);
       try {
-        const closes = await fetchFapiCloses(symbol, 750);
-        const price = closes[closes.length - 1];
+        const [closes, live] = await Promise.all([fetchFapiCloses(symbol, 750), fetchLivePrice(symbol, true).catch(() => null)]);
+        const price = live ?? closes[closes.length - 1];
         if (!price) return json({ error: 'No price', symbol }, 404);
         const vf = forecastVol(closes, true, price);
         if (!vf) return json({ error: 'Insufficient history for vol forecast', symbol }, 404);
@@ -982,8 +982,8 @@ export default {
       if (!symbol || !symbol.endsWith('USDT')) return json({ error: 'crypto symbol required' }, 400);
       const num = (k: string) => { const v = parseFloat(url.searchParams.get(k) || ''); return isFinite(v) ? v : undefined; };
       try {
-        const closes = await fetchFapiCloses(symbol, 750);
-        const price = closes[closes.length - 1];
+        const [closes, live] = await Promise.all([fetchFapiCloses(symbol, 750), fetchLivePrice(symbol, true).catch(() => null)]);
+        const price = live ?? closes[closes.length - 1];
         if (!price) return json({ error: 'No price', symbol }, 404);
         const vf = forecastVol(closes, true, price);
         const mult = bandMultipliers('24h');
@@ -3407,14 +3407,25 @@ async function fetchYahooCandlesTF(symbol: string, interval: string, range: stri
 // Live (current) price for display. Indicators are computed on CLOSED candles (in-progress
 // dropped), so daily.price is the previous daily close — stale by up to a day for the header.
 // This returns the real-time ticker so the web header matches iOS's live price.
+// Live price from Bybit (lastPrice) — fallback when Binance ticker is geo-blocked.
+async function fetchBybitPrice(symbol: string): Promise<number | null> {
+  try {
+    const r = await fetch(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${symbol}`);
+    if (!r.ok) return null;
+    const j = await r.json() as any;
+    const p = parseFloat(j?.result?.list?.[0]?.lastPrice);
+    return isNaN(p) ? null : p;
+  } catch { return null; }
+}
+
 async function fetchLivePrice(symbol: string, isCrypto: boolean): Promise<number | null> {
   try {
     if (isCrypto) {
-      const r = await fetch(`${BINANCE_SPOT}/ticker/price?symbol=${symbol}`);
-      if (!r.ok) return null;
-      const j = await r.json() as any;
-      const p = parseFloat(j?.price);
-      return isNaN(p) ? null : p;
+      try {
+        const r = await fetch(`${BINANCE_SPOT}/ticker/price?symbol=${symbol}`);
+        if (r.ok) { const j = await r.json() as any; const p = parseFloat(j?.price); if (!isNaN(p)) return p; }
+      } catch { /* Binance blocked → Bybit */ }
+      return fetchBybitPrice(symbol);   // real live price, not a stale candle close
     }
     const r = await fetch(`${YAHOO_BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`, { headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)' } });
     if (!r.ok) return null;
