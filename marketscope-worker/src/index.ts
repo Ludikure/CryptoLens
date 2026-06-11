@@ -2764,30 +2764,18 @@ async function computeSymbolPredictions(
       let oneHCandles: FullCandle[] = candles1hMap[symbol] ?? [];
       if (isCrypto) {
         if (!fourHCandles.length) {
-          try {
-            const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=4h&limit=260`);
-            if (resp.ok) {
-              const data = await resp.json() as any[];
-              const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
-              fourHCandles = dropInProgress(parsed, '4h');
-              candles4hMap[symbol] = fourHCandles;
-              candlesDirty['4h'] = true;
-              archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
-            }
-          } catch {}
+          const c = await fetchBinanceKlines(symbol, '4h', 260) as FullCandle[];   // proxy → Binance → Bybit
+          if (c.length) {
+            fourHCandles = c; candles4hMap[symbol] = fourHCandles; candlesDirty['4h'] = true;
+            archiveCandlesToD1(env, symbol, '4h', fourHCandles).catch(() => {});
+          }
         }
         if (!oneHCandles.length) {
-          try {
-            const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=1h&limit=100`);
-            if (resp.ok) {
-              const data = await resp.json() as any[];
-              const parsed = data.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
-              oneHCandles = dropInProgress(parsed, '1h');
-              candles1hMap[symbol] = oneHCandles;
-              candlesDirty['1h'] = true;
-              archiveCandlesToD1(env, symbol, '1h', oneHCandles).catch(() => {});
-            }
-          } catch {}
+          const c = await fetchBinanceKlines(symbol, '1h', 100) as FullCandle[];    // proxy → Binance → Bybit
+          if (c.length) {
+            oneHCandles = c; candles1hMap[symbol] = oneHCandles; candlesDirty['1h'] = true;
+            archiveCandlesToD1(env, symbol, '1h', oneHCandles).catch(() => {});
+          }
         }
       } else {
         // Stock: fetch 1H from Yahoo, aggregate to 4H
@@ -3319,15 +3307,7 @@ async function getPushToken(env: Env, deviceId: string): Promise<string | null> 
 
 async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<ScoreCandle[]> {
   if (isCrypto) {
-    const resp = await fetch(
-      `${BINANCE_SPOT}/klines?symbol=${symbol}&interval=1d&limit=260`
-    );
-    if (!resp.ok) return [];
-    const data = await resp.json() as any[];
-    const candles = data.map((k: any) => ({
-      time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
-    }));
-    return dropInProgress(candles, '1d');
+    return fetchBinanceKlines(symbol, '1d', 260);   // proxy → Binance → Bybit (resilient)
   } else {
     const resp = await fetch(
       `${YAHOO_BASE}/v8/finance/chart/${symbol}?interval=1d&range=1y`,
@@ -3389,9 +3369,11 @@ async function fetchBybitKlines(symbol: string, interval: string, limit: number)
   const iv = interval === '1h' ? '60' : interval === '4h' ? '240' : interval === '1d' ? 'D'
            : interval === '1w' ? 'W' : interval === '15m' ? '15' : interval;
   const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${iv}&limit=${Math.min(limit, 1000)}`;
-  // Retry transient failures (Bybit rate-limits a colo under the cron's universe-wide fallback load).
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (attempt) await new Promise(r => setTimeout(r, 200 * attempt));
+  // Single attempt by default — the cron bulk-fetches ~228 crypto klines/min and long retry
+  // backoffs make the scheduled handler time out before finishing. On-demand reliability comes
+  // from the tfcache + last-good fallback, not retries. (The TrueNAS proxy removes this load.)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 120));
     try {
       const resp = await fetch(url);
       if (!resp.ok) continue;
