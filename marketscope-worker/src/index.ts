@@ -1010,7 +1010,7 @@ export default {
       const isCrypto = symbol.endsWith('USDT');
       try {
         const [{ daily, fourH, oneH }, livePrice] = await Promise.all([
-          fetchAllTimeframes(symbol, isCrypto),
+          fetchAllTimeframesCached(env, symbol, isCrypto),
           fetchLivePrice(symbol, isCrypto).catch(() => null),
         ]);
         if (!daily.length) return json({ error: 'No candles', symbol }, 404);
@@ -1068,7 +1068,7 @@ export default {
       const isCrypto = symbol.endsWith('USDT');
 
       try {
-        const { daily, fourH, oneH } = await fetchAllTimeframes(symbol, isCrypto);
+        const { daily, fourH, oneH } = await fetchAllTimeframesCached(env, symbol, isCrypto);
         if (!daily.length) return json({ error: 'No candles', symbol }, 404);
         const indicators: PromptIndicator[] = [computeFullIndicators(daily as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
         if (fourH.length) indicators.push(computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
@@ -3355,14 +3355,22 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
 async function fetchBybitKlines(symbol: string, interval: string, limit: number): Promise<ScoreCandle[]> {
   const iv = interval === '1h' ? '60' : interval === '4h' ? '240' : interval === '1d' ? 'D'
            : interval === '1w' ? 'W' : interval === '15m' ? '15' : interval;
-  const resp = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${iv}&limit=${Math.min(limit, 1000)}`);
-  if (!resp.ok) return [];
-  const data = await resp.json() as any;
-  const list = data?.result?.list;
-  if (!Array.isArray(list) || !list.length) return [];
-  // each: [startMs, open, high, low, close, volume, turnover]; list is newest-first
-  const candles = list.map((k: any[]) => ({ time: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })).reverse();
-  return dropInProgress(candles as FullCandle[], interval);
+  const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${symbol}&interval=${iv}&limit=${Math.min(limit, 1000)}`;
+  // Retry transient failures (Bybit rate-limits a colo under the cron's universe-wide fallback load).
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise(r => setTimeout(r, 200 * attempt));
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      const data = await resp.json() as any;
+      const list = data?.result?.list;
+      if (!Array.isArray(list) || !list.length) continue;
+      // each: [startMs, open, high, low, close, volume, turnover]; list is newest-first
+      const candles = list.map((k: any[]) => ({ time: +k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })).reverse();
+      return dropInProgress(candles as FullCandle[], interval);
+    } catch { /* retry */ }
+  }
+  return [];
 }
 
 // 1H closes for the vol forecast. Binance fapi/spot klines are geo-blocked from Cloudflare
@@ -3434,6 +3442,23 @@ async function fetchLivePrice(symbol: string, isCrypto: boolean): Promise<number
     const p = meta?.regularMarketPrice ?? meta?.previousClose;
     return typeof p === 'number' && !isNaN(p) ? p : null;
   } catch { return null; }
+}
+
+// Cached candle fetch for on-demand endpoints. Serves a <60s cache without re-fetching, and
+// on a fetch failure (Bybit rate-limited a colo) falls back to the last-good cache (≤1h) instead
+// of 404ing. Candles are closed-bar anyway, so ≤1min staleness is harmless. Cuts Bybit load too.
+async function fetchAllTimeframesCached(env: { ALERTS: KVNamespace }, symbol: string, isCrypto: boolean):
+    Promise<{ daily: ScoreCandle[]; fourH: ScoreCandle[]; oneH: ScoreCandle[] }> {
+  const key = `tfcache:${symbol}`;
+  let cached: { tf: any; ts: number } | null = null;
+  try { const raw = await env.ALERTS.get(key); if (raw) cached = JSON.parse(raw); } catch { /* ignore */ }
+  if (cached && Date.now() - cached.ts < 60_000) return cached.tf;     // fresh enough — no fetch
+  const tf = await fetchAllTimeframes(symbol, isCrypto);
+  if (tf.daily.length) {
+    try { await env.ALERTS.put(key, JSON.stringify({ tf, ts: Date.now() }), { expirationTtl: 3600 }); } catch { /* ignore */ }
+    return tf;
+  }
+  return cached?.tf ?? tf;                                             // fetch blipped — serve last-good
 }
 
 async function fetchAllTimeframes(symbol: string, isCrypto: boolean): Promise<{ daily: ScoreCandle[]; fourH: ScoreCandle[]; oneH: ScoreCandle[] }> {
