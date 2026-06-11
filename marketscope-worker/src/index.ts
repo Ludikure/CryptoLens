@@ -3567,6 +3567,22 @@ async function fetchAllTimeframesCached(env: { ALERTS: KVNamespace }, symbol: st
     try { await env.ALERTS.put(key, JSON.stringify({ tf, ts: Date.now() }), { expirationTtl: 3600 }); } catch { /* ignore */ }
     return tf;
   }
+  // Live fetch blipped (Bybit rate-limited under cron load). Fall back to the cron's universe
+  // candle cache (candles:all:<interval>, refreshed every tick for all symbols) — the reliable
+  // path while Binance is geo-blocked and the TrueNAS proxy isn't configured. Then last-good tfcache.
+  if (isCrypto) {
+    try {
+      const [d, h, o] = await Promise.all([
+        env.ALERTS.get('candles:all:1d'), env.ALERTS.get('candles:all:4h'), env.ALERTS.get('candles:all:1h')]);
+      const dm = d ? JSON.parse(d) : {}, hm = h ? JSON.parse(h) : {}, om = o ? JSON.parse(o) : {};
+      const daily = dm[symbol];
+      if (Array.isArray(daily) && daily.length) {
+        const out = { daily, fourH: hm[symbol] ?? [], oneH: om[symbol] ?? [] };
+        try { await env.ALERTS.put(key, JSON.stringify({ tf: out, ts: Date.now() }), { expirationTtl: 3600 }); } catch { /* ignore */ }
+        return out;
+      }
+    } catch { /* ignore */ }
+  }
   return cached?.tf ?? tf;                                             // fetch blipped — serve last-good
 }
 
