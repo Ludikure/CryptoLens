@@ -103,6 +103,7 @@ const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    setProxyConfig(env);
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: CORS });
     }
@@ -1755,6 +1756,7 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    setProxyConfig(env);
     ctx.waitUntil(checkAllDeviceAlerts(env));
     ctx.waitUntil(checkAllDeviceScores(env));
     ctx.waitUntil(archiveShortInterest(env));
@@ -3349,6 +3351,37 @@ async function fetchScoreCandles(symbol: string, isCrypto: boolean): Promise<Sco
 
 // Fetch all three timeframes for the /indicators endpoint. Crypto: Binance klines direct.
 // Stock: Yahoo daily + 1H, 4H aggregated from 1H (mirrors the cron + iOS). In-progress dropped.
+// ── Self-hosted candle proxy (TrueNAS, residential IP) ─────────────────────────────────────
+// Binance blocks Cloudflare datacenter IPs, not homes. When BINANCE_PROXY_BASE is configured
+// the Worker fetches Binance-native data through the user's cloudflared tunnel; otherwise these
+// return null and the caller falls back to Bybit. Config is constant per deploy → safe as
+// module globals set once at each handler entry (see setProxyConfig).
+let PROXY_BASE = '', PROXY_SECRET = '';
+function setProxyConfig(env: any) {
+  if (!PROXY_BASE && env?.BINANCE_PROXY_BASE) PROXY_BASE = String(env.BINANCE_PROXY_BASE).replace(/\/$/, '');
+  if (!PROXY_SECRET && env?.BINANCE_PROXY_SECRET) PROXY_SECRET = String(env.BINANCE_PROXY_SECRET);
+}
+async function fetchProxyKlines(symbol: string, interval: string, limit: number): Promise<any[] | null> {
+  if (!PROXY_BASE) return null;
+  try {
+    const r = await fetch(`${PROXY_BASE}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
+      { headers: { 'X-Proxy-Secret': PROXY_SECRET }, signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return null;
+    const data = await r.json() as any;
+    return Array.isArray(data) && data.length ? data : null;
+  } catch { return null; }
+}
+async function fetchProxyPrice(symbol: string): Promise<number | null> {
+  if (!PROXY_BASE) return null;
+  try {
+    const r = await fetch(`${PROXY_BASE}/price?symbol=${symbol}`,
+      { headers: { 'X-Proxy-Secret': PROXY_SECRET }, signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return null;
+    const j = await r.json() as any; const p = parseFloat(j?.price);
+    return isNaN(p) ? null : p;
+  } catch { return null; }
+}
+
 // Bybit USDT-perp klines — the fallback when Binance is geo-blocked from Cloudflare colos.
 // Same symbols (BTCUSDT), perp venue like the training data, up to 1000 bars/request. Bybit
 // returns newest-first, so we reverse to oldest-first; in-progress last bar dropped after.
@@ -3377,6 +3410,8 @@ async function fetchBybitKlines(symbol: string, interval: string, limit: number)
 // colos (only the lighter derivatives endpoints work), so fall back to Bybit. Drops the
 // in-progress last bar. Returns [] only if BOTH sources fail.
 async function fetchFapiCloses(symbol: string, limit: number): Promise<number[]> {
+  const proxied = await fetchProxyKlines(symbol, '1h', limit);       // TrueNAS (Binance-native) first
+  if (proxied) return proxied.map((k: any) => +k[4]).slice(0, -1);
   try {
     const resp = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=${limit}`);
     if (resp.ok) {
@@ -3388,6 +3423,8 @@ async function fetchFapiCloses(symbol: string, limit: number): Promise<number[]>
 }
 
 async function fetchBinanceKlines(symbol: string, interval: string, limit: number): Promise<ScoreCandle[]> {
+  const proxied = await fetchProxyKlines(symbol, interval, limit);    // TrueNAS (Binance-native) first
+  if (proxied) return dropInProgress(proxied.map((k: any) => ({ time: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })), interval);
   try {
     const resp = await fetch(`${BINANCE_SPOT}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
     if (resp.ok) {
@@ -3429,6 +3466,8 @@ async function fetchBybitPrice(symbol: string): Promise<number | null> {
 async function fetchLivePrice(symbol: string, isCrypto: boolean): Promise<number | null> {
   try {
     if (isCrypto) {
+      const proxied = await fetchProxyPrice(symbol);    // TrueNAS (Binance-native) first
+      if (proxied != null) return proxied;
       try {
         const r = await fetch(`${BINANCE_SPOT}/ticker/price?symbol=${symbol}`);
         if (r.ok) { const j = await r.json() as any; const p = parseFloat(j?.price); if (!isNaN(p)) return p; }

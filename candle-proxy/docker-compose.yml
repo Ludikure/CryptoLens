@@ -1,0 +1,11 @@
+services:
+  candle-proxy:
+    build: .
+    image: marketscope-candle-proxy
+    container_name: marketscope-candle-proxy
+    restart: unless-stopped
+    ports:
+      - "8787:8787"          # cloudflared tunnel routes marketscope.ludikure.org → localhost:8787
+    environment:
+      - PORT=8787
+      - PROXY_SECRET=${PROXY_SECRET}   # set in a .env next to this file (same value as the Worker secret)
