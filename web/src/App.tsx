@@ -7,6 +7,7 @@ import { IndicatorTable } from './components/IndicatorTable';
 import { AnalysisView } from './components/AnalysisView';
 import { RiskCalculator } from './components/RiskCalculator';
 import { StressTest } from './components/StressTest';
+import { CorrelationView } from './components/CorrelationView';
 import { Dashboard } from './components/Dashboard';
 import { SettingsView } from './components/SettingsView';
 import { MarketView } from './components/MarketView';
@@ -104,7 +105,7 @@ export function App() {
 
       {view === 'market' && <MarketView symbol={symbol} />}
       {view === 'risk' && <RiskCalculator symbol={symbol} />}
-      {view === 'stress' && <StressTest />}
+      {view === 'stress' && <><StressTest /><CorrelationView /></>}
 
       {view === 'chart' && (
       <>

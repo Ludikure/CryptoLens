@@ -80,6 +80,17 @@ export async function getRisk(symbol: string, p: {
   return res.json();
 }
 
+export interface CorrelationResponse {
+  benchmark: string; symbols: string[]; matrix: number[][];
+  avgCorrToBenchmark: number; avgPairwise: number; effectivePositions: number;
+  betaToBenchmark: Record<string, number>;
+}
+export async function getCorrelation(symbols: string[]): Promise<CorrelationResponse> {
+  const res = await authedFetch(`/correlation?symbols=${symbols.map(encodeURIComponent).join(',')}`);
+  if (!res.ok) { let m = `correlation failed (${res.status})`; try { const e = await res.json(); if (e?.error) m = e.error; } catch { /* */ } throw new Error(m); }
+  return res.json();
+}
+
 export async function runFullAnalysis(symbol: string, opts?: { accountSize?: number; riskPercent?: number }): Promise<FullAnalysisResponse> {
   const res = await authedFetch('/full-analysis', {
     method: 'POST',

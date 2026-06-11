@@ -10,6 +10,7 @@ import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type 
 import { forecastVol, bandMultipliers } from './vol';
 import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
+import { correlationReport } from './correlation';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -1000,6 +1001,27 @@ export default {
         return json({ symbol, price, entry, horizon: '24h', range: vf.horizons['24h'], risk, ts: Date.now() });
       } catch (e) {
         return json({ error: 'Risk calc failed', symbol, detail: String(e) }, 500);
+      }
+    }
+
+    // Phase 7: portfolio correlation — concentration risk across a watchlist. 90d daily-return
+    // pairwise correlations + effective independent positions + β to benchmark (BTC for crypto).
+    if (path === '/correlation' && request.method === 'GET') {
+      const raw = (url.searchParams.get('symbols') || '').split(',').map(s => sanitizeSymbol(s)).filter(Boolean).slice(0, 15);
+      if (raw.length < 2) return json({ error: 'need ≥2 symbols' }, 400);
+      try {
+        const results = await Promise.all(raw.map(async s => {
+          const c = await fetchBinanceKlines(s!, '1d', 90);
+          return [s!, c.map(k => k.close)] as [string, number[]];
+        }));
+        const closesBySymbol: Record<string, number[]> = {};
+        for (const [s, closes] of results) if (closes.length >= 10) closesBySymbol[s] = closes;
+        const benchmark = raw.includes('BTCUSDT') ? 'BTCUSDT' : raw.find(s => s!.endsWith('USDT')) ? raw.find(s => s!.endsWith('USDT'))! : raw[0]!;
+        const report = correlationReport(closesBySymbol, benchmark);
+        if (!report) return json({ error: 'insufficient data' }, 404);
+        return json({ ...report, ts: Date.now() });
+      } catch (e) {
+        return json({ error: 'correlation failed', detail: String(e) }, 500);
       }
     }
 

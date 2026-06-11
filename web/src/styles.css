@@ -102,6 +102,9 @@ table.indicators td:last-child { border-right: none; }
 .analyze-bar .run:disabled { opacity: 0.6; cursor: default; }
 
 .analysis { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.corr-matrix { border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.corr-matrix th, .corr-matrix td { padding: 5px 9px; text-align: center; border: 1px solid var(--line); }
+.corr-matrix th { color: var(--muted); font-weight: 500; }
 .risk-states { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .rs-chip { font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); cursor: help; }
 .rs-chip.rs-high { background: rgba(229,72,77,0.15); color: #e5484d; border-color: rgba(229,72,77,0.4); }
