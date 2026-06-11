@@ -423,6 +423,7 @@ export interface BuildPromptInput {
   archetypeRecord?: { wins: number; losses: number; total: number } | null;   // E7 (from D1 trade_outcomes)
   activeSetups?: ActiveSetup[];                                                // C8 (active tracked trades)
   volForecast?: import('./vol').VolForecast | null;                            // Phase 1: HAR-RV expected range
+  riskStates?: import('./risk-states').RiskState[];                            // Phase 5: discrete risk states
   prevState?: PromptState; settings?: PromptSettings;
 }
 
@@ -552,6 +553,12 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     if (vf?.horizons?.['24h']) {
       const h = vf.horizons['24h'];
       L(`Expected 24h Range: ${formatPrice(h.s1[0])}–${formatPrice(h.s1[1])} (1σ, ~68%) · ${formatPrice(h.s2[0])}–${formatPrice(h.s2[1])} (2σ, ~95%). Calibrated vol forecast (σ=${f(h.sigma * 100, 1)}%), direction-AGNOSTIC — the honest "how big", not which way. Bands are fat-tail-adjusted (empirical, not Gaussian).`);
+    }
+    // Phase 5/8: discrete risk states (VALIDATED = vol-grounded, can lead; ctx = positioning context).
+    const rs = input.riskStates ?? [];
+    if (rs.length) {
+      L('Risk States: ' + rs.map(s => `${s.state}(${s.severity}${s.validated ? '' : ',ctx'})`).join(' · '));
+      for (const s of rs) L(`  - ${s.state} [${s.severity}${s.validated ? '' : ', context-only'}]: ${s.detail}`);
     }
     const trendDominates = adxMax >= 35 || stretchATR >= 2.5;
     if (trendDominates) {

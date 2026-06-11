@@ -1168,8 +1168,18 @@ export default {
         // positions so the server prompt can emit the same "manage this trade" section the
         // local path does — the one piece the worker can't know on its own.
         const activeSetups = Array.isArray(body.activeSetups) ? body.activeSetups : [];
+        const riskStates = computeRiskStates({
+          isCrypto,
+          atrPercentile: indicators[0].atrPercentile,
+          bbSqueezeDaily: indicators[0].bollingerBands?.squeeze, bbSqueeze4h: indicators[1]?.bollingerBands?.squeeze,
+          bbPercentBDaily: indicators[0].bollingerBands?.percentB ?? null,
+          longPct: deriv?.derivatives?.globalLongPercent ?? null,
+          fundingZ: deriv?.derivatives ? deriv.derivatives.fundingRatePercent / 0.025 : null,
+          oiChangePct: deriv?.derivatives?.oiChange4h ?? null,
+          cvdFalling: spotPressure?.cvdTrend === 'Falling',
+        });
         const { prompt, newState } = buildUserPrompt({
-          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast,
+          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
           derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
           stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
         });
@@ -1220,16 +1230,7 @@ export default {
           symbol, isCrypto, timestamp: Date.now(), model, analysis: text, setups,
           ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: tailRiskInfo(indicators[0].mlBigMoveProb) },
           vol: volForecast,
-          riskStates: computeRiskStates({
-            isCrypto,
-            atrPercentile: indicators[0].atrPercentile,
-            bbSqueezeDaily: indicators[0].bollingerBands?.squeeze, bbSqueeze4h: indicators[1]?.bollingerBands?.squeeze,
-            bbPercentBDaily: indicators[0].bollingerBands?.percentB ?? null,
-            longPct: deriv?.derivatives?.globalLongPercent ?? null,
-            fundingZ: deriv?.derivatives ? deriv.derivatives.fundingRatePercent / 0.025 : null,  // heuristic z (~0.05% → 2)
-            oiChangePct: deriv?.derivatives?.oiChange4h ?? null,
-            cvdFalling: spotPressure?.cvdTrend === 'Falling',
-          }),
+          riskStates,
           bias: { daily: indicators[0].bias, fourH: indicators[1]?.bias ?? null, oneH: indicators[2]?.bias ?? null },
         });
       } catch (e) {
