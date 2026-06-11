@@ -1,11 +1,44 @@
+# MarketScope candle proxy — routed through NordVPN (your home IP is in a Binance-blocked
+# country, so the proxy must exit via a permitted region, same as your phone). gluetun handles
+# the NordVPN tunnel; the proxy shares its network so ALL its Binance traffic goes through the VPN.
+# The cloudflared tunnel (inbound: marketscope.ludikure.org → localhost:8787) is separate.
 services:
+  vpn:
+    image: qmcgaw/gluetun
+    container_name: marketscope-vpn
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - VPN_SERVICE_PROVIDER=nordvpn
+      # WireGuard (NordLynx) — recommended. Get your key from the Nord dashboard
+      # (Manual setup → NordLynx), put it in .env as NORD_WG_KEY.
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${NORD_WG_KEY}
+      # Use the SAME country/server that works on your phone (one Binance serves + Nord reaches).
+      - SERVER_COUNTRIES=${NORD_COUNTRY}
+    ports:
+      - "8787:8787"        # the proxy's port, published via the VPN container to the host
+    restart: unless-stopped
+
   candle-proxy:
     build: .
     image: marketscope-candle-proxy
     container_name: marketscope-candle-proxy
-    restart: unless-stopped
-    ports:
-      - "8787:8787"          # cloudflared tunnel routes marketscope.ludikure.org → localhost:8787
+    network_mode: "service:vpn"   # << all proxy outbound exits through NordVPN
     environment:
       - PORT=8787
-      - PROXY_SECRET=${PROXY_SECRET}   # set in a .env next to this file (same value as the Worker secret)
+      - PROXY_SECRET=${PROXY_SECRET}
+    depends_on:
+      - vpn
+    restart: unless-stopped
+
+# .env next to this file:
+#   PROXY_SECRET=<openssl rand -hex 32>      (same value as the Worker secret)
+#   NORD_WG_KEY=<your NordLynx WireGuard private key>
+#   NORD_COUNTRY=<e.g. Canada, Germany — a region that works on your phone>
+#
+# OpenVPN alternative (if you prefer): set VPN_TYPE=openvpn and use
+#   OPENVPN_USER / OPENVPN_PASSWORD = your Nord *service* credentials (dashboard → Manual setup),
+# NOT your Nord account login.
