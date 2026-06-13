@@ -21,6 +21,18 @@ class AnalysisService: ObservableObject {
     let coinGecko = CoinGeckoService()
     let economicCalendar = EconomicCalendarService()
     let macroData = MacroDataService()
+
+    /// Thin-client master switch. When true (the default for fresh installs), indicators come from
+    /// the Worker (`/indicators`) and crypto candles from the box (`/candles/crypto`), so the phone
+    /// never hits Binance/Yahoo directly (no more 451 geoblock). OFF restores the fully-local engine
+    /// (`IndicatorEngine` + direct provider fetch) as a manual kill-switch — the engine stays
+    /// compiled for `BacktestEngine` regardless. Analysis (`/full-analysis`) is already server-side.
+    /// Fresh key (NOT the legacy `use_server_analysis`, which carries a stale persisted value on
+    /// devices that used the old "Server analysis (beta)" toggle — reusing it left thin mode OFF).
+    var thinClient: Bool {
+        UserDefaults.standard.object(forKey: "thin_client_mode") as? Bool ?? true
+    }
+
     private(set) var aiProvider: AIProvider?
     // Default provider for fresh installs. Existing users keep their UserDefaults("ai_provider")
     // selection (autoConfigureKey reads it on init). DeepSeek R1's reasoning is well-suited to
@@ -152,7 +164,9 @@ class AnalysisService: ObservableObject {
             guard let self else { return }
             await self.selectSymbol(symbol)
             guard !Task.isCancelled else { return }
-            if self.marketFor(symbol) == .crypto {
+            if self.marketFor(symbol) == .crypto && !self.thinClient {
+                // Spot pressure hits Binance spot (api.binance.com → 451 from the phone). Skipped in
+                // thin mode; the worker has spot pressure server-side for the analysis.
                 self.spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
             } else {
                 self.spotPressure = nil
@@ -196,13 +210,18 @@ class AnalysisService: ObservableObject {
         let market = marketFor(symbol)
         do {
             let tf = market.timeframes[0] // Daily only
-            let candles: [Candle]
-            switch market {
-            case .crypto: candles = try await binance.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300)
-            case .stock:
-                candles = try await yahoo.fetchCandles(symbol: symbol, interval: tf.interval)
+            let tf1: IndicatorResult
+            if thinClient {
+                tf1 = try await WorkerIndicatorsService.fetch(symbol: symbol).daily
+            } else {
+                let candles: [Candle]
+                switch market {
+                case .crypto: candles = try await binance.fetchCandles(symbol: symbol, interval: tf.interval, limit: 300)
+                case .stock:
+                    candles = try await yahoo.fetchCandles(symbol: symbol, interval: tf.interval)
+                }
+                tf1 = IndicatorEngine.computeAll(candles: candles, timeframe: tf.interval, label: tf.label, market: market)
             }
-            let tf1 = IndicatorEngine.computeAll(candles: candles, timeframe: tf.interval, label: tf.label, market: market)
 
             let result = AnalysisResult(
                 symbol: symbol, market: market, timestamp: Date(),
@@ -290,10 +309,23 @@ class AnalysisService: ObservableObject {
             // Reuse previous enrichment data if still fresh
             let previous = resultsBySymbol[symbol]
 
+            // Thin mode: route the geoblocked crypto enrichment (derivatives/positioning/spot/
+            // sentiment/fear&greed) through ONE worker /market call. Binance fapi is HTTP 451 from
+            // the phone, so the on-device derivatives/spot fetches were skipped — the cards were
+            // empty. Stock fundamentals stay on Yahoo/Finnhub (richer + not geoblocked); macro stays
+            // on /macro. Only on enrichment cycles; carry forward otherwise.
+            let marketBundle: WorkerMarketService.Bundle? =
+                (thinClient && market == .crypto && needsEnrichment)
+                ? await WorkerMarketService.fetch(symbol: symbol) : nil
+            if let sp = marketBundle?.spotPressure { self.spotPressure = sp }
+
             // Sentiment — only on enrichment cycles
             let sentiment: CoinInfo?
             let fearGreed: FearGreedIndex?
-            if needsEnrichment && market == .crypto {
+            if market == .crypto && thinClient {
+                sentiment = marketBundle?.sentiment ?? previous?.sentiment
+                fearGreed = marketBundle?.fearGreed ?? previous?.fearGreed
+            } else if needsEnrichment && market == .crypto {
                 sentiment = try? await coinGecko.fetchSentiment(symbol: symbol)
                 fearGreed = await coinGecko.fetchFearGreed()
             } else {
@@ -396,10 +428,15 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
-            // Crypto derivatives — only on enrichment cycles
+            // Crypto derivatives — only on enrichment cycles. Geoblocked (Binance fapi → 451 from
+            // the phone). In thin mode these come from the worker /market bundle above (one call,
+            // box fetches Binance behind NordVPN); carry forward on non-enrichment cycles.
             var derivData: DerivativesData? = nil
             var positioning: PositioningSnapshot? = nil
-            if market == .crypto {
+            if market == .crypto && thinClient {
+                derivData = marketBundle?.derivatives ?? previous?.derivatives
+                positioning = marketBundle?.positioning ?? previous?.positioning
+            } else if market == .crypto {
                 if needsEnrichment {
                     derivData = await derivativesService.fetchDerivativesData(symbol: symbol)
                     #if DEBUG
@@ -444,8 +481,9 @@ class AnalysisService: ObservableObject {
                                         hRsiD1: _hRsiDelta1, hMacdD1: _hMacdHistDelta1,
                                         dRsiD1: _dRsiDelta1, dAdxD1: _dAdxDelta1)
 
-            // Fetch ETH/BTC for cross-asset (crypto only, lightweight)
-            if market == .crypto {
+            // Fetch ETH/BTC for cross-asset (crypto only, lightweight). Geoblocked (Binance) — only
+            // fed the local scoring/ML-feature path, which the thin client bypasses, so skip it.
+            if market == .crypto && !thinClient {
                 ethBtcPrevPrice = ethBtcPrice
                 if let ethBtcCandles = try? await binance.fetchCandles(symbol: "ETHBTC", interval: "4h", limit: 2),
                    let last = ethBtcCandles.last {
@@ -454,9 +492,9 @@ class AnalysisService: ObservableObject {
             }
             let _ethBtcDelta = ethBtcPrevPrice > 0 ? (ethBtcPrice - ethBtcPrevPrice) / ethBtcPrevPrice * 100 : 0
 
-            // Fetch basis (futures premium vs spot) for crypto
+            // Fetch basis (futures premium vs spot) for crypto. Geoblocked — skip in thin mode.
             var _basisPct = 0.0
-            if market == .crypto {
+            if market == .crypto && !thinClient {
                 if let premiumData = try? await binance.fetchPremiumIndex(symbol: symbol) {
                     _basisPct = premiumData
                 }
@@ -539,7 +577,7 @@ class AnalysisService: ObservableObject {
             // Local feature dump for parity-vs-canonical investigations only. Constructed in
             // DEBUG builds so we can compare what the iOS live path would have produced vs
             // the worker's authoritative value. Production never reaches this branch.
-            if ["BTCUSDT", "ETHUSDT", "TSLA", "NVDA"].contains(symbol) {
+            if !thinClient, ["BTCUSDT", "ETHUSDT", "TSLA", "NVDA"].contains(symbol) {
                 let mlFeatures = Self.buildMLFeatures(tf1: tf1, tf2: tf2, tf3: tf3,
                                                        isCrypto: market == .crypto, derivCtx: derivData.map {
                     DerivativesContext.from(data: $0, priceRising: tf2.price > (tf2.candles.dropLast().last?.close ?? tf2.price))
@@ -603,9 +641,16 @@ class AnalysisService: ObservableObject {
             // Track setup/flat outcomes using 15m candles for precise wick detection
             let outcomeCandles: [Candle]
             if marketFor(symbol) == .crypto {
-                outcomeCandles = (try? await binance.fetchCandles(symbol: symbol, interval: "15m", limit: 96)) ?? result.h1.candles
+                if thinClient {
+                    // Box proxies Binance behind the VPN; phone never hits fapi.binance.com (451).
+                    outcomeCandles = await WorkerCandlesService.fetchCrypto(symbol: symbol, interval: "15m", limit: 96) ?? result.h1.candles
+                } else {
+                    outcomeCandles = (try? await binance.fetchCandles(symbol: symbol, interval: "15m", limit: 96)) ?? result.h1.candles
+                }
             } else {
-                outcomeCandles = (try? await yahoo.fetchCandles(symbol: symbol, interval: "15m")) ?? result.h1.candles
+                // Stocks aren't geoblocked; in thin mode the 1H slice from /indicators is enough.
+                outcomeCandles = thinClient ? result.h1.candles
+                    : ((try? await yahoo.fetchCandles(symbol: symbol, interval: "15m")) ?? result.h1.candles)
             }
             OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles, cachedResult: result)
             // Cross-symbol PENDING sweep — catches timeouts and entry triggers on setups
@@ -694,10 +739,12 @@ class AnalysisService: ObservableObject {
         do {
             var dataQuality = DataQuality()
 
-            // Cross-asset context + derivatives for crypto (fetched concurrently)
+            // Cross-asset context + derivatives for crypto (fetched concurrently). In thin mode both
+            // only fed the local indicator scoring / prompt (now server-side via /full-analysis) and
+            // derivatives is geoblocked — so skip them and let the worker supply them server-side.
             let crossAsset: CrossAssetContext?
             var earlyDerivData: DerivativesData? = nil
-            if market == .crypto {
+            if market == .crypto && !thinClient {
                 async let ca = buildCrossAssetContext()
                 async let dd = derivativesService.fetchDerivativesData(symbol: symbol)
                 crossAsset = await ca
@@ -725,13 +772,23 @@ class AnalysisService: ObservableObject {
                 dataQuality.candleStaleness = Date().timeIntervalSince(latestCandle.time)
             }
 
+            // Thin mode: one worker /market call for the geoblocked crypto enrichment bundle
+            // (derivatives/positioning/spot/sentiment/fear&greed) — see refreshIndicators.
+            let marketBundle: WorkerMarketService.Bundle? = (thinClient && market == .crypto)
+                ? await WorkerMarketService.fetch(symbol: symbol) : nil
+
             let sentiment: CoinInfo?
-            if market == .crypto {
+            if market == .crypto && thinClient {
+                sentiment = marketBundle?.sentiment
+                if sentiment == nil { dataQuality.sentimentOK = false }
+            } else if market == .crypto {
                 sentiment = try? await coinGecko.fetchSentiment(symbol: symbol)
                 if sentiment == nil { dataQuality.sentimentOK = false }
             } else { sentiment = nil }
 
-            let fearGreed = market == .crypto ? await coinGecko.fetchFearGreed() : nil
+            let fearGreed = market == .crypto
+                ? (thinClient ? marketBundle?.fearGreed : await coinGecko.fetchFearGreed())
+                : nil
 
             var stockInfo: StockInfo?
             if market == .stock {
@@ -799,12 +856,14 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
-            // Crypto derivatives (reuse early fetch, fall back to cached)
-            var derivData: DerivativesData? = earlyDerivData
-            var positioning: PositioningSnapshot? = nil
+            // Crypto derivatives. Thin: from the worker /market bundle (Binance fapi is 451 from the
+            // phone). Otherwise reuse the early fetch, falling back to cached.
+            var derivData: DerivativesData? = thinClient ? marketBundle?.derivatives : earlyDerivData
+            var positioning: PositioningSnapshot? = thinClient ? marketBundle?.positioning : nil
             if market == .crypto {
                 if derivData == nil, let cached = resultsBySymbol[symbol] {
                     derivData = cached.derivatives
+                    positioning = positioning ?? cached.positioning
                     #if DEBUG
                     print("[MarketScope] Derivatives fresh fetch nil, using cached")
                     #endif
@@ -826,21 +885,25 @@ class AnalysisService: ObservableObject {
             let macroSnapshot = await macroData.fetchMacroSnapshot()
             if macroSnapshot == nil { dataQuality.macroOK = false }
 
-            // Spot pressure for crypto (free Binance data)
+            // Spot pressure for crypto. Thin: from the worker /market bundle (Binance spot is 451
+            // from the phone). Otherwise direct.
             var spotPressure: SpotPressure? = nil
-            if market == .crypto {
+            if market == .crypto && thinClient {
+                spotPressure = marketBundle?.spotPressure
+                if spotPressure == nil { dataQuality.spotPressureOK = false }
+            } else if market == .crypto {
                 spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
                 if spotPressure == nil { dataQuality.spotPressureOK = false }
             }
 
-            // Weekly context + SPY for stocks
+            // Weekly + SPY context only fed the local prompt (now server-side via /full-analysis).
+            // weeklyContext still drives a dataQuality flag; spyContext is fully unused → dropped.
             var weeklyContext: String? = nil
-            var spyContext: String? = nil
-            if market == .stock {
+            if market == .stock && !thinClient {
                 weeklyContext = await buildWeeklyContext(symbol: symbol)
-                spyContext = await buildSPYContext()
                 if weeklyContext == nil { dataQuality.weeklyContextOK = false }
             }
+            _ = weeklyContext  // consumed only by the (now server-side) local-prompt path
 
             // Log data quality
             #if DEBUG
@@ -1384,6 +1447,19 @@ class AnalysisService: ObservableObject {
 
     private func fetchAndCompute(symbol: String, market: Market, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesData? = nil) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult, [Candle]) {
         let tfs = market.timeframes
+
+        // Thin client: all candle-fetch + indicator computation happens on the Worker. One
+        // `/indicators` call returns daily/4H/1H already computed; the 4th tuple element (formerly
+        // the full daily candle history for local ML features) is the worker's daily candles —
+        // ML now comes from `/ml-predict`, so the wider history isn't needed on-device.
+        if thinClient {
+            #if DEBUG
+            print("[MarketScope] [\(symbol)] thin client → /indicators (worker compute)")
+            #endif
+            let b = try await WorkerIndicatorsService.fetch(symbol: symbol)
+            let daily = b.daily
+            return (daily, b.fourH ?? daily, b.oneH ?? daily, daily.candles)
+        }
 
         switch market {
         case .crypto:
