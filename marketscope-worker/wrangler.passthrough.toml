@@ -1,0 +1,6 @@
+# Cutover passthrough config. Deploying this replaces the marketscope-proxy worker with the
+# forwarder in passthrough.ts — NO bindings, NO [triggers] — which freezes the CF D1 + stops
+# the cron. Rollback = `npx wrangler deploy` (uses the normal wrangler.toml).
+name = "marketscope-proxy"
+main = "passthrough.ts"
+compatibility_date = "2024-01-01"
