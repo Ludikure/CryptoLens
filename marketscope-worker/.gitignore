@@ -1,0 +1,24 @@
+# Secret-bearing + bulky migration artifacts — never commit these.
+# (Comments must be on their own line — an inline # does NOT start a comment in .gitignore.)
+
+# holds real API keys once filled in
+truenas-compose.yml
+# APNs auth keys
+*.p8
+*.env
+.dev.vars
+.dev.vars.local
+
+# Local migration data (huge, regenerable)
+dump.sql
+*.sql
+marketscope.db
+marketscope.db-*
+*.db
+*.db-shm
+*.db-wal
+models/
+
+# Build output
+dist/
+node_modules/

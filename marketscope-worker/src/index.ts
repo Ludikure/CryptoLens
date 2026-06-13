@@ -103,6 +103,84 @@ const MAX_NOTE_LENGTH = 500;     // Max alert note length
 const DEVICE_ID_REGEX = /^[a-zA-Z0-9-]{1,128}$/;
 const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'];
 
+// Yahoo crumb/cookie auth. At module scope so BOTH the fetch handler and the
+// archiveShortInterest cron can call it — it was previously nested inside fetch(), which made
+// the cron's call a ReferenceError (short-interest archiving never worked; logged every tick).
+async function getYahooCrumb(env: Env): Promise<{cookie: string; crumb: string} | null> {
+  const cacheKey = 'cache:yahoo-crumb';
+  const cached = await env.ALERTS.get(cacheKey);
+  if (cached) {
+    const parsed = JSON.parse(cached);
+    if (Date.now() - parsed.timestamp < 1800_000) return parsed.data;
+  }
+  try {
+    const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
+    const fcResp = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': ua }, redirect: 'manual' });
+    const setCookie = fcResp.headers.get('set-cookie') || '';
+    const a3Match = setCookie.match(/A3=([^;]+)/);
+    if (!a3Match) return null;
+    const cookie = `A3=${a3Match[1]}`;
+    const crumbResp = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
+      headers: { 'User-Agent': ua, 'Cookie': cookie },
+    });
+    if (!crumbResp.ok) return null;
+    const crumb = await crumbResp.text();
+    if (!crumb || crumb.includes('Unauthorized')) return null;
+    const result = { cookie, crumb };
+    await env.ALERTS.put(cacheKey, JSON.stringify({ data: result, timestamp: Date.now() }), { expirationTtl: 1800 });
+    return result;
+  } catch { return null; }
+}
+
+// Bounded-concurrency map — runs `fn` over items with at most `limit` in flight. One Node thread
+// handles this fine (the work is network-I/O wait, not CPU); the cap keeps us under Binance's
+// per-IP rate limit through the single VPN exit.
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const worker = async () => { while (i < items.length) { const idx = i++; await fn(items[idx]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+}
+
+// Fetch the 7 live fapi/binance derivative endpoints for one symbol concurrently and parse them
+// into the raw values the ML uses. Shared by the cron's bounded-parallel pre-warm and the
+// in-loop cache-miss fallback. Returns 0 for any endpoint that failed (same as the original
+// serial behavior). No OI-delta here — that needs prevOI and is computed in the symbol loop.
+async function fetchLiveDerivatives(symbol: string): Promise<any> {
+  const FAPI = 'https://fapi.binance.com';
+  const J = async (u: string): Promise<any> => { try { const r = await fetch(u); return r.ok ? await r.json() : null; } catch { return null; } };
+  const [fr, tlsp, tls, oih, glsa, pi, at] = await Promise.all([
+    J(`${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&limit=1`),
+    J(`${FAPI}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=4h&limit=1`),
+    J(`${FAPI}/futures/data/takerlongshortRatio?symbol=${symbol}&period=4h&limit=1`),
+    J(`${FAPI}/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=1`),
+    J(`${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=4h&limit=1`),
+    J(`${FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`),
+    J(`https://api.binance.com/api/v3/aggTrades?symbol=${symbol}&limit=1000`),
+  ]);
+  let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0, takerRatio = 0;
+  let openInterest = 0, markPrice = 0, indexPrice = 0, longPct = 0, basisPct = 0;
+  let largeBuyVol = 0, largeSellVol = 0, largeBuyCount = 0, largeSellCount = 0;
+  if (fr && fr.length) fundingRate = parseFloat(fr[0].fundingRate) * 100;
+  if (tlsp && tlsp.length) topTraderLongPct = parseFloat(tlsp[0].longAccount) * 100;
+  if (tls && tls.length) { takerBuyVol = parseFloat(tls[0].buyVol); takerSellVol = parseFloat(tls[0].sellVol); takerRatio = parseFloat(tls[0].buySellRatio); }
+  if (oih && oih.length) openInterest = parseFloat(oih[0].sumOpenInterest);
+  if (glsa && glsa.length) longPct = parseFloat(glsa[0].longAccount) * 100;
+  if (pi) {
+    markPrice = parseFloat(pi.markPrice); indexPrice = parseFloat(pi.indexPrice);
+    if (indexPrice > 0) basisPct = (markPrice - indexPrice) / indexPrice * 100;
+  }
+  if (at && at.length) {
+    const lastPrice = at.length > 0 ? parseFloat(at[at.length - 1].p) : 1;
+    const threshold = lastPrice * 0.5;
+    for (const t of at) {
+      const notional = parseFloat(t.q) * parseFloat(t.p);
+      if (notional < threshold) continue;
+      if (t.m) { largeSellVol += notional; largeSellCount++; } else { largeBuyVol += notional; largeBuyCount++; }
+    }
+  }
+  return { fundingRate, openInterest, topTraderLongPct, takerBuyVol, takerSellVol, takerRatio, longPct, markPrice, indexPrice, basisPct, largeBuyVol, largeSellVol, largeBuyCount, largeSellCount };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     setProxyConfig(env);
@@ -780,31 +858,7 @@ export default {
     }
 
     // === Yahoo Crumb Auth (cached 30 min) ===
-    async function getYahooCrumb(env: Env): Promise<{cookie: string; crumb: string} | null> {
-      const cacheKey = 'cache:yahoo-crumb';
-      const cached = await env.ALERTS.get(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Date.now() - parsed.timestamp < 1800_000) return parsed.data;
-      }
-      try {
-        const ua = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
-        const fcResp = await fetch('https://fc.yahoo.com', { headers: { 'User-Agent': ua }, redirect: 'manual' });
-        const setCookie = fcResp.headers.get('set-cookie') || '';
-        const a3Match = setCookie.match(/A3=([^;]+)/);
-        if (!a3Match) return null;
-        const cookie = `A3=${a3Match[1]}`;
-        const crumbResp = await fetch('https://query2.finance.yahoo.com/v1/test/getcrumb', {
-          headers: { 'User-Agent': ua, 'Cookie': cookie },
-        });
-        if (!crumbResp.ok) return null;
-        const crumb = await crumbResp.text();
-        if (!crumb || crumb.includes('Unauthorized')) return null;
-        const result = { cookie, crumb };
-        await env.ALERTS.put(cacheKey, JSON.stringify({ data: result, timestamp: Date.now() }), { expirationTtl: 1800 });
-        return result;
-      } catch { return null; }
-    }
+    // getYahooCrumb moved to module scope (defined above export default) so the cron can call it.
 
     // === Yahoo Proxies (cached) ===
     if (path === '/yahoo/quote') {
@@ -2515,6 +2569,10 @@ async function computeSymbolPredictions(
   const prevOIMap: Record<string, number> = prevOIBatchRaw ? JSON.parse(prevOIBatchRaw) : {};
   const derivArchiveBatchRaw = await env.ALERTS.get('deriv_archive:all');
   const derivArchiveMap: Record<string, number> = derivArchiveBatchRaw ? JSON.parse(derivArchiveBatchRaw) : {};
+  // Live-derivatives cache: per-symbol raw fapi values + ts. Warm passes within the 5-min TTL
+  // skip the VPN derivative batch (the cron's dominant cost). Per-symbol ts → staggered refresh.
+  const derivLiveBatchRaw = await env.ALERTS.get('deriv_live:all');
+  const derivLiveMap: Record<string, any> = derivLiveBatchRaw ? JSON.parse(derivLiveBatchRaw) : {};
   // Dense OI/price snapshots for a future HOMEMADE liquidation heatmap (every ~20 min per
   // symbol). Captures the heatmap inputs — live OI level + mark price + funding + positioning —
   // so that over months we accumulate the OI-vs-price history needed to model liquidation
@@ -2794,9 +2852,30 @@ async function computeSymbolPredictions(
   const calInserts: D1PreparedStatement[] = [];
   const calUpdates: D1PreparedStatement[] = [];
 
+  let _derivHits = 0, _derivMiss = 0, _nCrypto = 0, _nStock = 0;
+
+  // Pre-warm stale crypto derivative caches in bounded-parallel (5 symbols in flight) BEFORE the
+  // serial loop, so the loop always hits a warm cache. Collapses the cold/refresh pass from ~87s
+  // (76 serial VPN batches) to ~15s — without parallelizing the loop body, which would risk the
+  // notification-dedup invariants. Capped to stay under Binance's per-IP rate limit on the single
+  // VPN exit. On warm passes _stale is empty, so this is a no-op.
+  const _stale = allSymbols.filter(s => s.endsWith('USDT')).filter(s => {
+    const e = derivLiveMap[s]; return !e || (Date.now() - (e.ts || 0)) >= 300_000;
+  });
+  if (_stale.length) {
+    const _t = Date.now();
+    await mapLimit(_stale, 5, async (sym) => {
+      const d = await fetchLiveDerivatives(sym);
+      derivLiveMap[sym] = { ...d, ts: Date.now() };
+    });
+    console.log(`[cron] pre-warmed ${_stale.length} derivs in ${Date.now() - _t}ms`);
+  }
+
+  const _loopStart = Date.now();
   for (const symbol of allSymbols) {
     try {
       const isCrypto = symbol.endsWith('USDT');
+      if (isCrypto) _nCrypto++; else _nStock++;
 
       // Candle cache: lookup in per-interval batched maps; fetch + insert on miss.
       let candles: ScoreCandle[] = candles1dMap[symbol] ?? [];
@@ -2878,28 +2957,33 @@ async function computeSymbolPredictions(
         let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0;
         let openInterest = 0, markPrice = 0, indexPrice = 0, longPct = 0, takerRatio = 0;
 
-        try {
-          const r = await fetch(`${FAPI}/fapi/v1/fundingRate?symbol=${symbol}&limit=1`);
-          if (r.ok) { const d = await r.json() as any[]; if (d.length) fundingRate = parseFloat(d[0].fundingRate) * 100; }
-        } catch {}
-
-        try {
-          const r = await fetch(`${FAPI}/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=4h&limit=1`);
-          if (r.ok) { const d = await r.json() as any[]; if (d.length) topTraderLongPct = parseFloat(d[0].longAccount) * 100; }
-        } catch {}
-
-        try {
-          const r = await fetch(`${FAPI}/futures/data/takerlongshortRatio?symbol=${symbol}&period=4h&limit=1`);
-          if (r.ok) {
-            const d = await r.json() as any[];
-            if (d.length) { takerBuyVol = parseFloat(d[0].buyVol); takerSellVol = parseFloat(d[0].sellVol); takerRatio = parseFloat(d[0].buySellRatio); }
-          }
-        } catch {}
-
-        try {
-          const r = await fetch(`${FAPI}/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=1`);
-          if (r.ok) { const d = await r.json() as any[]; if (d.length) openInterest = parseFloat(d[0].sumOpenInterest); }
-        } catch {}
+        // Derivatives: cached per-symbol (deriv_live:all blob, per-symbol ts → staggered
+        // refresh, matching prev_oi:all). Warm passes within the 5-min TTL skip the VPN batch
+        // entirely — the dominant cron speedup. On a miss, fetch all 7 fapi/binance endpoints
+        // CONCURRENTLY (mirrors the /derivatives endpoint ~line 1277). These are ~4h-period
+        // stats + live mark/aggTrades; 5-min staleness is negligible for the ML, and the parsed
+        // values + downstream signal/archive computation are identical either way.
+        let largeBuyCount = 0, largeSellCount = 0;
+        const _dl = derivLiveMap[symbol];
+        if (_dl && (Date.now() - (_dl.ts || 0)) < 300_000) {
+          _derivHits++;
+          fundingRate = _dl.fundingRate; openInterest = _dl.openInterest;
+          topTraderLongPct = _dl.topTraderLongPct; takerBuyVol = _dl.takerBuyVol;
+          takerSellVol = _dl.takerSellVol; takerRatio = _dl.takerRatio;
+          longPct = _dl.longPct; markPrice = _dl.markPrice; indexPrice = _dl.indexPrice;
+          basisPct = _dl.basisPct; largeBuyVol = _dl.largeBuyVol; largeSellVol = _dl.largeSellVol;
+          largeBuyCount = _dl.largeBuyCount; largeSellCount = _dl.largeSellCount;
+        } else {
+          _derivMiss++;
+          const _d = await fetchLiveDerivatives(symbol);
+          fundingRate = _d.fundingRate; openInterest = _d.openInterest;
+          topTraderLongPct = _d.topTraderLongPct; takerBuyVol = _d.takerBuyVol;
+          takerSellVol = _d.takerSellVol; takerRatio = _d.takerRatio;
+          longPct = _d.longPct; markPrice = _d.markPrice; indexPrice = _d.indexPrice;
+          basisPct = _d.basisPct; largeBuyVol = _d.largeBuyVol; largeSellVol = _d.largeSellVol;
+          largeBuyCount = _d.largeBuyCount; largeSellCount = _d.largeSellCount;
+          derivLiveMap[symbol] = { ..._d, ts: Date.now() };
+        }
 
         let oiChangePct = 0;
         if (prevOI > 0 && openInterest > 0) {
@@ -2908,43 +2992,6 @@ async function computeSymbolPredictions(
         if (openInterest > 0) {
           prevOIMap[symbol] = openInterest;
         }
-
-        try {
-          const r = await fetch(`${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=4h&limit=1`);
-          if (r.ok) { const d = await r.json() as any[]; if (d.length) longPct = parseFloat(d[0].longAccount) * 100; }
-        } catch {}
-
-        try {
-          const r = await fetch(`${FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`);
-          if (r.ok) {
-            const d = await r.json() as any;
-            markPrice = parseFloat(d.markPrice); indexPrice = parseFloat(d.indexPrice);
-            if (indexPrice > 0) basisPct = (markPrice - indexPrice) / indexPrice * 100;
-          }
-        } catch {}
-
-        let largeBuyCount = 0, largeSellCount = 0;
-        try {
-          const atResp = await fetch(`https://api.binance.com/api/v3/aggTrades?symbol=${symbol}&limit=1000`);
-          if (atResp.ok) {
-            const trades = await atResp.json() as any[];
-            const lastPrice = trades.length > 0 ? parseFloat(trades[trades.length - 1].p) : 1;
-            const threshold = lastPrice * 0.5;
-            for (const t of trades) {
-              const qty = parseFloat(t.q);
-              const price = parseFloat(t.p);
-              const notional = qty * price;
-              if (notional < threshold) continue;
-              if (t.m) {
-                largeSellVol += notional;
-                largeSellCount++;
-              } else {
-                largeBuyVol += notional;
-                largeBuyCount++;
-              }
-            }
-          }
-        } catch {}
 
         derivSignals.fundingRateRaw = fundingRate;
         derivSignals.oiChangePct = oiChangePct;
@@ -3169,8 +3216,10 @@ async function computeSymbolPredictions(
   // Phase 5: persist current risk states (powers /risk-states + next-tick transition detection).
   // No TTL on the comparison set — a stale blob would just suppress a duplicate notification.
   try { await env.ALERTS.put('risk_states:all', JSON.stringify(curRiskStates)); } catch { /* ignore */ }
+  console.log(`[cron-timing] loop=${Date.now() - _loopStart}ms crypto=${_nCrypto} stock=${_nStock} derivCache=${_derivHits}hit/${_derivMiss}miss`);
   await env.ALERTS.put('prev_oi:all', JSON.stringify(prevOIMap), { expirationTtl: 86400 });
   await env.ALERTS.put('deriv_archive:all', JSON.stringify(derivArchiveMap), { expirationTtl: 14400 });
+  await env.ALERTS.put('deriv_live:all', JSON.stringify(derivLiveMap), { expirationTtl: 86400 });
   await env.ALERTS.put('oi_snap:all', JSON.stringify(oiSnapMap), { expirationTtl: 14400 });
   if (candlesDirty['1d']) await env.ALERTS.put('candles:all:1d', JSON.stringify(candles1dMap), { expirationTtl: 300 });
   if (candlesDirty['4h']) await env.ALERTS.put('candles:all:4h', JSON.stringify(candles4hMap), { expirationTtl: 300 });

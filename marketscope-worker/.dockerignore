@@ -1,0 +1,26 @@
+# Keep the build context tiny. The Dockerfile only needs package*.json, src/, server/.
+# Everything below would either bloat the context (the 2.2GB dump, the 1GB db) or is
+# rebuilt inside the image.
+
+node_modules
+dist
+
+# Migration data artifacts — these go onto the box via the /data volume mount, NOT the image
+dump.sql
+*.sql
+marketscope.db
+marketscope.db-*
+*.db
+*.db-shm
+*.db-wal
+models/
+
+# Training / analysis / local junk not needed at runtime
+ml-training
+csv_exports*
+test
+scripts
+*.csv
+.git
+.DS_Store
+*.log

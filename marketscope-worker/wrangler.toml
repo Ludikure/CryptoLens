@@ -31,6 +31,7 @@ database_id = "f67b9cbd-9264-4679-9161-1b4af2f9de9d"
 binding = "MODELS"
 bucket_name = "marketscope-models"
 
-# Cron trigger — check scores every minute
+# Cron trigger — temporarily throttled to every 5 min during TrueNAS migration (Phase 0
+# cost relief). Restore to "* * * * *" if rolling back; the TrueNAS service runs per-minute.
 [triggers]
-crons = ["* * * * *"]
+crons = ["*/5 * * * *"]
