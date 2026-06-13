@@ -20,13 +20,7 @@ export function startCron(worker: { scheduled: Function }, env: any) {
     const started = Date.now();
     const tasks: Promise<unknown>[] = [];
     const ctx = {
-      // Time each scheduled task independently. Order matches src/index.ts scheduled():
-      // [0] checkAllDeviceAlerts  [1] checkAllDeviceScores  [2] archiveShortInterest  [3] cleanupStaleDevices
-      waitUntil: (p: Promise<unknown>) => {
-        const i = tasks.length;
-        const t0 = Date.now();
-        tasks.push(Promise.resolve(p).finally(() => console.log(`cron task[${i}] ${Date.now() - t0}ms`)));
-      },
+      waitUntil: (p: Promise<unknown>) => { tasks.push(p); },
       passThroughOnException() {},
     };
     const event = { scheduledTime: Date.now(), cron: '* * * * *' };
@@ -40,7 +34,6 @@ export function startCron(worker: { scheduled: Function }, env: any) {
       console.error('cron run failed:', err);
     } finally {
       const ms = Date.now() - started;
-      console.log(`cron: pass completed in ${ms}ms`);
       if (ms > 55_000) console.warn(`cron: run took ${ms}ms (approaching the 60s tick)`);
       running = false;
     }

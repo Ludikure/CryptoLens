@@ -2852,8 +2852,6 @@ async function computeSymbolPredictions(
   const calInserts: D1PreparedStatement[] = [];
   const calUpdates: D1PreparedStatement[] = [];
 
-  let _derivHits = 0, _derivMiss = 0, _nCrypto = 0, _nStock = 0;
-
   // Pre-warm stale crypto derivative caches in bounded-parallel (5 symbols in flight) BEFORE the
   // serial loop, so the loop always hits a warm cache. Collapses the cold/refresh pass from ~87s
   // (76 serial VPN batches) to ~15s — without parallelizing the loop body, which would risk the
@@ -2863,19 +2861,15 @@ async function computeSymbolPredictions(
     const e = derivLiveMap[s]; return !e || (Date.now() - (e.ts || 0)) >= 300_000;
   });
   if (_stale.length) {
-    const _t = Date.now();
     await mapLimit(_stale, 5, async (sym) => {
       const d = await fetchLiveDerivatives(sym);
       derivLiveMap[sym] = { ...d, ts: Date.now() };
     });
-    console.log(`[cron] pre-warmed ${_stale.length} derivs in ${Date.now() - _t}ms`);
   }
 
-  const _loopStart = Date.now();
   for (const symbol of allSymbols) {
     try {
       const isCrypto = symbol.endsWith('USDT');
-      if (isCrypto) _nCrypto++; else _nStock++;
 
       // Candle cache: lookup in per-interval batched maps; fetch + insert on miss.
       let candles: ScoreCandle[] = candles1dMap[symbol] ?? [];
@@ -2966,7 +2960,6 @@ async function computeSymbolPredictions(
         let largeBuyCount = 0, largeSellCount = 0;
         const _dl = derivLiveMap[symbol];
         if (_dl && (Date.now() - (_dl.ts || 0)) < 300_000) {
-          _derivHits++;
           fundingRate = _dl.fundingRate; openInterest = _dl.openInterest;
           topTraderLongPct = _dl.topTraderLongPct; takerBuyVol = _dl.takerBuyVol;
           takerSellVol = _dl.takerSellVol; takerRatio = _dl.takerRatio;
@@ -2974,7 +2967,6 @@ async function computeSymbolPredictions(
           basisPct = _dl.basisPct; largeBuyVol = _dl.largeBuyVol; largeSellVol = _dl.largeSellVol;
           largeBuyCount = _dl.largeBuyCount; largeSellCount = _dl.largeSellCount;
         } else {
-          _derivMiss++;
           const _d = await fetchLiveDerivatives(symbol);
           fundingRate = _d.fundingRate; openInterest = _d.openInterest;
           topTraderLongPct = _d.topTraderLongPct; takerBuyVol = _d.takerBuyVol;
@@ -3216,7 +3208,6 @@ async function computeSymbolPredictions(
   // Phase 5: persist current risk states (powers /risk-states + next-tick transition detection).
   // No TTL on the comparison set — a stale blob would just suppress a duplicate notification.
   try { await env.ALERTS.put('risk_states:all', JSON.stringify(curRiskStates)); } catch { /* ignore */ }
-  console.log(`[cron-timing] loop=${Date.now() - _loopStart}ms crypto=${_nCrypto} stock=${_nStock} derivCache=${_derivHits}hit/${_derivMiss}miss`);
   await env.ALERTS.put('prev_oi:all', JSON.stringify(prevOIMap), { expirationTtl: 86400 });
   await env.ALERTS.put('deriv_archive:all', JSON.stringify(derivArchiveMap), { expirationTtl: 14400 });
   await env.ALERTS.put('deriv_live:all', JSON.stringify(derivLiveMap), { expirationTtl: 86400 });
