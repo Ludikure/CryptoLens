@@ -106,13 +106,21 @@ class AnalysisService: ObservableObject {
 
     init() { autoConfigureKey() }
 
+    /// The selected model id (may carry an `@thinking-N` suffix for Claude). Read by
+    /// `WorkerFullAnalysisService` so the server-side analysis uses the user's chosen provider+model.
+    private(set) var currentModelID: String = ""
+
     func configure(provider: AIProviderType, apiKey: String, model: String) {
         providerType = provider
+        currentModelID = model
         switch provider {
         case .claude: aiProvider = ClaudeService(apiKey: apiKey, model: model)
         case .gemini: aiProvider = GeminiService(apiKey: apiKey, model: model)
         case .deepseek: aiProvider = DeepSeekService(apiKey: apiKey, model: model)
         }
+        // Persist so the choice survives relaunch (the worker /full-analysis path reads these).
+        UserDefaults.standard.set(provider.rawValue, forKey: "ai_provider")
+        UserDefaults.standard.set(model, forKey: "ai_model")
     }
 
     /// Determine market type for a symbol.
@@ -948,9 +956,9 @@ class AnalysisService: ObservableObject {
             // outcome tracking; only the prompt-building + LLM call live on the Worker now. No
             // on-device fallback — the cron dead-man's-switch (/cron-health) covers worker uptime.
             aiLoadingPhase = .waitingForResponse
-            loadingStatus = "Analyzing (server · Sonnet thinking)…"
+            loadingStatus = "Analyzing (server · \(providerType.displayName))…"
             do {
-                let r = try await WorkerFullAnalysisService.analyze(symbol: symbol)
+                let r = try await WorkerFullAnalysisService.analyze(symbol: symbol, provider: providerType.rawValue, modelID: currentModelID)
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = r.markdown
                 tradeSetups = r.setups
@@ -1619,7 +1627,10 @@ class AnalysisService: ObservableObject {
             providerType = type
         }
         let type = providerType
-        let model = type.models[0].id
+        // Restore the saved model if it's still a valid id for this provider; else default to the
+        // provider's first (recommended) model.
+        let saved = UserDefaults.standard.string(forKey: "ai_model")
+        let model = (saved != nil && type.models.contains { $0.id == saved }) ? saved! : type.models[0].id
         configure(provider: type, apiKey: "", model: model)
     }
 

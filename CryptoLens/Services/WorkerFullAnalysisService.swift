@@ -39,26 +39,40 @@ enum WorkerFullAnalysisService {
         }
     }
 
-    static func analyze(symbol: String) async throws -> Result {
+    static func analyze(symbol: String, provider: String = "claude", modelID: String = "") async throws -> Result {
         // /full-analysis is auth-gated. ensureAuth obtains a token if we have none; a 401
         // self-heals once via handleAuthFailure (rotate deviceId + re-register), matching
         // WorkerMLService so server analysis doesn't dead-end on a stale token.
         await PushService.ensureAuth()
         do {
-            return try await post(symbol: symbol)
+            return try await post(symbol: symbol, provider: provider, modelID: modelID)
         } catch FetchError.unauthorized {
             await PushService.handleAuthFailure()
-            return try await post(symbol: symbol)
+            return try await post(symbol: symbol, provider: provider, modelID: modelID)
         }
     }
 
-    private static func post(symbol: String) async throws -> Result {
+    private static func post(symbol: String, provider: String, modelID: String) async throws -> Result {
         guard let url = URL(string: "\(PushService.workerURL)/full-analysis") else { throw FetchError.missingURL }
 
         // Position-sizing inputs (same UserDefaults the local prompt reads) so the server's
-        // CANDIDATE SETUPS sizing matches the user's risk plan. thinkingBudget is omitted →
-        // the worker defaults to 8000 (Sonnet + extended thinking).
+        // CANDIDATE SETUPS sizing matches the user's risk plan.
         var bodyDict: [String: Any] = ["symbol": symbol]
+
+        // Provider + model selection (Settings picker). Split the iOS "@thinking-N" model-id suffix
+        // into the clean model the worker allowlists + a separate thinkingBudget (Claude only). For
+        // a Claude model with no suffix, send 0 to disable thinking explicitly (else the worker
+        // defaults to 8000); Gemini/DeepSeek ignore thinkingBudget.
+        bodyDict["provider"] = provider
+        if !modelID.isEmpty {
+            if let r = modelID.range(of: "@thinking-") {
+                bodyDict["model"] = String(modelID[..<r.lowerBound])
+                if let budget = Int(modelID[r.upperBound...]) { bodyDict["thinkingBudget"] = budget }
+            } else {
+                bodyDict["model"] = modelID
+                if provider == "claude" { bodyDict["thinkingBudget"] = 0 }
+            }
+        }
         let acct = UserDefaults.standard.double(forKey: "accountSize")
         let risk = UserDefaults.standard.double(forKey: "riskPercent")
         if acct > 0 { bodyDict["accountSize"] = acct }

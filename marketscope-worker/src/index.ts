@@ -102,6 +102,72 @@ const MAX_BODY_BYTES = 600_000;   // Max request body size (600KB) — covers sy
 const MAX_NOTE_LENGTH = 500;     // Max alert note length
 const DEVICE_ID_REGEX = /^[a-zA-Z0-9-]{1,128}$/;
 const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'];
+const DEEPSEEK_MODELS = ['deepseek-reasoner', 'deepseek-chat'];
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+
+// Single multi-provider LLM call. Routes to Claude / Gemini / DeepSeek (model allowlisted per
+// provider, falling back to that provider's default), normalizes each response to plain text, and
+// returns the resolved model. Both /analyze and /full-analysis share this so provider selection
+// works identically on the thin client (server-side analysis) and the legacy local-prompt path.
+// thinkingBudget applies to Claude only (Anthropic extended thinking); ignored by the others.
+type LLMOutcome = { ok: true; text: string; model: string } | { ok: false; status: number; error: string };
+async function callLLM(env: Env, opts: { provider?: string; model?: string; system: string; prompt: string; thinkingBudget?: number | null }): Promise<LLMOutcome> {
+  const provider = opts.provider || 'claude';
+  const httpErr = (code: number): LLMOutcome =>
+    code === 429 ? { ok: false, status: 429, error: 'AI service busy. Try again shortly.' }
+    : code >= 500 ? { ok: false, status: 502, error: 'AI service temporarily unavailable' }
+    : { ok: false, status: code, error: `AI error (${code})` };
+
+  if (provider === 'deepseek') {
+    if (!env.DEEPSEEK_API_KEY) return { ok: false, status: 503, error: 'DeepSeek not configured' };
+    const model = DEEPSEEK_MODELS.includes(opts.model ?? '') ? opts.model! : 'deepseek-reasoner';
+    const resp = await fetch(aiGatewayURL(env, 'deepseek', 'v1/chat/completions', 'https://api.deepseek.com/v1/chat/completions'), {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model, max_tokens: 8000, temperature: 0, messages: [{ role: 'system', content: opts.system }, { role: 'user', content: opts.prompt }] }),
+    });
+    if (!resp.ok) return httpErr(resp.status);
+    const r = await resp.json() as any;
+    return { ok: true, text: r?.choices?.[0]?.message?.content || '', model };
+  }
+
+  if (provider === 'gemini') {
+    if (!env.GEMINI_API_KEY) return { ok: false, status: 503, error: 'Gemini not configured' };
+    const model = GEMINI_MODELS.includes(opts.model ?? '') ? opts.model! : 'gemini-2.5-flash';
+    const resp = await fetch(aiGatewayURL(env, 'google-ai-studio', `v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`, `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // maxOutputTokens covers Gemini 2.5's built-in thinking + the answer, so it needs headroom
+      // (the legacy /analyze used 2500, which can truncate the full analysis).
+      body: JSON.stringify({ system_instruction: { parts: [{ text: opts.system }] }, contents: [{ parts: [{ text: opts.prompt }] }], generationConfig: { maxOutputTokens: 8000, temperature: 0 } }),
+    });
+    if (!resp.ok) return httpErr(resp.status);
+    const r = await resp.json() as any;
+    return { ok: true, text: r?.candidates?.[0]?.content?.parts?.[0]?.text || '', model };
+  }
+
+  // Claude (default)
+  if (!env.CLAUDE_API_KEY) return { ok: false, status: 503, error: 'AI not configured' };
+  const model = ALLOWED_MODELS.includes(opts.model ?? '') ? opts.model! : 'claude-sonnet-4-6';
+  const thinkingBudget = opts.thinkingBudget && opts.thinkingBudget >= 1024 ? opts.thinkingBudget : null;
+  const reqBody: Record<string, unknown> = {
+    model,
+    max_tokens: thinkingBudget ? thinkingBudget + 4000 : 4000,
+    temperature: thinkingBudget ? 1 : 0,
+    system: opts.system,
+    messages: [{ role: 'user', content: opts.prompt }],
+  };
+  if (thinkingBudget) reqBody.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+  const resp = await fetch(aiGatewayURL(env, 'anthropic', 'v1/messages', 'https://api.anthropic.com/v1/messages'), {
+    method: 'POST',
+    headers: { 'x-api-key': env.CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'context-1m-2025-08-07', 'content-type': 'application/json' },
+    body: JSON.stringify(reqBody),
+  });
+  if (!resp.ok) return httpErr(resp.status);
+  const r = await resp.json() as any;
+  const text = (Array.isArray(r?.content) ? r.content.find((c: any) => c.type === 'text')?.text : '') || '';
+  return { ok: true, text, model };
+}
 
 // Yahoo crumb/cookie auth. At module scope so BOTH the fetch handler and the
 // archiveShortInterest cron can call it — it was previously nested inside fetch(), which made
@@ -1258,35 +1324,16 @@ export default {
         if (prompt.length > MAX_PROMPT_CHARS) return json({ error: 'Prompt too large' }, 413);
         const system = systemPrompt(isCrypto);
 
-        if (!env.CLAUDE_API_KEY) return json({ error: 'AI not configured' }, 503);
-        const model = ALLOWED_MODELS.includes(body.model) ? body.model : 'claude-sonnet-4-6';
-        // Sonnet + extended thinking by default (8000-token budget — matches the iOS
-        // "recommended" setting). Client can override via thinkingBudget, or pass 0 to disable.
-        // Thinking requires temperature 1 and max_tokens > budget; the response content array
-        // then leads with a `thinking` block, so the answer is the first `text` block.
+        // Provider selection (Claude / Gemini / DeepSeek) — the client picks via Settings and sends
+        // `provider` + `model`. Claude defaults to extended thinking (8000-token budget — matches the
+        // iOS "recommended" setting); client can override via thinkingBudget, or pass 0 to disable.
+        const provider = typeof body.provider === 'string' ? body.provider : 'claude';
         const thinkingBudget = body.thinkingBudget === 0 ? 0
           : (Number.isFinite(body.thinkingBudget) && body.thinkingBudget >= 1024 ? body.thinkingBudget : 8000);
-        const reqBody: Record<string, unknown> = {
-          model,
-          max_tokens: thinkingBudget ? thinkingBudget + 4000 : 4000,
-          temperature: thinkingBudget ? 1 : 0,
-          system,
-          messages: [{ role: 'user', content: prompt }],
-        };
-        if (thinkingBudget) reqBody.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
-        const resp = await fetch(aiGatewayURL(env, 'anthropic', 'v1/messages', 'https://api.anthropic.com/v1/messages'), {
-          method: 'POST',
-          headers: { 'x-api-key': env.CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'context-1m-2025-08-07', 'content-type': 'application/json' },
-          body: JSON.stringify(reqBody),
-        });
-        if (!resp.ok) {
-          const code = resp.status;
-          if (code === 429) return json({ error: 'AI service busy. Try again shortly.' }, 429);
-          if (code >= 500) return json({ error: 'AI service temporarily unavailable' }, 502);
-          return json({ error: `AI error (${code})` }, code);
-        }
-        const result = await resp.json() as any;
-        const text = (Array.isArray(result?.content) ? result.content.find((c: any) => c.type === 'text')?.text : '') || '';
+        const llm = await callLLM(env, { provider, model: body.model, system, prompt, thinkingBudget });
+        if (!llm.ok) return json({ error: llm.error }, llm.status);
+        const model = llm.model;
+        const text = llm.text;
         const setups = parseSetups(text);
 
         return json({

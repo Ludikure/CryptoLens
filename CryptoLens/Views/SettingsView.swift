@@ -240,7 +240,13 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .onAppear {
                 selectedProvider = service.providerType
-                updateModel()
+                // Reflect the persisted model choice (falls back to the provider's first model).
+                let saved = service.currentModelID
+                if !saved.isEmpty, selectedProvider.models.contains(where: { $0.id == saved }) {
+                    selectedModel = saved
+                } else {
+                    updateModel()
+                }
             }
         }
     }
