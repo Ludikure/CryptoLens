@@ -118,6 +118,48 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(['TRENDING', 'TRANSITIONING', 'RANGING']).toContain(newState.regime);
   });
 
+  it('F-1: CHASE / EXHAUSTION guard fires HIGH when buying an extended, overbought rally into a crowded long', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+    // Force a textbook "buying the top" tape: bullish momentum, price far above its 200D mean,
+    // overbought oscillators, into a crowded long (→ crowded_longs exhaustion signal).
+    daily.bias = 'Strong Bullish'; fourH.bias = 'Bullish';
+    daily.price = 120; daily.ema200 = 100; daily.atr = { atr: 5, atrPercent: 4 }; // stretch = 4 ATR
+    daily.rsi = 78; fourH.rsi = 76;
+    if (daily.stochRSI) daily.stochRSI.k = 92;
+    daily.mlWinProbability = 0.66;
+
+    const { prompt } = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      positioning: { fundingSentiment: 'Positive', oiTrend: 'Building', crowding: 'Crowded Long', crowdingCode: 'crowdedLong', smartMoneyBias: 'Neutral', takerPressure: 'Buy', squeezeRisk: { level: 'MODERATE', direction: 'LONG SQUEEZE' }, signals: [] },
+      prevState: { regime: 'TRENDING' },
+    });
+    expect(prompt).toContain('CHASE / EXHAUSTION RISK: HIGH');
+    expect(prompt).toContain('BUYING THE TOP');
+    expect(prompt).toContain('classic retail trap');
+    expect(prompt).toContain('extended');
+  });
+
+  it('F-1: CHASE / EXHAUSTION guard stays quiet on a calm, mid-range tape', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+    // Bullish but un-stretched: price near its mean, neutral oscillators, no crowding.
+    daily.bias = 'Bullish'; fourH.bias = 'Bullish';
+    daily.price = 101; daily.ema200 = 100; daily.atr = { atr: 5, atrPercent: 4 }; // stretch = 0.2 ATR
+    daily.rsi = 54; fourH.rsi = 52;
+    if (daily.stochRSI) daily.stochRSI.k = 50;
+    const { prompt } = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH], prevState: { regime: 'RANGING' } });
+    expect(prompt).not.toContain('CHASE / EXHAUSTION RISK: HIGH');
+  });
+
   it('buildUserPrompt handles a stock (no crossAsset/derivatives) without throwing', () => {
     const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
     const mk = (n: number, step: number, label: string, tf: string) =>

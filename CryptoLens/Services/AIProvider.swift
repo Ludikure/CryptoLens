@@ -1,11 +1,8 @@
 import Foundation
 
-/// Abstraction for AI analysis providers (Claude, Gemini, etc.)
-protocol AIProvider {
-    var displayName: String { get }
-    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market, stockInfo: StockInfo?, derivatives: DerivativesData?, positioning: PositioningSnapshot?, stockSentiment: StockSentimentData?, economicEvents: [EconomicEvent], macro: MacroSnapshot?, weeklyContext: String?, spyContext: String?, spotPressure: SpotPressure?, dataQuality: DataQuality?, crossAsset: CrossAssetContext?, outcomeHistory: [(direction: String, entry: Double, outcome: String, mlProb: Double?, conviction: String?)]) async throws -> ClaudeAnalysisResponse
-}
-
+/// AI provider selection. The actual analysis call runs server-side via the Worker
+/// `/full-analysis` endpoint (see `WorkerFullAnalysisService`); this enum only carries
+/// the user's provider/model choice and the per-provider model allowlist + key lookups.
 enum AIProviderType: String, Codable, CaseIterable, Identifiable {
     case claude = "claude"
     case gemini = "gemini"

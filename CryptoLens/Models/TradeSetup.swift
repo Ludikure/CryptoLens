@@ -153,12 +153,26 @@ struct TradeOutcome: Codable {
     var pendingExpiresAt: Date?    // 12h after creation for conditional setups
     var reEvalResult: ReEvalResult?
 
+    /// TERMINAL state — the trade is fully done and excursion tracking should STOP.
+    /// True only on a hard close: invalidated, expired, stop hit, or TP2 hit.
+    /// `tp1Hit` is deliberately NOT terminal — after TP1 the runner continues (stop
+    /// trails to break-even) until TP2 or the stop resolves it.
+    ///
+    /// ⚠️ Use THIS (never `isCounted`) for loop-termination / "stop tracking" checks.
+    /// The two differ on purpose: a 2026-05-09 regression used `isCounted` here, which
+    /// is true on `tp1Hit` alone, so every post-TP1 bar skipped tracking and 23/24
+    /// winners never registered TP2. Keep `resolved` = `stopHit || tp2Hit` (+ terminal
+    /// states); do not fold `tp1Hit` into it.
     var resolved: Bool {
         state == .invalidated || state == .expired ||
         stopHit || tp2Hit
     }
 
-    /// Whether this setup should be counted in win/loss statistics.
+    /// Whether this setup should be COUNTED in win/loss statistics — a different
+    /// question from whether it's `resolved`. True once an active setup has reached any
+    /// outcome-bearing milestone (`tp1Hit` included, since a TP1 hit is a recordable win
+    /// even while the runner is still live). Intended ONLY for stats/active-list filters
+    /// — NOT for loop termination (use `resolved` for that; see the warning above).
     var isCounted: Bool {
         state == .active && (stopHit || tp1Hit || tp2Hit)
     }

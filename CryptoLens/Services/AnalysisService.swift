@@ -33,7 +33,6 @@ class AnalysisService: ObservableObject {
         UserDefaults.standard.object(forKey: "thin_client_mode") as? Bool ?? true
     }
 
-    private(set) var aiProvider: AIProvider?
     // Default provider for fresh installs. Existing users keep their UserDefaults("ai_provider")
     // selection (autoConfigureKey reads it on init). DeepSeek R1's reasoning is well-suited to
     // our rule-based prompt at ~5x lower cost than Sonnet 4.6 + extended thinking.
@@ -113,11 +112,6 @@ class AnalysisService: ObservableObject {
     func configure(provider: AIProviderType, apiKey: String, model: String) {
         providerType = provider
         currentModelID = model
-        switch provider {
-        case .claude: aiProvider = ClaudeService(apiKey: apiKey, model: model)
-        case .gemini: aiProvider = GeminiService(apiKey: apiKey, model: model)
-        case .deepseek: aiProvider = DeepSeekService(apiKey: apiKey, model: model)
-        }
         // Persist so the choice survives relaunch (the worker /full-analysis path reads these).
         UserDefaults.standard.set(provider.rawValue, forKey: "ai_provider")
         UserDefaults.standard.set(model, forKey: "ai_model")
@@ -1577,7 +1571,9 @@ class AnalysisService: ObservableObject {
         if let exDivRaw = enhanced["exDividendDate"] as? Int {
             let exDate = Date(timeIntervalSince1970: Double(exDivRaw))
             si.exDividendDate = exDate
-            let days = Calendar.current.dateComponents([.day], from: Date(), to: exDate).day ?? 999
+            // ET-pinned (etCalendar) for consistency with the other time computations — a
+            // device-local calendar could shift the day-count by one across a TZ boundary.
+            let days = etCalendar.dateComponents([.day], from: Date(), to: exDate).day ?? 999
             si.exDividendWarning = days >= 0 && days <= 5
         }
         si.dividendRate = enhanced["dividendRate"] as? Double

@@ -1,9 +1,13 @@
-// Shared LLM prompt builder — TS port of CryptoLens/Services/AnalysisPrompt.swift, so the web
-// app (and, after Phase 4, iOS) build one identical prompt instead of duplicating ~2,700 lines.
+// Shared LLM prompt builder. This is now the SINGLE SOURCE OF TRUTH for the analysis prompt:
+// both the web app and iOS (thin client) call /full-analysis, which builds the prompt here.
+// The old on-device Swift prompt builder (CryptoLens/Services/AnalysisPrompt.buildUserPrompt
+// + systemPrompt + the Claude/Gemini/DeepSeek local services) was DELETED once the live path
+// moved fully server-side — there is no longer a Swift counterpart to stay in parity with.
 //
-// systemPrompt is byte-extracted from the Swift source (scripts/extract_system_prompt.py →
-// prompt-system.json) for guaranteed parity. classifyArchetype / useTighterBands / parseSetups
-// are ported here. buildUserPrompt (the ~2,090-line pre-computed-flags core) is ported next.
+// systemPrompt text lives in prompt-system.json (now canonical — it was originally extracted
+// from the Swift source via scripts/extract_system_prompt.py, but that source is gone, so the
+// JSON is hand-maintained going forward; the extract script is defunct). classifyArchetype /
+// useTighterBands / parseSetups are implemented here.
 //
 // Post the 2026-05-30 A/B collapse, the treatment path is always active, so useTighterBands
 // uses the treatment rule (tighter-by-default, trendingSymbols opt out).
@@ -787,6 +791,60 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L(`Exhaustion Signals (4H, vs ${direction} momentum): ${exhaustion.length ? `${exhaustion.length} — ${exhaustion.join(', ')}` : '0 — none'}`);
       L(`Continuation Signals (4H, with ${direction} momentum): ${continuation.length ? `${continuation.length} — ${continuation.join(', ')}` : '0 — none'}`);
       envContinuationCount = continuation.length;
+
+      // Phase C7b — CHASE / EXHAUSTION guard (F-1). Direction-AGNOSTIC "are you about to
+      // buy the top / short the bottom?" check, aimed at the single most common retail loss:
+      // entering AFTER a move has already run, at the extreme, where early entrants distribute
+      // to late chasers. Synthesizes signals already gathered above (extension from the 200D
+      // mean, stretched oscillators, running into a level in the chase direction, and the
+      // exhaustion tally) into ONE loud, plain-language risk read. The "chase direction" is the
+      // prevailing 4H momentum (bullish → buying a rally; bearish → shorting a sell-off).
+      const chaseDir = bullish4H ? 'LONG' : 'SHORT';
+      const dAtrChase = daily.atr?.atr ?? 0;
+      const stretch = (dAtrChase > 0 && daily.ema200 != null) ? Math.abs(daily.price - daily.ema200) / dAtrChase : 0;
+      const rsiHot = bullish4H
+        ? ((daily.rsi ?? 0) >= 70 || (fourH.rsi ?? 0) >= 72)
+        : ((daily.rsi ?? 100) <= 30 || (fourH.rsi ?? 100) <= 28);
+      const stochHot = bullish4H
+        ? ((daily.stochRSI?.k ?? 0) >= 85 || (fourH.stochRSI?.k ?? 0) >= 85)
+        : ((daily.stochRSI?.k ?? 100) <= 15 || (fourH.stochRSI?.k ?? 100) <= 15);
+      // Running INTO a level in the chase direction (resistance/VAH just above for longs;
+      // support/VAL just below for shorts) — the place a tired move is most likely to reject.
+      const pxChase = fourH.price;
+      const levelBand = 0.6 * (fourH.atr?.atr ?? dAtrChase);
+      let intoLevel = false, levelPx = 0;
+      if (levelBand > 0) {
+        if (bullish4H) {
+          const above = [...fourH.supportResistance.resistances, ...daily.supportResistance.resistances, daily.volumeProfile?.vah ?? NaN]
+            .filter(v => Number.isFinite(v) && v >= pxChase && v - pxChase <= levelBand);
+          if (above.length) { intoLevel = true; levelPx = Math.min(...above); }
+        } else {
+          const below = [...fourH.supportResistance.supports, ...daily.supportResistance.supports, daily.volumeProfile?.val ?? NaN]
+            .filter(v => Number.isFinite(v) && v <= pxChase && pxChase - v <= levelBand);
+          if (below.length) { intoLevel = true; levelPx = Math.max(...below); }
+        }
+      }
+      let chaseScore = 0;
+      if (stretch >= 2) chaseScore++;
+      if (rsiHot) chaseScore++;
+      if (stochHot) chaseScore++;
+      if (intoLevel) chaseScore++;
+      if (exhaustion.length >= 1) chaseScore++;
+      // HIGH requires the CORE ingredient of a chase (an already-extended OR visibly-exhausting
+      // move) plus confirmation, so two oscillators alone can't trip it.
+      const coreChase = stretch >= 2 || exhaustion.length >= 2;
+      const chaseLevel = (coreChase && chaseScore >= 3) ? 'HIGH' : (chaseScore >= 2 ? 'ELEVATED' : 'none');
+      if (chaseLevel !== 'none') {
+        const verb = bullish4H ? 'BUYING THE TOP' : 'SHORTING THE BOTTOM';
+        const parts: string[] = [];
+        if (stretch >= 2) parts.push(`price is ${f(stretch, 1)} ATR from its 200D mean (extended)`);
+        if (rsiHot) parts.push(`RSI is ${bullish4H ? 'overbought' : 'oversold'}`);
+        if (stochHot) parts.push(`Stoch is at an extreme`);
+        if (intoLevel) parts.push(`it is running into ${bullish4H ? 'resistance' : 'support'} at ${formatPrice(levelPx)}`);
+        if (exhaustion.length >= 1) parts.push(`${exhaustion.length} exhaustion signal${exhaustion.length > 1 ? 's' : ''} firing (${exhaustion.join(', ')})`);
+        L(`CHASE / EXHAUSTION RISK: ${chaseLevel} — entering ${chaseDir} here risks ${verb}. ${parts.join('; ')}.`);
+        L(`  This is the classic retail trap: a ${bullish4H ? 'rally' : 'sell-off'} that has ALREADY run is where early entrants distribute to late chasers. If the user wants ${chaseDir} exposure, the lower-risk play is to WAIT — for a pullback${intoLevel ? ` (the ${bullish4H ? 'resistance' : 'support'} at ${formatPrice(levelPx)} is more likely to reject than break here)` : ''} or for a fresh ${bullish4H ? 'higher-low' : 'lower-high'} to form — NOT to enter at the extreme. ${chaseLevel === 'HIGH' ? 'Surface this PROMINENTLY in the Risk Map (lead with it). ' : 'Surface this in the Risk Map. '}In "If You Take a Position", if a ${chaseDir} setup is still permitted, state plainly that it is a CHASE and prefer a pullback entry over the current extreme.`);
+      }
     }
 
     // Phase C9 — Bias Feasibility asymmetry

@@ -68,7 +68,6 @@
 		68B6B1452B61E92287BDC954 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF9F2D5B4EE3347239ADBDC /* ContentView.swift */; };
 		6B84693BCB47E535BE02B5C5 /* WhatsNewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97D8174D80F83C38A16FDA11 /* WhatsNewView.swift */; };
 		6CB0B7DAE5D15F755943128A /* ParityFixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = D582B49E33EE8704A3B11685 /* ParityFixture.swift */; };
-		6DE53F66061EF7D655663561 /* GeminiService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265CADECA7DA8D2B4EC1B20A /* GeminiService.swift */; };
 		6EA2251B7008EFE69821AD4F /* WorkerCandlesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE56068BFB398B44077DCFAD /* WorkerCandlesService.swift */; };
 		6F6918C1DAD95FCFDCA57E15 /* ml-model-crypto.json in Resources */ = {isa = PBXBuildFile; fileRef = 8A04B3AA46E9815EE2047D9C /* ml-model-crypto.json */; };
 		6F7BB3AED8D48BDF7D2253FD /* ATR.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9782B049170E42032D87F710 /* ATR.swift */; };
@@ -107,7 +106,6 @@
 		AB8E325DD7DB902013D01476 /* ComputeAll.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9907CD74121F972E8463CDC /* ComputeAll.swift */; };
 		AC89010EB36B5AC846E9FAF6 /* StockInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC47550CD92B9388BB0D39AC /* StockInfo.swift */; };
 		B0473DA25E0FB1469CD0E785 /* DivergenceDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D8DF82CEFFA137403724AA0 /* DivergenceDetector.swift */; };
-		B4E26817199B33D19C21211A /* DeepSeekService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 588BE937CF1B91086F5A7558 /* DeepSeekService.swift */; };
 		B940F520D3BC655317D7466D /* AnalysisHistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EBF83E06BDADDF2BE47A46C /* AnalysisHistoryView.swift */; };
 		B9D81CD659D2D3DB491CBD80 /* AlphaVantageProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88962AFDC19CD371678672A7 /* AlphaVantageProvider.swift */; };
 		BADE194C52C24FD656FBE75C /* CandleCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE62F3218DFF4127E5AD290A /* CandleCache.swift */; };
@@ -118,7 +116,6 @@
 		C40EF07BE308E6FF0DFD4C1B /* HistoricalDerivativesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E1F914DCCFEF6DC98E3DC2C0 /* HistoricalDerivativesService.swift */; };
 		C6A387FD4277EB50F0F09E3C /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 240E25E0B2FC9470C9FD86AF /* Formatters.swift */; };
 		C6BB796BC7207CC9E1E8E40D /* IndicatorResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = D572EBDCAE105716B5604679 /* IndicatorResult.swift */; };
-		C739724A940DA8439E24C910 /* ClaudeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 789F2DF1B44B021D2E901B4D /* ClaudeService.swift */; };
 		C913646ED2A7A8CFA8C39BB7 /* PositioningAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B08599D1603C5AB66273B24 /* PositioningAnalyzer.swift */; };
 		D0C2CE72945639081504B1BA /* StockIndicators.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC38D2043EA9CDE3ADA8BD14 /* StockIndicators.swift */; };
 		D12C957C48AE416D03F32DF5 /* PushService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C98ABE8F402ADB12ADC93C4 /* PushService.swift */; };
@@ -191,7 +188,6 @@
 		2194A97E79988E1EF8ACCC17 /* WorkerPendingSetupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerPendingSetupService.swift; sourceTree = "<group>"; };
 		2375646B3479EA716AE7270B /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		240E25E0B2FC9470C9FD86AF /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
-		265CADECA7DA8D2B4EC1B20A /* GeminiService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiService.swift; sourceTree = "<group>"; };
 		269A7170910D8B8931CD2333 /* MarketScopeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketScopeWidget.swift; sourceTree = "<group>"; };
 		29ADC5116EA585594CD2E515 /* CoinInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinInfo.swift; sourceTree = "<group>"; };
 		2BDD8D7D8E1CE4C82A4E3CDF /* MarketStructure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketStructure.swift; sourceTree = "<group>"; };
@@ -219,7 +215,6 @@
 		5492728228179217DA6357BA /* CandleAggregator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandleAggregator.swift; sourceTree = "<group>"; };
 		57FABE40BFC7AC6EF6B91755 /* FearGreedService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FearGreedService.swift; sourceTree = "<group>"; };
 		58869922EE597FCD9859C1FC /* StochasticRSI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StochasticRSI.swift; sourceTree = "<group>"; };
-		588BE937CF1B91086F5A7558 /* DeepSeekService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeepSeekService.swift; sourceTree = "<group>"; };
 		58B2E5EFCF02DC42400FCA88 /* SpotPressureAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotPressureAnalyzer.swift; sourceTree = "<group>"; };
 		5955F9E9132F1671E8DDAACE /* WorkerFullAnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerFullAnalysisService.swift; sourceTree = "<group>"; };
 		608D366EBB5762F3FAEB5E7B /* NavigationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationCoordinator.swift; sourceTree = "<group>"; };
@@ -234,7 +229,6 @@
 		751F6418841B0076E433CBE6 /* PositioningSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningSnapshot.swift; sourceTree = "<group>"; };
 		7733BFEB69A3031C96882AD8 /* ConnectionStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionStatus.swift; sourceTree = "<group>"; };
 		774EAFA76A70F4924070E2BA /* EarningsCalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsCalendar.swift; sourceTree = "<group>"; };
-		789F2DF1B44B021D2E901B4D /* ClaudeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeService.swift; sourceTree = "<group>"; };
 		8165A07DFF6E9010BBFA1091 /* EconomicCalendarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EconomicCalendarService.swift; sourceTree = "<group>"; };
 		8251FCFAA56BF737CFEDAC8B /* MACD.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MACD.swift; sourceTree = "<group>"; };
 		84D908C74E2725C15BE1CCCB /* HapticManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
@@ -344,13 +338,11 @@
 				9152F34D3CCD450200D49DC6 /* BiasNotificationManager.swift */,
 				026EE4E09E43FF634D4E9AE7 /* BinanceService.swift */,
 				DE62F3218DFF4127E5AD290A /* CandleCache.swift */,
-				789F2DF1B44B021D2E901B4D /* ClaudeService.swift */,
 				DA5961A704972E8E2F585273 /* CoinbaseService.swift */,
 				C6C40E0EF0FD7E88BF65CDA4 /* CoinGeckoService.swift */,
 				7733BFEB69A3031C96882AD8 /* ConnectionStatus.swift */,
 				A4DE7A0E484EF355541AD623 /* CronHealthService.swift */,
 				09AD174CC96B0CBAB38D9844 /* DarkPoolData.swift */,
-				588BE937CF1B91086F5A7558 /* DeepSeekService.swift */,
 				3EEAE99A396856BF50B2B37C /* DerivativesCache.swift */,
 				8829EA677390B0BFA2AACCC2 /* DerivativesService.swift */,
 				DE8553863BCB1F7D7A8E118D /* DirectionAccuracyService.swift */,
@@ -359,7 +351,6 @@
 				712D5923C993CB356F7E558C /* FavoritesStore.swift */,
 				57FABE40BFC7AC6EF6B91755 /* FearGreedService.swift */,
 				EF69570E9D61A3D79BB147E9 /* FinnhubProvider.swift */,
-				265CADECA7DA8D2B4EC1B20A /* GeminiService.swift */,
 				E1F914DCCFEF6DC98E3DC2C0 /* HistoricalDerivativesService.swift */,
 				E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */,
 				09AAF6BFAA40D31F154B42C7 /* MacroDataService.swift */,
@@ -688,7 +679,6 @@
 				F1FF18EB4962C1D652E9202C /* CandlePatterns.swift in Sources */,
 				75C47452512CAEBE03E99696 /* CandlestickChartView.swift in Sources */,
 				15DF67550E32C75C9890506A /* ClaudeAnalysisView.swift in Sources */,
-				C739724A940DA8439E24C910 /* ClaudeService.swift in Sources */,
 				F1FB71F4392ECE4C66D1D8D0 /* CoinGeckoService.swift in Sources */,
 				FB2F3C3E8890D136BB450D73 /* CoinInfo.swift in Sources */,
 				E9E67799FFCDABFF60631C0A /* CoinPickerView.swift in Sources */,
@@ -702,7 +692,6 @@
 				0B074A729A333B3D2633AC73 /* CryptoLensApp.swift in Sources */,
 				D82E974BF87FC786836A9CB4 /* DarkPoolData.swift in Sources */,
 				1B5CA24C22D0CBED6012138B /* DataQuality.swift in Sources */,
-				B4E26817199B33D19C21211A /* DeepSeekService.swift in Sources */,
 				636D9100892E8ACA32E67EA8 /* DerivativesCache.swift in Sources */,
 				013DA6AEB813102D16159585 /* DerivativesCardView.swift in Sources */,
 				BEEB5B883C585F11B4B5BD38 /* DerivativesContext.swift in Sources */,
@@ -721,7 +710,6 @@
 				AA47E6DBA31F580FFCAB5CD9 /* Fibonacci.swift in Sources */,
 				9A5E2A26ECABFF2342C0BD23 /* FinnhubProvider.swift in Sources */,
 				C6A387FD4277EB50F0F09E3C /* Formatters.swift in Sources */,
-				6DE53F66061EF7D655663561 /* GeminiService.swift in Sources */,
 				9B14B9E6EB0255ECAFDB84A9 /* HapticManager.swift in Sources */,
 				C40EF07BE308E6FF0DFD4C1B /* HistoricalDerivativesService.swift in Sources */,
 				C6BB796BC7207CC9E1E8E40D /* IndicatorResult.swift in Sources */,
