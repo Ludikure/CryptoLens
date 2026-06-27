@@ -872,6 +872,95 @@ enum OutcomeTracker {
     /// hours old. Entry triggers fire against cached price data, so a stale cache may
     /// either miss a live touch or trigger on a level the price has long since moved
     /// past. Background price polling would fix this; out of scope here.
+    // MARK: - F-4 Overtrading / cooling-off guard
+
+    /// Number of setups surfaced to the user today (local calendar day), across all symbols.
+    /// A proxy for "trades considered" — each registered setup is one the app put in front of
+    /// the user as actionable.
+    static func setupsConsideredToday() -> Int {
+        let cal = Calendar.current
+        return allSetups().filter { cal.isDateInToday($0.timestamp) }.count
+    }
+
+    /// Gentle cooling-off nudge for a user with a full-time job who shouldn't be overtrading.
+    /// Returns nil while within the user's stated daily cadence; otherwise a plain-language
+    /// reminder. Cadence is the `daily_trade_cadence` UserDefault (default 2). Counters the
+    /// dopamine loop without hard-blocking anything.
+    static func overtradingNudge() -> String? {
+        let cadence = max(1, UserDefaults.standard.object(forKey: "daily_trade_cadence") as? Int ?? 2)
+        let n = setupsConsideredToday()
+        guard n > cadence else { return nil }
+        return "You've had \(n) setups surface today — your plan is \(cadence) or fewer. Extra setups are usually the marginal ones, and marginal trades are typically –EV after fees. Stepping back is often the highest-EV move you can make today."
+    }
+
+    // MARK: - F-5 Post-trade debrief
+
+    private static func humanizeArchetype(_ a: String) -> String {
+        switch a {
+        case "MOMENTUM_CONTINUATION": return "momentum-continuation"
+        case "COUNTER_TREND_PULLBACK": return "pullback"
+        case "COUNTER_TREND_REVERSAL": return "counter-trend reversal"
+        case "BREAKOUT_RETEST": return "breakout-retest"
+        case "RANGE_EDGE_FADE": return "range-edge fade"
+        default: return a.lowercased().replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    private static func fmtR(_ v: Double) -> String { String(format: "%.1fR", abs(v)) }
+
+    /// Plain-language autopsy for a RESOLVED tracked trade — turns the outcome tracker into a
+    /// teacher, not just a scoreboard. Honest, derived entirely from what was recorded at entry
+    /// (archetype, ML quality, whether the entry was a breakout/chase) + the realized excursion
+    /// + the archetype's own track record. Returns nil for unresolved trades.
+    static func debrief(for t: TrackedSetup) -> String? {
+        let o = t.outcome
+        guard o.state == .active, (o.tp1Hit || o.tp2Hit || o.stopHit) else { return nil }
+        let isLong = t.setup.direction == "LONG"
+        let win = o.tp1Hit
+        let loss = o.stopHit && !o.tp1Hit && !o.partialTaken
+        let result = win ? (o.tp2Hit ? "a full WIN (ran to TP2)" : "a WIN (TP1 hit)")
+                         : (loss ? "a LOSS" : "a break-even (stopped after a partial)")
+
+        var parts: [String] = ["\(t.symbol) \(t.setup.direction) — \(result)."]
+
+        // Excursion story in R units.
+        let risk = t.setup.risk
+        if risk > 0 {
+            let favR = o.maxFavorable / risk
+            if loss {
+                parts.append(favR >= 0.5
+                    ? "It ran +\(fmtR(favR)) in your favor before reversing into the stop."
+                    : "It went against you almost immediately (peak only +\(fmtR(favR))).")
+            } else if win {
+                parts.append("Peak +\(fmtR(favR)) favorable.")
+            }
+        }
+
+        // Entry-quality context from what was recorded.
+        var entryNotes: [String] = []
+        if t.priceAtSetup > 0 {
+            let chase = (isLong && t.setup.entry > t.priceAtSetup) || (!isLong && t.setup.entry < t.priceAtSetup)
+            if chase { entryNotes.append("you entered in the breakout direction (a chase entry)") }
+        }
+        if let ml = t.mlProbability { entryNotes.append("ML move-quality was \(Int((ml * 100).rounded()))%") }
+        if let arch = t.archetype { entryNotes.append("pattern was \(humanizeArchetype(arch))") }
+        if !entryNotes.isEmpty { parts.append("At entry: " + entryNotes.joined(separator: ", ") + ".") }
+
+        // Lesson from this archetype's track record for this symbol.
+        if let arch = t.archetype {
+            let rec = archetypeRecord(symbol: t.symbol, archetype: arch, lookbackDays: 180)
+            if rec.total >= 3 {
+                let rate = Double(rec.wins) / Double(rec.total)
+                if loss && rate < 0.45 {
+                    parts.append("Lesson: your \(humanizeArchetype(arch)) trades are \(rec.wins)–\(rec.losses) — this pattern hasn't paid off; demand stronger confirmation or skip it.")
+                } else if win && rate >= 0.55 {
+                    parts.append("This pattern is working for you (\(rec.wins)–\(rec.losses)) — repeatable.")
+                }
+            }
+        }
+        return parts.joined(separator: " ")
+    }
+
     static func scanAllPendingSetups() {
         ioQueue.async {
             let dir = outcomeDir

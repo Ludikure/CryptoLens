@@ -9,10 +9,21 @@ struct OutcomeDashboardView: View {
     @State private var directionReport: DirectionAccuracyService.Report?
     @State private var calibration: MLCalibrationService.Report?
     @State private var cronStale: Bool?
+    @State private var overtradingNudge: String?              // F-4
+    @State private var debriefs: [UUID: String] = [:]          // F-5, keyed by setup id
 
     var body: some View {
         List {
             if let stats {
+                // F-4 — overtrading / cooling-off nudge. Only surfaces when today's surfaced
+                // setups exceed the user's stated cadence.
+                if let nudge = overtradingNudge {
+                    Section {
+                        Label(nudge, systemImage: "cup.and.saucer.fill")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                }
+
                 // Pipeline health (dead-man's-switch). Only surfaces when stale — a healthy
                 // cron is the silent default.
                 if cronStale == true {
@@ -130,6 +141,7 @@ struct OutcomeDashboardView: View {
             stats = OutcomeTracker.stats()
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
+            loadPersonaInsights()
             directionReport = await DirectionAccuracyService.fetch()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
@@ -138,6 +150,7 @@ struct OutcomeDashboardView: View {
             stats = OutcomeTracker.stats()
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
+            loadPersonaInsights()
             directionReport = await DirectionAccuracyService.fetch()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
@@ -505,6 +518,14 @@ struct OutcomeDashboardView: View {
 
             Text(tracked.timestamp, format: .dateTime.month(.abbreviated).day().hour().minute())
                 .font(.caption2).foregroundStyle(.tertiary)
+
+            // F-5 — plain-language debrief for resolved trades.
+            if let debrief = debriefs[tracked.id] {
+                Text(debrief)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -515,6 +536,16 @@ struct OutcomeDashboardView: View {
             live.append(contentsOf: OutcomeTracker.activeSetups(symbol: sym))
         }
         liveSetups = live.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// F-4 + F-5: the overtrading nudge and per-trade debriefs for the recent-setups list.
+    private func loadPersonaInsights() {
+        overtradingNudge = OutcomeTracker.overtradingNudge()
+        var d: [UUID: String] = [:]
+        for t in (stats?.recentSetups ?? []) {
+            if let text = OutcomeTracker.debrief(for: t) { d[t.id] = text }
+        }
+        debriefs = d
     }
 
     private func pendingTradeRow(_ tracked: TrackedSetup) -> some View {

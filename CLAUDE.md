@@ -559,6 +559,14 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-06-27 — Persona features F-4 (overtrading guard) + F-5 (post-trade debrief)
+
+Two iOS-side persona-protection features in the Outcome dashboard, both pure-iOS off existing tracked-setup data (no worker / schema change):
+- **F-4 overtrading / cooling-off guard** (`OutcomeTracker.overtradingNudge()` / `setupsConsideredToday()`): counts setups surfaced today (local day) vs the `daily_trade_cadence` UserDefault (default 2, Stepper in Settings → Risk Management). When exceeded, `OutcomeDashboardView` shows a gentle "you've had N setups today — stepping back is usually +EV" banner. Counters the dopamine loop without hard-blocking.
+- **F-5 post-trade debrief** (`OutcomeTracker.debrief(for:)`): plain-language autopsy for each RESOLVED tracked trade — outcome (WIN/LOSS/BE), the realized excursion in R, the entry context honestly reconstructed from what was recorded (chase entry = `entry` vs `priceAtSetup` in the trade direction; ML quality; archetype), and a lesson from that archetype's own track record (`archetypeRecord`, e.g. "your counter-trend trades are 2–7 — demand stronger confirmation"). Rendered under each row in the dashboard's Recent Setups. Turns the tracker into a teacher.
+
+iOS build green. **Requires an iOS rebuild+install.** Remaining persona features: F-3 (pre-trade sanity check) and F-6 (5-second decision cards) — both benefit from a worker-emitted structured risk-flags block (not yet built).
+
 ### 2026-06-27 — Analysis reliability (background URLSession) + F-2 whale-trap guard
 
 **Analysis no longer fails when the screen locks mid-call.** The `/full-analysis` LLM call (Claude + extended thinking, ~30-90s) ran on `URLSession.shared`, which iOS suspends within seconds of the app backgrounding — so a screen auto-lock failed the analysis. Two layers:

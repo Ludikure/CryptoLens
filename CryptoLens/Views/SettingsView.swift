@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
     @AppStorage("contractSize") private var contractSize: Double = 0.01
+    @AppStorage("daily_trade_cadence") private var dailyTradeCadence: Int = 2
 
     var body: some View {
         NavigationStack {
@@ -139,6 +140,10 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("Contract: \(String(format: "%g", contractSize)) units (e.g. 0.01 = nano BTC)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Stepper("Trades per day: \(dailyTradeCadence)", value: $dailyTradeCadence, in: 1...10)
+                    Text("Your planned daily cadence. The Outcome tab nudges you to step back once more than this many setups surface in a day.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
