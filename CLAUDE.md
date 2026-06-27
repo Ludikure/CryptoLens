@@ -559,6 +559,14 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-06-27 — Persona features F-3 (pre-trade sanity check) + F-6 (5-second decision cards)
+
+Two more iOS-side persona features, both pure-iOS off the already-loaded analysis (no worker call):
+- **F-3 pre-trade sanity check** (`Views/SanityCheckCard.swift` + `SanityCheck` logic struct): a 3-question gut check rendered above the analysis in `ContentView` whenever `result.tradeSetups` is non-empty. Derived from the loaded `AnalysisResult`: (1) pullback vs chasing (`entry` in the breakout direction vs `daily.price`), (2) stop inside/outside the noise zone (`setup.risk` vs 4H ATR; <1× = tight/likely-wicked), (3) high-impact event within 6h (`economicEvents` filtered by `isUpcoming && isHighImpact`). Color-coded; forces a 5-second pause at the impulsive moment.
+- **F-6 5-second decision cards** (`Views/WatchlistView.swift`, `decisionVerdict(for:)`): each watchlist card now leads with an at-a-glance verdict + one-line reason — CONDITIONS PRESENT (a viable setup exists → direction + ML%), STAND ASIDE (AI ran, no setup → no edge), or WATCH (indicators only, not yet analyzed → bias + ML, tap to analyze). Plain-language read without opening the chart.
+
+iOS build green. **Requires an iOS rebuild+install.** This completes the persona feature set F-1…F-6 (F-1 chase guard + F-2 whale-trap are live on the worker; F-3/F-4/F-5/F-6 are iOS).
+
 ### 2026-06-27 — Persona features F-4 (overtrading guard) + F-5 (post-trade debrief)
 
 Two iOS-side persona-protection features in the Outcome dashboard, both pure-iOS off existing tracked-setup data (no worker / schema change):
