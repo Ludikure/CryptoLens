@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// America/New_York calendar for time features (dayOfWeek, hourBucket, isWeekend).
 /// Was Calendar.current which produced device-local values — devices outside ET
@@ -723,6 +726,47 @@ class AnalysisService: ObservableObject {
         }
     }
 
+    // MARK: - Keep-alive during analysis
+    //
+    // The server LLM call (Claude + extended thinking) takes ~30-90s. If the screen auto-locks
+    // mid-analysis the app is backgrounded and iOS suspends the in-flight URLSession task within
+    // seconds, so the analysis fails ("Analysis failed…") long before the 120s timeout. Disabling
+    // the idle timer keeps the screen on (and the app foregrounded) for the duration of a
+    // user-initiated analysis; the background-task assertion buys ~30s of grace if the user
+    // manually locks or switches apps. Ref-counted so concurrent runs don't clear it early.
+    #if canImport(UIKit)
+    private var keepAliveCount = 0
+    private var analysisBGTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginAnalysisKeepAlive() {
+        keepAliveCount += 1
+        UIApplication.shared.isIdleTimerDisabled = true
+        if analysisBGTask == .invalid {
+            analysisBGTask = UIApplication.shared.beginBackgroundTask(withName: "MarketScopeAnalysis") { [weak self] in
+                // Expiration handler — documented to run on the main thread. Must end the task
+                // promptly or the OS terminates the app.
+                MainActor.assumeIsolated { self?.endBackgroundTaskIfNeeded() }
+            }
+        }
+    }
+
+    private func endAnalysisKeepAlive() {
+        keepAliveCount = max(0, keepAliveCount - 1)
+        guard keepAliveCount == 0 else { return }
+        UIApplication.shared.isIdleTimerDisabled = false
+        endBackgroundTaskIfNeeded()
+    }
+
+    private func endBackgroundTaskIfNeeded() {
+        guard analysisBGTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(analysisBGTask)
+        analysisBGTask = .invalid
+    }
+    #else
+    private func beginAnalysisKeepAlive() {}
+    private func endAnalysisKeepAlive() {}
+    #endif
+
     // MARK: - Full analysis: indicators + AI
 
     func runFullAnalysis(symbol: String) async {
@@ -731,6 +775,11 @@ class AnalysisService: ObservableObject {
             aiLoadingPhase = .idle
             return
         }
+
+        // Keep the screen awake (no auto-lock) + hold a background-task assertion for the whole
+        // run so a dimming screen can't suspend the server analysis mid-flight. See above.
+        beginAnalysisKeepAlive()
+        defer { endAnalysisKeepAlive() }
 
         let market = marketFor(symbol)
         isLoading = true
