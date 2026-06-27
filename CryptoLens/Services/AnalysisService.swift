@@ -1001,7 +1001,9 @@ class AnalysisService: ObservableObject {
             aiLoadingPhase = .waitingForResponse
             loadingStatus = "Analyzing (server · \(providerType.displayName))…"
             do {
-                let r = try await WorkerFullAnalysisService.analyze(symbol: symbol, provider: providerType.rawValue, modelID: currentModelID)
+                // Background URLSession: the request runs in the system daemon, so a screen-lock /
+                // app-suspend mid-call no longer cancels it — the await resumes when the app wakes.
+                let r = try await BackgroundAnalysisService.shared.analyze(symbol: symbol, provider: providerType.rawValue, modelID: currentModelID)
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = r.markdown
                 tradeSetups = r.setups

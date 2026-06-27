@@ -52,9 +52,12 @@ enum WorkerFullAnalysisService {
         }
     }
 
-    private static func post(symbol: String, provider: String, modelID: String) async throws -> Result {
-        guard let url = URL(string: "\(PushService.workerURL)/full-analysis") else { throw FetchError.missingURL }
+    /// The `/full-analysis` endpoint URL.
+    static var endpointURL: URL? { URL(string: "\(PushService.workerURL)/full-analysis") }
 
+    /// Assemble the POST body shared by the foreground and background paths (provider/model,
+    /// position sizing, active tracked trades). `async` only because it reads OutcomeTracker.
+    static func buildBody(symbol: String, provider: String, modelID: String) async -> [String: Any] {
         // Position-sizing inputs (same UserDefaults the local prompt reads) so the server's
         // CANDIDATE SETUPS sizing matches the user's risk plan.
         var bodyDict: [String: Any] = ["symbol": symbol]
@@ -102,25 +105,21 @@ enum WorkerFullAnalysisService {
             return dict
         }
         if !activeJSON.isEmpty { bodyDict["activeSetups"] = activeJSON }
+        return bodyDict
+    }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 120   // extended thinking can take ~60s
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        PushService.addAuthHeaders(&request)
-        request.httpBody = try JSONSerialization.data(withJSONObject: bodyDict)
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw FetchError.http(0) }
-        if http.statusCode == 401 { throw FetchError.unauthorized }
-        guard (200..<300).contains(http.statusCode) else {
+    /// Validate an HTTP status + decode the `/full-analysis` response into a `Result`.
+    /// Shared by the foreground and background paths. Throws `.unauthorized` on 401 so the
+    /// caller can self-heal once.
+    static func parse(status: Int, data: Data) throws -> Result {
+        if status == 401 { throw FetchError.unauthorized }
+        guard (200..<300).contains(status) else {
             if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let err = obj["error"] as? String {
                 throw FetchError.server(err)
             }
-            throw FetchError.http(http.statusCode)
+            throw FetchError.http(status)
         }
-
         struct Body: Decodable {
             let analysis: String
             let setups: [TradeSetup]
@@ -138,5 +137,21 @@ enum WorkerFullAnalysisService {
             mlDirectionUp: body.ml?.directionUp,
             biasDaily: body.bias?.daily
         )
+    }
+
+    private static func post(symbol: String, provider: String, modelID: String) async throws -> Result {
+        guard let url = endpointURL else { throw FetchError.missingURL }
+        let bodyDict = await buildBody(symbol: symbol, provider: provider, modelID: modelID)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 120   // extended thinking can take ~60s
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        PushService.addAuthHeaders(&request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: bodyDict)
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw FetchError.http(0) }
+        return try parse(status: http.statusCode, data: data)
     }
 }
