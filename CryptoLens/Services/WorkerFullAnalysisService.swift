@@ -49,7 +49,27 @@ enum WorkerFullAnalysisService {
         } catch FetchError.unauthorized {
             await PushService.handleAuthFailure()
             return try await post(symbol: symbol, provider: provider, modelID: modelID)
+        } catch {
+            // One retry for a transient blip (HTTP 0 / connection lost during a brief background /
+            // self-hosted box hiccup). Extended-thinking calls are long enough that a single
+            // network stumble shouldn't sink the whole analysis.
+            guard isTransient(error) else { throw error }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            return try await post(symbol: symbol, provider: provider, modelID: modelID)
         }
+    }
+
+    private static func isTransient(_ error: Error) -> Bool {
+        if case FetchError.http(0) = error { return true }
+        if let urlErr = error as? URLError {
+            switch urlErr.code {
+            case .networkConnectionLost, .timedOut, .cannotConnectToHost,
+                 .notConnectedToInternet, .cannotFindHost, .dnsLookupFailed:
+                return true
+            default: return false
+            }
+        }
+        return false
     }
 
     /// The `/full-analysis` endpoint URL.

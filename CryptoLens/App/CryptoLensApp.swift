@@ -10,16 +10,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         #endif
         UNUserNotificationCenter.current().delegate = self
         application.registerForRemoteNotifications()
-        // Reconstruct the background analysis session so any task that completed while the app
-        // was terminated is drained (and its system completion handler eventually called).
-        BackgroundAnalysisService.shared.activate()
         return true
-    }
-
-    /// iOS relaunches the app (or wakes it) to deliver completed background-session transfers.
-    /// Hand the completion handler to the service; it calls it once all events are processed.
-    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
-        BackgroundAnalysisService.shared.setSystemCompletionHandler(completionHandler, forIdentifier: identifier)
     }
 
     // Show push banners even when app is in foreground

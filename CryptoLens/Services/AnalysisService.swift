@@ -1001,9 +1001,12 @@ class AnalysisService: ObservableObject {
             aiLoadingPhase = .waitingForResponse
             loadingStatus = "Analyzing (server · \(providerType.displayName))…"
             do {
-                // Background URLSession: the request runs in the system daemon, so a screen-lock /
-                // app-suspend mid-call no longer cancels it — the await resumes when the app wakes.
-                let r = try await BackgroundAnalysisService.shared.analyze(symbol: symbol, provider: providerType.rawValue, modelID: currentModelID)
+                // Foreground URLSession. The screen stays awake for the whole run (idle timer
+                // disabled in beginAnalysisKeepAlive) + a beginBackgroundTask assertion gives
+                // grace time if the app briefly backgrounds — together these keep the request
+                // alive without the unreliable background-URLSession path (which returned HTTP 0
+                // because upload-task responses aren't delivered reliably on a background session).
+                let r = try await WorkerFullAnalysisService.analyze(symbol: symbol, provider: providerType.rawValue, modelID: currentModelID)
                 aiLoadingPhase = .parsingResponse
                 claudeAnalysis = r.markdown
                 tradeSetups = r.setups
