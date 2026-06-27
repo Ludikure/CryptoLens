@@ -606,6 +606,12 @@ struct AITabContent: View {
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
         }
 
+        // F-3 — pre-trade gut check, shown above the analysis whenever there's a setup to weigh.
+        if !result.tradeSetups.isEmpty {
+            SanityCheckCard(result: result)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
         ClaudeAnalysisView(markdown: result.claudeAnalysis, aiLoadingPhase: service.aiLoadingPhase, isStale: service.isAIStale, analysisTimestamp: result.analysisTimestamp, onRunAnalysis: {
             Task { await service.runFullAnalysis(symbol: selectedSymbol) }
         })
