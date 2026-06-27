@@ -160,6 +160,39 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(prompt).not.toContain('CHASE / EXHAUSTION RISK: HIGH');
   });
 
+  it('F-2: WHALE TRAP fires when retail is crowded long against top traders + stretched funding + falling CVD', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const indicators = [mk(230, DAY, 'Daily (1D)', '1d'), mk(230, H4, '4H', '4h'), mk(120, H1, '1H', '1h')];
+    const { prompt } = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators,
+      // 68% retail long, top traders net short, funding positive & stretched, OI building.
+      derivatives: { fundingRatePercent: 0.018, avgFundingRate: 0.0001, openInterestUSD: 8e9, oiChange4h: 1, oiChange24h: 6, globalLongPercent: 68, globalShortPercent: 32, topTraderLongPercent: 42, topTraderShortPercent: 58, takerBuySellRatio: 1.1, takerBuyVolume: 1000 },
+      positioning: { fundingSentiment: 'Positive (elevated)', oiTrend: 'Building', crowding: 'Crowded Long', crowdingCode: 'crowdedLong', smartMoneyBias: 'Bearish', takerPressure: 'Buy', squeezeRisk: { level: 'MODERATE', direction: 'LONG SQUEEZE' }, signals: [] },
+      spotPressure: { takerBuyRatio: 0.55, takerBuyLabel: 'Buying', cvd24h: -300, cvdTrend: 'Falling', bookRatio: 0.5, bookLabel: 'Balanced' },
+      prevState: { regime: 'TRENDING' },
+    });
+    expect(prompt).toContain('WHALE TRAP: HIGH');
+    expect(prompt).toContain('68% of retail is positioned LONG');
+    expect(prompt).toContain('liquidation cascade DOWN');
+    expect(prompt).toContain('opposite the crowd');
+  });
+
+  it('F-2: WHALE TRAP stays quiet when positioning is balanced', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const indicators = [mk(230, DAY, 'Daily (1D)', '1d'), mk(230, H4, '4H', '4h'), mk(120, H1, '1H', '1h')];
+    const { prompt } = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators,
+      derivatives: { fundingRatePercent: 0.001, avgFundingRate: 0.0001, openInterestUSD: 8e9, oiChange4h: 0, oiChange24h: 0, globalLongPercent: 52, globalShortPercent: 48, topTraderLongPercent: 51, topTraderShortPercent: 49, takerBuySellRatio: 1.0, takerBuyVolume: 1000 },
+      positioning: { fundingSentiment: 'Neutral', oiTrend: 'Stable', crowding: 'Balanced', crowdingCode: 'balanced', smartMoneyBias: 'Neutral', takerPressure: 'Neutral', squeezeRisk: { level: 'NONE', direction: '' }, signals: [] },
+      prevState: { regime: 'RANGING' },
+    });
+    expect(prompt).not.toContain('WHALE TRAP');
+  });
+
   it('buildUserPrompt handles a stock (no crossAsset/derivatives) without throwing', () => {
     const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
     const mk = (n: number, step: number, label: string, tf: string) =>

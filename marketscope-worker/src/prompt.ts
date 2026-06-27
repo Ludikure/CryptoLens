@@ -1320,6 +1320,42 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     if (d.takerBuySellRatio !== 1.0 || d.takerBuyVolume > 0) L(`Taker Buy/Sell: ${f(d.takerBuySellRatio, 2)} — ${p.takerPressure}`);
     if (p.squeezeRisk.level !== 'NONE') L(`Squeeze Risk: ${p.squeezeRisk.level} ${p.squeezeRisk.direction}`);
     if (p.signals.length) { L('Signals:'); for (const sig of p.signals) L(`- [${sig.strength}] ${sig.message}`); }
+
+    // F-2 — WHALE TRAP detector. Repackages crowding + smart-money divergence + stretched
+    // funding + CVD divergence into ONE plain-language verdict that NAMES the trap: when the
+    // retail crowd is piled onto one side and the conditions for a flush/squeeze against them are
+    // stacking up, entering on the crowd's side means joining the cohort most likely to be
+    // liquidated. RISK read, never a direction call. Crypto-only (needs derivatives).
+    const retailLong = d.globalLongPercent, retailShort = d.globalShortPercent;
+    const crowdLong = p.crowdingCode === 'crowdedLong' || retailLong >= 60;
+    const crowdShort = p.crowdingCode === 'crowdedShort' || retailShort >= 60;
+    if (crowdLong || crowdShort) {
+      const crowdSide = crowdLong ? 'LONG' : 'SHORT';
+      const fr = d.fundingRatePercent;
+      const haveTop = d.topTraderLongPercent !== 50 || d.topTraderShortPercent !== 50;
+      // Smart money leaning AGAINST the retail crowd is the strongest tell.
+      const smartAgainst = haveTop && (crowdLong ? d.topTraderShortPercent > d.topTraderLongPercent
+                                                  : d.topTraderLongPercent > d.topTraderShortPercent);
+      // Funding extreme in the crowd's direction = the crowd is paying to hold a stretched bet.
+      const fundingStretched = crowdLong ? fr > 0.01 : fr < -0.01;
+      // CVD diverging against the crowd (distribution under longs / accumulation under shorts).
+      const cvdAgainst = spotPressure ? (crowdLong ? spotPressure.cvdTrend === 'Falling'
+                                                   : spotPressure.cvdTrend === 'Rising') : false;
+      const oiBuilding = (d.oiChange24h ?? 0) > 2 || p.oiTrend === 'Building';
+      const tells: string[] = [];
+      if (smartAgainst) tells.push(`top traders are leaning ${crowdLong ? 'SHORT' : 'LONG'} — opposite the crowd`);
+      if (fundingStretched) tells.push(`funding is ${crowdLong ? 'positive' : 'negative'} & stretched (${f(fr, 3)}% — the crowd is paying to hold)`);
+      if (cvdAgainst) tells.push(`spot CVD is ${crowdLong ? 'falling (distribution into the rally)' : 'rising (accumulation into the drop)'}`);
+      if (oiBuilding) tells.push('open interest is building (more fuel for a cascade)');
+      if (tells.length >= 2) {
+        const flush = crowdLong ? 'long flush / liquidation cascade DOWN' : 'short squeeze UP';
+        const retailPct = crowdLong ? iTrunc(retailLong) : iTrunc(retailShort);
+        L();
+        L(`WHALE TRAP: ${tells.length >= 3 ? 'HIGH' : 'ELEVATED'} — ${retailPct}% of retail is positioned ${crowdSide} and the conditions for a ${flush} are stacking up.`);
+        L(`  Tells: ${tells.join('; ')}.`);
+        L(`  Read for the user: going ${crowdSide} here means JOINING the crowd that is most exposed to a flush — the setup where the majority gets hurt. It is a RISK flag, not a direction call (the squeeze can be slow or never come), but if the user is about to enter ${crowdSide}, they should know they'd be on the crowded, vulnerable side. Surface this in the Risk Map and name the cascade direction (${flush}).`);
+      }
+    }
   }
 
   // Spot pressure
