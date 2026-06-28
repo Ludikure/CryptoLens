@@ -4,9 +4,10 @@ import Foundation
 /// call that bundles the geoblocked crypto enrichment (derivatives + positioning, spot pressure)
 /// plus sentiment, fear & greed, and macro — and maps it to the iOS display models.
 ///
-/// This replaces the on-device enrichment fetches in the thin path: `DerivativesService`
-/// (Binance fapi → HTTP 451 from the phone's residential IP — the card was empty in thin mode),
-/// `SpotPressureAnalyzer` (Binance spot, was guarded off), and `CoinGeckoService` sentiment/F&G.
+/// This is the sole source of crypto display enrichment in the thin client: derivatives +
+/// positioning (Binance fapi → HTTP 451 from the phone's residential IP), spot pressure (Binance
+/// spot, also geoblocked), and sentiment / fear & greed. The former on-device fetchers for these
+/// have been removed — the phone never hits Binance/CoinGecko directly.
 /// Stock fundamentals stay on the on-device Yahoo/Finnhub path (richer than the worker subset and
 /// not geoblocked); macro stays on `/macro`. The LLM analysis itself already gets full enrichment
 /// server-side inside `/full-analysis` — this `/market` call only repopulates the iOS *display*.

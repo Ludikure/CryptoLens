@@ -186,9 +186,6 @@ struct ChartTabContent: View {
         .refreshable {
             await service.refreshIndicators(symbol: selectedSymbol)
             service.macroSnapshot = await service.macroData.fetchMacroSnapshot()
-            if service.marketFor(selectedSymbol) == .crypto {
-                service.spotPressure = await SpotPressureAnalyzer.analyze(symbol: selectedSymbol)
-            }
             HapticManager.notification(.success)
         }
         .task {
@@ -433,9 +430,6 @@ struct MarketTabContent: View {
             let symbol = service.currentSymbol ?? Constants.allCoins[0].id
             await service.refreshIndicators(symbol: symbol)
             service.macroSnapshot = await service.macroData.fetchMacroSnapshot()
-            if service.marketFor(symbol) == .crypto {
-                service.spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
-            }
             HapticManager.notification(.success)
         }
     }
