@@ -9,7 +9,6 @@ struct SettingsView: View {
     @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
     @AppStorage("experiments_enabled") private var experimentsEnabled: Bool = true
     @AppStorage("conformal_gate_enabled") private var conformalGate: Bool = false
-    @AppStorage("thin_client_mode") private var serverMode: Bool = true
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
@@ -168,20 +167,9 @@ struct SettingsView: View {
                 }
 
 
-                Section {
-                    Toggle("Server mode (thin client)", isOn: $serverMode)
-                } header: {
-                    Text("Compute")
-                } footer: {
-                    Text("ON (default): indicators and crypto candles are computed/fetched on the TrueNAS worker, so the phone never hits Binance/Yahoo directly. OFF: falls back to the on-device engine (direct provider fetch + local indicators) — a manual kill-switch if the worker is unreachable. Analysis always runs server-side.")
-                }
-
                 Section("Data") {
                     NavigationLink("Outcome Tracking") {
                         OutcomeDashboardView()
-                    }
-                    NavigationLink("Backtest") {
-                        BacktestView()
                     }
                 }
 

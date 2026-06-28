@@ -4,17 +4,15 @@ import Foundation
 /// indicator brain (candle fetch + `computeFullIndicators` per timeframe, all server-side) — and
 /// maps the JSON to the same `IndicatorResult` the chart/table/OutcomeTracker already consume.
 ///
-/// This replaces the on-device path (`BinanceService`/`YahooFinanceService` candle fetch +
-/// `IndicatorEngine.computeAll` ×3). The worker is the single source of truth; there is no local
-/// fallback (cron dead-man's-switch `/cron-health` covers worker uptime). `IndicatorEngine` stays
-/// compiled for `BacktestEngine` only.
+/// This is the sole indicator source for the (pure thin-client) app — the on-device indicator
+/// engine has been removed. The worker is the single source of truth; there is no local fallback
+/// (cron dead-man's-switch `/cron-health` covers worker uptime).
 ///
 /// The worker JSON shape (`src/indicators-full.ts`) is *close* to iOS `IndicatorResult` but not
 /// identical — it omits `id`, emits `macd` as `{histogram,crossover}` (macd/signal live in the
 /// series), `vwap` as a bare number, `atr` without `suggestedSL*`, `volumeProfile` as
 /// `{poc,vah,val}`, and `obv/adLine` without `current`. So we decode into tolerant DTOs and build
-/// `IndicatorResult` via its memberwise init (which defaults the rest), matching how
-/// `IndicatorEngine` populates these locally (see VWAP.swift:24, ATR.swift:19).
+/// `IndicatorResult` via its memberwise init (which defaults the rest).
 enum WorkerIndicatorsService {
 
     struct Bundle {
@@ -228,7 +226,7 @@ enum WorkerIndicatorsService {
                 marketStructure: marketStructure,
                 volScalar: volScalar
             )
-            // volumeProfile is a `var` set post-init by IndicatorEngine; mirror that here.
+            // volumeProfile is a `var` set post-init on IndicatorResult; mirror that here.
             if let vp = volumeProfile {
                 result.volumeProfile = VolumeProfileResult(poc: vp.poc, valueAreaHigh: vp.vah, valueAreaLow: vp.val)
             }

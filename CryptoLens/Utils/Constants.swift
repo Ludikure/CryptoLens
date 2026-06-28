@@ -27,8 +27,8 @@ enum Constants {
     // MARK: - Crypto
 
     /// Aligned with Coinbase Advanced perpetuals as of 2026-05-05. Each coin must satisfy
-    /// both: (1) Coinbase has an active perp product, (2) BacktestEngine.cryptoSymbols
-    /// includes it (so ML predictions and feature parity are wired). Removed POL/UNI/APT/
+    /// both: (1) Coinbase has an active perp product, (2) the worker's trained crypto symbol
+    /// set includes it (so ML predictions are wired). Removed POL/UNI/APT/
     /// ARB/OP/FIL/ATOM (no Coinbase perp) and added ZEC/XLM/HBAR/BCH/PEPE (perp + trained).
     /// PEPE is "1000PEPE PERP" on Coinbase (1 unit = 1000 PEPE tokens) — the underlying
     /// chart prices and ML signals are on plain PEPEUSDT; only the dollar-quote magnitude

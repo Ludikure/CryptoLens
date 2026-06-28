@@ -4,8 +4,7 @@ import Foundation
 /// (public, box fetches Binance behind the NordVPN proxy) so the phone never hits `fapi.binance.com`
 /// directly — that residential-IP call returns HTTP 451 and used to fall back to Coinbase.
 ///
-/// Used for the OutcomeTracker 15m wick-detection feed in thin mode. `BinanceService` stays compiled
-/// for `BacktestEngine`.
+/// Used for the OutcomeTracker 15m wick-detection feed.
 enum WorkerCandlesService {
 
     /// Returns `[Candle]` (oldest→newest) or nil on any failure — callers fall back to the

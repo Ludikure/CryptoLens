@@ -15,24 +15,10 @@ private let etCalendar: Calendar = {
 
 @MainActor
 class AnalysisService: ObservableObject {
-    let binance = BinanceService()
     let yahoo = YahooFinanceService()
-    let twelveData = TwelveDataProvider()
-    let tiingo = TiingoProvider()
     let finnhub = FinnhubProvider()
     let economicCalendar = EconomicCalendarService()
     let macroData = MacroDataService()
-
-    /// Thin-client master switch. When true (the default for fresh installs), indicators come from
-    /// the Worker (`/indicators`) and crypto candles from the box (`/candles/crypto`), so the phone
-    /// never hits Binance/Yahoo directly (no more 451 geoblock). OFF restores the fully-local engine
-    /// (`IndicatorEngine` + direct provider fetch) as a manual kill-switch — the engine stays
-    /// compiled for `BacktestEngine` regardless. Analysis (`/full-analysis`) is already server-side.
-    /// Fresh key (NOT the legacy `use_server_analysis`, which carries a stale persisted value on
-    /// devices that used the old "Server analysis (beta)" toggle — reusing it left thin mode OFF).
-    var thinClient: Bool {
-        UserDefaults.standard.object(forKey: "thin_client_mode") as? Bool ?? true
-    }
 
     // Default provider for fresh installs. Existing users keep their UserDefaults("ai_provider")
     // selection (autoConfigureKey reads it on init). DeepSeek R1's reasoning is well-suited to
@@ -276,13 +262,12 @@ class AnalysisService: ObservableObject {
             // Reuse previous enrichment data if still fresh
             let previous = resultsBySymbol[symbol]
 
-            // Thin mode: route the geoblocked crypto enrichment (derivatives/positioning/spot/
-            // sentiment/fear&greed) through ONE worker /market call. Binance fapi is HTTP 451 from
-            // the phone, so the on-device derivatives/spot fetches were skipped — the cards were
-            // empty. Stock fundamentals stay on Yahoo/Finnhub (richer + not geoblocked); macro stays
-            // on /macro. Only on enrichment cycles; carry forward otherwise.
+            // Route the geoblocked crypto enrichment (derivatives/positioning/spot/sentiment/
+            // fear&greed) through ONE worker /market call. Binance fapi is HTTP 451 from the phone.
+            // Stock fundamentals stay on Yahoo/Finnhub (richer + not geoblocked); macro stays on
+            // /macro. Only on enrichment cycles; carry forward otherwise.
             let marketBundle: WorkerMarketService.Bundle? =
-                (thinClient && market == .crypto && needsEnrichment)
+                (market == .crypto && needsEnrichment)
                 ? await WorkerMarketService.fetch(symbol: symbol) : nil
             if let sp = marketBundle?.spotPressure { self.spotPressure = sp }
 
@@ -451,16 +436,11 @@ class AnalysisService: ObservableObject {
             // Track setup/flat outcomes using 15m candles for precise wick detection
             let outcomeCandles: [Candle]
             if marketFor(symbol) == .crypto {
-                if thinClient {
-                    // Box proxies Binance behind the VPN; phone never hits fapi.binance.com (451).
-                    outcomeCandles = await WorkerCandlesService.fetchCrypto(symbol: symbol, interval: "15m", limit: 96) ?? result.h1.candles
-                } else {
-                    outcomeCandles = (try? await binance.fetchCandles(symbol: symbol, interval: "15m", limit: 96)) ?? result.h1.candles
-                }
+                // Box proxies Binance behind the VPN; phone never hits fapi.binance.com (451).
+                outcomeCandles = await WorkerCandlesService.fetchCrypto(symbol: symbol, interval: "15m", limit: 96) ?? result.h1.candles
             } else {
-                // Stocks aren't geoblocked; in thin mode the 1H slice from /indicators is enough.
-                outcomeCandles = thinClient ? result.h1.candles
-                    : ((try? await yahoo.fetchCandles(symbol: symbol, interval: "15m")) ?? result.h1.candles)
+                // Stocks: the 1H slice from /indicators is enough for wick detection.
+                outcomeCandles = result.h1.candles
             }
             OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles, cachedResult: result)
             // Cross-symbol PENDING sweep — catches timeouts and entry triggers on setups
@@ -616,9 +596,9 @@ class AnalysisService: ObservableObject {
                 dataQuality.candleStaleness = Date().timeIntervalSince(latestCandle.time)
             }
 
-            // Thin mode: one worker /market call for the geoblocked crypto enrichment bundle
+            // One worker /market call for the geoblocked crypto enrichment bundle
             // (derivatives/positioning/spot/sentiment/fear&greed) — see refreshIndicators.
-            let marketBundle: WorkerMarketService.Bundle? = (thinClient && market == .crypto)
+            let marketBundle: WorkerMarketService.Bundle? = (market == .crypto)
                 ? await WorkerMarketService.fetch(symbol: symbol) : nil
 
             let sentiment: CoinInfo?
@@ -867,332 +847,19 @@ class AnalysisService: ObservableObject {
         }
     }
 
-    // MARK: - ML Features
-
-    static func buildMLFeatures(tf1: IndicatorResult, tf2: IndicatorResult, tf3: IndicatorResult,
-                                 isCrypto: Bool, derivCtx: DerivativesContext?,
-                                 symbol: String = "",
-                                 vixValue: Double? = nil, crossAsset: CrossAssetContext? = nil,
-                                 fearGreedValue: Int? = nil,
-                                 ethBtcRatio: Double = 0, ethBtcDelta: Double = 0,
-                                 dRsiDelta: Double = 0, dAdxDelta: Double = 0,
-                                 hRsiDelta: Double = 0, hAdxDelta: Double = 0,
-                                 hMacdHistDelta: Double = 0,
-                                 barsSinceRegimeChange: Int = 0,
-                                 hRsiDelta1: Double = 0, hMacdHistDelta1: Double = 0,
-                                 dRsiDelta1: Double = 0,
-                                 hRsiAccel: Double = 0, hMacdAccel: Double = 0,
-                                 dAdxAccel: Double = 0,
-                                 basisPct: Double = 0,
-                                 spyCandles: [Candle] = [],
-                                 iwmCandles: [Candle] = [],
-                                 dailyCandles: [Candle] = [],
-                                 sectorETFCandles: [Candle] = [],
-                                 dxyCandles: [Candle] = [],
-                                 vix3mPrice: Double = 0,
-                                 darkPool: (ratio: Double, zscore: Double)? = nil,
-                                 oiPriceInteraction: Double = 0,
-                                 fundingSlope: Double = 0,
-                                 bodyWickRatio: Double = 0.5) -> MLFeatures {
-        func emaCross(_ r: IndicatorResult) -> Int {
-            var c = 0
-            if let e = r.ema20 { c += r.price > e ? 1 : -1 }
-            if let e = r.ema50 { c += r.price > e ? 1 : -1 }
-            if let e = r.ema200 { c += r.price > e ? 1 : -1 }
-            return c
-        }
-        func stackBull(_ r: IndicatorResult) -> Bool {
-            guard let e20 = r.ema20, let e50 = r.ema50, let e200 = r.ema200 else { return false }
-            return e20 > e50 && e50 > e200
-        }
-        func stackBear(_ r: IndicatorResult) -> Bool {
-            guard let e20 = r.ema20, let e50 = r.ema50, let e200 = r.ema200 else { return false }
-            return e20 < e50 && e50 < e200
-        }
-        func ema20Rising(_ r: IndicatorResult) -> Bool {
-            let s = r.ema20Series
-            return s.count >= 6 && s[s.count - 1] > s[s.count - 6]
-        }
-        let price = tf1.price
-        let candles = tf2.candles
-        let n = candles.count
-
-        // Pre-compute to help Swift type-checker
-        let _dStochCross: Int = tf1.stochRSI?.crossover == "bullish" ? 1 : tf1.stochRSI?.crossover == "bearish" ? -1 : 0
-        let _dMacdCross: Int = tf1.macd?.crossover == "bullish" ? 1 : tf1.macd?.crossover == "bearish" ? -1 : 0
-        let _dDivergence: Int = tf1.divergence?.contains("bullish") == true ? 1 : tf1.divergence?.contains("bearish") == true ? -1 : 0
-        let _hStochCross: Int = tf2.stochRSI?.crossover == "bullish" ? 1 : tf2.stochRSI?.crossover == "bearish" ? -1 : 0
-        let _hMacdCross: Int = tf2.macd?.crossover == "bullish" ? 1 : tf2.macd?.crossover == "bearish" ? -1 : 0
-        let _hDivergence: Int = tf2.divergence?.contains("bullish") == true ? 1 : tf2.divergence?.contains("bearish") == true ? -1 : 0
-        let _dAboveVwap: Bool = tf1.vwap.map { price > $0.vwap } ?? false
-        let _hAboveVwap: Bool = tf2.vwap.map { price > $0.vwap } ?? false
-        let _dxyAbove: Bool = crossAsset.map { $0.dxyPrice > $0.dxyEma20 } ?? false
-        let _l3Green: Bool = n >= 3 && candles[(n-3)...].allSatisfy { $0.close > $0.open }
-        let _l3Red: Bool = n >= 3 && candles[(n-3)...].allSatisfy { $0.close < $0.open }
-        let _l3Vol: Bool = n >= 3 && candles[n-2].volume > candles[n-3].volume && candles[n-1].volume > candles[n-2].volume
-        let _dStructBull = tf1.marketStructure?.label.contains("bullish") ?? false
-        let _dStructBear = tf1.marketStructure?.label.contains("bearish") ?? false
-        let _hStructBull = tf2.marketStructure?.label.contains("bullish") ?? false
-        let _hStructBear = tf2.marketStructure?.label.contains("bearish") ?? false
-        let _dBull = tf1.biasScore > 3
-        let _dBear = tf1.biasScore < -3
-        let _hBull = tf2.biasScore > 3
-        let _hBear = tf2.biasScore < -3
-        let _dMacdHist = tf1.macd?.histogram ?? 0.0
-        let _hMacdHist = tf2.macd?.histogram ?? 0.0
-
-        // Cross-timeframe interactions
-        var _tfAlign = 0
-        if _dBull { _tfAlign += 1 } else if _dBear { _tfAlign -= 1 }
-        if _hBull { _tfAlign += 1 } else if _hBear { _tfAlign -= 1 }
-        let _momAlign: Int = (_dMacdHist > 0 && _hMacdHist > 0) ? 1 : (_dMacdHist < 0 && _hMacdHist < 0) ? -1 : 0
-        let _structAlign: Int = (_dStructBull && _hStructBull) ? 1 : (_dStructBear && _hStructBear) ? -1 : 0
-
-        // Regime code
-        let _adx = tf1.adx?.adx ?? 0.0
-        let _regimeCode: Int = (_adx > 25 && (stackBull(tf1) || stackBear(tf1))) ? 2 : _adx < 20 ? 0 : 1
-
-        return MLFeatures(
-            dRsi: tf1.rsi ?? 50, dMacdHist: _dMacdHist,
-            dAdx: _adx, dAdxBullish: tf1.adx?.direction == "Bullish",
-            dEmaCross: emaCross(tf1), dStackBull: stackBull(tf1), dStackBear: stackBear(tf1),
-            dStructBull: _dStructBull, dStructBear: _dStructBear,
-            dStochK: tf1.stochRSI?.k ?? 50, dStochCross: _dStochCross,
-            dMacdCross: _dMacdCross, dDivergence: _dDivergence, dEma20Rising: ema20Rising(tf1),
-            dBBPercentB: tf1.bollingerBands?.percentB ?? 0.5, dBBSqueeze: tf1.bollingerBands?.squeeze ?? false,
-            dBBBandwidth: tf1.bollingerBands?.bandwidth ?? 0, dVolumeRatio: tf1.volumeRatio ?? 1.0,
-            dAboveVwap: _dAboveVwap,
-            hRsi: tf2.rsi ?? 50, hMacdHist: _hMacdHist,
-            hAdx: tf2.adx?.adx ?? 0, hAdxBullish: tf2.adx?.direction == "Bullish",
-            hEmaCross: emaCross(tf2), hStackBull: stackBull(tf2), hStackBear: stackBear(tf2),
-            hStructBull: _hStructBull, hStructBear: _hStructBear,
-            hStochK: tf2.stochRSI?.k ?? 50, hStochCross: _hStochCross,
-            hMacdCross: _hMacdCross, hDivergence: _hDivergence, hEma20Rising: ema20Rising(tf2),
-            hBBPercentB: tf2.bollingerBands?.percentB ?? 0.5, hBBSqueeze: tf2.bollingerBands?.squeeze ?? false,
-            hBBBandwidth: tf2.bollingerBands?.bandwidth ?? 0, hVolumeRatio: tf2.volumeRatio ?? 1.0,
-            hAboveVwap: _hAboveVwap,
-            eRsi: tf3.rsi ?? 50, eEmaCross: emaCross(tf3),
-            eStochK: tf3.stochRSI?.k ?? 50, eMacdHist: tf3.macd?.histogram ?? 0,
-            fundingSignal: derivCtx?.fundingSignal ?? 0, oiSignal: derivCtx?.oiSignal ?? 0,
-            takerSignal: derivCtx?.takerSignal ?? 0, crowdingSignal: derivCtx?.crowdingSignal ?? 0,
-            derivativesCombined: derivCtx?.combinedSignal ?? 0,
-            fundingRateRaw: derivCtx?.fundingRateRaw ?? 0,
-            oiChangePct: derivCtx?.oiChangePct ?? 0,
-            takerRatioRaw: derivCtx?.takerRatioRaw ?? 1.0,
-            longPctRaw: derivCtx?.longPctRaw ?? 50,
-            vix: vixValue ?? 20, dxyAboveEma20: _dxyAbove, volScalar: tf1.volScalar ?? 1.0,
-            last3Green: _l3Green, last3Red: _l3Red, last3VolIncreasing: _l3Vol,
-            obvRising: tf1.obv?.trend == "Rising",
-            adLineAccumulation: tf1.adLine?.trend == "Accumulation",
-            atrPercent: tf2.atr?.atrPercent ?? 0, atrPercentile: tf1.atrPercentile ?? 50,
-            isCrypto: isCrypto,
-            tfAlignment: _tfAlign, momentumAlignment: _momAlign, structureAlignment: _structAlign,
-            dayOfWeek: etCalendar.component(.weekday, from: Date()) - 1,
-            barsSinceRegimeChange: barsSinceRegimeChange,
-            regimeCode: _regimeCode,
-            // Rate-of-change (from previous refresh)
-            dRsiDelta: dRsiDelta, dAdxDelta: dAdxDelta,
-            hRsiDelta: hRsiDelta, hAdxDelta: hAdxDelta, hMacdHistDelta: hMacdHistDelta,
-            // Sentiment
-            fearGreedIndex: Double(fearGreedValue ?? 50),
-            fearGreedZone: FearGreedService.zone(for: fearGreedValue ?? 50),
-            // Cross-asset crypto
-            ethBtcRatio: ethBtcRatio, ethBtcDelta6: ethBtcDelta,
-            // Volume profile (from daily indicators)
-            vpDistToPocATR: {
-                guard let vp = tf1.volumeProfile, let atr = tf2.atr?.atr, atr > 0 else { return 0.0 }
-                return (tf1.price - vp.poc) / atr
-            }(),
-            vpAbovePoc: tf1.volumeProfile.map { tf1.price > $0.poc } ?? true,
-            vpVAWidth: {
-                guard let vp = tf1.volumeProfile, tf1.price > 0 else { return 0.0 }
-                return (vp.valueAreaHigh - vp.valueAreaLow) / tf1.price * 100
-            }(),
-            vpInValueArea: tf1.volumeProfile.map { tf1.price >= $0.valueAreaLow && tf1.price <= $0.valueAreaHigh } ?? true,
-            vpDistToVAH_ATR: {
-                guard let vp = tf1.volumeProfile, let atr = tf2.atr?.atr, atr > 0 else { return 0.0 }
-                return (vp.valueAreaHigh - tf1.price) / atr
-            }(),
-            vpDistToVAL_ATR: {
-                guard let vp = tf1.volumeProfile, let atr = tf2.atr?.atr, atr > 0 else { return 0.0 }
-                return (tf1.price - vp.valueAreaLow) / atr
-            }(),
-            // 1-bar deltas + acceleration
-            hRsiDelta1: hRsiDelta1, hMacdHistDelta1: hMacdHistDelta1, dRsiDelta1: dRsiDelta1,
-            hRsiAccel: hRsiAccel, hMacdAccel: hMacdAccel, dAdxAccel: dAdxAccel,
-            // Time-of-day
-            hourBucket: {
-                let h = etCalendar.component(.hour, from: Date())
-                return h < 8 ? 0 : h < 14 ? 1 : h < 21 ? 2 : 3
-            }(),
-            isWeekend: {
-                let wd = etCalendar.component(.weekday, from: Date())
-                return wd == 1 || wd == 7
-            }(),
-            // Basis
-            basisPct: basisPct,
-            basisExtreme: basisPct > 0.5 ? 1 : basisPct < -0.5 ? -1 : 0,
-            // Stock features — computed from full daily history (dailyCandles), not tf1.candles
-            // (chart-trimmed to 50 bars). Mirrors BacktestEngine which uses 252 bars.
-            fiftyTwoWeekPct: {
-                guard !isCrypto, dailyCandles.count >= 2 else { return 50.0 }
-                let lookback = Array(dailyCandles.suffix(252))
-                let hi = lookback.map(\.high).max() ?? tf1.price
-                let lo = lookback.map(\.low).min() ?? tf1.price
-                return hi != lo ? (tf1.price - lo) / (hi - lo) * 100 : 50.0
-            }(),
-            distToFiftyTwoHigh: {
-                guard !isCrypto, dailyCandles.count >= 2 else { return 0.0 }
-                let lookback = Array(dailyCandles.suffix(252))
-                let hi = lookback.map(\.high).max() ?? tf1.price
-                return hi > 0 ? (hi - tf1.price) / tf1.price * 100 : 0.0
-            }(),
-            gapPercent: {
-                guard !isCrypto, dailyCandles.count >= 2 else { return 0.0 }
-                let prev = dailyCandles[dailyCandles.count - 2].close
-                guard let todayOpen = dailyCandles.last?.open else { return 0.0 }
-                return prev > 0 ? (todayOpen - prev) / prev * 100 : 0
-            }(),
-            gapFilled: {
-                guard !isCrypto, dailyCandles.count >= 2 else { return false }
-                let prevClose = dailyCandles[dailyCandles.count - 2].close
-                guard let todayOpen = dailyCandles.last?.open else { return false }
-                let gapUp = todayOpen > prevClose
-                return gapUp ? price < prevClose : price > prevClose
-            }(),
-            gapDirectionAligned: {
-                guard !isCrypto, dailyCandles.count >= 2 else { return 0 }
-                let prevClose = dailyCandles[dailyCandles.count - 2].close
-                guard let todayOpen = dailyCandles.last?.open else { return 0 }
-                let gapPct = (todayOpen - prevClose) / prevClose * 100
-                guard abs(gapPct) >= 0.3 else { return 0 }
-                return (gapPct > 0) == (tf1.biasScore > 0) ? 1 : -1
-            }(),
-            relStrengthVsSpy: {
-                guard !isCrypto, spyCandles.count >= 6, dailyCandles.count >= 6 else { return 0.0 }
-                let stockRet = (dailyCandles[dailyCandles.count - 1].close - dailyCandles[dailyCandles.count - 6].close) / dailyCandles[dailyCandles.count - 6].close * 100
-                let spyRet = (spyCandles[spyCandles.count - 1].close - spyCandles[spyCandles.count - 6].close) / spyCandles[spyCandles.count - 6].close * 100
-                return stockRet - spyRet
-            }(),
-            beta: {
-                guard !isCrypto, spyCandles.count >= 60, dailyCandles.count >= 60 else { return 1.0 }
-                let n = 60
-                let stockSlice = Array(dailyCandles.suffix(n))
-                let spySlice = Array(spyCandles.suffix(n))
-                guard stockSlice.count >= 2, spySlice.count >= 2 else { return 1.0 }
-                let stockReturns = zip(stockSlice.dropFirst(), stockSlice).map { ($0.close - $1.close) / $1.close }
-                let spyReturns = zip(spySlice.dropFirst(), spySlice).map { ($0.close - $1.close) / $1.close }
-                let pairs = min(stockReturns.count, spyReturns.count)
-                guard pairs >= 10 else { return 1.0 }
-                let sr = Array(stockReturns.prefix(pairs))
-                let mr = Array(spyReturns.prefix(pairs))
-                let meanS = sr.reduce(0, +) / Double(pairs)
-                let meanM = mr.reduce(0, +) / Double(pairs)
-                var cov = 0.0, varM = 0.0
-                for j in 0..<pairs { cov += (sr[j] - meanS) * (mr[j] - meanM); varM += (mr[j] - meanM) * (mr[j] - meanM) }
-                return varM > 0 ? cov / varM : 1.0
-            }(),
-            vixLevelCode: {
-                let v = vixValue ?? 20
-                return v < 15 ? 0 : v < 25 ? 1 : v < 35 ? 2 : 3
-            }(),
-            isMarketHours: !isCrypto ? MarketHours.isMarketOpen() : true,
-            earningsProximity: {
-                guard !isCrypto else { return 0.0 }
-                let earn = EarningsCalendar.features(for: symbol, at: Date())
-                let nearest = min(earn.daysTo, earn.daysSince)
-                return nearest >= 60 ? 0.0 : exp(-Double(nearest) / 7.0)
-            }(),
-            shortVolumeRatio: darkPool?.ratio ?? 0.5,
-            shortVolumeZScore: darkPool?.zscore ?? 0.0,
-            oiPriceInteraction: oiPriceInteraction,
-            fundingSlope: fundingSlope,
-            bodyWickRatio: bodyWickRatio,
-            // Cross-market breadth & macro momentum
-            relStrengthVsSector: {
-                guard !isCrypto, sectorETFCandles.count >= 6, dailyCandles.count >= 6 else { return 0.0 }
-                let stockRet = (dailyCandles[dailyCandles.count - 1].close - dailyCandles[dailyCandles.count - 6].close) / dailyCandles[dailyCandles.count - 6].close * 100
-                let sectorRet = (sectorETFCandles[sectorETFCandles.count - 1].close - sectorETFCandles[sectorETFCandles.count - 6].close) / sectorETFCandles[sectorETFCandles.count - 6].close * 100
-                return stockRet - sectorRet
-            }(),
-            vixTermStructure: {
-                let vix = vixValue ?? 20
-                guard vix3mPrice > 0 else { return 1.0 }
-                return vix / vix3mPrice
-            }(),
-            dxyMomentum: {
-                guard dxyCandles.count >= 6 else { return 0.0 }
-                let current = dxyCandles[dxyCandles.count - 1].close
-                let fiveDaysAgo = dxyCandles[dxyCandles.count - 6].close
-                guard fiveDaysAgo > 0 else { return 0.0 }
-                return (current - fiveDaysAgo) / fiveDaysAgo * 100
-            }(),
-            iwmSpyRatio: {
-                guard iwmCandles.count >= 6, spyCandles.count >= 6 else { return 0.0 }
-                let iwmRet = (iwmCandles[iwmCandles.count - 1].close - iwmCandles[iwmCandles.count - 6].close) / iwmCandles[iwmCandles.count - 6].close * 100
-                let spyRet = (spyCandles[spyCandles.count - 1].close - spyCandles[spyCandles.count - 6].close) / spyCandles[spyCandles.count - 6].close * 100
-                return iwmRet - spyRet
-            }(),
-        )
-    }
-
     // MARK: - Fetch + compute for any market
 
-    private func fetchAndCompute(symbol: String, market: Market, crossAsset: CrossAssetContext? = nil, derivatives: DerivativesData? = nil) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult, [Candle]) {
-        let tfs = market.timeframes
-
-        // Thin client: all candle-fetch + indicator computation happens on the Worker. One
-        // `/indicators` call returns daily/4H/1H already computed; the 4th tuple element (formerly
-        // the full daily candle history for local ML features) is the worker's daily candles —
-        // ML now comes from `/ml-predict`, so the wider history isn't needed on-device.
-        if thinClient {
-            #if DEBUG
-            print("[MarketScope] [\(symbol)] thin client → /indicators (worker compute)")
-            #endif
-            let b = try await WorkerIndicatorsService.fetch(symbol: symbol)
-            let daily = b.daily
-            return (daily, b.fourH ?? daily, b.oneH ?? daily, daily.candles)
-        }
-
-        switch market {
-        case .crypto:
-            async let c1 = binance.fetchCandles(symbol: symbol, interval: tfs[0].interval, limit: 300)
-            async let c2 = binance.fetchCandles(symbol: symbol, interval: tfs[1].interval, limit: 300)
-            async let c3 = binance.fetchCandles(symbol: symbol, interval: tfs[2].interval, limit: 300)
-            // Build derivatives context from live data (uses 4H candle direction)
-            var derivCtx: DerivativesContext? = nil
-            if let d = derivatives {
-                let candles4H = try await c2
-                let priceRising = candles4H.count >= 2 && (candles4H.last?.close ?? 0) > candles4H[candles4H.count - 2].close
-                derivCtx = DerivativesContext.from(data: d, priceRising: priceRising)
-                let dailyCandles = try await c1
-                let r1 = IndicatorEngine.computeAll(candles: dailyCandles, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset, derivatives: derivCtx)
-                let r2 = IndicatorEngine.computeAll(candles: candles4H, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
-                let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
-                return (r1, r2, r3, dailyCandles)
-            }
-            let dailyCandles = try await c1
-            let r1 = IndicatorEngine.computeAll(candles: dailyCandles, timeframe: tfs[0].interval, label: tfs[0].label, market: market, crossAsset: crossAsset)
-            let r2 = IndicatorEngine.computeAll(candles: try await c2, timeframe: tfs[1].interval, label: tfs[1].label, market: market)
-            let r3 = IndicatorEngine.computeAll(candles: try await c3, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
-            return (r1, r2, r3, dailyCandles)
-
-        case .stock:
-            async let c1 = yahoo.fetchCandles(symbol: symbol, interval: tfs[0].interval)
-            async let c1h = yahoo.fetchCandles(symbol: symbol, interval: "1h")
-            async let c3 = yahoo.fetchCandles(symbol: symbol, interval: tfs[2].interval)
-            let daily = try await c1
-            let hourly = try await c1h
-            let entry = try await c3
-            let fourH = CandleAggregator.aggregate1HTo4H(hourly)
-            #if DEBUG
-            print("[MarketScope] [\(symbol)] Yahoo candles: D=\(daily.count), 4H=\(fourH.count) (from \(hourly.count) 1H), 1H=\(entry.count)")
-            #endif
-            let r1 = IndicatorEngine.computeAll(candles: daily, timeframe: tfs[0].interval, label: tfs[0].label, market: market)
-            let r2 = IndicatorEngine.computeAll(candles: fourH, timeframe: "4h", label: "4H (Bias)", market: market)
-            let r3 = IndicatorEngine.computeAll(candles: entry, timeframe: tfs[2].interval, label: tfs[2].label, market: market)
-            return (r1, r2, r3, daily)
-        }
+    private func fetchAndCompute(symbol: String, market: Market) async throws -> (IndicatorResult, IndicatorResult, IndicatorResult, [Candle]) {
+        // Pure thin client: all candle-fetch + indicator computation happens on the Worker. One
+        // `/indicators` call returns daily/4H/1H already computed. The 4th tuple element is the
+        // worker's daily candles (kept for the call-site signature). The worker is the single
+        // source of truth; the cron dead-man's-switch (`/cron-health`) covers worker uptime.
+        #if DEBUG
+        print("[MarketScope] [\(symbol)] thin client → /indicators (worker compute)")
+        #endif
+        let b = try await WorkerIndicatorsService.fetch(symbol: symbol)
+        let daily = b.daily
+        return (daily, b.fourH ?? daily, b.oneH ?? daily, daily.candles)
     }
 
     // MARK: - Shared Helpers
@@ -1282,10 +949,8 @@ class AnalysisService: ObservableObject {
 
     /// Fetches the worker's cron-cached prediction. Returns nil on cache miss or network
     /// failure — the UI then shows "—" for ML, matching what would happen if the cron
-    /// hadn't run yet anyway. We deliberately do NOT fall back to local `MLScoring.predict`:
-    /// the live iOS feature-build path drifted slightly from BacktestEngine canonical, so
-    /// a local fallback would display numbers that don't match notifications. Worker is the
-    /// only source of truth for displayed ML.
+    /// hadn't run yet anyway. There is no on-device fallback: the worker is the single
+    /// source of truth for displayed ML, so it always matches notifications.
     private func fetchWorkerML(symbol: String) async -> WorkerMLService.Prediction? {
         do {
             return try await WorkerMLService.predict(symbol: symbol)

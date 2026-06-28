@@ -274,3 +274,32 @@ struct IndicatorResult: Identifiable, Codable {
         volScalar = try container.decodeIfPresent(Double.self, forKey: .volScalar)
     }
 }
+
+// MARK: - Worker-supplied indicator subtypes
+//
+// These Codable result types were formerly declared in the on-device indicator
+// computation modules (VolumeProfile.swift, MarketStructure.swift). Those compute
+// modules were removed when the app became a pure thin client; the Worker now sends
+// these shapes in the `/indicators` payload, so the model types live here.
+
+/// Volume Profile: POC, Value Area High, Value Area Low.
+struct VolumeProfileResult: Codable {
+    let poc: Double
+    let valueAreaHigh: Double
+    let valueAreaLow: Double
+}
+
+/// A support/resistance level with its test count and recency.
+struct LevelTest: Codable {
+    let price: Double
+    let tests: Int
+    let candlesAgo: Int
+}
+
+/// Pre-computed market structure labels (HH/HL/LL/LH) + swing points.
+struct MarketStructureResult: Codable {
+    let label: String           // "HH/HL (bullish)", "LL/LH (bearish)", "HH/LL (expanding)", "Range"
+    let swingHighs: [Double]    // Last 2-3 swing highs (newest first)
+    let swingLows: [Double]     // Last 2-3 swing lows (newest first)
+    let levelTests: [LevelTest] // S/R with test count + recency
+}

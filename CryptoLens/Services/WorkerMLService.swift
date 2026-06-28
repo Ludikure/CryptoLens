@@ -1,14 +1,12 @@
 import Foundation
 
 /// Fetches ML probability + features from the Cloudflare Worker `/ml-predict` endpoint.
-/// Worker is the canonical live-serving implementation (see Phase 2 parity work);
-/// callers should prefer this over the local `MLScoring.predict()` path so notifications
-/// (which also run on worker cron) and in-app display stay in sync feature-for-feature.
+/// The worker is the single source of truth for displayed ML; notifications (worker cron)
+/// and in-app display stay in sync feature-for-feature.
 ///
 /// Cache semantics: worker returns the latest cron-cached prediction (TTL 5 min, written
 /// every minute for any symbol in any device's watchlist). A 404 means no cron has run
-/// for this symbol yet — caller should fall back to local prediction for that bar and
-/// retry on the next refresh.
+/// for this symbol yet — the UI shows "—" and retries on the next refresh.
 enum WorkerMLService {
 
     struct BigMove: Decodable {
