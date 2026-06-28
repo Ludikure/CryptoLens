@@ -1,6 +1,12 @@
-# Cutover passthrough config. Deploying this replaces the marketscope-proxy worker with the
-# forwarder in passthrough.ts — NO bindings, NO [triggers] — which freezes the CF D1 + stops
-# the cron. Rollback = `npx wrangler deploy` (uses the normal wrangler.toml).
+# TRANSITIONAL passthrough — the ONLY Cloudflare Worker still in use, and only as a bridge.
+# It forwards the old marketscope-proxy.ludikure.workers.dev URL to the self-hosted box
+# (marketscope.ludikure.org) so iOS builds still pointing at the old URL keep working. It has
+# NO bindings and NO [triggers] (no cron, no KV, no D1) — so it writes nothing to Cloudflare.
+#
+# RETIRE THIS once the iOS app (PushService.workerURL, now → marketscope.ludikure.org) has been
+# rebuilt + installed on all devices: then `npx wrangler delete --name marketscope-proxy` removes
+# the last Cloudflare Worker. Do NOT recreate the full worker (the deleted wrangler.toml) — its
+# cron + KV caused the 2026-06-27 KV-limit incident. See CLAUDE.md.
 name = "marketscope-proxy"
 main = "passthrough.ts"
 compatibility_date = "2024-01-01"

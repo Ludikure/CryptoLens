@@ -1,11 +1,14 @@
 import Foundation
 
-/// Syncs alerts and device token to the Cloudflare Worker.
+/// Syncs alerts and device token to the self-hosted backend (the TrueNAS "box").
 /// Auth: server-issued token obtained on first registration.
 /// All state is @MainActor-isolated to prevent data races on deviceId, authToken, and isAuthenticating.
 @MainActor
 enum PushService {
-    nonisolated static let workerURL = "https://marketscope-proxy.ludikure.workers.dev"
+    // Self-hosted backend on TrueNAS — the app talks to it DIRECTLY, no Cloudflare Worker in the
+    // path. The old marketscope-proxy.ludikure.workers.dev was a Cloudflare Worker; it's now a
+    // transitional passthrough that forwards to this same host and is being retired. See CLAUDE.md.
+    nonisolated static let workerURL = "https://marketscope.ludikure.org"
 
     /// Stable device identifier — mutable to support auth recovery.
     private(set) static var deviceId: String = {

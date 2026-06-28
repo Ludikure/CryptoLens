@@ -5,8 +5,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "deploy": "wrangler deploy",
-    "predeploy": "vitest run",
+    "deploy": "echo '\\n  ✋ No Cloudflare deploy. The backend runs on TrueNAS (the box at marketscope.ludikure.org).\\n  `wrangler deploy` would resurrect the dead Cloudflare Worker (cron + KV) — that caused the\\n  2026-06-27 KV-limit incident. To ship worker changes: npm run build:server, then rebuild the\\n  TrueNAS container (docker compose up -d --build). See CLAUDE.md.\\n' && exit 1",
     "backtest": "tsx scripts/backtest.ts",
     "augment": "tsx scripts/augment-csv.ts",
     "persistence": "tsx scripts/persistence-analysis.ts",

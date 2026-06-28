@@ -559,6 +559,19 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-06-27 — ⚠️ NO CLOUDFLARE WORKERS: the backend runs on the TrueNAS box. NEVER `wrangler deploy`.
+
+**The live backend is the self-hosted TrueNAS box at `marketscope.ludikure.org`** (the same `src/index.ts` worker code running on Node via the `server/` adapters — KV→SQLite, D1→better-sqlite3, R2→filesystem, cron→node-cron; commit `21bc0e7`). Its KV is a local SQLite table with **no put limits**. Cloudflare is NOT in the data path.
+
+**Incident (root cause of the 2026-06-27 Cloudflare KV "put limit exceeded" email):** to ship worker prompt changes (F-1/F-2) I ran `npm run deploy` (= `wrangler deploy`), which redeployed the **full Cloudflare Worker** from the old `wrangler.toml` — **resurrecting the Cloudflare cron (`*/5`) + KV bindings** that the June 13 cutover had intentionally retired. The CF cron then wrote ~10 KV blobs every 5 min → blew the 1,000/day free-tier limit, and CF started serving app traffic directly (bypassing the box, double crons). **Fix:** redeployed the passthrough (`npx wrangler deploy -c wrangler.passthrough.toml`) → CF cron/KV stopped; deleted `wrangler.toml`; neutralized `npm run deploy` (now errors out).
+
+**Architecture now:**
+- **iOS** (`PushService.workerURL`) points **directly at the box** `https://marketscope.ludikure.org` — no Cloudflare Worker in the path. (Requires a rebuild+install to take effect on-device.)
+- **Shipping worker changes** = rebuild the TrueNAS container: `cd marketscope-worker && npm run build:server` → `node dist/server.mjs` (`docker compose up -d --build` on the box). **Never `wrangler deploy`** — `npm run deploy` is now a guard that errors with this reminder. `wrangler.toml` (the full-worker cron+KV+D1+R2 config) is deleted so it can't be redeployed.
+- **`passthrough.ts` + `wrangler.passthrough.toml`** = the LAST Cloudflare Worker, transitional only: forwards the old `…workers.dev` URL → the box for iOS builds still on the old URL. No bindings/cron/KV. **Retire it** after the app is rebuilt on the box URL: `npx wrangler delete --name marketscope-proxy`.
+
+**Remaining Cloudflare touchpoints (not yet removed — flagged for a decision):** (a) the **AI Gateway** indirection (`AI_GATEWAY_BASE` / `aiGatewayURL()` in `index.ts`) — inert on the box (env unset → direct LLM call), safe to delete on request; (b) the **`web/` app** is deployed to **Cloudflare Pages** (a separate client — keep or move); (c) **ingress**: how `marketscope.ludikure.org` is exposed (likely a cloudflared tunnel — free, no KV limit, ingress-only) vs. a direct DNS/TLS setup.
+
 ### 2026-06-27 — Persona features F-3 (pre-trade sanity check) + F-6 (5-second decision cards)
 
 Two more iOS-side persona features, both pure-iOS off the already-loaded analysis (no worker call):
