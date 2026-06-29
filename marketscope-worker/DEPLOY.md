@@ -5,27 +5,28 @@ The self-hosted backend ("the box", `marketscope.ludikure.org` on TrueNAS) runs 
 that image on every push to the worker code and publishes it to **GHCR** as
 `ghcr.io/ludikure/marketscope:latest`. So shipping a change is: **push → click Update in TrueNAS.**
 
-## One-time TrueNAS setup (do this once, ~10 min)
+## One-time setup (done 2026-06-28 — keep for reference / re-setup)
 
-1. **Create a GHCR pull token** (so TrueNAS can pull the private image):
-   - GitHub → Settings → Developer settings → **Personal access tokens (classic)** → Generate.
-   - Scope: **`read:packages`** only. Copy the token.
+The GHCR package is **private** (it bundles the trained ML models), so the box authenticates once:
 
-2. **Give TrueNAS the credential.** In the TrueNAS UI: **Apps → Discover → (gear / three-dot) → Manage Container Images / Registries** (wording varies by version) → add a registry:
-   - Registry: `ghcr.io`
-   - Username: your GitHub username (`Ludikure`)
-   - Password: the `read:packages` token from step 1.
-
-3. **Point the marketscope app at the GHCR image.** Apps → Installed → `marketscope` → **Edit** → in the YAML/config change:
-   ```yaml
-   marketscope:
-     image: ghcr.io/ludikure/marketscope:latest   # was: marketscope:1.0
+1. **Create a GHCR pull token:** GitHub → Settings → Developer settings → **Personal access tokens
+   (classic)** → scope **`read:packages`** only.
+2. **Log the box in once (the only SSH step):**
    ```
-   - If the UI offers an **image pull policy**, set it to **Always** (so a restart re-pulls `latest`).
-   - Save. TrueNAS pulls the image and restarts the app.
+   sudo docker login ghcr.io -u Ludikure
+   ```
+   Paste the token as the password. (Stored in `/root/.docker/config.json`; persists.)
+3. **Point the marketscope app at the GHCR image.** TrueNAS UI → Apps → Installed →
+   `marketscope` → **Edit** → under the `marketscope` service set (siblings, same indent):
+   ```yaml
+       image: ghcr.io/ludikure/marketscope:latest   # was: marketscope:1.0
+       pull_policy: always
+   ```
+   **Save.** TrueNAS pulls the image and redeploys. (`pull_policy: always` makes every
+   restart re-pull `:latest`.)
 
-   (Optional but cleaner: instead of `:latest`, pin a specific build with `:<commit-sha>` from the
-   Action's output, and bump it per deploy — gives you an exact, rollback-able version.)
+   (Optional, cleaner: pin `:<commit-sha>` instead of `:latest` and bump it per deploy for an
+   exact, rollback-able version.)
 
 ## Ongoing deploys (no SSH)
 
