@@ -30,13 +30,16 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(c).not.toContain('HIGH-confidence and commit');
     expect(c).not.toContain('treat direction as HIGH');
     expect(c).toContain('DATA-LEAK ARTIFACT');
-    // risk-first output structure — Environment Risk is now the headline, ML_WIN demoted
-    expect(c).toContain('## Environment Risk');
-    expect(c).toContain('## Move Likelihood (secondary)');
+    // risk-first output structure — Bottom Line + merged "The Tape" (Environment Risk headline,
+    // ML_WIN demoted), no separate Direction header (lean folds into Bottom Line)
+    expect(c).toContain('## Bottom Line');
+    expect(c).toContain('## The Tape');
+    expect(c).toContain('SHORT MODE');                   // quiet-bar mode switch
+    expect(c).toContain('SINCE LAST ANALYSIS');          // prior-analysis delta (#6)
     expect(c).toContain('ML_WIN Context');               // ATR-normalized: correctly-but-misleadingly low in trends
     expect(c).toContain('ATR-normalized');
     expect(c).toContain('## Risk Map');
-    expect(c).toContain('Direction (your read)');
+    expect(c).not.toContain('## Direction');             // dropped — lean lives in Bottom Line
     expect(c).toContain('DERIVATIVES / SPOT');
     // stock keeps news + market hours, drops crypto derivatives
     expect(s.startsWith('You are MarketScope — a RISK and VOLATILITY analyst')).toBe(true);
@@ -116,6 +119,36 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     // Stateful: regime recomputed + returned for persistence
     expect(typeof newState.regime).toBe('string');
     expect(['TRENDING', 'TRANSITIONING', 'RANGING']).toContain(newState.regime);
+  });
+
+  it('#6: SINCE LAST ANALYSIS surfaces the ML delta + prior Bottom Line, and stamps newState for the next run', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+    daily.mlWinProbability = 0.71;
+    const { prompt, newState } = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      prevState: { regime: 'RANGING', prevMlWin: 0.44, prevBottomLine: 'Quiet, mid-range — nothing to do.', prevAnalysisMs: NOW - 4 * H1 },
+    });
+    expect(prompt).toContain('=== SINCE LAST ANALYSIS ===');
+    expect(prompt).toContain('4.0h ago');
+    expect(prompt).toContain('44% → 71% (rising +27pp)');
+    expect(prompt).toContain('Previous Bottom Line: "Quiet, mid-range — nothing to do."');
+    // newState re-stamped so the NEXT run sees THIS run's values
+    expect(newState.prevMlWin).toBe(0.71);
+    expect(newState.prevAnalysisMs).toBe(NOW);
+
+    // No prior state → section omitted entirely (first analysis of a symbol)
+    const fresh = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH], prevState: {} });
+    expect(fresh.prompt).not.toContain('SINCE LAST ANALYSIS');
+    expect(fresh.newState.prevMlWin).toBe(0.71);
+
+    // Stale prior state (>3 days) → section omitted
+    const stale = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH], prevState: { prevMlWin: 0.44, prevAnalysisMs: NOW - 4 * DAY } });
+    expect(stale.prompt).not.toContain('SINCE LAST ANALYSIS');
   });
 
   it('F-1: CHASE / EXHAUSTION guard fires HIGH when buying an extended, overbought rally into a crowded long', () => {

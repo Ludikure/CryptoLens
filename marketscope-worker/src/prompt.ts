@@ -414,7 +414,14 @@ export interface SpotPressure { takerBuyRatio: number; takerBuyLabel: string; cv
 interface OutcomeHistoryItem { direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null; }
 interface ActiveSetup { direction: string; entry: number; risk: number; tp1: number; mlProbability?: number | null; entryHitTimeMs: number; maxFavorable: number; maxAdverse: number; tp1Hit: boolean; partialTaken: boolean; breakevenActivated: boolean; }
 
-export interface PromptState { regime?: string | null; killDur?: Record<string, number>; killDurCandleMs?: number | null; nakedPOC?: { poc: number; dateMs: number } | null; }
+export interface PromptState {
+  regime?: string | null; killDur?: Record<string, number>; killDurCandleMs?: number | null; nakedPOC?: { poc: number; dateMs: number } | null;
+  // #6 (prior-analysis delta) — carried so each run can lead with what CHANGED since the last
+  // analysis of this symbol (the antidote to same-y serial reads). prevMlWin/prevAnalysisMs are
+  // set pre-LLM; prevBottomLine is filled by the caller AFTER the LLM responds (extracted from the
+  // analysis text) and persisted back to KV, so the NEXT run sees it.
+  prevMlWin?: number | null; prevBottomLine?: string | null; prevAnalysisMs?: number | null;
+}
 interface PromptSettings { accountSize?: number; riskPercent?: number; conformalGateEnabled?: boolean; }
 
 export interface BuildPromptInput {
@@ -448,6 +455,33 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
   const L = (s = '') => lines.push(s);
   const isCryptoSym = symbol.toUpperCase().endsWith('USDT');
   const newState: PromptState = { regime: prevState.regime ?? null, killDur: { ...(prevState.killDur ?? {}) }, killDurCandleMs: prevState.killDurCandleMs ?? null, nakedPOC: prevState.nakedPOC ?? null };
+
+  // #6 — SINCE LAST ANALYSIS: a snapshot of the previous run for this symbol so the LLM can lead
+  // with what CHANGED (the antidote to same-y serial reads). Emitted only when the prior state is
+  // present and fresh (<3 days). prevMlWin/prevAnalysisMs are stamped now; prevBottomLine is filled
+  // by the /full-analysis caller AFTER the LLM responds and persisted back, so the NEXT run sees it.
+  const curMlWin = indicators[0]?.mlWinProbability ?? null;
+  {
+    const pMs = prevState.prevAnalysisMs ?? null;
+    const pWin = prevState.prevMlWin ?? null;
+    const pBL = prevState.prevBottomLine ?? null;
+    const age = pMs != null ? nowMs - pMs : -1;
+    if (age > 0 && age < 86_400_000 * 3) {
+      const ageMin = Math.round(age / 60_000);
+      const ageStr = ageMin < 60 ? `${ageMin}m` : `${(ageMin / 60).toFixed(1)}h`;
+      L(); L('=== SINCE LAST ANALYSIS ===');
+      L(`Previous analysis: ${ageStr} ago.`);
+      if (pWin != null && curMlWin != null) {
+        const thenPct = Math.round(pWin * 100), nowPct = Math.round(curMlWin * 100), d = nowPct - thenPct;
+        L(`ML move-likelihood then → now: ${thenPct}% → ${nowPct}% (${d > 0 ? `rising +${d}pp` : d < 0 ? `falling ${d}pp` : 'flat'}).`);
+      }
+      if (pBL) L(`Previous Bottom Line: "${pBL}"`);
+      L('→ If something material changed (ML ≥15pp, regime flip, a flag newly fired/cleared, a level newly IN_PLAY), LEAD the Bottom Line with it. If not, say "largely unchanged" and keep the whole output short.');
+    }
+  }
+  newState.prevMlWin = curMlWin;
+  newState.prevAnalysisMs = nowMs;
+  newState.prevBottomLine = prevState.prevBottomLine ?? null;
 
   if (dataQuality?.promptSection) { L(); L('=== DATA QUALITY ==='); L(dataQuality.promptSection); }
   if (crossAsset) {

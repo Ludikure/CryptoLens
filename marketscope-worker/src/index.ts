@@ -1323,6 +1323,15 @@ export default {
         const text = llm.text;
         const setups = parseSetups(text);
 
+        // #6 — persist the fresh Bottom Line so the NEXT analysis of this symbol can lead with what
+        // changed (newState already carries this run's ML win + timestamp). Best-effort; the early
+        // put above already saved regime/kill/POC state in case this fails.
+        try {
+          const m = text.match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
+          const bl = m ? m[1].replace(/\s+/g, ' ').trim().slice(0, 320) : null;
+          if (bl) await env.ALERTS.put(stateKey, JSON.stringify({ ...newState, prevBottomLine: bl }), { expirationTtl: 86400 * 7 });
+        } catch { /* best-effort */ }
+
         return json({
           symbol, isCrypto, timestamp: Date.now(), model, analysis: text, setups,
           ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: tailRiskInfo(indicators[0].mlBigMoveProb) },
