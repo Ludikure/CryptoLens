@@ -559,6 +559,19 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-06-29 — Analysis prompt retune: collapse skeleton, mode switch, prior-analysis delta
+
+**Fixes the "every analysis feels the same / too long" complaint at the structural level.** Root cause was the OUTPUT FORMAT, not the content: it mandated **8 `##` sections**, three of which (Environment Risk / Move Likelihood / Regime) answered the same "how dangerous/active is the tape" question, and "use `##` headers exactly" fought "LENGTH MATCHES SUBSTANCE" — so the model emitted all 8 every time. Six changes to `marketscope-worker/src/prompt-system.json` (both crypto + stock) + plumbing in `src/prompt.ts` / `src/index.ts`:
+
+- **#1 Merged the three tape sections into one `## The Tape`** + added an explicit **SHORT vs FULL mode switch** with a concrete checkable trigger (auto-FLAT AND Env Risk MODERATE/LOW AND no HIGH/ELEVATED flag AND no IN_PLAY level AND ML_WIN < FAVORABLE AND no event AND nothing changed → SHORT = Bottom Line + What to Watch only). A binary mode beats "be as short as the tape is boring."
+- **#2 Bottom Line: hard ≤35-word plain-English cap** (was "two sentences", which let the model cram 5 hazards into two 40-word sentences).
+- **#3 Dropped the standalone `## Direction` section** (boilerplate with one word swapped) — the one-word lean now folds into the Bottom Line.
+- **#4 De-duplicated the "ML_WIN is ATR-normalized, low ≠ safe" lecture** (~5× → once); restating it trained the model to re-derive the caveat in every output, itself a source of same-y boilerplate.
+- **#5 Added two end-to-end worked examples** (quiet SHORT-mode + eventful FULL-mode) to each market, prefaced illustrative-only (don't reuse the numbers). FULL-mode word cap tightened 400→300.
+- **#6 SINCE LAST ANALYSIS delta (the structural cure for serial sameness):** `PromptState` now carries `prevMlWin` / `prevBottomLine` / `prevAnalysisMs`. `buildUserPrompt` emits a `=== SINCE LAST ANALYSIS ===` block (age, ML then→now with pp delta, prior Bottom Line) when prior state is present and <3 days old, and re-stamps `newState` with this run's ML + timestamp. `/full-analysis` extracts the fresh Bottom Line from the LLM output post-call (regex on the `## Bottom Line` section, capped 320 chars) and persists it to KV `prompt:<symbol>` so the **next** run leads with what moved. The system prompt instructs the LLM to lead the Bottom Line with the change when material (ML ≥15pp / regime flip / flag fired-cleared / level newly IN_PLAY), else "largely unchanged" + stay short.
+
+`prompt-system.json` was regenerated via a one-off build script (authoring the text as JS template literals + `JSON.stringify`, far safer than hand-escaping the `\n` in the single-line JSON values). **420/420 worker tests green** (added a #6 test; updated the systemPrompt-structure assertions for the merged section + dropped Direction header). Server bundle builds clean. Committed `5e3b41c`, pushed → GHCR Action built `ghcr.io/ludikure/marketscope:latest` (28s). **Live after a TrueNAS Update (pull_policy: always).** No iOS rebuild needed (display-only consumer of the worker analysis).
+
 ### 2026-06-27 — ⚠️ NO CLOUDFLARE WORKERS: the backend runs on the TrueNAS box. NEVER `wrangler deploy`.
 
 **The live backend is the self-hosted TrueNAS box at `marketscope.ludikure.org`** (the same `src/index.ts` worker code running on Node via the `server/` adapters — KV→SQLite, D1→better-sqlite3, R2→filesystem, cron→node-cron; commit `21bc0e7`). Its KV is a local SQLite table with **no put limits**. Cloudflare is NOT in the data path.
