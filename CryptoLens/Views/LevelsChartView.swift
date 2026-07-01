@@ -10,7 +10,7 @@ struct LevelsChartView: View {
     let levels: [WatchLevel]
     let timeframeLabel: String
 
-    private let chartHeight: CGFloat = 200
+    private let chartHeight: CGFloat = 300
     private let labelGutter: CGFloat = 92
 
     private var pMin: Double {
