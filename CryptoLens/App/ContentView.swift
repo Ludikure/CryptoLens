@@ -617,6 +617,16 @@ struct AITabContent: View {
         })
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
+        // Chart of the levels the analysis is watching — S/R, VWAP, POC/value area, and the setup's
+        // entry/stop/targets — so you can see where price sits relative to what the text discusses.
+        let watchLevels = WatchLevels.build(result: result)
+        let levelCandles: [Candle] = result.tf2.candles.isEmpty ? result.daily.candles : result.tf2.candles
+        if !watchLevels.isEmpty, !levelCandles.isEmpty {
+            LevelsChartView(candles: levelCandles, currentPrice: result.daily.price,
+                            levels: watchLevels, timeframeLabel: result.tf2.candles.isEmpty ? "Daily" : "4H")
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
         Button {
             showHistory = true
         } label: {

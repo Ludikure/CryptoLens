@@ -26,6 +26,7 @@
 		1DA91CCD4AD89D7CA73F3150 /* ScoringSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A034ED23A494C9E41E6826B /* ScoringSnapshot.swift */; };
 		1DD589421F6653D764A6D74B /* FavoritesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 712D5923C993CB356F7E558C /* FavoritesStore.swift */; };
 		20A85053FF422B346C4F9605 /* AnalysisPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D1B2E6EF4E4D25DA359BC7D /* AnalysisPrompt.swift */; };
+		261514FEEB8259565509F467 /* LevelsChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885D71681696A62F6B8F1E64 /* LevelsChartView.swift */; };
 		28C17907B776E97E558A7380 /* MarketHours.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91A2649852593EF35667B3E2 /* MarketHours.swift */; };
 		311277D07A0E6B0CC72E55C3 /* OutcomeTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3E353FC7C48DFCAF7BB3931 /* OutcomeTracker.swift */; };
 		326096D60B4A374B7625C959 /* SentimentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D02DC95AF0031BFDF1DFF203 /* SentimentView.swift */; };
@@ -58,6 +59,7 @@
 		645957246AA55759B2DBDC92 /* DerivativesData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 082FF9FCE52776C592BFE849 /* DerivativesData.swift */; };
 		68B6B1452B61E92287BDC954 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF9F2D5B4EE3347239ADBDC /* ContentView.swift */; };
 		6B84693BCB47E535BE02B5C5 /* WhatsNewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97D8174D80F83C38A16FDA11 /* WhatsNewView.swift */; };
+		6C0D85673C5F3477A0E4596C /* WatchLevel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1C2EB5E783EB807B11521D6 /* WatchLevel.swift */; };
 		6EA2251B7008EFE69821AD4F /* WorkerCandlesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE56068BFB398B44077DCFAD /* WorkerCandlesService.swift */; };
 		6F6918C1DAD95FCFDCA57E15 /* ml-model-crypto.json in Resources */ = {isa = PBXBuildFile; fileRef = 8A04B3AA46E9815EE2047D9C /* ml-model-crypto.json */; };
 		73CC058F145BED37E556EFD7 /* AnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E687573C82B61768A3DA2604 /* AnalysisService.swift */; };
@@ -192,6 +194,7 @@
 		774EAFA76A70F4924070E2BA /* EarningsCalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsCalendar.swift; sourceTree = "<group>"; };
 		8165A07DFF6E9010BBFA1091 /* EconomicCalendarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EconomicCalendarService.swift; sourceTree = "<group>"; };
 		84D908C74E2725C15BE1CCCB /* HapticManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
+		885D71681696A62F6B8F1E64 /* LevelsChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelsChartView.swift; sourceTree = "<group>"; };
 		8A04B3AA46E9815EE2047D9C /* ml-model-crypto.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ml-model-crypto.json"; sourceTree = "<group>"; };
 		8D87BB163A44C9CA82CFF0F1 /* AnalysisStateMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisStateMigration.swift; sourceTree = "<group>"; };
 		9152F34D3CCD450200D49DC6 /* BiasNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiasNotificationManager.swift; sourceTree = "<group>"; };
@@ -241,6 +244,7 @@
 		ECFF75D61F6282EEA3218D2E /* EconomicCalendarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EconomicCalendarView.swift; sourceTree = "<group>"; };
 		EF69570E9D61A3D79BB147E9 /* FinnhubProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FinnhubProvider.swift; sourceTree = "<group>"; };
 		EFEAFEA0595DECFF1680C007 /* FavoritePillsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritePillsView.swift; sourceTree = "<group>"; };
+		F1C2EB5E783EB807B11521D6 /* WatchLevel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchLevel.swift; sourceTree = "<group>"; };
 		F3E353FC7C48DFCAF7BB3931 /* OutcomeTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutcomeTracker.swift; sourceTree = "<group>"; };
 		F93ABFA98862631B7B4607F9 /* Constants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Constants.swift; sourceTree = "<group>"; };
 		FA1CC172A0CDA5D6AF0FE979 /* SparklineChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparklineChart.swift; sourceTree = "<group>"; };
@@ -388,6 +392,7 @@
 				EC50FD5E89801E8670B98C86 /* FearGreedView.swift */,
 				4ACC70EF9EA70BD6354CD915 /* IndicatorTableView.swift */,
 				BCE089BD3A094D186E3B2F2F /* InfoTooltip.swift */,
+				885D71681696A62F6B8F1E64 /* LevelsChartView.swift */,
 				08FE6A3E4EF46DDD47822E60 /* MacroContextView.swift */,
 				04E451D5B1A589DBED045C12 /* OutcomeDashboardView.swift */,
 				95C1F0FBEEB3FCB16E4418C5 /* PositionSizeCalculatorView.swift */,
@@ -431,6 +436,7 @@
 				FC47550CD92B9388BB0D39AC /* StockInfo.swift */,
 				4AE84F39420DD84DD31D5AD2 /* StockSentiment.swift */,
 				EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */,
+				F1C2EB5E783EB807B11521D6 /* WatchLevel.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -610,6 +616,7 @@
 				62795D11B0D1547323A7837D /* IndicatorTableView.swift in Sources */,
 				52D9347C7ADB28DF90D6E1E3 /* InfoTooltip.swift in Sources */,
 				5EECD991E44E2BD735AFDDBF /* LayerDiagnostic.swift in Sources */,
+				261514FEEB8259565509F467 /* LevelsChartView.swift in Sources */,
 				4E4C1CFCD07E6CA5F24FB811 /* MLCalibrationService.swift in Sources */,
 				7D4EB1918FE1BBF9492608B4 /* MacroContextView.swift in Sources */,
 				8FBDB414578031715BF63F96 /* MacroDataService.swift in Sources */,
@@ -649,6 +656,7 @@
 				3E9DD0F27577A3A9567C0FC0 /* TradeSetupChartView.swift in Sources */,
 				C05DE975C43EE58FD3D930EF /* ViewHelpers.swift in Sources */,
 				4022873D15F6D82DC37F348F /* ViewToImage.swift in Sources */,
+				6C0D85673C5F3477A0E4596C /* WatchLevel.swift in Sources */,
 				04F2B48A42BAAC63001FF28C /* WatchlistView.swift in Sources */,
 				6B84693BCB47E535BE02B5C5 /* WhatsNewView.swift in Sources */,
 				6EA2251B7008EFE69821AD4F /* WorkerCandlesService.swift in Sources */,
