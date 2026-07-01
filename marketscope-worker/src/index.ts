@@ -88,7 +88,11 @@ const MAX_PROMPT_CHARS = 200_000; // ~50K tokens per field; fits within 1M conte
 const MAX_BODY_BYTES = 600_000;   // Max request body size (600KB) — covers system + user prompt + JSON wrapper headroom
 const MAX_NOTE_LENGTH = 500;     // Max alert note length
 const DEVICE_ID_REGEX = /^[a-zA-Z0-9-]{1,128}$/;
-const ALLOWED_MODELS = ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-haiku-4-5-20251001'];
+const ALLOWED_MODELS = ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-haiku-4-5-20251001'];
+// Adaptive-thinking family: Sonnet 5 + Opus 4.7/4.8 REJECT manual `thinking:{budget_tokens}` AND
+// non-default `temperature`/`top_p`/`top_k` with a 400. They use adaptive thinking + the `effort`
+// knob instead. (Sonnet 4.6 / Opus 4.6 / Haiku 4.5 still accept the legacy budget_tokens path.)
+const EFFORT_MODELS = new Set(['claude-sonnet-5', 'claude-opus-4-7', 'claude-opus-4-8']);
 const DEEPSEEK_MODELS = ['deepseek-reasoner', 'deepseek-chat'];
 const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-pro'];
 
@@ -136,15 +140,30 @@ async function callLLM(env: Env, opts: { provider?: string; model?: string; syst
   // Claude (default)
   if (!env.CLAUDE_API_KEY) return { ok: false, status: 503, error: 'AI not configured' };
   const model = ALLOWED_MODELS.includes(opts.model ?? '') ? opts.model! : 'claude-sonnet-4-6';
-  const thinkingBudget = opts.thinkingBudget && opts.thinkingBudget >= 1024 ? opts.thinkingBudget : null;
+  // `thinkingBudget` from the client is now just an ON/OFF signal for thinking (>=1024 = on). On the
+  // legacy models the number is still used as the literal budget; on the effort family it only
+  // decides adaptive-on vs disabled (depth is set by `effort`).
+  const wantThinking = !!(opts.thinkingBudget && opts.thinkingBudget >= 1024);
   const reqBody: Record<string, unknown> = {
     model,
-    max_tokens: thinkingBudget ? thinkingBudget + 4000 : 4000,
-    temperature: thinkingBudget ? 1 : 0,
     system: opts.system,
     messages: [{ role: 'user', content: opts.prompt }],
   };
-  if (thinkingBudget) reqBody.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+  if (EFFORT_MODELS.has(model)) {
+    // Sonnet 5 / Opus 4.7-4.8: adaptive thinking + effort. No temperature (400 if non-default),
+    // no budget_tokens (400). `high` effort ≈ the old "extended thinking" depth (deep on hard
+    // bars, skipped on trivial ones). max_tokens is a HARD cap on thinking+text — generous so a
+    // deep think can't truncate the ~400-word analysis (Sonnet 5's tokenizer runs ~30% hotter).
+    reqBody.thinking = { type: wantThinking ? 'adaptive' : 'disabled' };
+    reqBody.output_config = { effort: wantThinking ? 'high' : 'medium' };
+    reqBody.max_tokens = wantThinking ? 32000 : 8000;
+  } else {
+    // Legacy family (Sonnet 4.6 / Opus 4.6 / Haiku 4.5): manual budget_tokens still accepted.
+    const thinkingBudget = wantThinking ? opts.thinkingBudget! : null;
+    reqBody.max_tokens = thinkingBudget ? thinkingBudget + 4000 : 4000;
+    reqBody.temperature = thinkingBudget ? 1 : 0;
+    if (thinkingBudget) reqBody.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+  }
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: { 'x-api-key': env.CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'context-1m-2025-08-07', 'content-type': 'application/json' },

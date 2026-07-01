@@ -26,8 +26,13 @@ enum AIProviderType: String, Codable, CaseIterable, Identifiable {
     /// cost than the next tier up.
     var models: [(id: String, name: String)] {
         switch self {
+        // NB: the "@thinking-N" suffix is now just an ON/OFF signal. On Sonnet 5 / Opus 4.7 the
+        // worker uses adaptive thinking + `effort: high` (manual budget_tokens 400s on those); the
+        // number is only honored on the legacy Sonnet 4.6 / Opus 4.6 budget path.
         case .claude: return [
-            ("claude-sonnet-4-6@thinking-8000", "Sonnet 4.6 + Extended Thinking (recommended)"),
+            ("claude-sonnet-5@thinking-8000", "Sonnet 5 + Extended Thinking (recommended)"),
+            ("claude-sonnet-5", "Sonnet 5 (faster, no thinking)"),
+            ("claude-sonnet-4-6@thinking-8000", "Sonnet 4.6 + Extended Thinking"),
             ("claude-sonnet-4-6", "Sonnet 4.6 (faster, no thinking)"),
             ("claude-opus-4-7@thinking-10000", "Opus 4.7 + Extended Thinking (max quality)"),
             ("claude-opus-4-7", "Opus 4.7"),
