@@ -604,6 +604,12 @@ struct AITabContent: View {
         if !result.tradeSetups.isEmpty {
             SanityCheckCard(result: result)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+            // #2 — exact risk-based position size for each setup (tap "Adjust" for a live calculator).
+            ForEach(result.tradeSetups) { setup in
+                PositionSizeCard(symbol: result.symbol, setup: setup)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            }
         }
 
         ClaudeAnalysisView(markdown: result.claudeAnalysis, aiLoadingPhase: service.aiLoadingPhase, isStale: service.isAIStale, analysisTimestamp: result.analysisTimestamp, onRunAnalysis: {

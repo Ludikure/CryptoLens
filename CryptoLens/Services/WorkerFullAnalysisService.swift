@@ -40,23 +40,61 @@ enum WorkerFullAnalysisService {
     }
 
     static func analyze(symbol: String, provider: String = "claude", modelID: String = "") async throws -> Result {
-        // /full-analysis is auth-gated. ensureAuth obtains a token if we have none; a 401
+        // /full-analysis/async is auth-gated. ensureAuth obtains a token if we have none; a 401
         // self-heals once via handleAuthFailure (rotate deviceId + re-register), matching
         // WorkerMLService so server analysis doesn't dead-end on a stale token.
         await PushService.ensureAuth()
         do {
-            return try await post(symbol: symbol, provider: provider, modelID: modelID)
+            return try await runJob(symbol: symbol, provider: provider, modelID: modelID)
         } catch FetchError.unauthorized {
             await PushService.handleAuthFailure()
-            return try await post(symbol: symbol, provider: provider, modelID: modelID)
-        } catch {
-            // One retry for a transient blip (HTTP 0 / connection lost during a brief background /
-            // self-hosted box hiccup). Extended-thinking calls are long enough that a single
-            // network stumble shouldn't sink the whole analysis.
-            guard isTransient(error) else { throw error }
-            try? await Task.sleep(nanoseconds: 800_000_000)
-            return try await post(symbol: symbol, provider: provider, modelID: modelID)
+            return try await runJob(symbol: symbol, provider: provider, modelID: modelID)
         }
+    }
+
+    /// Fire-and-forget: start (or resume) a detached analysis job on the box and poll for the
+    /// result. The box runs the ~30-90s pipeline independent of the phone, so a screen-lock /
+    /// app-suspend can't kill it — each poll is a short request, and while the app is frozen the
+    /// box keeps working; on resume the next poll returns the finished result. If the app was
+    /// force-killed, `pendingJob(for:)` lets a later call RESUME the same job (no second LLM spend).
+    private static func runJob(symbol: String, provider: String, modelID: String) async throws -> Result {
+        var jobId: String
+        if let existing = pendingJob(for: symbol) {
+            jobId = existing
+        } else {
+            jobId = try await startAsyncJob(symbol: symbol, provider: provider, modelID: modelID)
+            storePendingJob(jobId, symbol: symbol)
+        }
+
+        let deadline = Date().addingTimeInterval(180)   // generous — covers a slow extended-thinking run
+        var transientStreak = 0
+        var restarted = false
+        while Date() < deadline {
+            do {
+                switch try await pollResult(jobId: jobId) {
+                case .pending:
+                    transientStreak = 0
+                case .done(let r):
+                    clearPendingJob(symbol: symbol)
+                    return r
+                case .failed(let msg):
+                    clearPendingJob(symbol: symbol)
+                    throw FetchError.server(msg)
+                case .expired:
+                    // Job fell out of the box's KV (restart or >1h). Restart once, else give up.
+                    clearPendingJob(symbol: symbol)
+                    guard !restarted else { throw FetchError.server("Analysis job expired") }
+                    restarted = true
+                    jobId = try await startAsyncJob(symbol: symbol, provider: provider, modelID: modelID)
+                    storePendingJob(jobId, symbol: symbol)
+                }
+            } catch let e where isTransient(e) {
+                transientStreak += 1
+                if transientStreak > 10 { throw e }   // ~30s of continuous failures → surface it
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)   // poll every 3s
+        }
+        throw FetchError.server("Analysis timed out")
     }
 
     private static func isTransient(_ error: Error) -> Bool {
@@ -159,19 +197,85 @@ enum WorkerFullAnalysisService {
         )
     }
 
-    private static func post(symbol: String, provider: String, modelID: String) async throws -> Result {
-        guard let url = endpointURL else { throw FetchError.missingURL }
-        let bodyDict = await buildBody(symbol: symbol, provider: provider, modelID: modelID)
+    // MARK: - Async job (fire-and-forget)
 
+    private enum PollOutcome { case pending; case done(Result); case failed(String); case expired }
+
+    /// POST /full-analysis/async → returns the jobId. Short request; the heavy work is detached.
+    private static func startAsyncJob(symbol: String, provider: String, modelID: String) async throws -> String {
+        guard let url = URL(string: "\(PushService.workerURL)/full-analysis/async") else { throw FetchError.missingURL }
+        let bodyDict = await buildBody(symbol: symbol, provider: provider, modelID: modelID)
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 120   // extended thinking can take ~60s
+        request.timeoutInterval = 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         PushService.addAuthHeaders(&request)
         request.httpBody = try JSONSerialization.data(withJSONObject: bodyDict)
-
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw FetchError.http(0) }
-        return try parse(status: http.statusCode, data: data)
+        if http.statusCode == 401 { throw FetchError.unauthorized }
+        guard (200..<300).contains(http.statusCode) else {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = obj["error"] as? String { throw FetchError.server(err) }
+            throw FetchError.http(http.statusCode)
+        }
+        struct Started: Decodable { let jobId: String }
+        guard let s = try? JSONDecoder().decode(Started.self, from: data) else { throw FetchError.decode }
+        return s.jobId
+    }
+
+    /// GET /full-analysis/result?jobId= → pending / done / failed / expired. The `result` field of a
+    /// done job is the same shape as the sync /full-analysis body, so it reuses `parse`.
+    private static func pollResult(jobId: String) async throws -> PollOutcome {
+        guard let url = URL(string: "\(PushService.workerURL)/full-analysis/result?jobId=\(jobId)") else { throw FetchError.missingURL }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 15
+        PushService.addAuthHeaders(&request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw FetchError.http(0) }
+        if http.statusCode == 401 { throw FetchError.unauthorized }
+        if http.statusCode == 404 { return .expired }
+        guard (200..<300).contains(http.statusCode) else { throw FetchError.http(http.statusCode) }
+        struct Envelope: Decodable { let status: String; let error: String? }
+        guard let env = try? JSONDecoder().decode(Envelope.self, from: data) else { throw FetchError.decode }
+        switch env.status {
+        case "done":
+            guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let result = obj["result"],
+                  let rdata = try? JSONSerialization.data(withJSONObject: result) else { throw FetchError.decode }
+            return .done(try parse(status: 200, data: rdata))
+        case "error": return .failed(env.error ?? "Analysis failed")
+        case "expired": return .expired
+        default: return .pending
+        }
+    }
+
+    // MARK: - Pending-job persistence (survives app kill → resume without a second LLM spend)
+
+    private static func jobKey(_ symbol: String) -> String { "pending_analysis_job_\(symbol)" }
+
+    /// A recent (<3 min) in-flight jobId for this symbol, if any. Stale entries are pruned.
+    static func pendingJob(for symbol: String) -> String? {
+        let d = UserDefaults.standard
+        guard let jid = d.string(forKey: jobKey(symbol)) else { return nil }
+        if Date().timeIntervalSince1970 - d.double(forKey: jobKey(symbol) + "_at") > 180 {
+            clearPendingJob(symbol: symbol); return nil
+        }
+        return jid
+    }
+
+    /// Whether a resumable analysis job is outstanding for this symbol (drives foreground recovery).
+    static func hasPendingJob(for symbol: String) -> Bool { pendingJob(for: symbol) != nil }
+
+    private static func storePendingJob(_ jobId: String, symbol: String) {
+        let d = UserDefaults.standard
+        d.set(jobId, forKey: jobKey(symbol))
+        d.set(Date().timeIntervalSince1970, forKey: jobKey(symbol) + "_at")
+    }
+
+    private static func clearPendingJob(symbol: String) {
+        let d = UserDefaults.standard
+        d.removeObject(forKey: jobKey(symbol))
+        d.removeObject(forKey: jobKey(symbol) + "_at")
     }
 }

@@ -96,6 +96,13 @@ struct MarketScopeApp: App {
                     case .active:
                         if let symbol = analysisService.currentSymbol {
                             analysisService.startAutoRefresh(symbol: symbol)
+                            // Fire-and-forget recovery: if an analysis job for this symbol was left
+                            // in flight when the app was backgrounded/killed, resume it — the box
+                            // finished it while we were away, so this returns the cached result with
+                            // no second LLM spend. (Tapping the "analysis ready" push lands here too.)
+                            if WorkerFullAnalysisService.hasPendingJob(for: symbol), !analysisService.isLoading {
+                                Task { await analysisService.runFullAnalysis(symbol: symbol) }
+                            }
                         }
                         alertsStore.processPendingBackgroundAlerts()
                         alertsStore.syncFromServer()

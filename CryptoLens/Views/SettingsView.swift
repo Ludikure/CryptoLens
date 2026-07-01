@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
     @AppStorage("contractSize") private var contractSize: Double = 0.01
     @AppStorage("daily_trade_cadence") private var dailyTradeCadence: Int = 2
+    @AppStorage("max_leverage") private var maxLeverage: Double = 3.0
 
     var body: some View {
         NavigationStack {
@@ -139,6 +140,12 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Text("Contract: \(String(format: "%g", contractSize)) units (e.g. 0.01 = nano BTC)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Stepper(value: $maxLeverage, in: 1...20, step: 0.5) {
+                        Text("Max leverage: \(String(format: "%.1f", maxLeverage))×")
+                    }
+                    Text("Warns on the setup card when a size's notional exceeds this multiple of your account.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Stepper("Trades per day: \(dailyTradeCadence)", value: $dailyTradeCadence, in: 1...10)
