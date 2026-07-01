@@ -175,6 +175,129 @@ async function callLLM(env: Env, opts: { provider?: string; model?: string; syst
   return { ok: true, text, model };
 }
 
+// The full-analysis pipeline end-to-end: candles → indicators → ML overlay → enrichment → STATEFUL
+// prompt (buildUserPrompt, KV-backed regime/kill/POC state) → LLM → parsed setups → result object.
+// Extracted so BOTH the synchronous /full-analysis (web app) and the detached /full-analysis/async
+// (iOS fire-and-forget) share one code path. Returns a typed ok/error union for expected conditions;
+// throws on unexpected failures (callers wrap). Does NOT rate-limit or serialize — callers do.
+type CoreResult = { ok: true; result: any } | { ok: false; status: number; error: string };
+async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, body: any, deviceId: string): Promise<CoreResult> {
+  const { daily, fourH, oneH } = await fetchAllTimeframesCached(env, symbol, isCrypto);
+  if (!daily.length) return { ok: false, status: 404, error: 'No candles' };
+  const indicators: PromptIndicator[] = [computeFullIndicators(daily as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
+  if (fourH.length) indicators.push(computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
+  if (oneH.length) indicators.push(computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
+
+  // Phase 1: HAR-RV expected-range forecast (crypto-only; needs 721+ 1H closes for rv_30d). Best-effort.
+  let volForecast = null;
+  if (isCrypto) {
+    try {
+      const closes1h = await fetchFapiCloses(symbol, 750);
+      volForecast = forecastVol(closes1h, true, closes1h[closes1h.length - 1] ?? indicators[0].price);
+    } catch { /* vol forecast best-effort */ }
+  }
+
+  // ML overlay onto the daily indicator (cron-cached ml_preds:all; best-effort).
+  try {
+    const cached = await env.ALERTS.get('ml_preds:all');
+    if (cached) {
+      const e = (JSON.parse(cached) as Record<string, any>)[symbol];
+      if (e) {
+        const d = indicators[0];
+        d.mlWinProbability = e.probability ?? null;
+        d.mlPersistenceProbability = e.probabilityH72 ?? null;
+        d.mlBigMoveProb = e.bigMoveProb ?? null;
+        d.mlDirectionUp = e.pUp ?? null;
+        d.mlConfident = e.confident ?? null;
+        d.mlMetaDirection = e.metaDirection ?? null;
+        d.mlMetaProbability = e.probabilityMeta ?? null;
+        d.mlQ75 = e.q75 ?? null;
+      }
+    }
+  } catch { /* ML overlay best-effort — prompt degrades gracefully without it */ }
+
+  // Outcome feedback loop — last resolved trades for this device+symbol+model.
+  let outcomeHistory: Array<{ direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null }> = [];
+  try {
+    const modelVersion = isCrypto ? 11 : 13;
+    const res = await env.DB.prepare(
+      `SELECT direction, entry_price, outcome, ml_probability, conviction FROM trade_outcomes
+       WHERE device_id = ? AND symbol = ? AND model_version = ? AND outcome IS NOT NULL
+       ORDER BY opened_at DESC LIMIT 10`
+    ).bind(deviceId, symbol, modelVersion).all();
+    outcomeHistory = (res.results as any[]).map(r => ({ direction: r.direction, entry: r.entry_price, outcome: r.outcome, mlProb: r.ml_probability, conviction: r.conviction }));
+  } catch { /* best-effort */ }
+
+  // Enrichment (additive, best-effort, parallel).
+  const nowMs = Date.now();
+  const [deriv, macro, spotPressure, sentiment, crossAsset, economicEvents, stock] = await Promise.all([
+    isCrypto ? fetchDerivativesEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
+    fetchMacroEnrichment(env).catch(() => null),
+    isCrypto ? fetchSpotPressureEnrichment(symbol).catch(() => null) : Promise.resolve(null),
+    isCrypto ? fetchSentimentEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
+    isCrypto ? fetchCrossAssetEnrichment().catch(() => null) : Promise.resolve(null),
+    fetchEconomicEvents(nowMs).catch(() => []),
+    !isCrypto ? fetchStockEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
+  ]);
+
+  // Stateful prompt build — KV-backed prevState (regime staleness, kill durations, naked POC).
+  const stateKey = `prompt:${symbol}`;
+  let prevState: PromptState = {};
+  try { const s = await env.ALERTS.get(stateKey); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh state */ }
+  const settings = {
+    accountSize: Number.isFinite(body.accountSize) && body.accountSize > 0 ? body.accountSize : undefined,
+    riskPercent: Number.isFinite(body.riskPercent) && body.riskPercent > 0 ? Math.min(body.riskPercent, 100) : undefined,
+    conformalGateEnabled: body.conformalGateEnabled === true,
+  };
+  const activeSetups = Array.isArray(body.activeSetups) ? body.activeSetups : [];
+  const riskStates = computeRiskStates({
+    isCrypto,
+    atrPercentile: indicators[0].atrPercentile,
+    bbSqueezeDaily: indicators[0].bollingerBands?.squeeze, bbSqueeze4h: indicators[1]?.bollingerBands?.squeeze,
+    bbPercentBDaily: indicators[0].bollingerBands?.percentB ?? null,
+    longPct: deriv?.derivatives?.globalLongPercent ?? null,
+    fundingZ: deriv?.derivatives ? deriv.derivatives.fundingRatePercent / 0.025 : null,
+    oiChangePct: deriv?.derivatives?.oiChange4h ?? null,
+    cvdFalling: spotPressure?.cvdTrend === 'Falling',
+  });
+  const { prompt, newState } = buildUserPrompt({
+    symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
+    derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
+    stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
+  });
+  try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
+
+  // Dry-run: return the built prompt (no LLM call) for parity inspection.
+  if (body.promptOnly === true) {
+    const sections = (prompt.match(/^=== .* ===$/gm) || []).map(s => s.replace(/=/g, '').trim());
+    return { ok: true, result: { symbol, isCrypto, length: prompt.length, sectionCount: sections.length, sections, prompt } };
+  }
+
+  if (prompt.length > MAX_PROMPT_CHARS) return { ok: false, status: 413, error: 'Prompt too large' };
+  const system = systemPrompt(isCrypto);
+  const provider = typeof body.provider === 'string' ? body.provider : 'claude';
+  const thinkingBudget = body.thinkingBudget === 0 ? 0
+    : (Number.isFinite(body.thinkingBudget) && body.thinkingBudget >= 1024 ? body.thinkingBudget : 8000);
+  const llm = await callLLM(env, { provider, model: body.model, system, prompt, thinkingBudget });
+  if (!llm.ok) return { ok: false, status: llm.status, error: llm.error };
+  const setups = parseSetups(llm.text);
+
+  // #6 — persist the fresh Bottom Line so the NEXT analysis leads with what changed.
+  try {
+    const m = llm.text.match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
+    const bl = m ? m[1].replace(/\s+/g, ' ').trim().slice(0, 320) : null;
+    if (bl) await env.ALERTS.put(stateKey, JSON.stringify({ ...newState, prevBottomLine: bl }), { expirationTtl: 86400 * 7 });
+  } catch { /* best-effort */ }
+
+  return { ok: true, result: {
+    symbol, isCrypto, timestamp: Date.now(), model: llm.model, analysis: llm.text, setups,
+    ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: tailRiskInfo(indicators[0].mlBigMoveProb) },
+    vol: volForecast,
+    riskStates,
+    bias: { daily: indicators[0].bias, fourH: indicators[1]?.bias ?? null, oneH: indicators[2]?.bias ?? null },
+  } };
+}
+
 // Yahoo crumb/cookie auth. At module scope so BOTH the fetch handler and the
 // archiveShortInterest cron can call it — it was previously nested inside fetch(), which made
 // the cron's call a ReferenceError (short-interest archiving never worked; logged every tick).
@@ -1227,140 +1350,85 @@ export default {
       const isCrypto = symbol.endsWith('USDT');
 
       try {
-        const { daily, fourH, oneH } = await fetchAllTimeframesCached(env, symbol, isCrypto);
-        if (!daily.length) return json({ error: 'No candles', symbol }, 404);
-        const indicators: PromptIndicator[] = [computeFullIndicators(daily as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
-        if (fourH.length) indicators.push(computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
-        if (oneH.length) indicators.push(computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
-
-        // Phase 1: HAR-RV expected-range forecast (crypto-only; needs 721+ 1H closes for rv_30d,
-        // so a dedicated deep fetch — fetchAllTimeframes only pulls 300). Best-effort.
-        let volForecast = null;
-        if (isCrypto) {
-          try {
-            const closes1h = await fetchFapiCloses(symbol, 750);
-            volForecast = forecastVol(closes1h, true, closes1h[closes1h.length - 1] ?? indicators[0].price);
-          } catch { /* vol forecast best-effort */ }
-        }
-
-        // ML overlay onto the daily indicator (cron-cached ml_preds:all; best-effort).
-        try {
-          const cached = await env.ALERTS.get('ml_preds:all');
-          if (cached) {
-            const e = (JSON.parse(cached) as Record<string, any>)[symbol];
-            if (e) {
-              const d = indicators[0];
-              d.mlWinProbability = e.probability ?? null;
-              d.mlPersistenceProbability = e.probabilityH72 ?? null;
-              d.mlBigMoveProb = e.bigMoveProb ?? null;
-              d.mlDirectionUp = e.pUp ?? null;
-              d.mlConfident = e.confident ?? null;
-              d.mlMetaDirection = e.metaDirection ?? null;
-              d.mlMetaProbability = e.probabilityMeta ?? null;
-              d.mlQ75 = e.q75 ?? null;
-            }
-          }
-        } catch { /* ML overlay best-effort — prompt degrades gracefully without it */ }
-
-        // Outcome feedback loop — last resolved trades for this device+symbol+model.
-        let outcomeHistory: Array<{ direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null }> = [];
-        try {
-          const modelVersion = isCrypto ? 11 : 13;
-          const res = await env.DB.prepare(
-            `SELECT direction, entry_price, outcome, ml_probability, conviction FROM trade_outcomes
-             WHERE device_id = ? AND symbol = ? AND model_version = ? AND outcome IS NOT NULL
-             ORDER BY opened_at DESC LIMIT 10`
-          ).bind(deviceId, symbol, modelVersion).all();
-          outcomeHistory = (res.results as any[]).map(r => ({ direction: r.direction, entry: r.entry_price, outcome: r.outcome, mlProb: r.ml_probability, conviction: r.conviction }));
-        } catch { /* best-effort */ }
-
-        // Enrichment (additive, best-effort, parallel). Crypto: Binance derivatives + positioning.
-        // Both markets: macro (FRED/DXY from the /macro cache). The rest of the enrichment
-        // (sentiment/stockInfo/stockSentiment/cross-asset/economic events) is layered in next.
-        const nowMs = Date.now();
-        const [deriv, macro, spotPressure, sentiment, crossAsset, economicEvents, stock] = await Promise.all([
-          isCrypto ? fetchDerivativesEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
-          fetchMacroEnrichment(env).catch(() => null),
-          isCrypto ? fetchSpotPressureEnrichment(symbol).catch(() => null) : Promise.resolve(null),
-          isCrypto ? fetchSentimentEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
-          isCrypto ? fetchCrossAssetEnrichment().catch(() => null) : Promise.resolve(null),
-          fetchEconomicEvents(nowMs).catch(() => []),   // both markets — macro events drive the Macro Risk flag + kill
-          !isCrypto ? fetchStockEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
-        ]);
-
-        // Stateful prompt build — KV-backed prevState (regime staleness, kill durations, naked POC).
-        const stateKey = `prompt:${symbol}`;
-        let prevState: PromptState = {};
-        try { const s = await env.ALERTS.get(stateKey); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh state */ }
-        // Position-sizing inputs from the client (web Settings / iOS). Coerced + bounded so
-        // the CANDIDATE SETUPS sizing uses the user's real risk budget instead of the $500 default.
-        const settings = {
-          accountSize: Number.isFinite(body.accountSize) && body.accountSize > 0 ? body.accountSize : undefined,
-          riskPercent: Number.isFinite(body.riskPercent) && body.riskPercent > 0 ? Math.min(body.riskPercent, 100) : undefined,
-          conformalGateEnabled: body.conformalGateEnabled === true,
-        };
-        // Active tracked trades (Active Trade State / C8). The client (iOS) sends its open
-        // positions so the server prompt can emit the same "manage this trade" section the
-        // local path does — the one piece the worker can't know on its own.
-        const activeSetups = Array.isArray(body.activeSetups) ? body.activeSetups : [];
-        const riskStates = computeRiskStates({
-          isCrypto,
-          atrPercentile: indicators[0].atrPercentile,
-          bbSqueezeDaily: indicators[0].bollingerBands?.squeeze, bbSqueeze4h: indicators[1]?.bollingerBands?.squeeze,
-          bbPercentBDaily: indicators[0].bollingerBands?.percentB ?? null,
-          longPct: deriv?.derivatives?.globalLongPercent ?? null,
-          fundingZ: deriv?.derivatives ? deriv.derivatives.fundingRatePercent / 0.025 : null,
-          oiChangePct: deriv?.derivatives?.oiChange4h ?? null,
-          cvdFalling: spotPressure?.cvdTrend === 'Falling',
-        });
-        const { prompt, newState } = buildUserPrompt({
-          symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-          derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
-          stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
-        });
-        try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
-
-        // Dry-run: return the built prompt (no LLM call) so the server prompt can be inspected /
-        // diffed against the iOS prompt for parity. Cheap (no Claude tokens).
-        if (body.promptOnly === true) {
-          const sections = (prompt.match(/^=== .* ===$/gm) || []).map(s => s.replace(/=/g, '').trim());
-          return json({ symbol, isCrypto, length: prompt.length, sectionCount: sections.length, sections, prompt });
-        }
-
-        if (prompt.length > MAX_PROMPT_CHARS) return json({ error: 'Prompt too large' }, 413);
-        const system = systemPrompt(isCrypto);
-
-        // Provider selection (Claude / Gemini / DeepSeek) — the client picks via Settings and sends
-        // `provider` + `model`. Claude defaults to extended thinking (8000-token budget — matches the
-        // iOS "recommended" setting); client can override via thinkingBudget, or pass 0 to disable.
-        const provider = typeof body.provider === 'string' ? body.provider : 'claude';
-        const thinkingBudget = body.thinkingBudget === 0 ? 0
-          : (Number.isFinite(body.thinkingBudget) && body.thinkingBudget >= 1024 ? body.thinkingBudget : 8000);
-        const llm = await callLLM(env, { provider, model: body.model, system, prompt, thinkingBudget });
-        if (!llm.ok) return json({ error: llm.error }, llm.status);
-        const model = llm.model;
-        const text = llm.text;
-        const setups = parseSetups(text);
-
-        // #6 — persist the fresh Bottom Line so the NEXT analysis of this symbol can lead with what
-        // changed (newState already carries this run's ML win + timestamp). Best-effort; the early
-        // put above already saved regime/kill/POC state in case this fails.
-        try {
-          const m = text.match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
-          const bl = m ? m[1].replace(/\s+/g, ' ').trim().slice(0, 320) : null;
-          if (bl) await env.ALERTS.put(stateKey, JSON.stringify({ ...newState, prevBottomLine: bl }), { expirationTtl: 86400 * 7 });
-        } catch { /* best-effort */ }
-
-        return json({
-          symbol, isCrypto, timestamp: Date.now(), model, analysis: text, setups,
-          ml: { win: indicators[0].mlWinProbability ?? null, persistence: indicators[0].mlPersistenceProbability ?? null, directionUp: indicators[0].mlDirectionUp ?? null, bigMove: tailRiskInfo(indicators[0].mlBigMoveProb) },
-          vol: volForecast,
-          riskStates,
-          bias: { daily: indicators[0].bias, fourH: indicators[1]?.bias ?? null, oneH: indicators[2]?.bias ?? null },
-        });
+        const r = await runFullAnalysisCore(env, symbol, isCrypto, body, deviceId);
+        return r.ok ? json(r.result) : json({ error: r.error, symbol }, r.status);
       } catch (e) {
         return json({ error: `Full analysis failed: ${e}`, symbol }, 500);
       }
+    }
+
+    // Fire-and-forget analysis: mint a jobId, run the (~30-90s) pipeline DETACHED on the box's Node
+    // event loop (which keeps it alive after this response returns — no ctx.waitUntil needed since
+    // the box is a persistent process, not a Worker isolate), and immediately return {jobId}. The
+    // phone can lock its screen / background the app without killing the analysis; it polls
+    // /full-analysis/result and, as a backstop, gets an APNs "ready" push. This is the permanent fix
+    // for "analysis fails when the screen turns off mid-call".
+    if (path === '/full-analysis/async' && request.method === 'POST') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const limited = await checkRateLimit(env, `analyze:${deviceId}`, RATE_LIMIT_ANALYZE);
+      if (limited) return json({ error: 'Rate limited. Max 30 analyses per hour.' }, 429);
+
+      let body: any = {};
+      try { body = await request.json(); } catch { /* allow empty body */ }
+      const symbol = sanitizeSymbol(body.symbol || url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const isCrypto = symbol.endsWith('USDT');
+      const jobId = crypto.randomUUID();
+      const jobKey = `analysis_job:${jobId}`;
+      await env.ALERTS.put(jobKey, JSON.stringify({ status: 'pending', symbol, createdAt: Date.now() }), { expirationTtl: 3600 });
+
+      // Detached: continues on the event loop after we respond.
+      void (async () => {
+        const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+        try {
+          const r = await runFullAnalysisCore(env, symbol, isCrypto, body, deviceId);
+          const done = r.ok
+            ? { status: 'done', symbol, result: r.result, finishedAt: Date.now(), claimed: false }
+            : { status: 'error', symbol, error: r.error, code: r.status, finishedAt: Date.now(), claimed: false };
+          await env.ALERTS.put(jobKey, JSON.stringify(done), { expirationTtl: 3600 });
+
+          // APNs backstop. Wait a few seconds first: if the app is in the foreground and polling, its
+          // GET /full-analysis/result marks the job `claimed`, and we suppress the push (no redundant
+          // banner). If the screen is locked (poll suspended), it stays unclaimed → the push fires and
+          // the user gets the Bottom Line + a tap-to-open. Best-effort throughout.
+          await sleep(5000);
+          try {
+            const cur = await env.ALERTS.get(jobKey);
+            const claimed = cur ? (JSON.parse(cur).claimed === true) : true;
+            const pushToken = claimed ? null : await getPushToken(env, deviceId);
+            if (pushToken) {
+              const title = r.ok ? `${symbol} analysis ready` : `${symbol} analysis failed`;
+              let bodyTxt = 'Tap to view';
+              if (r.ok) {
+                const bl = String(r.result?.analysis || '').match(/##\s*Bottom Line\s*\n([^\n]+)/i);
+                if (bl) bodyTxt = bl[1].trim().slice(0, 160);
+              } else { bodyTxt = r.error || 'Try again'; }
+              await sendAPNs(env, pushToken, title, bodyTxt);
+            }
+          } catch { /* push best-effort */ }
+        } catch (e) {
+          await env.ALERTS.put(jobKey, JSON.stringify({ status: 'error', symbol, error: `${e}`, finishedAt: Date.now(), claimed: false }), { expirationTtl: 3600 }).catch(() => {});
+        }
+      })();
+
+      return json({ jobId, status: 'pending', symbol });
+    }
+
+    // Poll an async analysis job. Returns {status: pending|done|error, result?|error?}. The first
+    // time it returns a finished job it flips `claimed` so the completion push is suppressed (the app
+    // is clearly foregrounded and watching).
+    if (path === '/full-analysis/result' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const jobId = url.searchParams.get('jobId') || '';
+      if (!/^[a-f0-9-]{16,64}$/i.test(jobId)) return json({ error: 'Bad jobId' }, 400);
+      const raw = await env.ALERTS.get(`analysis_job:${jobId}`);
+      if (!raw) return json({ status: 'expired' }, 404);
+      const job = JSON.parse(raw);
+      if ((job.status === 'done' || job.status === 'error') && job.claimed !== true) {
+        job.claimed = true;
+        await env.ALERTS.put(`analysis_job:${jobId}`, JSON.stringify(job), { expirationTtl: 3600 }).catch(() => {});
+      }
+      return json(job);
     }
 
     if (path === '/ml-models/version') {
