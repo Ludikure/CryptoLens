@@ -559,6 +559,12 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-07-02 — "Constant auto-FLAT" fix: ML calibration drift + low-ML-in-trend reframe (commit 3bfaace)
+
+User: "no trade / auto-FLAT for two days while BTC ran 5%." Diagnosed from live `/ml-calibration` (4290 graded samples): the static isotonic ML calibration has **drifted and compressed** — predicted 30-50% bucket realizes **65%**, the whole curve sits flat ~62-67% instead of spanning 30→80% (top bucket 70-85 realizes only 67%). So the `ML_WIN < 50 → auto_FLAT` gate was firing on bars with genuinely ~65% move odds. Two fixes (worker-only, commit 3bfaace):
+1. **Recalibrated the GATE, not just the display:** `runFullAnalysisCore` computes `calibratedMlWin = 0.35·raw + 0.65·(live bucket realized rate)` when n≥100; the Conviction Envelope auto-FLAT keys on that. Symmetric (also lowers the over-confident top bucket) → a re-calibration, not a loosening. Raw ML_WIN still shown + the audited-calibration line.
+2. **Reframed the honest low-ML-in-trend case:** ML_WIN gauges a SHARP ≥1.5-ATR/24h move, so a slow trend grind is a low-ML state *by design*. When the ONLY auto-FLAT reason is ML and Environment Risk is ELEVATED/HIGH, the prompt emits a `FRAMING:` line ("no volatility-edge entry, NOT nothing happening — trend intact, riding it is your call, this tool doesn't gate that") and the system prompt honors it instead of a bare "stand aside." BTC at raw 26% (bucket realizes 36%) still flats — correctly, a slow +5%/2d isn't a vol event — but the systematic over-FLAT across the huge 30-50 bucket is fixed and the message is honest. **KEY LESSON: ML_WIN measures volatility events, not trend participation; the static calibration drifts and the live `ml_calibration` curve is the truth — consider periodic model retrains when the live curve flattens.**
+
 ### 2026-07-01 — 4-agent code review: CRITICAL notification bug found + batch-1 fixes (commit 787dc40)
 
 A full 4-agent review (worker core / analysis brain / iOS services / iOS views) surfaced ~35 verified issues. Batch 1 shipped:
