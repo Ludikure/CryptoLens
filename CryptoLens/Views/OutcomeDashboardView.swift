@@ -52,9 +52,9 @@ struct OutcomeDashboardView: View {
                     }
                 }
 
-                // Live forward track record of the dual-gate direction model (crypto).
-                // Worker-logged across the whole universe, graded 24h later — the
-                // out-of-sample test of the backtest's ~94.7%.
+                // Historical track record of the RETIRED direction model (crypto). The 94.7%
+                // backtest claim was a data-leak artifact (2026-06-02); this section is kept as
+                // the honest "direction models fail live" exhibit, not a live scoreboard.
                 if let dir = directionReport, (dir.resolved > 0 || dir.pending > 0) {
                     directionSection(dir)
                     if !dir.bySymbol.isEmpty {
@@ -219,7 +219,7 @@ struct OutcomeDashboardView: View {
                     Text(String(format: "%.0f%%", acc))
                         .font(.title3).fontWeight(.bold)
                         .foregroundStyle(acc >= 70 ? .green : acc >= 55 ? .orange : .red)
-                    Text("vs \(String(format: "%.0f%%", dir.backtestBaseline)) backtest")
+                    Text("~coin flip, as expected")
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
                 .font(.subheadline)
@@ -247,9 +247,9 @@ struct OutcomeDashboardView: View {
                 }
             }
         } header: {
-            Text("Direction Model — Live (crypto)")
+            Text("Direction Model — RETIRED (historical)")
         } footer: {
-            Text("Every dual-gate signal (ML Win ≥70% + direction model ≥70% confident) logged across all crypto symbols and graded on the realized 24h direction. Long and short tracked separately. Forward, out-of-sample — pre-cost, like the backtest. Builds up over time.")
+            Text("This model was retired 2026-06-02: its 94.7% backtest accuracy turned out to be a data-leak artifact, and the live forward test resolved near coin-flip. The graded signals are kept as the honest exhibit of why MarketScope does not predict direction. No new signals are logged.")
         }
     }
 

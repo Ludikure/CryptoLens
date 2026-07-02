@@ -172,7 +172,15 @@ function fibAbsolute(highs: number[], lows: number[], closes: number[], lookback
   return { trend: up ? 'uptrend' : 'downtrend', swingHigh: r2(hi), swingLow: r2(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
 }
 
-// ── Candle patterns — port of CandlePatterns.detect ──
+// ── Candle patterns — port of CandlePatterns.detect + trend-context gates (2026-07-02) ──
+// The classical reversal patterns require a preceding move to reverse. The pre-fix port
+// distinguished Hammer/Hanging Man (and Inverted Hammer/Shooting Star) by candle COLOR only,
+// and the 3-bar stars had no prior-trend requirement — producing geometric nonsense like
+// "Evening Star at support in oversold" (live user report; classically that location is
+// Morning-Star territory). Trend context = 5-bar net close change ending just before the
+// pattern; when there aren't enough bars to establish it, trend-gated patterns are skipped.
+// NOTE: display/prompt path only — the candle-pattern ML features live in scoring-full.ts
+// (last3Green/last3Red/wick features) and are untouched, so model parity is unaffected.
 function candlePatterns(o: number[], h: number[], l: number[], c: number[]) {
   const out: Array<{ pattern: string; signal: string }> = [];
   if (c.length < 3) return out;
@@ -181,16 +189,25 @@ function candlePatterns(o: number[], h: number[], l: number[], c: number[]) {
   if (range <= 0) return out;
   const bodyPct = body / range, upper = h[n] - Math.max(o[n], c[n]), lower = Math.min(o[n], c[n]) - l[n];
   const po = o[n - 1], pc = c[n - 1], prevBody = Math.abs(pc - po);
+  const upBefore = (k: number) => k - 5 >= 0 && c[k] > c[k - 5];
+  const downBefore = (k: number) => k - 5 >= 0 && c[k] < c[k - 5];
   if (bodyPct < 0.1) out.push({ pattern: 'Doji', signal: 'Indecision — potential reversal' });
-  if (lower > 2 * body && upper < body * 0.5 && c[n] >= o[n]) out.push({ pattern: 'Hammer', signal: 'Bullish reversal signal' });
-  if (upper > 2 * body && lower < body * 0.5 && c[n] >= o[n]) out.push({ pattern: 'Inverted Hammer', signal: 'Potential bullish reversal' });
-  if (upper > 2 * body && lower < body * 0.5 && c[n] < o[n]) out.push({ pattern: 'Shooting Star', signal: 'Bearish reversal signal' });
-  if (lower > 2 * body && upper < body * 0.5 && c[n] < o[n]) out.push({ pattern: 'Hanging Man', signal: 'Bearish reversal signal' });
+  // Wick shapes: the SHAPE picks the family; the PRECEDING TREND picks the name + direction
+  // (a long lower wick is a bullish hammer after a decline, a bearish hanging-man warning
+  // after an advance) — candle color is not the classical discriminator.
+  const lowerWickShape = lower > 2 * body && upper < body * 0.5;
+  const upperWickShape = upper > 2 * body && lower < body * 0.5;
+  if (lowerWickShape && downBefore(n - 1)) out.push({ pattern: 'Hammer', signal: 'Bullish reversal signal (after decline)' });
+  if (lowerWickShape && upBefore(n - 1)) out.push({ pattern: 'Hanging Man', signal: 'Bearish warning (after advance)' });
+  if (upperWickShape && downBefore(n - 1)) out.push({ pattern: 'Inverted Hammer', signal: 'Potential bullish reversal (after decline)' });
+  if (upperWickShape && upBefore(n - 1)) out.push({ pattern: 'Shooting Star', signal: 'Bearish reversal signal (after advance)' });
   if (pc < po && c[n] > o[n] && c[n] > po && o[n] < pc && body > prevBody) out.push({ pattern: 'Bullish Engulfing', signal: 'Strong bullish reversal' });
   if (pc > po && c[n] < o[n] && c[n] < po && o[n] > pc && body > prevBody) out.push({ pattern: 'Bearish Engulfing', signal: 'Strong bearish reversal' });
   const o3 = o[n - 2], c3 = c[n - 2];
-  if (c3 < o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] > o[n] && c[n] > (o3 + c3) / 2) out.push({ pattern: 'Morning Star', signal: 'Bullish reversal (3-bar)' });
-  if (c3 > o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] < o[n] && c[n] < (o3 + c3) / 2) out.push({ pattern: 'Evening Star', signal: 'Bearish reversal (3-bar)' });
+  if (c3 < o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] > o[n] && c[n] > (o3 + c3) / 2 && downBefore(n - 3))
+    out.push({ pattern: 'Morning Star', signal: 'Bullish reversal (3-bar, after decline)' });
+  if (c3 > o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] < o[n] && c[n] < (o3 + c3) / 2 && upBefore(n - 3))
+    out.push({ pattern: 'Evening Star', signal: 'Bearish reversal (3-bar, after advance)' });
   return out;
 }
 

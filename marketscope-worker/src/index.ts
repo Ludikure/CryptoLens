@@ -1882,10 +1882,12 @@ export default {
       return json({ bySymbol: summary.results, overall });
     }
 
-    // Live forward track record for the dual-gate direction model. Universe-wide (not
-    // per-device) — these signals are logged by the cron across all crypto symbols and
-    // graded 24h later. This is the number that tells us whether the backtest's ~94%
-    // holds out-of-sample. See logDirectionSignals/resolveDirectionSignals.
+    // Historical track record of the RETIRED dual-gate direction model. The "~94.7% backtest
+    // accuracy" was a DATA-LEAK ARTIFACT (2026-06-02 finding) — the live forward test resolved
+    // ~coin-flip, the pUp head was retired, and no new signals are logged (logDirectionSignals
+    // skips on pUp=null). This endpoint now serves the resolved rows as the honest
+    // "direction models fail live" exhibit; the retracted baseline is no longer presented as a
+    // reference number.
     if (path === '/direction-accuracy' && request.method === 'GET') {
       try {
         const overall = await env.DB.prepare(`
@@ -1955,11 +1957,13 @@ export default {
           pending: (pending?.n as number) ?? 0,
           pendingSignals: pendingSignals.results ?? [],
           recent: recent.results ?? [],
-          backtestBaseline: 94.7,   // frozen-holdout dual-gate accuracy for reference
+          backtestBaseline: null,   // RETRACTED — the 94.7% was a data-leak artifact (2026-06-02)
+          retracted: true,
+          retractionNote: 'The direction model was retired 2026-06-02: its backtest accuracy was a data-leak artifact and the live forward test resolved ~coin-flip. Rows here are the honest historical exhibit.',
         });
       } catch (e) {
         // Table not created yet (no cron has fired a signal) — return an empty shell.
-        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], byDirection: [], bySymbol: [], pending: 0, pendingSignals: [], recent: [], backtestBaseline: 94.7 });
+        return json({ overall: { resolved: 0, accuracy: null }, byConfidence: [], byDirection: [], bySymbol: [], pending: 0, pendingSignals: [], recent: [], backtestBaseline: null, retracted: true });
       }
     }
 
@@ -2509,11 +2513,10 @@ async function checkAllDeviceScores(env: Env) {
 
   const predictions = await computeSymbolPredictions(env, allSymbols);
 
-  // Live validation of the dual-gate direction claim ("~94% directional accuracy
-  // when ML Win >= 70% AND the direction model is >= 70% confident"). Independent of
-  // the LLM/setup path — this logs the raw model signal at fire time and grades it
-  // 24h later against the realized forward price, accumulating a forward, out-of-sample
-  // track record across the whole crypto universe. Both calls are fault-isolated so a
+  // Direction-model live validation — RETIRED (the direction model's backtest accuracy was a
+  // data-leak artifact, 2026-06-02; pUp is null so logDirectionSignals fires nothing new).
+  // resolveDirectionSignals stays to grade any leftover pending rows so the historical
+  // exhibit closes out honestly. Both calls are fault-isolated so a
   // schema hiccup never blocks notifications.
   try {
     await resolveDirectionSignals(env, predictions);
@@ -2534,11 +2537,12 @@ async function checkAllDeviceScores(env: Env) {
   await stampHeartbeat(env);
 }
 
-// ─── Dual-gate direction live-validation ──────────────────────────────────────
-// The crypto direction head claims ~94% directional accuracy at high confidence on
-// the frozen backtest holdout. These two passes turn that into a *live*, forward
-// track record so we can see whether it holds out-of-sample (and net of nothing —
-// this measures the raw 24h direction sign, the same quantity the backtest measured).
+// ─── Dual-gate direction live-validation (RETIRED — historical exhibit) ────────
+// The crypto direction head once claimed ~94% directional accuracy — that claim was a
+// DATA-LEAK ARTIFACT (2026-06-02) and the model was retired: mlPredictDirection returns null,
+// so logDirectionSignals never fires new signals. resolveDirectionSignals still grades any
+// leftover pending rows so the historical record closes out honestly (it resolved ~coin-flip,
+// which is the whole point of keeping the exhibit).
 
 const DIR_SIGNAL_HORIZON_MS = 24 * 3600 * 1000;  // grade 24h after firing
 const DIR_PUP_GATE = 0.70;                        // |conviction| threshold (>=.70 long / <=.30 short)
@@ -3456,9 +3460,12 @@ async function processDeviceNotifications(
       const pred = predictions.get(symbol);
       if (!pred) return null;
       const wasNotified = triggered.some(t => t.symbol === symbol);
+      // bias = the real bias-alignment label, NOT a direction fabricated from ML_WIN — ML_WIN is
+      // direction-AGNOSTIC by the system's own doctrine (pre-2026-07-02 this wrote
+      // mlProb > 0.5 ? 'Bullish' : 'Bearish', serving a fake directional label via /scores).
       return env.DB.prepare(
         'INSERT INTO score_history (device_id, symbol, daily_score, four_h_score, ml_probability, bias, notification_sent) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).bind(deviceId, symbol, pred.dailyScore, 0, pred.mlProb, pred.mlProb > 0.5 ? 'Bullish' : 'Bearish', wasNotified ? 1 : 0);
+      ).bind(deviceId, symbol, pred.dailyScore, 0, pred.mlProb, pred.biasAlignment ?? null, wasNotified ? 1 : 0);
     })
     .filter((s): s is NonNullable<typeof s> => s !== null);
   if (historyStmts.length > 0) {

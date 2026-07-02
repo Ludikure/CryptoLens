@@ -1,11 +1,10 @@
 import Foundation
 
-/// Fetches the live forward track record of the dual-gate direction model from the
-/// worker `/direction-accuracy` endpoint. The worker cron logs every dual-gate signal
-/// (ML Win ≥ 70% AND direction model ≥ 70% confident) across the whole crypto universe
-/// and grades it 24h later against the realized price — so this is an out-of-sample,
-/// forward measurement of the backtest's ~94.7% claim, accumulating autonomously
-/// whether or not the app is open.
+/// Fetches the track record of the RETIRED dual-gate direction model from the worker
+/// `/direction-accuracy` endpoint. The model was retired 2026-06-02: its "~94.7% backtest
+/// accuracy" was a data-leak artifact and the live forward test resolved ~coin-flip.
+/// No new signals are logged; the resolved rows are kept as the honest historical
+/// exhibit of why the app does not predict direction.
 enum DirectionAccuracyService {
 
     struct Report {
@@ -14,7 +13,7 @@ enum DirectionAccuracyService {
         let longs: Int
         let shorts: Int
         let pending: Int            // logged but not yet 24h old
-        let backtestBaseline: Double
+        let backtestBaseline: Double?   // nil — retracted (data-leak artifact); kept optional for old workers
         let byConfidence: [ConfidenceBand]
         let longSide: SideStats?    // graded long signals (nil until at least one resolves)
         let shortSide: SideStats?   // graded short signals
@@ -91,7 +90,7 @@ enum DirectionAccuracyService {
             let bySymbol: [Sym]?
             let pending: Int
             let recent: [Recent]
-            let backtestBaseline: Double
+            let backtestBaseline: Double?   // null since the 2026-07-02 retraction
         }
         guard let body = try? JSONDecoder().decode(Body.self, from: data) else { return nil }
 

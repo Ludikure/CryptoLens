@@ -288,15 +288,26 @@ function priceActionAnalyze(ind: PromptIndicator): { regime: string; momentum: M
     macdHistValue: last(recentHist) ?? 0, macdHistDirection, volumeTrend, volumeRatio: volRatio,
   };
 
-  // contextualizePatterns + buildSummaryText
+  // contextualizePatterns + buildSummaryText. Significance is DIRECTION-AWARE (2026-07-02):
+  // a bullish pattern AT SUPPORT (or bearish at resistance) is the classical high-significance
+  // read; the incongruent combination (bearish pattern at support etc.) is tagged
+  // counter_context instead of being promoted to 'high' — the pre-fix code boosted ANY pattern
+  // near ANY level, which is how "Evening Star at_support" got headlined in oversold tape.
+  const BULLISH_PATTERNS = new Set(['Hammer', 'Inverted Hammer', 'Morning Star', 'Bullish Engulfing']);
+  const BEARISH_PATTERNS = new Set(['Shooting Star', 'Hanging Man', 'Evening Star', 'Bearish Engulfing']);
+  const sigAtLevel = (pattern: string, position: 'at_support' | 'at_resistance'): string => {
+    const bull = BULLISH_PATTERNS.has(pattern), bear = BEARISH_PATTERNS.has(pattern);
+    if (!bull && !bear) return 'moderate';   // Doji etc. — location adds interest, not direction
+    return ((bull && position === 'at_support') || (bear && position === 'at_resistance')) ? 'high' : 'counter_context';
+  };
   const patterns: Array<{ pattern: string; position: string; level: number | null; significance: string }> = [];
   if (ind.candlePatterns.length) {
     const price = ind.price, atrV = ind.atr?.atr ?? price * 0.01, thr = atrV * 0.3, e20 = ind.ema20 ?? 0;
     for (const p of ind.candlePatterns) {
       let placed = false;
-      for (const s of ind.supportResistance.supports) { if (Math.abs(price - s) < thr) { patterns.push({ pattern: p.pattern, position: 'at_support', level: s, significance: 'high' }); placed = true; break; } }
+      for (const s of ind.supportResistance.supports) { if (Math.abs(price - s) < thr) { patterns.push({ pattern: p.pattern, position: 'at_support', level: s, significance: sigAtLevel(p.pattern, 'at_support') }); placed = true; break; } }
       if (placed) continue;
-      for (const r of ind.supportResistance.resistances) { if (Math.abs(price - r) < thr) { patterns.push({ pattern: p.pattern, position: 'at_resistance', level: r, significance: 'high' }); placed = true; break; } }
+      for (const r of ind.supportResistance.resistances) { if (Math.abs(price - r) < thr) { patterns.push({ pattern: p.pattern, position: 'at_resistance', level: r, significance: sigAtLevel(p.pattern, 'at_resistance') }); placed = true; break; } }
       if (placed) continue;
       if (e20 > 0 && Math.abs(price - e20) < thr) patterns.push({ pattern: p.pattern, position: 'at_ema20', level: e20, significance: 'moderate' });
       else patterns.push({ pattern: p.pattern, position: 'in_space', level: null, significance: 'low' });
@@ -313,7 +324,10 @@ function priceActionAnalyze(ind: PromptIndicator): { regime: string; momentum: M
   mom += `, MACD hist ${momentum.macdHistDirection}, Volume ${momentum.volumeTrend} (${f(momentum.volumeRatio, 1)}x)`;
   sl.push(mom);
   const meaningful = patterns.filter(p => p.significance !== 'low');
-  if (meaningful.length) sl.push('Patterns: ' + meaningful.map(p => p.level != null ? `${p.pattern} ${p.position} (${formatPrice(p.level)})` : `${p.pattern} ${p.position}`).join(', '));
+  if (meaningful.length) sl.push('Patterns: ' + meaningful.map(p => {
+    const base = p.level != null ? `${p.pattern} ${p.position} (${formatPrice(p.level)})` : `${p.pattern} ${p.position}`;
+    return p.significance === 'counter_context' ? `${base} [counter-context — pattern direction contradicts the location; discount it]` : base;
+  }).join(', '));
   return { regime: regimeObj.regime, momentum, summaryText: sl.join('\n') };
 }
 
@@ -555,13 +569,22 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     const dAtrVal = daily.atr?.atr ?? 0;
     const stretchATR = (dAtrVal > 0 && daily.ema200 != null) ? Math.abs(daily.price - daily.ema200) / dAtrVal : 0;
     const trendDir = maAlignment === 'bearish_stacked' ? 'down' : maAlignment === 'bullish_stacked' ? 'up' : 'mixed';
+    // stretchATR is ATR-normalized, so a COMPRESSED current ATR inflates it exactly when the
+    // tape is coiled rather than violent (the live "violent downtrend @ 20th-pct ATR in an
+    // active squeeze" self-contradiction). The flag LEVEL is kept (a deeply-extended coiled
+    // trend IS dangerous — expansion resumes the trend more often than not), but the WORDING
+    // is now computed from the ATR percentile instead of patched over in the system prompt.
+    const atrPctlDaily = daily.atrPercentile ?? null;
+    const volCompressed = atrPctlDaily != null && atrPctlDaily < 40;
     let envRisk: string, envReason: string;
     if (adxMax >= 40 || (regime === 'TRENDING' && stretchATR >= 3)) {
       envRisk = 'HIGH';
-      envReason = `violent ${trendDir}-trend (ADX ${f(adxMax, 0)}, price ${f(stretchATR, 1)} ATR from 200D) — momentum can carry far past prior extremes; fading it or holding against it is dangerous`;
-    } else if (adxMax >= 28 || regime === 'TRENDING' || stretchATR >= 2) {
+      envReason = volCompressed
+        ? `deeply extended ${trendDir}-trend but COILED (ADX ${f(adxMax, 0)}, price ${f(stretchATR, 1)} ATR from 200D, ATR ${f(atrPctlDaily!, 0)}th pct) — expansion risk: a vol release here most often resumes the trend; fading it or holding against it is dangerous`
+        : `violent ${trendDir}-trend (ADX ${f(adxMax, 0)}, price ${f(stretchATR, 1)} ATR from 200D) — momentum can carry far past prior extremes; fading it or holding against it is dangerous`;
+    } else if (adxMax >= 28 || regime === 'TRENDING' || (stretchATR >= 2 && regime !== 'RANGING')) {
       envRisk = 'ELEVATED';
-      envReason = `directional ${trendDir}-trend in force (ADX ${f(adxMax, 0)}, ${f(stretchATR, 1)} ATR from 200D) — trend-continuation risk`;
+      envReason = `directional ${trendDir}-trend in force (ADX ${f(adxMax, 0)}, ${f(stretchATR, 1)} ATR from 200D)${volCompressed ? ` — extended but coiled (ATR ${f(atrPctlDaily!, 0)}th pct), expansion + trend-continuation risk` : ' — trend-continuation risk'}`;
     } else if (regime === 'TRANSITIONING' || stretchATR >= 1) {
       envRisk = 'MODERATE';
       envReason = `${regime.toLowerCase()} — expansion possible, no dominant trend`;
@@ -736,11 +759,17 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       envMacroRisk = macroRisk;
     } else { L('Macro Risk: NONE'); envMacroRisk = 'NONE'; }
 
-    // Phase C1 — Parabolic
-    if (daily.candles.length >= 1 && daily.price > 0) {
-      const priorDailyClose = last(daily.candles)!.close;
+    // Phase C1 — Parabolic. NB: on the worker `daily.price` IS the last daily close
+    // (dropInProgress everywhere), so the pre-2026-07-02 "daily.price − last(candles).close"
+    // was identically 0 and this flag NEVER fired (the deleted iOS original compared the live
+    // ticker against the last close). Use the freshest closed price (1H close when present)
+    // vs the PRIOR daily close — the move over the most recent ~24h of closed data.
+    if (daily.candles.length >= 2 && daily.price > 0) {
+      const oneHPx = indicators.length > 2 ? indicators[2].price : 0;
+      const freshPrice = oneHPx > 0 ? oneHPx : daily.price;
+      const priorDailyClose = daily.candles[daily.candles.length - 2].close;
       if (priorDailyClose > 0) {
-        const pct24h = (daily.price - priorDailyClose) / priorDailyClose * 100;
+        const pct24h = (freshPrice - priorDailyClose) / priorDailyClose * 100;
         const threshold = stockInfo ? 3.0 : 5.0;
         if (pct24h >= threshold) L(`Parabolic Risk: ELEVATED_LONG (24h move +${f(pct24h, 1)}% > ${f(threshold, 0)}% — mean-reversion bias next 48h, cap conviction MODERATE on longs, tighten TP1)`);
         else if (pct24h <= -threshold) L(`Parabolic Risk: ELEVATED_SHORT (24h move ${f(pct24h, 1)}% < -${f(threshold, 0)}% — mean-reversion bias next 48h, cap conviction MODERATE on shorts, tighten TP1)`);
@@ -1721,9 +1750,10 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (!recent.length) continue;
       L(`${ind.label} (last ${recent.length}, newest first, format: [O, H, L, C, Vol]):`);
       const rev = [...recent].reverse();
+      // All bars are CLOSED — every feed path applies dropInProgress. The old "(forming)" tag on
+      // the newest bar told the LLM the very bar its patterns/kills fired on "may still change".
       rev.forEach((c, i) => {
-        const forming = i === 0 ? ' (forming)' : '';
-        L(`${i + 1}. [${formatPrice(c.open)}, ${formatPrice(c.high)}, ${formatPrice(c.low)}, ${formatPrice(c.close)}, ${f(c.volume, 0)}]${forming}`);
+        L(`${i + 1}. [${formatPrice(c.open)}, ${formatPrice(c.high)}, ${formatPrice(c.low)}, ${formatPrice(c.close)}, ${f(c.volume, 0)}]`);
       });
       L();
     }
