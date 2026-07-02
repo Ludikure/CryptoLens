@@ -14,6 +14,7 @@
 
 import systemPrompts from './prompt-system.json';
 import { stopQuality } from './risk-engine';
+import { tailRiskInfo } from './ml-predict';
 
 export function systemPrompt(isCrypto: boolean): string {
   return isCrypto ? (systemPrompts as { crypto: string }).crypto : (systemPrompts as { stock: string }).stock;
@@ -604,9 +605,12 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     const bigMove = daily.mlBigMoveProb;
     let bigMoveBucket: string | null = null;
     if (bigMove != null) {
-      const baseRate = 0.064;  // tail base rate (matches head export)
-      bigMoveBucket = bigMove >= 0.10 ? 'HIGH' : bigMove >= 0.079 ? 'ELEVATED' : 'NORMAL';
-      const xBase = (bigMove / baseRate);
+      // Thresholds + base rate from the model JSON via tailRiskInfo (2026-07-02) — these were
+      // hardcoded here (0.064/0.079/0.10), duplicating ml-predict and drifting on retrain.
+      const tri = tailRiskInfo(bigMove);
+      bigMoveBucket = tri?.bucket ?? (bigMove >= 0.10 ? 'HIGH' : bigMove >= 0.079 ? 'ELEVATED' : 'NORMAL');
+      const xBase = tri?.multiple ?? (bigMove / 0.064);
+      const baseRate = xBase > 0 ? bigMove / xBase : 0.064;
       L(`Big-Move Risk: ${bigMoveBucket} (model: ${f(bigMove * 100, 0)}% chance of a >=4 ATR move in 24h, ${f(xBase, 1)}x the ${f(baseRate * 100, 0)}% base). Direction-agnostic — an outsized move is more likely than normal, EITHER way. This is the learned tail gauge ML_WIN (>=1.5 ATR) cannot provide.`);
       // Escalate Environment Risk if the tail head fires while the heuristic read low.
       if (bigMoveBucket === 'HIGH' && (envRisk === 'LOW' || envRisk === 'MODERATE')) {
@@ -621,6 +625,12 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     if (vf?.horizons?.['24h']) {
       const h = vf.horizons['24h'];
       L(`Expected 24h Range: ${formatPrice(h.s1[0])}–${formatPrice(h.s1[1])} (1σ, ~68%) · ${formatPrice(h.s2[0])}–${formatPrice(h.s2[1])} (2σ, ~95%). Calibrated vol forecast (σ=${f(h.sigma * 100, 1)}%), direction-AGNOSTIC — the honest "how big", not which way. Bands are fat-tail-adjusted (empirical, not Gaussian).`);
+    } else if (stockInfo && daily.atr?.atr && daily.price > 0) {
+      // Stocks have no HAR-RV forecast (vol.ts is crypto-only — needs deep 1H history), but the
+      // stock system prompt instructs on EXPECTED RANGE — without a band the LLM risked
+      // hallucinating one. Emit an honest ATR-based approximation instead (2026-07-02).
+      const a = daily.atr.atr;
+      L(`Expected 24h Range (ATR-based approximation): ${formatPrice(daily.price - a)}–${formatPrice(daily.price + a)} (±1× daily ATR — a rough typical-day band, NOT a calibrated forecast; gaps can exceed it).`);
     }
     // Phase 5/8: discrete risk states (VALIDATED = vol-grounded, can lead; ctx = positioning context).
     const rs = input.riskStates ?? [];
@@ -628,7 +638,9 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L('Risk States: ' + rs.map(s => `${s.state}(${s.severity}${s.validated ? '' : ',ctx'})`).join(' · '));
       for (const s of rs) L(`  - ${s.state} [${s.severity}${s.validated ? '' : ', context-only'}]: ${s.detail}`);
     }
-    const trendDominates = adxMax >= 35 || stretchATR >= 2.5;
+    // Aligned with the ELEVATED gate (2026-07-02) — at ADX 30 the prompt used to say both
+    // "directional trend in force" (Environment Risk) and "range/transition regime" (here).
+    const trendDominates = adxMax >= 28 || (stretchATR >= 2 && regime !== 'RANGING');
     if (trendDominates) {
       L('ML_WIN Context: in this strong trend a low ML_WIN is CORRECT but MISLEADING — ML_WIN is ATR-normalized, so a >=1.5-ATR move on top of already-high vol is genuinely less likely (~42% vs ~62% in calm). Do NOT read a low ML_WIN here as "safe/quiet"; the trend itself is the danger. Lead the risk read from Environment Risk + structure, not ML_WIN.');
     } else {
@@ -1159,6 +1171,10 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       else if (mlPct >= 50) bucket = `MARGINAL (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling MODERATE, counter-trend qualified: no`;
       else bucket = `UNFAVORABLE (ML_WIN ${mlPct}%) — NO TRADE regardless of directional clarity`;
       L(`ML Bucket: ${bucket}`);
+    } else {
+      // Missing-ML was previously SILENT (every ML section just disappeared, including the
+      // ML<50 auto-FLAT) — the LLM had no way to know the quality signal was absent vs good.
+      L('ML Bucket: UNAVAILABLE (prediction cache stale) — no quality signal this run; treat as no statistical edge to enter and cap aggressiveness. Say "ML unavailable", never estimate a number.');
     }
 
     // Live calibration (2026-07-02): the realized goodR rate for the CURRENT prediction's bucket,
@@ -1436,7 +1452,11 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const smartAgainst = haveTop && (crowdLong ? d.topTraderShortPercent > d.topTraderLongPercent
                                                   : d.topTraderLongPercent > d.topTraderShortPercent);
       // Funding extreme in the crowd's direction = the crowd is paying to hold a stretched bet.
-      const fundingStretched = crowdLong ? fr > 0.01 : fr < -0.01;
+      // ±0.03 (2026-07-02): 0.01%/8h is the exchange BASELINE — the enrichment's own scale calls
+      // >0.01 "Positive (normal)" and reserves "Elevated" for >0.05. At ±0.01 this tell was nearly
+      // free whenever the crowd leaned one way, and the "stretched — paying to hold" text
+      // contradicted the Funding Rate line printed above it.
+      const fundingStretched = crowdLong ? fr > 0.03 : fr < -0.03;
       // CVD diverging against the crowd (distribution under longs / accumulation under shorts).
       const cvdAgainst = spotPressure ? (crowdLong ? spotPressure.cvdTrend === 'Falling'
                                                    : spotPressure.cvdTrend === 'Rising') : false;

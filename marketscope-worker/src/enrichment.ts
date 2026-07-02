@@ -4,7 +4,16 @@
 // Stock fundamentals / sentiment / cross-asset / economic events are layered in subsequently.
 
 import type { DerivativesData, PositioningSnapshot, MacroSnapshot, SpotPressure, CoinInfo, CrossAssetContext, StockInfo, StockSentimentData } from './prompt';
-import { emaArray } from './scoring-full';
+import { emaArray, sectorETFForSymbol } from './scoring-full';
+
+const FINNHUB_BASE = 'https://finnhub.io/api/v1';
+
+// 1-day % return from a daily-close series (last vs prior). null when insufficient data.
+function pct1d(closes: number[]): number | null {
+  if (closes.length < 2) return null;
+  const a = closes[closes.length - 2], b = closes[closes.length - 1];
+  return a > 0 ? (b - a) / a * 100 : null;
+}
 
 interface Env { ALERTS: KVNamespace; }
 
@@ -99,6 +108,24 @@ export function analyzePositioning(d: DerivativesData): PositioningSnapshot {
   return { fundingSentiment, oiTrend, crowding, crowdingCode, smartMoneyBias, takerPressure, squeezeRisk, signals };
 }
 
+// Finnhub GET with a 12h KV cache. Best-effort — null on any failure or when unconfigured.
+async function fetchFinnhubJSON(env: Env, pathAndQuery: string): Promise<any> {
+  if (!env.FINNHUB_API_KEY) return null;
+  const cacheKey = `cache:fhenrich:${pathAndQuery}`;
+  try {
+    const cached = await env.ALERTS.get(cacheKey);
+    if (cached) { const p = JSON.parse(cached); if (Date.now() - p.timestamp < 43200_000) return p.data; }
+  } catch { /* ignore */ }
+  try {
+    const sep = pathAndQuery.includes('?') ? '&' : '?';
+    const r = await fetch(`${FINNHUB_BASE}${pathAndQuery}${sep}token=${env.FINNHUB_API_KEY}`, { headers: { 'User-Agent': UA } });
+    if (!r.ok) return null;
+    const data = await r.json();
+    try { await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 43200 }); } catch { /* ignore */ }
+    return data;
+  } catch { return null; }
+}
+
 // Fetch raw derivatives (reuse the /derivatives 5-min cache; fetch + cache on miss), then build
 // the DerivativesData + PositioningSnapshot pair. Returns null for non-crypto or on failure.
 export async function fetchDerivativesEnrichment(env: Env, symbol: string): Promise<{ derivatives: DerivativesData; positioning: PositioningSnapshot } | null> {
@@ -149,7 +176,13 @@ export function computeSpotPressure(klines: any[], depth: any): SpotPressure | n
   const half = Math.floor(deltas.length / 2);
   const firstHalf = deltas.slice(0, half).reduce((a, b) => a + b, 0);
   const secondHalf = deltas.slice(deltas.length - half).reduce((a, b) => a + b, 0);
-  const cvdTrend = secondHalf > firstHalf * 1.2 ? 'Rising' : secondHalf < firstHalf * 0.8 ? 'Falling' : 'Flat';
+  // Sign-aware trend compare (2026-07-02): the old multiplicative compare (second > first*1.2)
+  // mis-signed for NEGATIVE CVD — with firstHalf = -500, a WORSENING -590 satisfied
+  // -590 > -600 → "Rising", and the Flat band was empty for negatives. Compare by difference
+  // against a 20%-of-magnitude threshold instead (feeds cvd_divergence_* exhaustion signals,
+  // WHALE TRAP cvdAgainst, and the LIQUIDATION_SETUP risk state).
+  const cvdThr = 0.2 * Math.abs(firstHalf);
+  const cvdTrend = secondHalf - firstHalf > cvdThr ? 'Rising' : firstHalf - secondHalf > cvdThr ? 'Falling' : 'Flat';
   let bookRatio: number | null = null, bookLabel: string | null = null;
   const bids = depth?.bids, asks = depth?.asks;
   if (Array.isArray(bids) && Array.isArray(asks)) {
@@ -372,6 +405,45 @@ export async function fetchStockEnrichment(env: Env, symbol: string): Promise<{ 
   const dy = rawNum(sd.dividendYield);
   const revG = rawNum(fd.revenueGrowth), earnG = rawNum(fd.earningsGrowth);
 
+  // Relative strength + sector + insider + news (2026-07-02): these revive the backtest-validated
+  // LONG_CONFIRMATION gate (needs relativeStrength1d) + Sector Strength, News-Thesis Conflict, and
+  // Insider Cluster prompt sections — all previously dead because fetchStockEnrichment never
+  // populated them. All best-effort and parallel; any failure just leaves that field null.
+  const sectorETF = sectorETFForSymbol(symbol);
+  const symChangePct = rawNum(price.regularMarketChangePercent);
+  const [spyCloses, sectorCloses, insiderRaw, newsRaw] = await Promise.all([
+    fetchYahooDailyCloses('SPY'),
+    sectorETF ? fetchYahooDailyCloses(sectorETF) : Promise.resolve([] as number[]),
+    fetchFinnhubJSON(env, `/stock/insider-transactions?symbol=${symbol}`),
+    fetchFinnhubJSON(env, `/company-news?symbol=${symbol}&from=${new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10)}&to=${new Date().toISOString().slice(0, 10)}`),
+  ]);
+  const spyPct = pct1d(spyCloses);
+  const relativeStrength1d = (symChangePct != null && spyPct != null) ? symChangePct - spyPct : null;
+  const sectorPct = pct1d(sectorCloses);
+  const outperformingSector = (symChangePct != null && sectorPct != null) ? symChangePct > sectorPct : null;
+
+  // Insider transactions → InsiderTx[] (Finnhub returns change<0 = sell). Last ~6 months.
+  let insiderTransactions: Array<{ date: number; isBuy: boolean; name: string; shares: number; value: number }> | null = null;
+  let insiderBuyCount6m: number | null = null, insiderSellCount6m: number | null = null;
+  if (Array.isArray(insiderRaw?.data)) {
+    const cutoff = Date.now() - 182 * 86400_000;
+    const txs = insiderRaw.data
+      .map((t: any) => {
+        const dateMs = t.transactionDate ? Date.parse(t.transactionDate) : NaN;
+        const change = rawNum(t.change) ?? 0, priceP = rawNum(t.transactionPrice) ?? 0;
+        return { date: dateMs, isBuy: change > 0, name: String(t.name ?? '').slice(0, 40), shares: Math.abs(change), value: Math.abs(change) * priceP };
+      })
+      .filter((t: any) => Number.isFinite(t.date) && t.date >= cutoff && t.shares > 0);
+    if (txs.length) {
+      insiderTransactions = txs.slice(0, 40);
+      insiderBuyCount6m = txs.filter((t: any) => t.isBuy).length;
+      insiderSellCount6m = txs.filter((t: any) => !t.isBuy).length;
+    }
+  }
+  const newsHeadlines: string[] | null = Array.isArray(newsRaw)
+    ? newsRaw.slice(0, 8).map((n: any) => String(n?.headline ?? '').slice(0, 140)).filter(Boolean)
+    : null;
+
   const stockInfo: StockInfo = {
     marketState,
     peRatio: rawNum(sd.trailingPE),
@@ -390,6 +462,11 @@ export async function fetchStockEnrichment(env: Env, symbol: string): Promise<{ 
     exDividendDate: exDivSec != null ? exDivSec * 1000 : null,
     dividendRate: rawNum(sd.dividendRate),
     exDividendWarning: exDivSec != null ? (exDivSec * 1000 - Date.now()) / 86400000 <= 5 && exDivSec * 1000 >= Date.now() : null,
+    // 2026-07-02 additions — revive LONG_CONFIRMATION + Sector Strength + Insider + News.
+    sectorETF, relativeStrength1d, outperformingSector,
+    insiderTransactions, insiderBuyCount6m, insiderSellCount6m,
+    insiderNetBuying: (insiderBuyCount6m != null && insiderSellCount6m != null) ? insiderBuyCount6m > insiderSellCount6m : null,
+    newsHeadlines,
   };
 
   // VIX from the macro cache; 52w position + short interest from Yahoo.

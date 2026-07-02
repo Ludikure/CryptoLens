@@ -152,11 +152,13 @@ async function callLLM(env: Env, opts: { provider?: string; model?: string; syst
   if (EFFORT_MODELS.has(model)) {
     // Sonnet 5 / Opus 4.7-4.8: adaptive thinking + effort. No temperature (400 if non-default),
     // no budget_tokens (400). `high` effort ≈ the old "extended thinking" depth (deep on hard
-    // bars, skipped on trivial ones). max_tokens is a HARD cap on thinking+text — generous so a
-    // deep think can't truncate the ~400-word analysis (Sonnet 5's tokenizer runs ~30% hotter).
+    // bars, skipped on trivial ones). max_tokens is a HARD cap on thinking+text. 16k (not 32k):
+    // the analysis is ≤300 words + a few k thinking tokens; a non-streaming generation much
+    // beyond that risks undici's ~300s headers timeout (the response only starts once
+    // generation COMPLETES), which would fail exactly the deepest runs.
     reqBody.thinking = { type: wantThinking ? 'adaptive' : 'disabled' };
     reqBody.output_config = { effort: wantThinking ? 'high' : 'medium' };
-    reqBody.max_tokens = wantThinking ? 32000 : 8000;
+    reqBody.max_tokens = wantThinking ? 16000 : 8000;
   } else {
     // Legacy family (Sonnet 4.6 / Opus 4.6 / Haiku 4.5): manual budget_tokens still accepted.
     const thinkingBudget = wantThinking ? opts.thinkingBudget! : null;
@@ -169,7 +171,12 @@ async function callLLM(env: Env, opts: { provider?: string; model?: string; syst
     headers: { 'x-api-key': env.CLAUDE_API_KEY, 'anthropic-version': '2023-06-01', 'anthropic-beta': 'context-1m-2025-08-07', 'content-type': 'application/json' },
     body: JSON.stringify(reqBody),
   });
-  if (!resp.ok) return httpErr(resp.status);
+  if (!resp.ok) {
+    // Log the error BODY — without it a 400 from a param mistake on a new model family is
+    // indistinguishable from any other failure (this hid the Opus 4.7 budget_tokens 400s).
+    try { console.error(`[llm] ${model} ${resp.status}: ${(await resp.text()).slice(0, 500)}`); } catch { /* ignore */ }
+    return httpErr(resp.status);
+  }
   const r = await resp.json() as any;
   const text = (Array.isArray(r?.content) ? r.content.find((c: any) => c.type === 'text')?.text : '') || '';
   return { ok: true, text, model };
@@ -186,7 +193,10 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   if (!daily.length) return { ok: false, status: 404, error: 'No candles' };
   const indicators: PromptIndicator[] = [computeFullIndicators(daily as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
   if (fourH.length) indicators.push(computeFullIndicators(fourH as FullCandle[], { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
-  if (oneH.length) indicators.push(computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
+  // The indicators array is POSITIONAL ([daily, 4H, 1H]) — if the 4H fetch failed but 1H
+  // succeeded, appending 1H would land at index 1 and be consumed as 4H everywhere
+  // (riskStates.bbSqueeze4h, bias.fourH, the prompt's fourH local). Skip 1H in that rare case.
+  if (fourH.length && oneH.length) indicators.push(computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
 
   // Phase 1: HAR-RV expected-range forecast (crypto-only; needs 721+ 1H closes for rv_30d). Best-effort.
   let volForecast = null;
@@ -1442,7 +1452,9 @@ export default {
       const isCrypto = symbol.endsWith('USDT');
       const jobId = crypto.randomUUID();
       const jobKey = `analysis_job:${jobId}`;
-      await env.ALERTS.put(jobKey, JSON.stringify({ status: 'pending', symbol, createdAt: Date.now() }), { expirationTtl: 3600 });
+      // deviceId is stored so /full-analysis/result can verify ownership — without it, any valid
+      // token + a leaked jobId UUID could read another device's analysis.
+      await env.ALERTS.put(jobKey, JSON.stringify({ status: 'pending', symbol, createdAt: Date.now(), deviceId }), { expirationTtl: 3600 });
 
       // Detached: continues on the event loop after we respond.
       void (async () => {
@@ -1450,8 +1462,8 @@ export default {
         try {
           const r = await runFullAnalysisCore(env, symbol, isCrypto, body, deviceId);
           const done = r.ok
-            ? { status: 'done', symbol, result: r.result, finishedAt: Date.now(), claimed: false }
-            : { status: 'error', symbol, error: r.error, code: r.status, finishedAt: Date.now(), claimed: false };
+            ? { status: 'done', symbol, result: r.result, finishedAt: Date.now(), claimed: false, deviceId }
+            : { status: 'error', symbol, error: r.error, code: r.status, finishedAt: Date.now(), claimed: false, deviceId };
           await env.ALERTS.put(jobKey, JSON.stringify(done), { expirationTtl: 3600 });
 
           // APNs backstop. Wait a few seconds first: if the app is in the foreground and polling, its
@@ -1474,7 +1486,7 @@ export default {
             }
           } catch { /* push best-effort */ }
         } catch (e) {
-          await env.ALERTS.put(jobKey, JSON.stringify({ status: 'error', symbol, error: `${e}`, finishedAt: Date.now(), claimed: false }), { expirationTtl: 3600 }).catch(() => {});
+          await env.ALERTS.put(jobKey, JSON.stringify({ status: 'error', symbol, error: `${e}`, finishedAt: Date.now(), claimed: false, deviceId }), { expirationTtl: 3600 }).catch(() => {});
         }
       })();
 
@@ -1491,6 +1503,15 @@ export default {
       const raw = await env.ALERTS.get(`analysis_job:${jobId}`);
       if (!raw) return json({ status: 'expired' }, 404);
       const job = JSON.parse(raw);
+      // Ownership: a job is only readable by the device that started it (jobs created before
+      // this check carry no deviceId — allowed through for back-compat during rollout).
+      if (job.deviceId && job.deviceId !== deviceId) return json({ status: 'expired' }, 404);
+      // Stuck-pending: a process restart mid-job strands the record at 'pending' until the 1h
+      // KV TTL — the client would poll "pending" forever. Past 10 min, report it as failed so
+      // the client can restart cleanly.
+      if (job.status === 'pending' && Date.now() - (job.createdAt ?? 0) > 10 * 60_000) {
+        return json({ status: 'error', symbol: job.symbol, error: 'Analysis job lost (server restarted) — retry' });
+      }
       if ((job.status === 'done' || job.status === 'error') && job.claimed !== true) {
         job.claimed = true;
         await env.ALERTS.put(`analysis_job:${jobId}`, JSON.stringify(job), { expirationTtl: 3600 }).catch(() => {});
@@ -2554,7 +2575,9 @@ function notificationDirection(biasAlignment: string, dStochCross: number): numb
 // naturally without needing atomic D1 cooldowns.
 async function checkAllDeviceScores(env: Env) {
   const watchlistRows = await env.DB.prepare('SELECT device_id, symbol FROM watchlist').all();
-  if (!watchlistRows.results.length) return;
+  // Empty watchlist is a HEALTHY state (e.g., right after a stale-device sweep) — stamp the
+  // heartbeat before returning, or /cron-health false-alarms 503 while the cron is fine.
+  if (!watchlistRows.results.length) { await stampHeartbeat(env); return; }
 
   const watchlistsByDevice = new Map<string, string[]>();
   for (const row of watchlistRows.results) {
@@ -3002,22 +3025,32 @@ async function computeSymbolPredictions(
               darkPoolData[sym] = { ratio: shortVol / totalVol, zscore: 0 };
             }
           }
-          // Load historical ratios from KV for Z-score computation
+          // Load historical ratios from KV for Z-score computation. APPEND AT MOST ONCE PER
+          // DAY (2026-07-02): the 4h cache TTL meant ~6 re-fetches/day each pushed the SAME
+          // day's ratio, so the "20-day" Z window really covered ~3.3 days of near-identical
+          // values — variance collapsed and the Z feature saturated (live/train skew vs the
+          // true-daily training pipeline). `__lastAppend` marks the last append date.
           const histKey = 'darkpool:history';
           const histRaw = await env.ALERTS.get(histKey);
-          const hist: Record<string, number[]> = histRaw ? JSON.parse(histRaw) : {};
+          const histBlob: Record<string, number[] | string> = histRaw ? JSON.parse(histRaw) : {};
+          const todayStr = new Date().toISOString().slice(0, 10);
+          const appendToday = histBlob['__lastAppend'] !== todayStr;
           for (const [sym, dp] of Object.entries(darkPoolData)) {
-            if (!hist[sym]) hist[sym] = [];
-            hist[sym].push(dp.ratio);
-            if (hist[sym].length > 20) hist[sym] = hist[sym].slice(-20);
-            const arr = hist[sym];
-            if (arr.length >= 5) {
-              const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
-              const std = Math.sqrt(arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length);
+            const cur = histBlob[sym];
+            const arr: number[] = Array.isArray(cur) ? cur : [];
+            if (appendToday) {
+              arr.push(dp.ratio);
+              histBlob[sym] = arr.length > 20 ? arr.slice(-20) : arr;
+            }
+            const window = Array.isArray(histBlob[sym]) ? histBlob[sym] as number[] : arr;
+            if (window.length >= 5) {
+              const mean = window.reduce((a, b) => a + b, 0) / window.length;
+              const std = Math.sqrt(window.reduce((a, b) => a + (b - mean) ** 2, 0) / window.length);
               dp.zscore = std > 0.001 ? (dp.ratio - mean) / std : 0;
             }
           }
-          await env.ALERTS.put(histKey, JSON.stringify(hist), { expirationTtl: 86400 * 30 });
+          if (appendToday) histBlob['__lastAppend'] = todayStr;
+          await env.ALERTS.put(histKey, JSON.stringify(histBlob), { expirationTtl: 86400 * 30 });
           await env.ALERTS.put(dpCacheKey, JSON.stringify(darkPoolData), { expirationTtl: 14400 });
         }
       } catch {}
@@ -3067,6 +3100,10 @@ async function computeSymbolPredictions(
   if (_stale.length) {
     await mapLimit(_stale, 5, async (sym) => {
       const d = await fetchLiveDerivatives(sym);
+      // All-zero = every fapi endpoint failed (fetchLiveDerivatives returns 0 per failure) —
+      // don't cache it, or zero funding/OI/taker feeds the ML for up to 5 ticks. Leaving the
+      // stale entry (or nothing) makes the next tick retry instead.
+      if (d.markPrice === 0 && d.openInterest === 0) return;
       derivLiveMap[sym] = { ...d, ts: Date.now() };
     });
   }
@@ -3178,7 +3215,8 @@ async function computeSymbolPredictions(
           longPct = _d.longPct; markPrice = _d.markPrice; indexPrice = _d.indexPrice;
           basisPct = _d.basisPct; largeBuyVol = _d.largeBuyVol; largeSellVol = _d.largeSellVol;
           largeBuyCount = _d.largeBuyCount; largeSellCount = _d.largeSellCount;
-          derivLiveMap[symbol] = { ..._d, ts: Date.now() };
+          // All-zero = fetch failure; don't cache (next tick retries instead of serving zeros 5 min).
+          if (!(_d.markPrice === 0 && _d.openInterest === 0)) derivLiveMap[symbol] = { ..._d, ts: Date.now() };
         }
 
         let oiChangePct = 0;
@@ -3213,7 +3251,9 @@ async function computeSymbolPredictions(
         // batched blob is flushed at the end of computeSymbolPredictions only if any
         // symbol actually archived this cron.
         const lastArchive = derivArchiveMap[symbol];
-        if (!lastArchive || Date.now() - lastArchive > 3.5 * 3600 * 1000) {
+        // Never archive a failed (all-zero) fetch — it would write a permanent zero row into
+        // derivatives_history and pollute future training data. Gate un-stamped so it retries.
+        if ((!lastArchive || Date.now() - lastArchive > 3.5 * 3600 * 1000) && !(markPrice === 0 && openInterest === 0)) {
           const ts = Math.floor(Date.now() / 1000);
           try {
             await env.DB.prepare(
