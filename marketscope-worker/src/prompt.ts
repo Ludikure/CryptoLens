@@ -13,6 +13,7 @@
 // uses the treatment rule (tighter-by-default, trendingSymbols opt out).
 
 import systemPrompts from './prompt-system.json';
+import { stopQuality } from './risk-engine';
 
 export function systemPrompt(isCrypto: boolean): string {
   return isCrypto ? (systemPrompts as { crypto: string }).crypto : (systemPrompts as { stock: string }).stock;
@@ -449,6 +450,10 @@ export interface BuildPromptInput {
   activeSetups?: ActiveSetup[];                                                // C8 (active tracked trades)
   volForecast?: import('./vol').VolForecast | null;                            // Phase 1: HAR-RV expected range
   riskStates?: import('./risk-states').RiskState[];                            // Phase 5: discrete risk states
+  // Insight enrichments (2026-07-02) — all derived from data the system already stores:
+  mlCalibration?: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null;  // live realized goodR for the CURRENT prediction's bucket (ml_calibration D1)
+  mlTrajectory?: { points: number[]; hours: number } | null;                   // sampled ML_WIN path over the last N hours, oldest→newest (score_history D1)
+  btcContext?: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null; // BTC regime read for alt analyses (ml_preds:all KV)
   prevState?: PromptState; settings?: PromptSettings;
 }
 
@@ -1156,6 +1161,35 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L(`ML Bucket: ${bucket}`);
     }
 
+    // Live calibration (2026-07-02): the realized goodR rate for the CURRENT prediction's bucket,
+    // measured forward on ml_calibration D1 — turns ML_WIN from an assertion into an audited number.
+    // n>=20 so a thin bucket can't mislead.
+    if (input.mlCalibration && input.mlCalibration.n >= 20) {
+      const c = input.mlCalibration;
+      L(`ML Calibration (live, audited): bars predicted ${c.bucketLabel} realized a >=1.5-ATR move ${f(c.realizedPct, 0)}% of the time over the last ${c.windowDays}d (n=${c.n}). Weight ML_WIN by this measured rate, not the raw number.`);
+    }
+
+    // ML_WIN trajectory (2026-07-02): the sampled path from score_history — a building path means
+    // a vol regime forming; a decaying one means the move is already spent. Context the
+    // instantaneous number can't carry.
+    if (input.mlTrajectory && input.mlTrajectory.points.length >= 3) {
+      const pts = input.mlTrajectory.points;
+      const deltaPp = (pts[pts.length - 1] - pts[0]) * 100;
+      const trend = deltaPp >= 5 ? 'RISING — vol regime building' : deltaPp <= -5 ? 'FALLING — move likelihood decaying' : 'flat';
+      L(`ML_WIN ${input.mlTrajectory.hours}h path: ${pts.map(p => Math.round(p * 100)).join('→')}% (${trend}).`);
+    }
+
+    // BTC regime context for alts (2026-07-02): alts were analyzed blind to BTC; alt beta
+    // amplifies any BTC move regardless of the alt's own chart.
+    if (input.btcContext && isCryptoSym && symbol.toUpperCase() !== 'BTCUSDT') {
+      const b = input.btcContext;
+      const parts: string[] = [];
+      if (b.mlWin != null) parts.push(`ML_WIN ${iTrunc(b.mlWin * 100)}%`);
+      if (b.bigMoveBucket && b.bigMoveBucket !== 'NORMAL') parts.push(`Big-Move ${b.bigMoveBucket}`);
+      if (b.persistence != null) parts.push(`persistence ${iTrunc(b.persistence * 100)}%`);
+      if (parts.length) L(`BTC CONTEXT: ${parts.join(', ')} — alt beta amplifies any BTC move; a BTC flush or squeeze drags this symbol regardless of its own chart. Fold BTC's state into the risk read.`);
+    }
+
     // ML Persistence (72h)
     if (daily.mlPersistenceProbability != null) {
       const p72Pct = iTrunc(daily.mlPersistenceProbability * 100);
@@ -1649,7 +1683,18 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
           const viable = finalTP1RR >= (isCounterTrend ? 0.8 : isWideBand ? 0.5 : 1.0);
           const setupLabel = isCounterTrend ? 'COUNTER-TREND' : 'TREND';
           const confirmation = isCounterTrend ? 'WICK_REJECTION_CLOSE_BACK_ACROSS_LEVEL' : regime === 'TRENDING' ? 'VOLUME_1.2X_OR_SECOND_TEST' : 'NONE';
-          candidates.push(`[${setupLabel}] Entry ${formatPrice(entry.price)} (${entry.type}) | Stop ${formatPrice(adjustedStop)} | Risk ${formatPrice(risk)} (${qtyStr} units @ ${formatPrice(riskDollars)} risk) | TP1: ${targetLines[0]} | TP2: ${targetLines[1]} | Confirmation: ${confirmation} | Viable: ${viable}`);
+          // Stop quality (2026-07-02): risk-engine's reflection-principle noise-hit probability —
+          // P(pure noise alone wicks this stop within 24h) at the HAR-RV σ. Built + tested since
+          // Phase 3 but never wired to the analysis path; aimed at the wicked-stop retail loss.
+          let stopQ = '';
+          const sigma24 = input.volForecast?.horizons?.['24h']?.sigma;
+          if (sigma24 && sigma24 > 0) {
+            const q = stopQuality(entry.price, adjustedStop, sigma24);
+            if (Number.isFinite(q.noiseHit)) {
+              stopQ = ` | Stop noise-hit ~${Math.round(q.noiseHit * 100)}% (${q.rating}${q.rating === 'TIGHT' ? ' — noise alone likely wicks this stop; widen it or skip' : ''})`;
+            }
+          }
+          candidates.push(`[${setupLabel}] Entry ${formatPrice(entry.price)} (${entry.type}) | Stop ${formatPrice(adjustedStop)} | Risk ${formatPrice(risk)} (${qtyStr} units @ ${formatPrice(riskDollars)} risk) | TP1: ${targetLines[0]} | TP2: ${targetLines[1]} | Confirmation: ${confirmation}${stopQ} | Viable: ${viable}`);
         }
         if (candidates.length) { L(); L('=== CANDIDATE SETUPS (pre-computed R:R — do not recalculate) ==='); for (const c of candidates) L(c); }
       }

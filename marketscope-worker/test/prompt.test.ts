@@ -82,6 +82,35 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(formatPrice(0.0000123)).toBe('$0.000012');
   });
 
+  it('insight enrichments: live calibration, ML trajectory, BTC context render (and gate correctly)', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+    daily.mlWinProbability = 0.63;
+
+    const { prompt } = buildUserPrompt({
+      symbol: 'ETHUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      mlCalibration: { n: 41, realizedPct: 63.4, windowDays: 90, bucketLabel: '60-70%' },
+      mlTrajectory: { points: [0.31, 0.44, 0.62], hours: 24 },
+      btcContext: { mlWin: 0.41, bigMoveBucket: 'ELEVATED', persistence: 0.55 },
+    });
+    expect(prompt).toContain('ML Calibration (live, audited): bars predicted 60-70% realized a >=1.5-ATR move 63% of the time over the last 90d (n=41)');
+    expect(prompt).toContain('ML_WIN 24h path: 31→44→62% (RISING — vol regime building)');
+    expect(prompt).toContain('BTC CONTEXT: ML_WIN 41%, Big-Move ELEVATED, persistence 55%');
+
+    // Gates: thin calibration (n<20) suppressed; BTC context never renders for BTC itself.
+    const gated = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      mlCalibration: { n: 7, realizedPct: 80, windowDays: 90, bucketLabel: '60-70%' },
+      btcContext: { mlWin: 0.41, bigMoveBucket: 'ELEVATED', persistence: 0.55 },
+    });
+    expect(gated.prompt).not.toContain('ML Calibration');
+    expect(gated.prompt).not.toContain('BTC CONTEXT');
+  });
+
   it('buildUserPrompt runs end-to-end over real computeFullIndicators output (crypto)', () => {
     const NOW = 1748736000000; // fixed (2025-06-01T00:00:00Z) — scripts can't use Date.now()
     const DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;

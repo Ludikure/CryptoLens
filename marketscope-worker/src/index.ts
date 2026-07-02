@@ -197,11 +197,14 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     } catch { /* vol forecast best-effort */ }
   }
 
-  // ML overlay onto the daily indicator (cron-cached ml_preds:all; best-effort).
+  // ML overlay onto the daily indicator (cron-cached ml_preds:all; best-effort). The same blob
+  // also supplies the BTC regime context for alt analyses (zero extra reads).
+  let btcContext: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null = null;
   try {
     const cached = await env.ALERTS.get('ml_preds:all');
     if (cached) {
-      const e = (JSON.parse(cached) as Record<string, any>)[symbol];
+      const all = JSON.parse(cached) as Record<string, any>;
+      const e = all[symbol];
       if (e) {
         const d = indicators[0];
         d.mlWinProbability = e.probability ?? null;
@@ -213,8 +216,46 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
         d.mlMetaProbability = e.probabilityMeta ?? null;
         d.mlQ75 = e.q75 ?? null;
       }
+      if (isCrypto && symbol !== 'BTCUSDT') {
+        const btc = all['BTCUSDT'];
+        if (btc) btcContext = { mlWin: btc.probability ?? null, bigMoveBucket: tailRiskBucket(btc.bigMoveProb ?? null), persistence: btc.probabilityH72 ?? null };
+      }
     }
   } catch { /* ML overlay best-effort — prompt degrades gracefully without it */ }
+
+  // Insight enrichments (2026-07-02), both best-effort:
+  // (a) live calibration — the realized goodR rate for the CURRENT prediction's bucket over the
+  //     last 90d (ml_calibration D1, universe-wide) so the prompt cites an audited number;
+  // (b) ML_WIN trajectory — the last-24h path from this device's score_history (cron writes a row
+  //     per minute for watchlisted symbols), downsampled to ~6 points.
+  let mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null = null;
+  let mlTrajectory: { points: number[]; hours: number } | null = null;
+  const curWin = indicators[0].mlWinProbability;
+  if (curWin != null) {
+    try {
+      const bounds: Array<[number, number, string]> = [[0, 0.3, '<30%'], [0.3, 0.5, '30-50%'], [0.5, 0.6, '50-60%'], [0.6, 0.7, '60-70%'], [0.7, 1.01, '70%+']];
+      const [lo, hi, label] = bounds.find(([l, h]) => curWin >= l && curWin < h) ?? bounds[bounds.length - 1];
+      const row = await env.DB.prepare(
+        `SELECT COUNT(*) as n, AVG(good_r) * 100 as realized FROM ml_calibration
+         WHERE resolved = 1 AND is_crypto = ? AND logged_at > ? AND predicted_prob >= ? AND predicted_prob < ?`
+      ).bind(isCrypto ? 1 : 0, Date.now() - 90 * 86400_000, lo, hi).first();
+      const n = (row?.n as number) ?? 0;
+      if (n > 0 && row?.realized != null) mlCalibration = { n, realizedPct: row.realized as number, windowDays: 90, bucketLabel: label };
+    } catch { /* calibration best-effort */ }
+  }
+  try {
+    const res = await env.DB.prepare(
+      `SELECT ml_probability FROM score_history
+       WHERE device_id = ? AND symbol = ? AND ml_probability IS NOT NULL AND timestamp >= datetime('now', '-24 hours')
+       ORDER BY timestamp ASC`
+    ).bind(deviceId, symbol).all();
+    const rows = (res.results as any[]).map(r => r.ml_probability as number);
+    if (rows.length >= 3) {
+      const N = 6;
+      const points = rows.length <= N ? rows : Array.from({ length: N }, (_, i) => rows[Math.round(i * (rows.length - 1) / (N - 1))]);
+      mlTrajectory = { points, hours: 24 };
+    }
+  } catch { /* trajectory best-effort */ }
 
   // Outcome feedback loop — last resolved trades for this device+symbol. The model_version filter
   // matches EVERY version iOS has ever stamped (crypto: 10 legacy → 12 current; stock: 12/13) —
@@ -266,6 +307,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
+    mlCalibration, mlTrajectory, btcContext,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });
