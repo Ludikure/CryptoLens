@@ -111,6 +111,23 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(gated.prompt).not.toContain('BTC CONTEXT');
   });
 
+  it('VOLATILITY PRICING: flags cheap vol when the model forecast exceeds options-implied move', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+    // forecast 3.0% vs implied 2.0% → ratio 1.5 ≥ 1.25 → cheap vol.
+    const { prompt } = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      volPricing: { dvol: 40, impliedMovePct: 2.0, forecastMovePct: 3.0 },
+    });
+    expect(prompt).toContain('VOLATILITY PRICING: options imply a ±2.00% daily move (Deribit DVOL 40%)');
+    expect(prompt).toContain('vol looks CHEAP');
+    expect(prompt).toContain('long-gamma/straddle favorable');
+  });
+
   it('calibration-corrected ML gate: a drifted-low raw ML_WIN no longer auto-FLATs when the live bucket realizes higher', () => {
     const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
     const mk = (n: number, step: number, label: string, tf: string) =>

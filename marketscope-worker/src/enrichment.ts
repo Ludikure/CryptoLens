@@ -334,6 +334,27 @@ export async function fetchEconomicEvents(nowMs: number): Promise<EconomicEventO
   } catch { return []; }
 }
 
+// Implied volatility from Deribit's DVOL index (30-day annualized IV, %). Public market data, no
+// auth (US-accessible for DATA even though Deribit doesn't serve US *trading*). BTC/ETH only —
+// the only liquid crypto options markets. Feeds the VOLATILITY PRICING read: the app's own move
+// FORECAST (HAR-RV) vs what options are PRICING → is a coming move cheap (long-gamma favorable) or
+// already expensive (rich vol, the move is expected). This is how you monetize a direction-agnostic
+// volatility edge with a direction-agnostic instrument.
+export async function fetchImpliedVol(currency: 'BTC' | 'ETH'): Promise<number | null> {
+  const end = Date.now(), start = end - 6 * 3600 * 1000;
+  const url = `https://www.deribit.com/api/v2/public/get_volatility_index_data?currency=${currency}&start_timestamp=${start}&end_timestamp=${end}&resolution=3600`;
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': UA } });
+    if (!r.ok) return null;
+    const j = await r.json() as any;
+    const data = j?.result?.data;
+    if (!Array.isArray(data) || !data.length) return null;
+    const last = data[data.length - 1];   // [timestamp, open, high, low, close]
+    const dvol = Array.isArray(last) ? Number(last[4]) : null;
+    return (dvol != null && isFinite(dvol) && dvol > 0) ? dvol : null;
+  } catch { return null; }
+}
+
 // Crypto Fear & Greed index (alternative.me). Returns {value 0-100, label}.
 export async function fetchFearGreed(): Promise<{ value: number; label: string } | null> {
   try {

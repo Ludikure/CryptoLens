@@ -11,7 +11,7 @@ import { forecastVol, bandMultipliers } from './vol';
 import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
 import { correlationReport } from './correlation';
-import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment } from './enrichment';
+import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
 // Without this, every minute's cron sees a different "current" close (the live tick),
@@ -276,6 +276,21 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     }
   } catch { /* trajectory best-effort */ }
 
+  // Volatility pricing (BTC/ETH only — the liquid crypto options markets). Compare the model's own
+  // 24h move forecast (HAR-RV σ) against options-implied move (Deribit DVOL) to flag cheap/rich vol.
+  let volPricing: { dvol: number; impliedMovePct: number; forecastMovePct: number } | null = null;
+  const ivCurrency = symbol === 'BTCUSDT' ? 'BTC' : symbol === 'ETHUSDT' ? 'ETH' : null;
+  const forecastSigma = volForecast?.horizons?.['24h']?.sigma;
+  if (ivCurrency && forecastSigma && forecastSigma > 0) {
+    try {
+      const dvol = await fetchImpliedVol(ivCurrency);
+      if (dvol) {
+        const impliedMovePct = dvol * Math.sqrt(1 / 365);   // annualized IV → 1-day 1σ move %
+        volPricing = { dvol, impliedMovePct, forecastMovePct: forecastSigma * 100 };
+      }
+    } catch { /* IV best-effort */ }
+  }
+
   // Outcome feedback loop — last resolved trades for this device+symbol. The model_version filter
   // matches EVERY version iOS has ever stamped (crypto: 10 legacy → 12 current; stock: 12/13) —
   // pre-2026-07-01 this filtered on 11/13, which matched NOTHING iOS wrote, so outcomeHistory was
@@ -326,7 +341,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-    mlCalibration, calibratedMlWin, mlTrajectory, btcContext,
+    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });
