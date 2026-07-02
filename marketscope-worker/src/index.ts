@@ -420,10 +420,18 @@ export default {
       return json({ error: 'Forbidden' }, 403);
     }
 
-    // Enforce body size limit on POST requests (except candle uploads)
-    if (request.method === 'POST' && path !== '/history') {
-      const contentLength = parseInt(request.headers.get('Content-Length') || '0');
-      if (contentLength > MAX_BODY_BYTES) {
+    // Enforce body size limits on bodied requests. Content-Length is REQUIRED (411 otherwise):
+    // a chunked-encoding request carries no length header, and pre-2026-07-02 that parsed to 0
+    // and sailed past the cap — on Cloudflare the platform capped bodies anyway, but on the box
+    // request.json() would buffer an unbounded stream into RAM (memory-exhaustion DoS). Every
+    // legitimate client (iOS URLSession, browser fetch) always sends Content-Length.
+    // /history (candle uploads) is exempt from MAX_BODY_BYTES but still hard-capped.
+    if (request.method === 'POST' || request.method === 'PUT') {
+      const lenHeader = request.headers.get('Content-Length');
+      if (lenHeader === null) return json({ error: 'Length Required' }, 411);
+      const contentLength = parseInt(lenHeader);
+      const cap = path === '/history' ? 10_000_000 : MAX_BODY_BYTES;
+      if (!Number.isFinite(contentLength) || contentLength > cap) {
         return json({ error: 'Request body too large' }, 413);
       }
     }
@@ -479,9 +487,14 @@ export default {
       }
     }
 
-    // All endpoints (except /register, /bls/actuals) require valid auth token.
-    // /history is auth-gated; the iOS callers (BacktestEngine) send X-Auth-Token.
-    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/darkpool' && !path.startsWith('/debug') && !path.startsWith('/twelvedata') && !path.startsWith('/finnhub/')) {
+    // All endpoints require a valid auth token EXCEPT the deliberately-public set below
+    // (/register bootstraps auth; /bls, /derivatives, /spot, /candles/crypto, /sentiment,
+    // /darkpool are public read-only proxies with their own caching/IP limits).
+    // 2026-07-02: /debug/*, /twelvedata/*, /finnhub/* moved BEHIND the gate — they were
+    // exempt (contradicting this doc's endpoint table), leaving upstream API quota burnable
+    // and /debug/backfill-derivatives usable as a DoS lever with only the public X-App-ID.
+    // iOS FinnhubProvider already sends auth headers; nothing calls /twelvedata or /debug.
+    if (path !== '/register' && path !== '/bls/actuals' && path !== '/derivatives' && path !== '/spot' && path !== '/candles/crypto' && path !== '/sentiment' && path !== '/darkpool') {
       if (!deviceId || !authToken) return json({ error: 'Unauthorized' }, 401);
       // Check D1 first, then KV fallback
       const device = await env.DB.prepare('SELECT auth_token FROM devices WHERE device_id = ?').bind(deviceId).first();
@@ -1594,7 +1607,10 @@ export default {
     if (path === '/debug/backfill-derivatives') {
       const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
       if (!symbol) return json({ error: 'Missing symbol' }, 400);
-      const days = parseInt(url.searchParams.get('days') || '365');
+      // Clamped to [1, 400]: unclamped, days=10000000 meant ~340k paginated Binance windows ×5
+      // endpoints through the VPN + unbounded D1 writes on a request thread (DoS lever). Binance
+      // derivatives history only goes back ~30 days for most futures/data endpoints anyway.
+      const days = Math.min(400, Math.max(1, parseInt(url.searchParams.get('days') || '365') || 365));
       const FAPI = 'https://fapi.binance.com';
       const BUCKET_MS = 4 * 3600 * 1000;
       const endMs = Date.now();
