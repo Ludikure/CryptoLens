@@ -253,6 +253,15 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
       if (n > 0 && row?.realized != null) mlCalibration = { n, realizedPct: row.realized as number, windowDays: 90, bucketLabel: label };
     } catch { /* calibration best-effort */ }
   }
+  // Calibration-corrected ML_WIN for the auto-FLAT/quality GATE (2026-07-02). The static isotonic
+  // calibration drifts: live data shows the 30-50% bucket realizing ~65% (compressed model), so the
+  // raw number over-triggers "no trade". Blend the raw value 35/65 toward the measured bucket rate
+  // (n>=100). This is a symmetric RE-calibration, not a loosening — it also LOWERS an over-confident
+  // top bucket (70-85 raw realizing only ~67%). Display still shows raw + the calibration line.
+  let calibratedMlWin: number | null = null;
+  if (mlCalibration && mlCalibration.n >= 100 && curWin != null) {
+    calibratedMlWin = 0.35 * curWin + 0.65 * (mlCalibration.realizedPct / 100);
+  }
   try {
     const res = await env.DB.prepare(
       `SELECT ml_probability FROM score_history
@@ -317,7 +326,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-    mlCalibration, mlTrajectory, btcContext,
+    mlCalibration, calibratedMlWin, mlTrajectory, btcContext,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });

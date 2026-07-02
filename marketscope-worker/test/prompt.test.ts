@@ -111,6 +111,28 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(gated.prompt).not.toContain('BTC CONTEXT');
   });
 
+  it('calibration-corrected ML gate: a drifted-low raw ML_WIN no longer auto-FLATs when the live bucket realizes higher', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+    daily.mlWinProbability = 0.42;   // raw < 50 → would auto-FLAT on the raw number
+
+    // calibratedMlWin 0.35*0.42 + 0.65*0.65 = 0.57 → clears 50, so ML is NOT an auto-FLAT reason.
+    const lifted = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      calibratedMlWin: 0.35 * 0.42 + 0.65 * 0.65,
+    });
+    expect(lifted.prompt).toContain('the live forward calibration corrects it');
+    expect(lifted.prompt).not.toContain('auto_FLAT_active: ML_WIN');
+
+    // Without calibration, the raw 42% still auto-FLATs (unchanged behavior).
+    const raw = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH] });
+    expect(raw.prompt).toContain('auto_FLAT_active: ML_WIN_42%<50');
+  });
+
   it('buildUserPrompt runs end-to-end over real computeFullIndicators output (crypto)', () => {
     const NOW = 1748736000000; // fixed (2025-06-01T00:00:00Z) — scripts can't use Date.now()
     const DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;

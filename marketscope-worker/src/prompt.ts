@@ -453,6 +453,7 @@ export interface BuildPromptInput {
   riskStates?: import('./risk-states').RiskState[];                            // Phase 5: discrete risk states
   // Insight enrichments (2026-07-02) — all derived from data the system already stores:
   mlCalibration?: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null;  // live realized goodR for the CURRENT prediction's bucket (ml_calibration D1)
+  calibratedMlWin?: number | null;   // raw ML_WIN corrected by the live forward calibration — used by the auto-FLAT/quality gate so drift can't over-suppress
   mlTrajectory?: { points: number[]; hours: number } | null;                   // sampled ML_WIN path over the last N hours, oldest→newest (score_history D1)
   btcContext?: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null; // BTC regime read for alt analyses (ml_preds:all KV)
   prevState?: PromptState; settings?: PromptSettings;
@@ -1100,10 +1101,16 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
 
     // Phase C10 — Conviction Envelope
     {
-      const mlPct = daily.mlWinProbability != null ? iTrunc(daily.mlWinProbability * 100) : null;
+      const rawMlPct = daily.mlWinProbability != null ? iTrunc(daily.mlWinProbability * 100) : null;
+      // The ML auto-FLAT keys on the CALIBRATION-CORRECTED value (2026-07-02) — the raw number
+      // has drifted low (30-50 bucket realizing ~65%), so keying the hard "no trade" on it was
+      // over-suppressing tradeable-quality bars ("no trade auto-FLAT for 2 days while BTC ran").
+      const gateMlWin = input.calibratedMlWin ?? daily.mlWinProbability;
+      const mlPct = gateMlWin != null ? iTrunc(gateMlWin * 100) : null;
+      const calibLifted = input.calibratedMlWin != null && rawMlPct != null && rawMlPct < 50 && mlPct != null && mlPct >= 50;
       const staleCount = dataQuality?.missingEnrichments.length ?? 0;
       const autoFlat: string[] = [];
-      if (mlPct != null && mlPct < 50) autoFlat.push(`ML_WIN_${mlPct}%<50`);
+      if (mlPct != null && mlPct < 50) autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);
       if (envAnyKilled) autoFlat.push('ANY_KILLED=true');
       if (envDivergenceEscalated) autoFlat.push('divergence_escalated_6+_candles');
       // biases_MIXED → auto-FLAT. (The old "Stoch agreement overrides this" exemption was
@@ -1151,7 +1158,18 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const maxAllowed = autoFlat.length ? 'FLAT' : highBlocks.length === 0 ? 'HIGH' : moderateBlocks.length === 0 ? 'MODERATE' : 'LOW';
       L('Conviction Envelope:');
       L(`  max_allowed: ${maxAllowed}`);
-      if (autoFlat.length) { L(`  auto_FLAT_active: ${autoFlat.join(', ')}`); L('  → Output NO SETUP regardless of any other reasoning'); }
+      if (calibLifted) L(`  note: raw ML_WIN ${rawMlPct}% would auto-FLAT, but the live forward calibration corrects it to ~${mlPct}% (bucket realizes higher than the drifted model predicts) — NOT auto-FLAT on ML alone.`);
+      if (autoFlat.length) {
+        L(`  auto_FLAT_active: ${autoFlat.join(', ')}`);
+        L('  → Output NO SETUP regardless of any other reasoning');
+        // Reframe the low-ML-in-a-trend case so the output isn't a demoralizing "nothing here":
+        // ML_WIN measures a SHARP (>=1.5 ATR/24h) move; a slow trend grind is a low-ML_WIN state
+        // BY DESIGN, and "no vol-edge entry" is NOT "no trend / stand down".
+        const onlyML = autoFlat.length === 1 && autoFlat[0].startsWith('ML_WIN_');
+        if (onlyML && (envRisk === 'ELEVATED' || envRisk === 'HIGH')) {
+          L(`  FRAMING: this FLAT is "no volatility-edge entry" (ML_WIN gauges a sharp >=1.5-ATR move, unlikely here), NOT "quiet / nothing happening" — Environment Risk is ${envRisk} and the ${trendDir}-trend is intact. Riding an existing trend is a separate decision this tool does not gate; say so plainly instead of a flat "stand aside". Do NOT imply the tape is safe.`);
+        }
+      }
       else {
         if (highBlocks.length) L(`  HIGH_blocked_because: ${highBlocks.join(', ')}`);
         if (moderateBlocks.length) L(`  MODERATE_blocked_because: ${moderateBlocks.join(', ')}`);
