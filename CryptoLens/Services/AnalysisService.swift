@@ -555,6 +555,13 @@ class AnalysisService: ObservableObject {
     // MARK: - Full analysis: indicators + AI
 
     func runFullAnalysis(symbol: String) async {
+        // Reentrancy guard: the scenePhase recovery Task and a user tap can both be enqueued on
+        // the MainActor before either runs; without this, two runs start two LLM jobs (double
+        // spend) and register duplicate setups (parseSetups mints fresh UUIDs per decode, so the
+        // registerSetup id-dedupe can't catch it). aiLoadingPhase is set synchronously below,
+        // before the first await, so the second enqueued task reliably sees it and bails.
+        guard aiLoadingPhase == .idle else { return }
+
         if NetworkMonitor.shared.isOffline {
             error = "No internet connection. Connect to a network and try again."
             aiLoadingPhase = .idle
@@ -767,8 +774,19 @@ class AnalysisService: ObservableObject {
                 claudeAnalysis = r.markdown
                 tradeSetups = r.setups
             } catch {
-                claudeAnalysis = "Analysis failed: \(error.localizedDescription). Check your connection and try again."
-                tradeSetups = []
+                // A failed analysis is an ERROR, not an analysis. Pre-2026-07-01 the failure text
+                // was stored as a real result — saved to history/disk cache, stamped with an
+                // analysisTimestamp, registered as a FLAT outcome (polluting the false-conservatism
+                // stats with network failures), and (with auto-alerts on) it wiped the previous
+                // setup's alerts and re-added nothing. Now: surface the error and bail.
+                if symbol == currentSymbol {
+                    self.error = "Analysis failed: \(error.localizedDescription)"
+                }
+                isLoading = false
+                loadingStatus = ""
+                aiLoadingPhase = .idle
+                HapticManager.notification(.error)
+                return
             }
 
             let now = Date()
@@ -790,14 +808,17 @@ class AnalysisService: ObservableObject {
             )
 
             resultsBySymbol[symbol] = result
-            // Only mutate displayed UI state if the user is still viewing this symbol —
+            // Loading state resets UNCONDITIONALLY — pre-2026-07-01 these were gated on
+            // symbol == currentSymbol, so switching favorites mid-analysis left aiLoadingPhase
+            // stuck non-idle forever, disabling the AI run buttons + toolbar until relaunch.
+            isLoading = false
+            loadingStatus = ""
+            aiLoadingPhase = .idle
+            // Only mutate DISPLAYED result state if the user is still viewing this symbol —
             // otherwise lastResult flips to the wrong asset when a slow AI analysis
             // completes after the user has already swiped to another favorite.
             if symbol == currentSymbol {
                 lastResult = result
-                isLoading = false
-                loadingStatus = ""
-                aiLoadingPhase = .idle
                 isAIStale = false
                 HapticManager.notification(.success)
             }
@@ -839,7 +860,12 @@ class AnalysisService: ObservableObject {
             saveCache(result)
 
         } catch {
-            self.error = error.localizedDescription
+            // Reset loading state unconditionally, but only DISPLAY the error if the user is
+            // still on this symbol — a stale (switched-away) run's failure shouldn't banner
+            // over whatever they're viewing now.
+            if symbol == currentSymbol {
+                self.error = error.localizedDescription
+            }
             self.isLoading = false
             self.loadingStatus = ""
             self.aiLoadingPhase = .idle

@@ -216,15 +216,19 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     }
   } catch { /* ML overlay best-effort — prompt degrades gracefully without it */ }
 
-  // Outcome feedback loop — last resolved trades for this device+symbol+model.
+  // Outcome feedback loop — last resolved trades for this device+symbol. The model_version filter
+  // matches EVERY version iOS has ever stamped (crypto: 10 legacy → 12 current; stock: 12/13) —
+  // pre-2026-07-01 this filtered on 11/13, which matched NOTHING iOS wrote, so outcomeHistory was
+  // always [] and the LLM never saw the trade record. Keep this in sync with
+  // OutcomeTracker.currentModelVersion + the shipped model JSON `version` fields.
   let outcomeHistory: Array<{ direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null }> = [];
   try {
-    const modelVersion = isCrypto ? 11 : 13;
+    const versions = isCrypto ? [10, 11, 12] : [12, 13];
     const res = await env.DB.prepare(
       `SELECT direction, entry_price, outcome, ml_probability, conviction FROM trade_outcomes
-       WHERE device_id = ? AND symbol = ? AND model_version = ? AND outcome IS NOT NULL
+       WHERE device_id = ? AND symbol = ? AND model_version IN (${versions.map(() => '?').join(',')}) AND outcome IS NOT NULL
        ORDER BY opened_at DESC LIMIT 10`
-    ).bind(deviceId, symbol, modelVersion).all();
+    ).bind(deviceId, symbol, ...versions).all();
     outcomeHistory = (res.results as any[]).map(r => ({ direction: r.direction, entry: r.entry_price, outcome: r.outcome, mlProb: r.ml_probability, conviction: r.conviction }));
   } catch { /* best-effort */ }
 
@@ -265,7 +269,13 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });
-  try { await env.ALERTS.put(stateKey, JSON.stringify(newState), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
+  // Persist the regime/kill/POC state now, but CARRY OVER the prior #6 baseline
+  // (prevMlWin/prevBottomLine/prevAnalysisMs): only a successful LLM run below may advance it.
+  // Pre-2026-07-01 this put persisted the fresh baseline unconditionally, so a 413 / provider
+  // error / promptOnly dry-run re-baselined SINCE LAST ANALYSIS and the next real run
+  // under-reported what changed.
+  const stateCarry = { ...newState, prevMlWin: prevState.prevMlWin ?? null, prevBottomLine: prevState.prevBottomLine ?? null, prevAnalysisMs: prevState.prevAnalysisMs ?? null };
+  try { await env.ALERTS.put(stateKey, JSON.stringify(stateCarry), { expirationTtl: 86400 * 7 }); } catch { /* state persist best-effort */ }
 
   // Dry-run: return the built prompt (no LLM call) for parity inspection.
   if (body.promptOnly === true) {
@@ -282,11 +292,13 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   if (!llm.ok) return { ok: false, status: llm.status, error: llm.error };
   const setups = parseSetups(llm.text);
 
-  // #6 — persist the fresh Bottom Line so the NEXT analysis leads with what changed.
+  // #6 — the LLM run succeeded: NOW advance the SINCE LAST ANALYSIS baseline (fresh ML + timestamp
+  // from newState) and persist the fresh Bottom Line. Unconditional on llm.ok — even if the Bottom
+  // Line regex misses, the ML/timestamp baseline must still advance.
   try {
     const m = llm.text.match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
     const bl = m ? m[1].replace(/\s+/g, ' ').trim().slice(0, 320) : null;
-    if (bl) await env.ALERTS.put(stateKey, JSON.stringify({ ...newState, prevBottomLine: bl }), { expirationTtl: 86400 * 7 });
+    await env.ALERTS.put(stateKey, JSON.stringify({ ...newState, prevBottomLine: bl ?? prevState.prevBottomLine ?? null }), { expirationTtl: 86400 * 7 });
   } catch { /* best-effort */ }
 
   return { ok: true, result: {
@@ -3421,11 +3433,14 @@ async function processDeviceNotifications(
     // Atomic claim: insert if absent, otherwise overwrite only if the prior claim has
     // expired. `meta.changes === 1` means we won (either fresh insert or expired-claim
     // takeover); `0` means another concurrent caller already holds an unexpired claim.
+    // NB: positional `?` only — the box's better-sqlite3 adapter rejects `?N` numbered params
+    // (this exact statement silently killed every ML-crossing push from the TrueNAS cutover
+    // until 2026-07-01: the throw aborted the device pass on precisely the ticks that crossed).
     const claim = await env.DB.prepare(
-      `INSERT INTO notif_claims (push_token, symbol, expires_at) VALUES (?1, ?2, ?3)
-       ON CONFLICT(push_token, symbol) DO UPDATE SET expires_at = ?3
-       WHERE notif_claims.expires_at < ?4`
-    ).bind(pushToken, symbol, expiresAt, now).run();
+      `INSERT INTO notif_claims (push_token, symbol, expires_at) VALUES (?, ?, ?)
+       ON CONFLICT(push_token, symbol) DO UPDATE SET expires_at = ?
+       WHERE notif_claims.expires_at < ?`
+    ).bind(pushToken, symbol, expiresAt, expiresAt, now).run();
     if ((claim.meta.changes ?? 0) === 0) continue;
     triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb,
                      direction: dir === 1 ? 'LONG' : 'SHORT' });

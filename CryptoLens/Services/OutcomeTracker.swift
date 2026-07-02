@@ -469,11 +469,14 @@ enum OutcomeTracker {
         return (sum & 1 == 0) ? baselinePromptVersion : treatmentPromptVersion
     }
 
-    /// ML model version is asset-class-dependent: crypto uses v10 (LightGBM), stocks
-    /// use v12 (XGBoost, retrained 2026-05-04 on lookahead-corrected data). The
-    /// `currentModelVersion(for:)` resolver picks the right one at registration time.
+    /// Must match the `version` field of the worker's shipped ml-model-{crypto,stock}.json —
+    /// both 12 as of the 2026-06-02 v12-CLEAN crypto retrain (crypto LightGBM, stock XGBoost).
+    /// Pre-2026-07-01 this returned 10 for crypto (a leak-era leftover) while the worker's
+    /// outcome-feedback query filtered on 11/13 — so the LLM's trade-record lookup matched
+    /// nothing. The worker now queries IN(10,11,12) crypto / IN(12,13) stock; keep all three
+    /// registries (this, the worker query, the JSONs) in sync on retrains.
     static func currentModelVersion(for symbol: String) -> Int {
-        symbol.hasSuffix("USDT") ? 10 : 12
+        symbol.hasSuffix("USDT") ? 12 : 12
     }
 
     /// Register a new setup for tracking. Classifies as market or conditional.

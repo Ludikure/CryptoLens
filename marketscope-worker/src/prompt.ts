@@ -479,7 +479,9 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L('→ If something material changed (ML ≥15pp, regime flip, a flag newly fired/cleared, a level newly IN_PLAY), LEAD the Bottom Line with it. If not, say "largely unchanged" and keep the whole output short.');
     }
   }
-  newState.prevMlWin = curMlWin;
+  // Keep the prior ML baseline when the current read is null (ml_preds cache miss) — otherwise
+  // one stale cache would erase the delta the next successful run should report.
+  newState.prevMlWin = curMlWin ?? prevState.prevMlWin ?? null;
   newState.prevAnalysisMs = nowMs;
   newState.prevBottomLine = prevState.prevBottomLine ?? null;
 

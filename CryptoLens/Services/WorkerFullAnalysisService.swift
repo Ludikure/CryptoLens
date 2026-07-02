@@ -94,6 +94,14 @@ enum WorkerFullAnalysisService {
             }
             try? await Task.sleep(nanoseconds: 3_000_000_000)   // poll every 3s
         }
+        // The wall-clock deadline also elapses while the app is SUSPENDED (the task is frozen,
+        // not polling) — so on resume the loop can exit with the finished result sitting in the
+        // box's KV. One final poll before declaring a timeout; this is the normal path for a
+        // long screen-lock, not an edge case.
+        if case .done(let r) = try await pollResult(jobId: jobId) {
+            clearPendingJob(symbol: symbol)
+            return r
+        }
         throw FetchError.server("Analysis timed out")
     }
 
@@ -254,11 +262,14 @@ enum WorkerFullAnalysisService {
 
     private static func jobKey(_ symbol: String) -> String { "pending_analysis_job_\(symbol)" }
 
-    /// A recent (<3 min) in-flight jobId for this symbol, if any. Stale entries are pruned.
+    /// An in-flight (or finished-but-unclaimed) jobId for this symbol, if any. The retention
+    /// window matches the box's KV job TTL (3600s) — pre-2026-07-01 this pruned at 180s, which
+    /// defeated the whole fire-and-forget design: tapping the "analysis ready" push more than
+    /// 3 minutes after starting found no job to resume and re-ran the analysis (double LLM spend).
     static func pendingJob(for symbol: String) -> String? {
         let d = UserDefaults.standard
         guard let jid = d.string(forKey: jobKey(symbol)) else { return nil }
-        if Date().timeIntervalSince1970 - d.double(forKey: jobKey(symbol) + "_at") > 180 {
+        if Date().timeIntervalSince1970 - d.double(forKey: jobKey(symbol) + "_at") > 3600 {
             clearPendingJob(symbol: symbol); return nil
         }
         return jid
