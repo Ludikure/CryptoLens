@@ -243,6 +243,10 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(prompt).toContain('BUYING THE TOP');
     expect(prompt).toContain('classic retail trap');
     expect(prompt).toContain('extended');
+    // Symmetry fix: an aligned trend that has already run (CHASE HIGH) now hard-FLATs the
+    // envelope, the same way MIXED does — no more green-lighting the late chase.
+    expect(prompt).toContain('chase_into_extended_aligned_trend');
+    expect(prompt).toContain('Output NO SETUP');
   });
 
   it('F-1: CHASE / EXHAUSTION guard stays quiet on a calm, mid-range tape', () => {

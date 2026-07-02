@@ -518,6 +518,7 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
   if (indicators.length >= 2) {
     const daily = indicators[0], fourH = indicators[1], oneH = indicators.length > 2 ? indicators[2] : null;
     let envAnyKilled = false, envDivergenceEscalated = false, envMacroRisk = 'NONE', envContinuationCount = 0, envAlignment = 'UNKNOWN', envNewsConflicts = false;
+    let envChaseLevel = 'none';   // CHASE/EXHAUSTION level, hoisted so the Conviction Envelope can hard-FLAT a mature-aligned chase
     const isTreatment = true;
     let treatmentStochCrossDaily = 'none', treatmentStochCross4H = 'none', treatmentLongConfirmStatus = 'n/a';
     const treatmentLongConfirmReasons: string[] = [];
@@ -929,6 +930,7 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // move) plus confirmation, so two oscillators alone can't trip it.
       const coreChase = stretch >= 2 || exhaustion.length >= 2;
       const chaseLevel = (coreChase && chaseScore >= 3) ? 'HIGH' : (chaseScore >= 2 ? 'ELEVATED' : 'none');
+      envChaseLevel = chaseLevel;   // hand to the Conviction Envelope
       if (chaseLevel !== 'none') {
         const verb = bullish4H ? 'BUYING THE TOP' : 'SHORTING THE BOTTOM';
         const parts: string[] = [];
@@ -1128,6 +1130,13 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // biases_MIXED → auto-FLAT. (The old "Stoch agreement overrides this" exemption was
       // removed — Stoch direction is noise, so it can't rescue a mixed-bias setup.)
       if (envAlignment === 'MIXED') autoFlat.push('biases_MIXED');
+      // Symmetry fix (2026-07-02): the envelope hard-blocked MIXED (no coherent trade) but only
+      // WARNED on the opposite bad state — an aligned trend that has already run (CHASE HIGH).
+      // Measured (trend_direction_test.py): a MATURE aligned trend has ~0% forward EV — entering
+      // it is the late chase. So "aligned + CHASE HIGH" now auto-FLATs too, leaving only the
+      // young/just-confirmed alignment window (the one cell with any edge) tradeable. This makes
+      // the app MORE selective — the honest direction — not more generous.
+      if (envChaseLevel === 'HIGH' && envAlignment !== 'MIXED' && envAlignment !== 'UNKNOWN') autoFlat.push('chase_into_extended_aligned_trend');
       if (envMacroRisk === 'IMMINENT') autoFlat.push('macro_IMMINENT');
       if (isTreatment) {
         if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'FAIL') autoFlat.push('treatment_long_confirm_FAIL');
