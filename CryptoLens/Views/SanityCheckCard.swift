@@ -51,8 +51,11 @@ struct SanityCheck {
         var items: [Item] = []
 
         // 1) Chasing vs pullback — entering in the breakout direction (above price for a long /
-        // below price for a short) means buying/selling an extended move.
-        let chasing = (isLong && setup.entry > price) || (!isLong && setup.entry < price)
+        // below price for a short) means buying/selling an extended move. A 0.3% tolerance (the
+        // same band SetupType.classify uses for "market" entries) avoids flagging a legitimate
+        // at-market entry one tick beyond price as the scariest "CHASING" warning.
+        let chaseTol = price * 0.003
+        let chasing = (isLong && setup.entry > price + chaseTol) || (!isLong && setup.entry < price - chaseTol)
         items.append(Item(
             question: "Pullback entry, or chasing a move that already ran?",
             answer: chasing
@@ -60,16 +63,18 @@ struct SanityCheck {
                 : "PULLBACK — the plan waits for price to come back to your entry. Lower-risk than chasing.",
             ok: !chasing))
 
-        // 2) Stop inside or outside the noise zone — a stop closer than ~1×ATR(4H) is inside
-        // normal noise and is likely to get wicked out before the idea has a chance.
+        // 2) Stop inside or outside the noise zone — a stop closer than ~1×ATR is inside normal
+        // noise and is likely to get wicked out before the idea has a chance. tf2 is 4H for crypto
+        // but 1H for stocks — label it from the timeframe rather than hardcoding "4H".
+        let noiseTF = result.tf2.label
         if let atr = result.tf2.atr?.atr, atr > 0, setup.risk > 0 {
             let stopATR = setup.risk / atr
             let inside = stopATR < 1.0
             items.append(Item(
                 question: "Is your stop outside the noise zone?",
                 answer: String(format: inside
-                    ? "TIGHT — your stop is %.1f×ATR away; normal 4H noise can wick you out before the idea plays out."
-                    : "OK — your stop is %.1f×ATR away, outside typical 4H noise.", stopATR),
+                    ? "TIGHT — your stop is %.1f×ATR away; normal \(noiseTF) noise can wick you out before the idea plays out."
+                    : "OK — your stop is %.1f×ATR away, outside typical \(noiseTF) noise.", stopATR),
                 ok: !inside))
         }
 

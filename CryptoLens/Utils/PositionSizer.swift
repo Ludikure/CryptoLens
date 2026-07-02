@@ -45,8 +45,14 @@ enum PositionSizer {
     }
 
     /// Quantity with sensible precision (small crypto sizes need more decimals than share counts).
+    /// Large counts get thousands separators — a raw "12345678 PEPE" is unreadable.
     static func formatQuantity(_ q: Double) -> String {
-        if q >= 1000 { return String(format: "%.0f", q) }
+        if q >= 1000 {
+            let fmt = NumberFormatter()
+            fmt.numberStyle = .decimal
+            fmt.maximumFractionDigits = 0
+            return fmt.string(from: NSNumber(value: q)) ?? String(format: "%.0f", q)
+        }
         if q >= 1 { return String(format: "%.2f", q) }
         if q >= 0.01 { return String(format: "%.4f", q) }
         return String(format: "%.6f", q)

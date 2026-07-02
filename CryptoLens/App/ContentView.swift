@@ -523,15 +523,12 @@ struct AITabContent: View {
 
     @ViewBuilder
     private func aiContent(_ result: AnalysisResult) -> some View {
-        // Setup summary card with position sizing
+        // Setup summary card (Entry/SL/TP). Position sizing lives in the dedicated
+        // PositionSizeCard below — the legacy inline "contracts" block was removed 2026-07-02
+        // (it showed a THIRD, conflicting size story alongside the card + the server prompt,
+        // used a hardcoded $500 fallback the card doesn't, and split 50%@1R/25%@TP1 which
+        // contradicts the documented execution model of 50% off at TP1 + BE + runner to TP2).
         if let setup = result.tradeSetups.first {
-            let risk = setup.risk
-            let riskDollars = accountSize > 0 && riskPercent > 0 ? accountSize * riskPercent / 100.0 : 500.0
-            let positionSize = risk > 0 ? riskDollars / risk : 0  // in base units (e.g. BTC)
-            let totalContracts = contractSize > 0 ? Int(positionSize / contractSize) : 0
-            let partialAt1R = totalContracts / 2        // 50% off at +1.0 R:R
-            let atTP1 = totalContracts / 4              // 25% at TP1
-            let runner = totalContracts - partialAt1R - atTP1  // remainder to TP2
 
             HStack(spacing: 12) {
                 Text(setup.direction)
@@ -566,31 +563,6 @@ struct AITabContent: View {
                                 .foregroundStyle(.green)
                         }
                     }
-                    // Position sizing
-                    if totalContracts > 0 {
-                        HStack(spacing: 0) {
-                            Text("\(totalContracts) contracts")
-                                .fontWeight(.semibold)
-                            Text(" \u{2022} ")
-                                .foregroundStyle(.secondary)
-                            Text("\(partialAt1R)")
-                                .foregroundStyle(.orange)
-                            Text("@1R ")
-                                .foregroundStyle(.secondary)
-                            Text("\(atTP1)")
-                                .foregroundStyle(.green)
-                            Text("@TP1 ")
-                                .foregroundStyle(.secondary)
-                            Text("\(runner)")
-                                .foregroundStyle(.blue)
-                            Text(" run")
-                                .foregroundStyle(.secondary)
-                        }
-                        .font(.caption2)
-                        Text("Risk \(Formatters.formatPrice(riskDollars)) (\(String(format: "%.1f", riskPercent))%)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
             .padding(10)
@@ -623,7 +595,7 @@ struct AITabContent: View {
         let levelCandles: [Candle] = result.tf2.candles.isEmpty ? result.daily.candles : result.tf2.candles
         if !watchLevels.isEmpty, !levelCandles.isEmpty {
             LevelsChartView(candles: levelCandles, currentPrice: result.daily.price,
-                            levels: watchLevels, timeframeLabel: result.tf2.candles.isEmpty ? "Daily" : "4H")
+                            levels: watchLevels, timeframeLabel: result.tf2.candles.isEmpty ? result.daily.label : result.tf2.label)
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
@@ -647,13 +619,18 @@ struct AITabContent: View {
         }
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
+        // Guard against empty candles (thin-mode fetch hiccup) — TradeSetupChartView's price
+        // range falls back to 0 with no candles, squashing every line to the top.
         ForEach(result.tradeSetups) { setup in
-            TradeSetupChartView(
-                candles: result.tf3.candles,
-                setup: setup,
-                currentPrice: result.daily.price
-            )
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            let setupCandles = result.tf3.candles.isEmpty ? result.tf2.candles : result.tf3.candles
+            if !setupCandles.isEmpty {
+                TradeSetupChartView(
+                    candles: setupCandles,
+                    setup: setup,
+                    currentPrice: result.daily.price
+                )
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            }
         }
 
         if !result.claudeAnalysis.isEmpty && !result.claudeAnalysis.contains("not configured") {

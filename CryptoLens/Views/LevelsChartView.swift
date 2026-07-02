@@ -13,14 +13,27 @@ struct LevelsChartView: View {
     private let chartHeight: CGFloat = 300
     private let labelGutter: CGFloat = 92
 
-    private var pMin: Double {
-        ((candles.map(\.low) + levels.map(\.price) + [currentPrice]).min() ?? currentPrice) * 0.999
+    // Y-scale is driven by the CANDLES (+ current price), not the levels — a far setup level
+    // (e.g. a 3-ATR TP2) used to compress 50 candles into a stripe. Levels beyond the candle
+    // range are pinned to the top/bottom edge instead of stretching the axis. Hoisted into
+    // stored bounds (was 3 computed properties re-scanning the arrays on every y() call).
+    private let pMin: Double
+    private let pMax: Double
+
+    init(candles: [Candle], currentPrice: Double, levels: [WatchLevel], timeframeLabel: String) {
+        self.candles = candles; self.currentPrice = currentPrice
+        self.levels = levels; self.timeframeLabel = timeframeLabel
+        let lo = (candles.map(\.low) + [currentPrice]).min() ?? currentPrice
+        let hi = (candles.map(\.high) + [currentPrice]).max() ?? currentPrice
+        let pad = max((hi - lo) * 0.04, hi * 0.0005)
+        self.pMin = lo - pad
+        self.pMax = hi + pad
     }
-    private var pMax: Double {
-        ((candles.map(\.high) + levels.map(\.price) + [currentPrice]).max() ?? currentPrice) * 1.001
-    }
+
     private var range: Double { max(pMax - pMin, 1e-9) }
-    private func y(_ p: Double, _ h: CGFloat) -> CGFloat { CGFloat((pMax - p) / range) * h }
+    private func y(_ p: Double, _ h: CGFloat) -> CGFloat {
+        CGFloat((pMax - min(pMax, max(pMin, p))) / range) * h   // clamp off-range levels to the edge
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -62,7 +75,9 @@ struct LevelsChartView: View {
                     }
                     .stroke(Color.primary.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
 
-                    // Watch levels
+                    // Watch levels — lines at true y; labels de-conflicted so clustered levels
+                    // (VAH/POC/swing highs) don't render on top of each other in the gutter.
+                    let labelYs = labelPositions(h)
                     ForEach(levels) { lvl in
                         let ly = y(lvl.price, h)
                         Path { p in p.move(to: CGPoint(x: 0, y: ly)); p.addLine(to: CGPoint(x: plotW, y: ly)) }
@@ -74,7 +89,7 @@ struct LevelsChartView: View {
                             .foregroundStyle(lvl.role.color)
                             .lineLimit(1)
                             .frame(width: labelGutter - 4, alignment: .leading)
-                            .position(x: plotW + labelGutter / 2, y: min(h - 6, max(6, ly)))
+                            .position(x: plotW + labelGutter / 2, y: labelYs[lvl.id] ?? min(h - 6, max(6, ly)))
                     }
                 }
             }
@@ -87,6 +102,29 @@ struct LevelsChartView: View {
         .padding(10)
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// De-conflicted label Y positions keyed by level id: sort by natural y, then push each label
+    /// down so no two are closer than `minGap`, and finally shift the whole stack up if it
+    /// overflows the bottom — so clustered levels get readable, non-overlapping labels.
+    private func labelPositions(_ h: CGFloat) -> [String: CGFloat] {
+        let minGap: CGFloat = 12
+        let ordered = levels
+            .map { (id: $0.id, y: min(h - 6, max(6, y($0.price, h)))) }
+            .sorted { $0.y < $1.y }
+        var out: [String: CGFloat] = [:]
+        var lastY: CGFloat = -.infinity
+        for item in ordered {
+            let placed = max(item.y, lastY + minGap)
+            out[item.id] = placed
+            lastY = placed
+        }
+        // If the stack ran past the bottom, slide it all up to fit.
+        if let overflow = out.values.max(), overflow > h - 6 {
+            let shift = overflow - (h - 6)
+            for k in out.keys { out[k]! -= shift }
+        }
+        return out
     }
 
     private func labelText(_ lvl: WatchLevel) -> String {

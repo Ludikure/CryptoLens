@@ -278,6 +278,17 @@ enum WorkerFullAnalysisService {
     /// Whether a resumable analysis job is outstanding for this symbol (drives foreground recovery).
     static func hasPendingJob(for symbol: String) -> Bool { pendingJob(for: symbol) != nil }
 
+    /// All symbols with a recent outstanding job — lets foreground recovery resume jobs even when
+    /// the app cold-launched (currentSymbol not yet set) or the user switched symbols before the
+    /// job finished. Prunes stale keys as a side effect.
+    static func pendingJobSymbols() -> [String] {
+        let prefix = "pending_analysis_job_"
+        return UserDefaults.standard.dictionaryRepresentation().keys
+            .filter { $0.hasPrefix(prefix) && !$0.hasSuffix("_at") }
+            .map { String($0.dropFirst(prefix.count)) }
+            .filter { hasPendingJob(for: $0) }
+    }
+
     private static func storePendingJob(_ jobId: String, symbol: String) {
         let d = UserDefaults.standard
         d.set(jobId, forKey: jobKey(symbol))

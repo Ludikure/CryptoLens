@@ -40,13 +40,15 @@ enum WatchLevelRole {
 enum LevelProximity { case inPlay, nearby, distant }
 
 struct WatchLevel: Identifiable {
-    let id = UUID()
     let price: Double
     let role: WatchLevelRole
     let label: String
     let distanceATR: Double
     let proximity: LevelProximity
     let isAbove: Bool          // above the current price?
+    // Stable identity (was `UUID()` regenerated every build → SwiftUI tore down + rebuilt every
+    // line/label in the ForEach on each List recompute, breaking diffing/animation).
+    var id: String { "\(role)-\(price)" }
 }
 
 enum WatchLevels {
@@ -99,14 +101,19 @@ enum WatchLevels {
             merged.append(lvl)
         }
 
-        // Map to WatchLevel + rank by closeness; cap the count.
+        // Map to WatchLevel + rank by closeness; cap the count. Setup levels (entry/stop/targets)
+        // are ALWAYS kept — pre-2026-07-02 the closeness cap could evict a setup's own TP2 (the
+        // farthest level at ~3 ATR) whenever 8+ structural levels sat closer, leaving the chart
+        // showing a setup with no visible target. Only the STRUCTURAL remainder is capped.
         let levels = merged.map { lvl -> WatchLevel in
             let dATR = abs(lvl.price - price) / atr
             let prox: LevelProximity = dATR < 0.4 ? .inPlay : (dATR < 1.2 ? .nearby : .distant)
             return WatchLevel(price: lvl.price, role: lvl.role, label: lvl.label,
                               distanceATR: dATR, proximity: prox, isAbove: lvl.price >= price)
         }
-        let sorted = levels.sorted { $0.distanceATR < $1.distanceATR }
-        return Array(sorted.prefix(maxLevels)).sorted { $0.price > $1.price }
+        let setupLevels = levels.filter { $0.role.isSetupLevel }
+        let structural = levels.filter { !$0.role.isSetupLevel }.sorted { $0.distanceATR < $1.distanceATR }
+        let kept2 = setupLevels + Array(structural.prefix(max(0, maxLevels - setupLevels.count)))
+        return kept2.sorted { $0.price > $1.price }
     }
 }

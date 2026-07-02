@@ -70,7 +70,10 @@ class AnalysisService: ObservableObject {
         return dir
     }
 
-    init() { autoConfigureKey() }
+    /// Weak hook so the AppDelegate (which doesn't hold the @StateObject) can reach the live
+    /// instance for push-tap analysis recovery. Set on init; the single app-lifetime instance.
+    static weak var shared: AnalysisService?
+    init() { autoConfigureKey(); AnalysisService.shared = self }
 
     /// The selected model id (may carry an `@thinking-N` suffix for Claude). Read by
     /// `WorkerFullAnalysisService` so the server-side analysis uses the user's chosen provider+model.
@@ -120,6 +123,18 @@ class AnalysisService: ObservableObject {
     /// Unified symbol switch with cancellation — use from any view.
     /// Handles selectSymbol + spot pressure + macro fetch with a single cancellable task.
     private var switchTask: Task<Void, Never>?
+
+    /// Resume any outstanding fire-and-forget analysis jobs (called on app foreground / push tap).
+    /// The box finished the analysis while the app was away, so runFullAnalysis → analyze() resumes
+    /// the cached job with no second LLM spend. Switches to the recovered symbol so the result is
+    /// actually shown when it differs from what the user is currently viewing.
+    func recoverPendingAnalyses() {
+        guard !isLoading, aiLoadingPhase == .idle else { return }
+        let pending = WorkerFullAnalysisService.pendingJobSymbols()
+        guard let symbol = pending.first(where: { $0 == currentSymbol }) ?? pending.first else { return }
+        if symbol != currentSymbol { switchToSymbol(symbol) }
+        Task { await runFullAnalysis(symbol: symbol) }
+    }
 
     func switchToSymbol(_ symbol: String) {
         HapticManager.selection()
@@ -245,7 +260,10 @@ class AnalysisService: ObservableObject {
             isLoading = true
             loadingStatus = "Fetching market data..."
         }
-        error = nil
+        // Only clear a displayed error for the symbol the user is actually viewing — this runs
+        // for every symbol in the background refresh cycle, so an unguarded reset would erase a
+        // just-shown error banner while its underlying condition still holds.
+        if symbol == currentSymbol { error = nil }
 
         do {
             let (tf1, tf2, tf3, _) = try await fetchAndCompute(symbol: symbol, market: market)

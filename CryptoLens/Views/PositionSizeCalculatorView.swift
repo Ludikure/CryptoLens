@@ -10,10 +10,13 @@ struct PositionSizeCalculatorView: View {
     let direction: String
     @State private var entry: Double
     @State private var stop: Double
-
-    @AppStorage("accountSize") private var accountSize: Double = 25000
-    @AppStorage("riskPercent") private var riskPercent: Double = 2.0
-    @AppStorage("max_leverage") private var maxLeverage: Double = 3.0
+    // Risk-plan inputs are LOCAL scratch state seeded from the saved plan — a "what if I risked
+    // 5%?" experiment must NOT silently rewrite the plan that Settings, the setup card, AND the
+    // server prompt sizing all consume. "Save as my default" commits it explicitly. (2026-07-02)
+    @State private var accountSize: Double
+    @State private var riskPercent: Double
+    @State private var maxLeverage: Double
+    @State private var savedConfirmation = false
     @Environment(\.dismiss) private var dismiss
 
     init(symbol: String, entry: Double, stop: Double, direction: String) {
@@ -21,11 +24,22 @@ struct PositionSizeCalculatorView: View {
         self.direction = direction
         _entry = State(initialValue: entry)
         _stop = State(initialValue: stop)
+        let d = UserDefaults.standard
+        _accountSize = State(initialValue: d.object(forKey: "accountSize") as? Double ?? 25000)
+        _riskPercent = State(initialValue: d.object(forKey: "riskPercent") as? Double ?? 2.0)
+        _maxLeverage = State(initialValue: d.object(forKey: "max_leverage") as? Double ?? 3.0)
     }
 
     private var sizing: PositionSizing? {
         PositionSizer.compute(accountSize: accountSize, riskPercent: riskPercent,
                               entry: entry, stop: stop, symbol: symbol, leverageCap: maxLeverage)
+    }
+
+    private var differsFromSaved: Bool {
+        let d = UserDefaults.standard
+        return accountSize != (d.object(forKey: "accountSize") as? Double ?? 25000)
+            || riskPercent != (d.object(forKey: "riskPercent") as? Double ?? 2.0)
+            || maxLeverage != (d.object(forKey: "max_leverage") as? Double ?? 3.0)
     }
 
     var body: some View {
@@ -48,6 +62,22 @@ struct PositionSizeCalculatorView: View {
                     }
                     Stepper(value: $maxLeverage, in: 1...20, step: 0.5) {
                         Text("Max leverage \(String(format: "%.1f", maxLeverage))×")
+                    }
+                    if differsFromSaved {
+                        Button {
+                            let d = UserDefaults.standard
+                            d.set(accountSize, forKey: "accountSize")
+                            d.set(riskPercent, forKey: "riskPercent")
+                            d.set(maxLeverage, forKey: "max_leverage")
+                            savedConfirmation = true
+                        } label: {
+                            Label(savedConfirmation ? "Saved" : "Save as my default", systemImage: savedConfirmation ? "checkmark" : "square.and.arrow.down")
+                        }
+                        .disabled(savedConfirmation)
+                    }
+                    if differsFromSaved && !savedConfirmation {
+                        Text("These values are a what-if — your saved plan is unchanged unless you save.")
+                            .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
 
@@ -86,6 +116,9 @@ struct PositionSizeCalculatorView: View {
             }
             .navigationTitle("Position Size")
             .navigationBarTitleDisplayMode(.inline)
+            .onChange(of: accountSize) { savedConfirmation = false }
+            .onChange(of: riskPercent) { savedConfirmation = false }
+            .onChange(of: maxLeverage) { savedConfirmation = false }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
