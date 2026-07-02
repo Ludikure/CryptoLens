@@ -111,7 +111,7 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(gated.prompt).not.toContain('BTC CONTEXT');
   });
 
-  it('VOLATILITY PRICING: flags cheap vol when the model forecast exceeds options-implied move', () => {
+  it('Options-Implied Vol: regime context only (straddle edge rejected in backtest)', () => {
     const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
     const mk = (n: number, step: number, label: string, tf: string) =>
       computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
@@ -123,9 +123,9 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
       symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
       volPricing: { dvol: 40, impliedMovePct: 2.0, forecastMovePct: 3.0 },
     });
-    expect(prompt).toContain('VOLATILITY PRICING: options imply a ±2.00% daily move (Deribit DVOL 40%)');
-    expect(prompt).toContain('vol looks CHEAP');
-    expect(prompt).toContain('long-gamma/straddle favorable');
+    expect(prompt).toContain('Options-Implied Vol (BTC/ETH, context): 30d DVOL 40% (NORMAL)');
+    expect(prompt).toContain('NOT a trade signal');
+    expect(prompt).not.toContain('straddle favorable');
   });
 
   it('calibration-corrected ML gate: a drifted-low raw ML_WIN no longer auto-FLATs when the live bucket realizes higher', () => {

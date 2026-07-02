@@ -634,16 +634,16 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const a = daily.atr.atr;
       L(`Expected 24h Range (ATR-based approximation): ${formatPrice(daily.price - a)}–${formatPrice(daily.price + a)} (±1× daily ATR — a rough typical-day band, NOT a calibrated forecast; gaps can exceed it).`);
     }
-    // VOLATILITY PRICING (2026-07-02, BTC/ETH) — the model's forecast move vs what options price.
-    // This is how a DIRECTION-AGNOSTIC volatility edge is monetized: buy gamma (a straddle) when
-    // the forecast move exceeds the priced move (cheap vol), avoid buying / consider selling premium
-    // when it's the reverse (rich vol — the move is already expected).
+    // OPTIONS-IMPLIED VOL (2026-07-02, BTC/ETH) — CONTEXT ONLY. The "buy a straddle when vol is
+    // cheap" edge was BACKTESTED AND REJECTED (options_straddle_test.py, 4yr): implied vol exceeds
+    // realized on average (positive vol-risk-premium → buying vol is structurally -EV), and the
+    // forecast>implied "cheap" read did NOT predict realized>implied (mildly backwards — it fires
+    // after a vol spike, right as vol mean-reverts). So this line is a REGIME read (how much
+    // turbulence the market is pricing), never a trade signal.
     if (input.volPricing) {
-      const vp = input.volPricing, ratio = vp.impliedMovePct > 0 ? vp.forecastMovePct / vp.impliedMovePct : 1;
-      const read = ratio >= 1.25 ? `model forecast RICHER than priced (×${f(ratio, 2)}) — vol looks CHEAP: a coming move is UNDERPRICED, long-gamma/straddle favorable`
-        : ratio <= 0.8 ? `model forecast BELOW priced (×${f(ratio, 2)}) — vol looks RICH: the move is already priced in, buying options is expensive; a breakout here is more likely already-expected/crowded`
-        : `forecast ≈ priced (×${f(ratio, 2)}) — vol fairly priced, no options edge either way`;
-      L(`VOLATILITY PRICING: options imply a ±${f(vp.impliedMovePct, 2)}% daily move (Deribit DVOL ${f(vp.dvol, 0)}%); the model forecasts ±${f(vp.forecastMovePct, 2)}%. ${read}. Direction-agnostic — this is about move SIZE vs its price, not which way.`);
+      const vp = input.volPricing;
+      const regime = vp.dvol >= 80 ? 'EXTREME' : vp.dvol >= 58 ? 'ELEVATED' : vp.dvol >= 40 ? 'NORMAL' : 'LOW';
+      L(`Options-Implied Vol (BTC/ETH, context): 30d DVOL ${f(vp.dvol, 0)}% (${regime}) — the options market is pricing a ±${f(vp.impliedMovePct, 2)}% typical day (model forecasts ±${f(vp.forecastMovePct, 2)}%). This is the market's expected turbulence, NOT a trade signal: buying this vol (straddles) is structurally negative-EV (vol-risk-premium), backtest-confirmed.`);
     }
     // Phase 5/8: discrete risk states (VALIDATED = vol-grounded, can lead; ctx = positioning context).
     const rs = input.riskStates ?? [];
