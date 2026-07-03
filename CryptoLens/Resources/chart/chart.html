@@ -4,102 +4,111 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <style>
-  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overscroll-behavior: none; }
-  #chart { position: absolute; inset: 0; }
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overscroll-behavior: none;
+    font-family: -apple-system, system-ui, sans-serif; }
+  #container { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .pane { position: relative; width: 100%; }
+  #main { flex: 1 1 auto; min-height: 0; }
+  .sub { flex: 0 0 108px; border-top: 1px solid #1c2230; }
+  .lbl { position: absolute; top: 3px; left: 6px; font-size: 10px; color: #9aa4b2; z-index: 3; pointer-events: none; }
 </style>
-<!-- Lightweight Charts is bundled locally (Copy Bundle Resources flattens it to the .app root,
-     the same directory as this html) — no CDN, works offline. -->
+<!-- Lightweight Charts bundled locally (Copy Bundle Resources flattens it next to this html). -->
 <script src="lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
-<div id="chart"></div>
+<div id="container">
+  <div id="main" class="pane"></div>
+  <div id="rsi" class="pane sub"><span class="lbl">RSI</span></div>
+  <div id="macd" class="pane sub"><span class="lbl">MACD</span></div>
+</div>
 <script>
-// Port of web/src/components/ChartPanel.tsx. Exposes window.setChart(payload) for the Swift side
-// (WebChartView) to push candles + EMA/VWAP lines + S/R/setup price lines. The hard pan/zoom/
-// crosshair work is Lightweight Charts' — the whole reason we moved off the SwiftUI Canvas.
-var chart = null, candle = null, volSeries = null;
-var overlays = [];      // ISeriesApi<'Line'> for EMAs
-var priceLines = [];    // IPriceLine for S/R + setup levels
-var pending = null;     // last payload received before the chart was ready
+// Multi-pane port of web/src/components/{ChartPanel,SubPanels}.tsx: main candles + EMA/volume/
+// price-lines, with RSI + MACD sub-panels below, all time-synced. window.setChart(payload) is
+// called by the Swift side (WebChartView). Charts are recreated on each payload (the Swift
+// Coordinator dedups, so this only runs on real data/timeframe/theme changes — not during panning,
+// which Lightweight Charts handles internally).
+var pending = null, charts = [];
 
-function makeChart(dark) {
-  var bg = dark ? '#0b0e14' : '#ffffff';
-  var text = dark ? '#9aa4b2' : '#4a5568';
-  var grid = dark ? '#1c2230' : '#eaecef';
-  chart = LightweightCharts.createChart(document.getElementById('chart'), {
-    layout: { background: { type: 'solid', color: bg }, textColor: text },
-    grid: { vertLines: { color: grid }, horzLines: { color: grid } },
-    rightPriceScale: { borderColor: grid, autoScale: true },
-    timeScale: { borderColor: grid, timeVisible: true, secondsVisible: false },
-    crosshair: { mode: 0 },   // magnet off — free crosshair
+function opts(dark, showTime) {
+  return {
+    layout: { background: { type: 'solid', color: dark ? '#0b0e14' : '#ffffff' }, textColor: dark ? '#9aa4b2' : '#4a5568' },
+    grid: { vertLines: { color: dark ? '#141a25' : '#eef0f3' }, horzLines: { color: dark ? '#141a25' : '#eef0f3' } },
+    rightPriceScale: { borderColor: dark ? '#1c2230' : '#e2e5ea' },
+    timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime },
+    crosshair: { mode: 0 },
     autoSize: true,
-    handleScale: { axisPressedMouseMove: true },
-  });
-  candle = chart.addCandlestickSeries({
-    upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
-    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
-  });
+  };
 }
+function clean(pts) { return (pts || []).filter(function (p) { return p && isFinite(p.value); }); }
 
 function render(p) {
-  if (!chart) makeChart(!!p.dark);
-  else chart.applyOptions({
-    layout: { background: { type: 'solid', color: p.dark ? '#0b0e14' : '#ffffff' }, textColor: p.dark ? '#9aa4b2' : '#4a5568' },
-  });
+  charts.forEach(function (c) { try { c.remove(); } catch (e) {} });
+  charts = [];
+  var dark = !!p.dark;
 
-  // Tear down the previous symbol's overlays + price lines FIRST (imperative). Leaving old S/R
-  // price lines on the series pins the auto-scale to the prior symbol's range (BTC $60k vs ETH $2k).
-  priceLines.forEach(function (pl) { try { candle.removePriceLine(pl); } catch (e) {} });
-  overlays.forEach(function (o) { try { chart.removeSeries(o); } catch (e) {} });
-  priceLines = []; overlays = [];
-
-  var data = (p.candles || []).map(function (c) {
-    return { time: c.time, open: c.open, high: c.high, low: c.low, close: c.close };
-  }).sort(function (a, b) { return a.time - b.time; });
+  // ── Main pane: candles + EMAs + price lines + volume (time axis hidden; shared axis at bottom) ──
+  var main = LightweightCharts.createChart(document.getElementById('main'), opts(dark, false));
+  charts.push(main);
+  var candle = main.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+  var data = (p.candles || []).map(function (c) { return { time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }; })
+                              .sort(function (a, b) { return a.time - b.time; });
   candle.setData(data);
   if (!data.length) return;
-
-  var minMove = Math.pow(10, -(p.precision || 2));
-  candle.applyOptions({ priceFormat: { type: 'price', precision: p.precision || 2, minMove: minMove } });
+  candle.applyOptions({ priceFormat: { type: 'price', precision: p.precision || 2, minMove: Math.pow(10, -(p.precision || 2)) } });
 
   (p.lines || []).forEach(function (ln) {
     if (!ln.points || !ln.points.length) return;
-    var ls = chart.addLineSeries({ color: ln.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    var ls = main.addLineSeries({ color: ln.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     ls.setData(ln.points);
-    overlays.push(ls);
   });
-
   (p.priceLines || []).forEach(function (l) {
-    priceLines.push(candle.createPriceLine({
-      price: l.price, color: l.color, lineWidth: 1,
-      lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.title,
-    }));
+    candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.title });
   });
-
-  // Volume histogram pinned to the bottom ~18% (its own overlay price scale so it doesn't
-  // compress the candles).
-  if (volSeries) { try { chart.removeSeries(volSeries); } catch (e) {} volSeries = null; }
   if (p.volume && p.volume.length) {
-    volSeries = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
-    volSeries.setData(p.volume);
-    chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    var vol = main.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
+    vol.setData(p.volume);
+    main.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
   }
 
-  chart.timeScale().fitContent();
-  chart.priceScale('right').applyOptions({ autoScale: true });
+  // ── RSI pane (line + 70/30 guides) ──
+  var rsiC = LightweightCharts.createChart(document.getElementById('rsi'), opts(dark, false));
+  charts.push(rsiC);
+  var rsiL = rsiC.addLineSeries({ color: '#e6c84f', lineWidth: 2, priceLineVisible: false, lastValueVisible: false });
+  rsiL.setData(clean(p.rsi));
+  [70, 30].forEach(function (g) { rsiL.createPriceLine({ price: g, color: '#2c3b4a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(g) }); });
+
+  // ── MACD pane (histogram + macd + signal). Bottom pane keeps the shared time axis. ──
+  var macdC = LightweightCharts.createChart(document.getElementById('macd'), opts(dark, true));
+  charts.push(macdC);
+  var pf = { type: 'price', precision: p.macdPrecision || 3, minMove: Math.pow(10, -(p.macdPrecision || 3)) };
+  var h = macdC.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: pf });
+  h.setData(p.macdHist || []);
+  var ml = macdC.addLineSeries({ color: '#5b8def', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: pf });
+  ml.setData(clean(p.macdLine));
+  var sg = macdC.addLineSeries({ color: '#f0a020', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, priceFormat: pf });
+  sg.setData(clean(p.macdSignal));
+
+  // ── Sync visible TIME range across all panes (time-based → robust to warmup-offset lengths) ──
+  var syncing = false;
+  charts.forEach(function (src) {
+    src.timeScale().subscribeVisibleTimeRangeChange(function (r) {
+      if (syncing || !r) return;
+      syncing = true;
+      charts.forEach(function (dst) { if (dst !== src) { try { dst.timeScale().setVisibleRange(r); } catch (e) {} } });
+      syncing = false;
+    });
+  });
+  main.timeScale().fitContent();
 }
 
 window.setChart = function (payload) {
   try {
     var p = (typeof payload === 'string') ? JSON.parse(payload) : payload;
-    if (document.readyState === 'complete' && window.LightweightCharts) render(p);
+    if (window.LightweightCharts && document.getElementById('main')) render(p);
     else pending = p;
-  } catch (e) { /* swallow — Swift side is best-effort */ }
+  } catch (e) { /* best-effort */ }
 };
-
-window.addEventListener('load', function () {
-  if (pending) { render(pending); pending = null; }
-});
+window.addEventListener('load', function () { if (pending) { render(pending); pending = null; } });
 </script>
 </body>
 </html>

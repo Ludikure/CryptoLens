@@ -371,7 +371,7 @@ struct ChartTabContent: View {
                         tf: selected.candles.isEmpty ? result.tf1 : selected,
                         watchLevels: WatchLevels.build(result: result),
                         dark: colorScheme == .dark))
-                        .frame(height: 340)
+                        .frame(height: 520)   // main (flex) + RSI (108) + MACD (108) panes
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             } else {

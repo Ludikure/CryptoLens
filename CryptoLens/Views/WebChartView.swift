@@ -18,12 +18,20 @@ struct ChartPayload: Codable {
     struct PriceLine: Codable { let price: Double; let color: String; let title: String; let dashed: Bool }
     struct VolumeBar: Codable { let time: Int; let value: Double; let color: String }
 
+    struct HistBar: Codable { let time: Int; let value: Double; let color: String }
+
     let dark: Bool
     let precision: Int
     let candles: [Bar]
     let lines: [Line]           // EMA20/50/200
     let priceLines: [PriceLine] // curated watch levels (S/R, VWAP, POC/VA, Entry/SL/TP)
     let volume: [VolumeBar]
+    // Sub-panels
+    let rsi: [Point]
+    let macdHist: [HistBar]
+    let macdLine: [Point]
+    let macdSignal: [Point]
+    let macdPrecision: Int
 
     /// Chart color + style for a watch-level role. Kept here (not on the model) so WatchLevel stays
     /// chart-agnostic. Mirrors the SwiftUI LevelsChartView palette.
@@ -54,21 +62,18 @@ struct ChartPayload: Codable {
         // Precision by magnitude (sub-cent alts need more decimals than stocks/BTC).
         let precision = last >= 100 ? 2 : last >= 1 ? 3 : last >= 0.01 ? 5 : 8
 
-        // EMA overlays aligned to the RIGHT edge of the candle window (series are shorter due to
-        // indicator warmup) — same tail-alignment as ChartPanel.tsx.
-        func ema(_ series: [Double], _ color: String) -> Line? {
-            guard !series.isEmpty, !bars.isEmpty else { return nil }
+        // Tail-align a series to the RIGHT edge of the candle window (series are shorter due to
+        // indicator warmup) — same tail-alignment as ChartPanel.tsx / SubPanels.tsx.
+        func align(_ series: [Double]) -> [Point] {
+            guard !series.isEmpty, !bars.isEmpty else { return [] }
             let slice = Array(series.suffix(bars.count))
             let start = bars.count - slice.count
-            let pts: [Point] = slice.enumerated().compactMap { i, v in
-                v.isFinite ? Point(time: bars[start + i].time, value: v) : nil
-            }
-            return pts.isEmpty ? nil : Line(color: color, points: pts)
+            return slice.enumerated().compactMap { i, v in v.isFinite ? Point(time: bars[start + i].time, value: v) : nil }
         }
         var lines: [Line] = []
-        if let l = ema(tf.ema20Series, "#5b8def") { lines.append(l) }
-        if let l = ema(tf.ema50Series, "#f0a020") { lines.append(l) }
-        if let l = ema(tf.ema200Series, "#b06be8") { lines.append(l) }
+        let e20 = align(tf.ema20Series); if !e20.isEmpty { lines.append(Line(color: "#5b8def", points: e20)) }
+        let e50 = align(tf.ema50Series); if !e50.isEmpty { lines.append(Line(color: "#f0a020", points: e50)) }
+        let e200 = align(tf.ema200Series); if !e200.isEmpty { lines.append(Line(color: "#b06be8", points: e200)) }
 
         // Curated watch levels (already deduped/capped/labeled by WatchLevels.build) → price lines.
         let priceLines: [PriceLine] = watchLevels.map {
@@ -81,7 +86,19 @@ struct ChartPayload: Codable {
                       color: $0.close >= $0.open ? "rgba(38,166,154,0.45)" : "rgba(239,83,80,0.45)")
         }
 
-        return ChartPayload(dark: dark, precision: precision, candles: bars, lines: lines, priceLines: priceLines, volume: volume)
+        // Sub-panels: RSI + MACD.
+        let rsi = align(tf.rsiSeries)
+        let macdLine = align(tf.macdLineSeries)
+        let macdSignal = align(tf.macdSignalSeries)
+        let macdHist: [HistBar] = align(tf.macdHistSeries).map {
+            HistBar(time: $0.time, value: $0.value, color: $0.value >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)")
+        }
+        let macdMax = (tf.macdHistSeries + tf.macdLineSeries + tf.macdSignalSeries).map { Swift.abs($0) }.max() ?? 1
+        let macdPrecision = macdMax >= 1 ? 3 : macdMax >= 0.01 ? 5 : 8
+
+        return ChartPayload(dark: dark, precision: precision, candles: bars, lines: lines, priceLines: priceLines,
+                            volume: volume, rsi: rsi, macdHist: macdHist, macdLine: macdLine, macdSignal: macdSignal,
+                            macdPrecision: macdPrecision)
     }
 }
 
@@ -117,6 +134,7 @@ struct WebChartView: UIViewRepresentable {
         weak var webView: WKWebView?
         private var loaded = false
         private var pending: ChartPayload?
+        private var lastJSON: String?   // dedup: updateUIView fires on any parent re-render; only push real changes
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             loaded = true
@@ -130,6 +148,10 @@ struct WebChartView: UIViewRepresentable {
         private func send(_ payload: ChartPayload) {
             guard let data = try? JSONEncoder().encode(payload),
                   let json = String(data: data, encoding: .utf8) else { return }
+            // Skip redundant pushes — render() recreates the charts, so pushing an identical payload
+            // on every SwiftUI re-render would flicker + drop the user's pan/zoom state.
+            if json == lastJSON { return }
+            lastJSON = json
             webView?.evaluateJavaScript("window.setChart(\(json))", completionHandler: nil)
         }
     }
