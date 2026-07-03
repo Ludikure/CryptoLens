@@ -112,6 +112,7 @@ struct ChartTabContent: View {
     @State private var biasChanges: [String] = []
     @State private var activeSetups: [TrackedSetup] = []
     @State private var tradesExpanded = false
+    @State private var chartTFIndex = 1     // 0=Daily, 1=4H(crypto)/1H(stock), 2=1H — default the medium TF
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("use_webview_chart") private var useWebViewChart = false   // POC flag: TradingView Lightweight Charts
 
@@ -357,13 +358,22 @@ struct ChartTabContent: View {
             // TradingView Lightweight Charts (WKWebView) behind a flag, POC of
             // docs/tradingview-chart-plan.md — compare side-by-side with the Canvas chart, then cut over.
             if useWebViewChart {
-                WebChartView(payload: ChartPayload.build(
-                    tf: result.tf2.candles.isEmpty ? result.tf1 : result.tf2,
-                    setup: result.tradeSetups.first,
-                    watchLevels: [],
-                    dark: colorScheme == .dark))
-                    .frame(height: 320)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                let tfs = [result.tf1, result.tf2, result.tf3]
+                let selected = tfs[min(max(chartTFIndex, 0), tfs.count - 1)]
+                VStack(spacing: 6) {
+                    Picker("Timeframe", selection: $chartTFIndex) {
+                        Text(result.tf1.label).tag(0)
+                        Text(result.tf2.label).tag(1)
+                        Text(result.tf3.label).tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                    WebChartView(payload: ChartPayload.build(
+                        tf: selected.candles.isEmpty ? result.tf1 : selected,
+                        watchLevels: WatchLevels.build(result: result),
+                        dark: colorScheme == .dark))
+                        .frame(height: 340)
+                }
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             } else {
                 CandlestickChartView(results: [result.tf1, result.tf2, result.tf3], activeSetup: result.tradeSetups.first)
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))

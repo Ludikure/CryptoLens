@@ -16,15 +16,39 @@ struct ChartPayload: Codable {
     struct Point: Codable { let time: Int; let value: Double }
     struct Line: Codable { let color: String; let points: [Point] }
     struct PriceLine: Codable { let price: Double; let color: String; let title: String; let dashed: Bool }
+    struct VolumeBar: Codable { let time: Int; let value: Double; let color: String }
 
     let dark: Bool
     let precision: Int
     let candles: [Bar]
-    let lines: [Line]          // EMA20/50/200
-    let priceLines: [PriceLine] // S/R + VWAP + Entry/SL/TP/TP2 + watch levels
+    let lines: [Line]           // EMA20/50/200
+    let priceLines: [PriceLine] // curated watch levels (S/R, VWAP, POC/VA, Entry/SL/TP)
+    let volume: [VolumeBar]
 
-    /// Build the payload from a single timeframe's IndicatorResult + the active setup + watch levels.
-    static func build(tf: IndicatorResult, setup: TradeSetup?, watchLevels: [WatchLevel], dark: Bool) -> ChartPayload {
+    /// Chart color + style for a watch-level role. Kept here (not on the model) so WatchLevel stays
+    /// chart-agnostic. Mirrors the SwiftUI LevelsChartView palette.
+    private static func style(_ role: WatchLevelRole) -> (hex: String, dashed: Bool) {
+        switch role {
+        case .resistance: return ("#ef5350", true)
+        case .support:    return ("#26a69a", true)
+        case .vwap:       return ("#a78bfa", true)
+        case .poc:        return ("#f0a020", true)
+        case .valueArea:  return ("#c0872a", true)
+        case .entry:      return ("#22d3ee", false)
+        case .stop:       return ("#ef5350", false)
+        case .target:     return ("#26a69a", false)
+        }
+    }
+    private static func tag(_ lvl: WatchLevel) -> String {
+        switch lvl.role {
+        case .resistance: return "R"
+        case .support:    return "S"
+        default:          return lvl.label   // VWAP / POC / VAH / VAL / Entry / Stop / TP1 / TP2
+        }
+    }
+
+    /// Build the payload for one timeframe's candles + the analysis's watch levels.
+    static func build(tf: IndicatorResult, watchLevels: [WatchLevel], dark: Bool) -> ChartPayload {
         let bars = tf.candles.map { Bar(time: Int($0.time.timeIntervalSince1970), open: $0.open, high: $0.high, low: $0.low, close: $0.close) }
         let last = tf.candles.last?.close ?? 1
         // Precision by magnitude (sub-cent alts need more decimals than stocks/BTC).
@@ -46,18 +70,18 @@ struct ChartPayload: Codable {
         if let l = ema(tf.ema50Series, "#f0a020") { lines.append(l) }
         if let l = ema(tf.ema200Series, "#b06be8") { lines.append(l) }
 
-        var priceLines: [PriceLine] = []
-        for s in tf.supportResistance.supports.prefix(3) { priceLines.append(PriceLine(price: s, color: "#3f6f5f", title: "S", dashed: true)) }
-        for r in tf.supportResistance.resistances.prefix(3) { priceLines.append(PriceLine(price: r, color: "#6f3f4a", title: "R", dashed: true)) }
-        if let v = tf.vwap?.vwap { priceLines.append(PriceLine(price: v, color: "#8a7fbf", title: "VWAP", dashed: true)) }
-        if let s = setup {
-            let up = s.direction.uppercased() != "SHORT"
-            priceLines.append(PriceLine(price: s.entry, color: "#22d3ee", title: "Entry", dashed: false))
-            priceLines.append(PriceLine(price: s.stopLoss, color: "#ef5350", title: "SL", dashed: false))
-            priceLines.append(PriceLine(price: s.tp1, color: "#26a69a", title: up ? "TP1" : "TP1", dashed: false))
-            if let tp2 = s.tp2 { priceLines.append(PriceLine(price: tp2, color: "#26a69a", title: "TP2", dashed: false)) }
+        // Curated watch levels (already deduped/capped/labeled by WatchLevels.build) → price lines.
+        let priceLines: [PriceLine] = watchLevels.map {
+            let s = style($0.role)
+            return PriceLine(price: $0.price, color: s.hex, title: tag($0), dashed: s.dashed)
         }
-        return ChartPayload(dark: dark, precision: precision, candles: bars, lines: lines, priceLines: priceLines)
+
+        let volume: [VolumeBar] = tf.candles.map {
+            VolumeBar(time: Int($0.time.timeIntervalSince1970), value: $0.volume,
+                      color: $0.close >= $0.open ? "rgba(38,166,154,0.45)" : "rgba(239,83,80,0.45)")
+        }
+
+        return ChartPayload(dark: dark, precision: precision, candles: bars, lines: lines, priceLines: priceLines, volume: volume)
     }
 }
 

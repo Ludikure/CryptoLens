@@ -17,7 +17,7 @@
 // Port of web/src/components/ChartPanel.tsx. Exposes window.setChart(payload) for the Swift side
 // (WebChartView) to push candles + EMA/VWAP lines + S/R/setup price lines. The hard pan/zoom/
 // crosshair work is Lightweight Charts' — the whole reason we moved off the SwiftUI Canvas.
-var chart = null, candle = null;
+var chart = null, candle = null, volSeries = null;
 var overlays = [];      // ISeriesApi<'Line'> for EMAs
 var priceLines = [];    // IPriceLine for S/R + setup levels
 var pending = null;     // last payload received before the chart was ready
@@ -75,6 +75,15 @@ function render(p) {
       lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.title,
     }));
   });
+
+  // Volume histogram pinned to the bottom ~18% (its own overlay price scale so it doesn't
+  // compress the candles).
+  if (volSeries) { try { chart.removeSeries(volSeries); } catch (e) {} volSeries = null; }
+  if (p.volume && p.volume.length) {
+    volSeries = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
+    volSeries.setData(p.volume);
+    chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+  }
 
   chart.timeScale().fitContent();
   chart.priceScale('right').applyOptions({ autoScale: true });
