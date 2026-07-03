@@ -19,19 +19,22 @@ struct ChartPayload: Codable {
     struct VolumeBar: Codable { let time: Int; let value: Double; let color: String }
 
     struct HistBar: Codable { let time: Int; let value: Double; let color: String }
+    struct SubLine: Codable { let color: String; let width: Int; let points: [Point] }
+    struct SubPanel: Codable {
+        let id: String              // display label: "RSI" | "MACD" | "Stoch" | "ADX"
+        let precision: Int
+        let lines: [SubLine]
+        let histogram: [HistBar]?   // MACD only
+        let guides: [Double]        // horizontal reference lines (70/30, 80/20, 25…)
+    }
 
     let dark: Bool
     let precision: Int
     let candles: [Bar]
     let lines: [Line]           // EMA20/50/200
     let priceLines: [PriceLine] // curated watch levels (S/R, VWAP, POC/VA, Entry/SL/TP)
-    let volume: [VolumeBar]
-    // Sub-panels
-    let rsi: [Point]
-    let macdHist: [HistBar]
-    let macdLine: [Point]
-    let macdSignal: [Point]
-    let macdPrecision: Int
+    let volume: [VolumeBar]     // empty when the Volume panel is toggled off
+    let subpanels: [SubPanel]   // only the enabled indicator panels, in display order
 
     /// Chart color + style for a watch-level role. Kept here (not on the model) so WatchLevel stays
     /// chart-agnostic. Mirrors the SwiftUI LevelsChartView palette.
@@ -56,7 +59,10 @@ struct ChartPayload: Codable {
     }
 
     /// Build the payload for one timeframe's candles + the analysis's watch levels.
-    static func build(tf: IndicatorResult, watchLevels: [WatchLevel], dark: Bool) -> ChartPayload {
+    /// `panels` = enabled sub-panel ids in display order ("rsi","macd","stoch","adx");
+    /// `showVolume` toggles the main-pane volume histogram.
+    static func build(tf: IndicatorResult, watchLevels: [WatchLevel], dark: Bool,
+                      panels: [String] = ["rsi", "macd"], showVolume: Bool = true) -> ChartPayload {
         let bars = tf.candles.map { Bar(time: Int($0.time.timeIntervalSince1970), open: $0.open, high: $0.high, low: $0.low, close: $0.close) }
         let last = tf.candles.last?.close ?? 1
         // Precision by magnitude (sub-cent alts need more decimals than stocks/BTC).
@@ -81,24 +87,43 @@ struct ChartPayload: Codable {
             return PriceLine(price: $0.price, color: s.hex, title: tag($0), dashed: s.dashed)
         }
 
-        let volume: [VolumeBar] = tf.candles.map {
+        let volume: [VolumeBar] = showVolume ? tf.candles.map {
             VolumeBar(time: Int($0.time.timeIntervalSince1970), value: $0.volume,
                       color: $0.close >= $0.open ? "rgba(38,166,154,0.45)" : "rgba(239,83,80,0.45)")
-        }
+        } : []
 
-        // Sub-panels: RSI + MACD.
-        let rsi = align(tf.rsiSeries)
-        let macdLine = align(tf.macdLineSeries)
-        let macdSignal = align(tf.macdSignalSeries)
-        let macdHist: [HistBar] = align(tf.macdHistSeries).map {
-            HistBar(time: $0.time, value: $0.value, color: $0.value >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)")
+        // Enabled sub-panels, in display order.
+        var subpanels: [SubPanel] = []
+        for id in ["rsi", "macd", "stoch", "adx"] where panels.contains(id) {
+            switch id {
+            case "rsi":
+                subpanels.append(SubPanel(id: "RSI", precision: 1,
+                    lines: [SubLine(color: "#e6c84f", width: 2, points: align(tf.rsiSeries))], histogram: nil, guides: [70, 30]))
+            case "macd":
+                let hist = align(tf.macdHistSeries).map {
+                    HistBar(time: $0.time, value: $0.value, color: $0.value >= 0 ? "rgba(38,166,154,0.7)" : "rgba(239,83,80,0.7)")
+                }
+                let mMax = (tf.macdHistSeries + tf.macdLineSeries + tf.macdSignalSeries).map { Swift.abs($0) }.max() ?? 1
+                let mp = mMax >= 1 ? 3 : mMax >= 0.01 ? 5 : 8
+                subpanels.append(SubPanel(id: "MACD", precision: mp,
+                    lines: [SubLine(color: "#5b8def", width: 1, points: align(tf.macdLineSeries)),
+                            SubLine(color: "#f0a020", width: 1, points: align(tf.macdSignalSeries))],
+                    histogram: hist, guides: []))
+            case "stoch":
+                subpanels.append(SubPanel(id: "Stoch", precision: 1,
+                    lines: [SubLine(color: "#22d3ee", width: 2, points: align(tf.stochKSeries)),
+                            SubLine(color: "#f0a020", width: 1, points: align(tf.stochDSeries))], histogram: nil, guides: [80, 20]))
+            case "adx":
+                subpanels.append(SubPanel(id: "ADX", precision: 1,
+                    lines: [SubLine(color: "#b06be8", width: 2, points: align(tf.adxSeries)),
+                            SubLine(color: "#26a69a", width: 1, points: align(tf.plusDISeries)),
+                            SubLine(color: "#ef5350", width: 1, points: align(tf.minusDISeries))], histogram: nil, guides: [25]))
+            default: break
+            }
         }
-        let macdMax = (tf.macdHistSeries + tf.macdLineSeries + tf.macdSignalSeries).map { Swift.abs($0) }.max() ?? 1
-        let macdPrecision = macdMax >= 1 ? 3 : macdMax >= 0.01 ? 5 : 8
 
         return ChartPayload(dark: dark, precision: precision, candles: bars, lines: lines, priceLines: priceLines,
-                            volume: volume, rsi: rsi, macdHist: macdHist, macdLine: macdLine, macdSignal: macdSignal,
-                            macdPrecision: macdPrecision)
+                            volume: volume, subpanels: subpanels)
     }
 }
 

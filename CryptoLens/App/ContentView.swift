@@ -115,9 +115,28 @@ struct ChartTabContent: View {
     @State private var chartTFIndex = 1     // 0=Daily, 1=4H(crypto)/1H(stock), 2=1H — default the medium TF
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("use_webview_chart") private var useWebViewChart = false   // POC flag: TradingView Lightweight Charts
+    // Toggleable sub-panels (persisted), mirroring the classic chart's panel switches.
+    @AppStorage("chart_rsi") private var chRsi = true
+    @AppStorage("chart_macd") private var chMacd = true
+    @AppStorage("chart_stoch") private var chStoch = false
+    @AppStorage("chart_adx") private var chAdx = false
+    @AppStorage("chart_vol") private var chVol = true
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
+    }
+
+    /// A small toggle chip for a chart sub-panel (RSI/MACD/Stoch/ADX/Vol).
+    @ViewBuilder private func panelChip(_ title: String, _ isOn: Binding<Bool>) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: {
+            Text(title)
+                .font(.caption2).fontWeight(.medium)
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(isOn.wrappedValue ? Color.accentColor.opacity(0.22) : Color(.systemGray5))
+                .foregroundStyle(isOn.wrappedValue ? Color.accentColor : .secondary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     private func switchToAdjacentFavorite(offset: Int) {
@@ -360,6 +379,7 @@ struct ChartTabContent: View {
             if useWebViewChart {
                 let tfs = [result.tf1, result.tf2, result.tf3]
                 let selected = tfs[min(max(chartTFIndex, 0), tfs.count - 1)]
+                let panels: [String] = [chRsi ? "rsi" : nil, chMacd ? "macd" : nil, chStoch ? "stoch" : nil, chAdx ? "adx" : nil].compactMap { $0 }
                 VStack(spacing: 6) {
                     Picker("Timeframe", selection: $chartTFIndex) {
                         Text(result.tf1.label).tag(0)
@@ -367,11 +387,16 @@ struct ChartTabContent: View {
                         Text(result.tf3.label).tag(2)
                     }
                     .pickerStyle(.segmented)
+                    HStack(spacing: 6) {
+                        panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
+                        panelChip("ADX", $chAdx); panelChip("Vol", $chVol)
+                        Spacer()
+                    }
                     WebChartView(payload: ChartPayload.build(
                         tf: selected.candles.isEmpty ? result.tf1 : selected,
                         watchLevels: WatchLevels.build(result: result),
-                        dark: colorScheme == .dark))
-                        .frame(height: 520)   // main (flex) + RSI (108) + MACD (108) panes
+                        dark: colorScheme == .dark, panels: panels, showVolume: chVol))
+                        .frame(height: 320 + CGFloat(panels.count) * 140)   // main + 140/sub-panel
                 }
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
             } else {
