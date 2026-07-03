@@ -10,7 +10,6 @@ struct SettingsView: View {
     @AppStorage("experiments_enabled") private var experimentsEnabled: Bool = true
     @AppStorage("conformal_gate_enabled") private var conformalGate: Bool = false
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
-    @AppStorage("use_webview_chart") private var useWebViewChart = false
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
     @AppStorage("contractSize") private var contractSize: Double = 0.01
@@ -113,9 +112,6 @@ struct SettingsView: View {
                         Text("Dark").tag("dark")
                     }
                     .pickerStyle(.segmented)
-                    Toggle("New chart (TradingView, beta)", isOn: $useWebViewChart)
-                    Text("Uses TradingView's Lightweight Charts for the price chart. Beta — toggle off to revert to the classic chart.")
-                        .font(.caption).foregroundStyle(.secondary)
                 }
 
                 Section("Risk Management") {

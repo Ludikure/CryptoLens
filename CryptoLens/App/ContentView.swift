@@ -114,7 +114,6 @@ struct ChartTabContent: View {
     @State private var tradesExpanded = false
     @State private var chartTFIndex = 1     // 0=Daily, 1=4H(crypto)/1H(stock), 2=1H — default the medium TF
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("use_webview_chart") private var useWebViewChart = false   // POC flag: TradingView Lightweight Charts
     // Toggleable sub-panels (persisted), mirroring the classic chart's panel switches.
     @AppStorage("chart_rsi") private var chRsi = true
     @AppStorage("chart_macd") private var chMacd = true
@@ -374,35 +373,29 @@ struct ChartTabContent: View {
         }
 
         if !result.tf1.candles.isEmpty {
-            // TradingView Lightweight Charts (WKWebView) behind a flag, POC of
-            // docs/tradingview-chart-plan.md — compare side-by-side with the Canvas chart, then cut over.
-            if useWebViewChart {
-                let tfs = [result.tf1, result.tf2, result.tf3]
-                let selected = tfs[min(max(chartTFIndex, 0), tfs.count - 1)]
-                let panels: [String] = [chRsi ? "rsi" : nil, chMacd ? "macd" : nil, chStoch ? "stoch" : nil, chAdx ? "adx" : nil].compactMap { $0 }
-                VStack(spacing: 6) {
-                    Picker("Timeframe", selection: $chartTFIndex) {
-                        Text(result.tf1.label).tag(0)
-                        Text(result.tf2.label).tag(1)
-                        Text(result.tf3.label).tag(2)
-                    }
-                    .pickerStyle(.segmented)
-                    HStack(spacing: 6) {
-                        panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
-                        panelChip("ADX", $chAdx); panelChip("Vol", $chVol)
-                        Spacer()
-                    }
-                    WebChartView(payload: ChartPayload.build(
-                        tf: selected.candles.isEmpty ? result.tf1 : selected,
-                        watchLevels: WatchLevels.build(result: result),
-                        dark: colorScheme == .dark, panels: panels, showVolume: chVol))
-                        .frame(height: 320 + CGFloat(panels.count) * 140)   // main + 140/sub-panel
+            // TradingView Lightweight Charts (WKWebView) — the price chart (WebChartView).
+            let tfs = [result.tf1, result.tf2, result.tf3]
+            let selected = tfs[min(max(chartTFIndex, 0), tfs.count - 1)]
+            let panels: [String] = [chRsi ? "rsi" : nil, chMacd ? "macd" : nil, chStoch ? "stoch" : nil, chAdx ? "adx" : nil].compactMap { $0 }
+            VStack(spacing: 6) {
+                Picker("Timeframe", selection: $chartTFIndex) {
+                    Text(result.tf1.label).tag(0)
+                    Text(result.tf2.label).tag(1)
+                    Text(result.tf3.label).tag(2)
                 }
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-            } else {
-                CandlestickChartView(results: [result.tf1, result.tf2, result.tf3], activeSetup: result.tradeSetups.first)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                .pickerStyle(.segmented)
+                HStack(spacing: 6) {
+                    panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
+                    panelChip("ADX", $chAdx); panelChip("Vol", $chVol)
+                    Spacer()
+                }
+                WebChartView(payload: ChartPayload.build(
+                    tf: selected.candles.isEmpty ? result.tf1 : selected,
+                    watchLevels: WatchLevels.build(result: result),
+                    dark: colorScheme == .dark, panels: panels, showVolume: chVol))
+                    .frame(height: 320 + CGFloat(panels.count) * 140)   // main + 140/sub-panel
             }
+            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         }
 
         IndicatorTableView(

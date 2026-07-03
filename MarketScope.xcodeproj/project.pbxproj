@@ -65,7 +65,6 @@
 		6EA2251B7008EFE69821AD4F /* WorkerCandlesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE56068BFB398B44077DCFAD /* WorkerCandlesService.swift */; };
 		6F6918C1DAD95FCFDCA57E15 /* ml-model-crypto.json in Resources */ = {isa = PBXBuildFile; fileRef = 8A04B3AA46E9815EE2047D9C /* ml-model-crypto.json */; };
 		73CC058F145BED37E556EFD7 /* AnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E687573C82B61768A3DA2604 /* AnalysisService.swift */; };
-		75C47452512CAEBE03E99696 /* CandlestickChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6E8D06DE337DB8681FAF8A9 /* CandlestickChartView.swift */; };
 		76E0EE796A444BC47B9A0B98 /* WorkerFullAnalysisService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5955F9E9132F1671E8DDAACE /* WorkerFullAnalysisService.swift */; };
 		773C117939CC2ECF6E4B9175 /* ScoringParams.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8AFB3FA541ACB57F2BA870 /* ScoringParams.swift */; };
 		783FD4A0A781E187452CF062 /* AnalysisState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C7ED8B1B8469C82E1E1B421 /* AnalysisState.swift */; };
@@ -221,7 +220,6 @@
 		BB12F1B7515B8E8D3F24EFFE /* WorkerIndicatorsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerIndicatorsService.swift; sourceTree = "<group>"; };
 		BCE089BD3A094D186E3B2F2F /* InfoTooltip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoTooltip.swift; sourceTree = "<group>"; };
 		BDB023939777AFC1AC8D15B4 /* PositionSizeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSizeCard.swift; sourceTree = "<group>"; };
-		C6E8D06DE337DB8681FAF8A9 /* CandlestickChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CandlestickChartView.swift; sourceTree = "<group>"; };
 		C7A8F5A68318696489A9302B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C8B95E399F9FF364CFF73C8D /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
 		C9543475960F1776ED8D9352 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
@@ -399,7 +397,6 @@
 				6EBF83E06BDADDF2BE47A46C /* AnalysisHistoryView.swift */,
 				D1946FA77C8C32F6D51B1003 /* AnalysisSnapshotView.swift */,
 				AB439BCEE474102426A11B6A /* AssetToolbarModifier.swift */,
-				C6E8D06DE337DB8681FAF8A9 /* CandlestickChartView.swift */,
 				3CEBC7A6029CF08B65BAF4A4 /* ClaudeAnalysisView.swift */,
 				9C188735F2331F1002B4B991 /* CoinPickerView.swift */,
 				9AE108B1457B5F3BB52077EF /* DerivativesCardView.swift */,
@@ -603,7 +600,6 @@
 				AAD231397B0F9D3E6B125BFC /* BiasNotificationManager.swift in Sources */,
 				49248B7514292C369167B8DB /* Candle.swift in Sources */,
 				38EEA523B4BA48DB06288CED /* CandleAggregator.swift in Sources */,
-				75C47452512CAEBE03E99696 /* CandlestickChartView.swift in Sources */,
 				15DF67550E32C75C9890506A /* ClaudeAnalysisView.swift in Sources */,
 				FB2F3C3E8890D136BB450D73 /* CoinInfo.swift in Sources */,
 				E9E67799FFCDABFF60631C0A /* CoinPickerView.swift in Sources */,
