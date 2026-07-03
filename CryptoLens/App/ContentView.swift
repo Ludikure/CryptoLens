@@ -112,6 +112,8 @@ struct ChartTabContent: View {
     @State private var biasChanges: [String] = []
     @State private var activeSetups: [TrackedSetup] = []
     @State private var tradesExpanded = false
+    @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("use_webview_chart") private var useWebViewChart = false   // POC flag: TradingView Lightweight Charts
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
@@ -352,8 +354,20 @@ struct ChartTabContent: View {
         }
 
         if !result.tf1.candles.isEmpty {
-            CandlestickChartView(results: [result.tf1, result.tf2, result.tf3], activeSetup: result.tradeSetups.first)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            // TradingView Lightweight Charts (WKWebView) behind a flag, POC of
+            // docs/tradingview-chart-plan.md — compare side-by-side with the Canvas chart, then cut over.
+            if useWebViewChart {
+                WebChartView(payload: ChartPayload.build(
+                    tf: result.tf2.candles.isEmpty ? result.tf1 : result.tf2,
+                    setup: result.tradeSetups.first,
+                    watchLevels: [],
+                    dark: colorScheme == .dark))
+                    .frame(height: 320)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            } else {
+                CandlestickChartView(results: [result.tf1, result.tf2, result.tf3], activeSetup: result.tradeSetups.first)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            }
         }
 
         IndicatorTableView(
