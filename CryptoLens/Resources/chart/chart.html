@@ -9,7 +9,7 @@
   #container { position: absolute; inset: 0; display: flex; flex-direction: column; }
   .pane { position: relative; width: 100%; }
   #main { flex: 1 1 auto; min-height: 0; }
-  .sub { flex: 0 0 140px; border-top: 1px solid #1c2230; }
+  .sub { flex: 0 0 170px; border-top: 1px solid #1c2230; }
   .lbl { position: absolute; top: 3px; left: 6px; font-size: 10px; color: #9aa4b2; z-index: 3; pointer-events: none; }
 </style>
 <script src="lightweight-charts.standalone.production.js"></script>
@@ -32,8 +32,10 @@ function opts(dark, showTime) {
   return {
     layout: { background: { type: 'solid', color: dark ? '#0b0e14' : '#ffffff' }, textColor: dark ? '#9aa4b2' : '#4a5568' },
     grid: { vertLines: { color: dark ? '#141a25' : '#eef0f3' }, horzLines: { color: dark ? '#141a25' : '#eef0f3' } },
-    rightPriceScale: { borderColor: dark ? '#1c2230' : '#e2e5ea' },
-    timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime },
+    rightPriceScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', scaleMargins: { top: 0.08, bottom: 0.08 } },
+    // rightOffset leaves ~8 bars of space so the newest candle isn't jammed against the price axis
+    // + its labels (last price, VWAP/POC/S/R/Entry axis labels).
+    timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime, rightOffset: 8 },
     crosshair: { mode: 0 }, autoSize: true,
   };
 }
