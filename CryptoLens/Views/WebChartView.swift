@@ -141,8 +141,14 @@ struct WebChartView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        webView.scrollView.isScrollEnabled = false   // let Lightweight Charts own horizontal pan; page scrolls via the parent
+        // Gesture coexistence: keep the WKWebView's own scroll off (chart owns horizontal pan via
+        // Lightweight Charts' DOM touch handling), but let the WebView's pan recognize SIMULTANEOUSLY
+        // with the enclosing List/ScrollView so a vertical one-finger drag ON the chart scrolls the
+        // page (was inconsistent — the WebView swallowed the touch). Horizontal → chart pans;
+        // vertical → page scrolls.
+        webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
+        webView.scrollView.panGestureRecognizer.delegate = context.coordinator
         webView.isOpaque = false                      // no white WKWebView flash before the page paints
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
@@ -159,11 +165,16 @@ struct WebChartView: UIViewRepresentable {
         context.coordinator.push(payload)
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, UIGestureRecognizerDelegate {
         weak var webView: WKWebView?
         private var loaded = false
         private var pending: ChartPayload?
         private var lastJSON: String?   // dedup: updateUIView fires on any parent re-render; only push real changes
+
+        // Let the enclosing List/ScrollView's pan recognize alongside the WebView's — so a vertical
+        // drag over the chart scrolls the page while Lightweight Charts handles horizontal pans.
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             loaded = true
