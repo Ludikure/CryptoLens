@@ -38,11 +38,15 @@ function opts(dark, showTime) {
     // squeezed all bars to fill the width, so Daily drew thick and 1H thin); scroll for history.
     timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime, rightOffset: 8, barSpacing: 7 },
     crosshair: { mode: 0 }, autoSize: true,
-    // TradingView-style touch: ONE finger horizontal drag pans the bars; TWO fingers pinch-zoom.
-    // Nothing else scales — axis-drag scaling off (it was making single-finger drags read as a
-    // zoom), vertical single-finger drag off (no price-scale hijack). kineticScroll for momentum.
+    // TradingView-style touch, by REGION:
+    //  - chart body, one finger horizontal → pan the bars
+    //  - chart body, one finger vertical   → scroll the page (vertTouchDrag off + the passthrough
+    //    pan recognizer in WebChartView)
+    //  - PRICE axis drag (one finger)      → stretch/compress the price scale (spacing between prices)
+    //  - TIME axis drag (one finger)       → stretch/compress the time scale
+    //  - two fingers                       → pinch-zoom
     handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: false, price: false }, axisDoubleClickReset: true },
+    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: true },
     kineticScroll: { touch: true, mouse: false },
   };
 }
