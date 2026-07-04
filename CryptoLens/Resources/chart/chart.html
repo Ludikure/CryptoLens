@@ -12,21 +12,21 @@
   .sub { flex: 0 0 140px; border-top: 1px solid #1c2230; }
   .lbl { position: absolute; top: 3px; left: 6px; font-size: 10px; color: #9aa4b2; z-index: 3; pointer-events: none; }
 </style>
-<!-- Lightweight Charts bundled locally (Copy Bundle Resources flattens it next to this html). -->
 <script src="lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 <div id="container">
   <div id="main" class="pane"></div>
-  <!-- sub-panels are created dynamically per payload.subpanels -->
 </div>
 <script>
-// Multi-pane port of web/src/components/{ChartPanel,SubPanels}.tsx: main candles + EMA/volume/
-// price-lines, with RSI + MACD sub-panels below, all time-synced. window.setChart(payload) is
-// called by the Swift side (WebChartView). Charts are recreated on each payload (the Swift
-// Coordinator dedups, so this only runs on real data/timeframe/theme changes — not during panning,
-// which Lightweight Charts handles internally).
-var pending = null, charts = [];
+// Multi-pane port of web/src/components/{ChartPanel,SubPanels}.tsx. window.setChart(payload) is
+// called by the Swift side (WebChartView).
+//
+// FLASH FIX (2026-07-03): the charts are built ONCE and data is updated IN PLACE (setData) on
+// subsequent payloads. They are torn down + rebuilt only when the STRUCTURE changes (theme or the
+// enabled sub-panel set). Previously every payload did chart.remove()+recreate, so the several
+// staged payloads on first launch (cached → indicators → ML → analysis) flashed the chart.
+var main = null, candle = null, vol = null, emaSeries = [], priceLines = [], subs = [], structKey = null, pending = null;
 
 function opts(dark, showTime) {
   return {
@@ -34,78 +34,89 @@ function opts(dark, showTime) {
     grid: { vertLines: { color: dark ? '#141a25' : '#eef0f3' }, horzLines: { color: dark ? '#141a25' : '#eef0f3' } },
     rightPriceScale: { borderColor: dark ? '#1c2230' : '#e2e5ea' },
     timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime },
-    crosshair: { mode: 0 },
-    autoSize: true,
+    crosshair: { mode: 0 }, autoSize: true,
   };
 }
 function clean(pts) { return (pts || []).filter(function (p) { return p && isFinite(p.value); }); }
+function structKeyOf(p) { return (p.dark ? 'd' : 'l') + '|' + (p.subpanels || []).map(function (s) { return s.id; }).join(','); }
 
-function render(p) {
-  charts.forEach(function (c) { try { c.remove(); } catch (e) {} });
-  charts = [];
+// Build the chart + pane skeleton (persistent series). Called only when structKey changes.
+function buildStructure(p) {
+  [main].concat(subs.map(function (s) { return s.chart; })).forEach(function (c) { if (c) { try { c.remove(); } catch (e) {} } });
+  emaSeries = []; priceLines = []; subs = []; main = null; candle = null; vol = null;
   var container = document.getElementById('container');
-  // Remove previously-created sub-panel divs (main is static).
   Array.prototype.slice.call(container.querySelectorAll('.sub')).forEach(function (d) { container.removeChild(d); });
-  var dark = !!p.dark;
-  var subs = p.subpanels || [];
 
-  // ── Main pane: candles + EMAs + price lines + volume. Shows the time axis only when there are
-  // no sub-panels (otherwise the bottom sub-panel carries the shared axis). ──
-  var main = LightweightCharts.createChart(document.getElementById('main'), opts(dark, subs.length === 0));
-  charts.push(main);
-  var candle = main.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+  var dark = !!p.dark, sp = p.subpanels || [];
+  main = LightweightCharts.createChart(document.getElementById('main'), opts(dark, sp.length === 0));
+  candle = main.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+  vol = main.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
+  main.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+  // 3 persistent EMA line series (index-stable; setData empty when a series is absent).
+  ['#5b8def', '#f0a020', '#b06be8'].forEach(function (col) {
+    emaSeries.push(main.addLineSeries({ color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }));
+  });
+
+  var chartsForSync = [main];
+  sp.forEach(function (spec, idx) {
+    var div = document.createElement('div'); div.className = 'pane sub';
+    var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = spec.id; div.appendChild(lbl);
+    container.appendChild(div);
+    var c = LightweightCharts.createChart(div, opts(dark, idx === sp.length - 1));
+    var pf = { type: 'price', precision: spec.precision || 1, minMove: Math.pow(10, -(spec.precision || 1)) };
+    var entry = { chart: c, hist: null, lines: [] };
+    if (spec.histogram != null) entry.hist = c.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: pf });
+    (spec.lines || []).forEach(function (ln, i) {
+      var ls = c.addLineSeries({ color: ln.color, lineWidth: ln.width, priceLineVisible: false, lastValueVisible: i === 0, crosshairMarkerVisible: false, priceFormat: pf });
+      entry.lines.push(ls);
+      if (i === 0 && spec.guides) spec.guides.forEach(function (g) { ls.createPriceLine({ price: g, color: '#2c3b4a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(g) }); });
+    });
+    subs.push(entry); chartsForSync.push(c);
+  });
+
+  // Sync visible TIME range across panes (time-based → robust to warmup-offset series lengths).
+  var syncing = false;
+  chartsForSync.forEach(function (src) {
+    src.timeScale().subscribeVisibleTimeRangeChange(function (r) {
+      if (syncing || !r) return; syncing = true;
+      chartsForSync.forEach(function (dst) { if (dst !== src) { try { dst.timeScale().setVisibleRange(r); } catch (e) {} } });
+      syncing = false;
+    });
+  });
+}
+
+// Update data on the existing series (no teardown → no flash; preserves the user's zoom).
+function update(p, fit) {
   var data = (p.candles || []).map(function (c) { return { time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }; })
                               .sort(function (a, b) { return a.time - b.time; });
   candle.setData(data);
   if (!data.length) return;
   candle.applyOptions({ priceFormat: { type: 'price', precision: p.precision || 2, minMove: Math.pow(10, -(p.precision || 2)) } });
 
-  (p.lines || []).forEach(function (ln) {
-    if (!ln.points || !ln.points.length) return;
-    var ls = main.addLineSeries({ color: ln.color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-    ls.setData(ln.points);
-  });
+  var lines = p.lines || [];
+  emaSeries.forEach(function (s, i) { s.setData(lines[i] ? clean(lines[i].points) : []); });
+  vol.setData(p.volume || []);
+
+  // Price lines are overlays on the persistent candle series — remove + re-add (no full-chart flash).
+  priceLines.forEach(function (pl) { try { candle.removePriceLine(pl); } catch (e) {} });
+  priceLines = [];
   (p.priceLines || []).forEach(function (l) {
-    candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.title });
-  });
-  if (p.volume && p.volume.length) {
-    var vol = main.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
-    vol.setData(p.volume);
-    main.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
-  }
-
-  // ── Sub-panels (RSI / MACD / Stoch / ADX), created dynamically; the LAST one carries the axis ──
-  subs.forEach(function (sp, idx) {
-    var div = document.createElement('div');
-    div.className = 'pane sub';
-    var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = sp.id; div.appendChild(lbl);
-    container.appendChild(div);
-    var c = LightweightCharts.createChart(div, opts(dark, idx === subs.length - 1));
-    charts.push(c);
-    var pf = { type: 'price', precision: sp.precision || 1, minMove: Math.pow(10, -(sp.precision || 1)) };
-    if (sp.histogram && sp.histogram.length) {
-      c.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: pf }).setData(sp.histogram);
-    }
-    (sp.lines || []).forEach(function (ln, i) {
-      var ls = c.addLineSeries({ color: ln.color, lineWidth: ln.width, priceLineVisible: false, lastValueVisible: i === 0, crosshairMarkerVisible: false, priceFormat: pf });
-      ls.setData(clean(ln.points));
-      if (i === 0 && sp.guides) {
-        sp.guides.forEach(function (g) { ls.createPriceLine({ price: g, color: '#2c3b4a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(g) }); });
-      }
-    });
+    priceLines.push(candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.title }));
   });
 
-  // ── Sync visible TIME range across all panes (time-based → robust to warmup-offset lengths) ──
-  var syncing = false;
-  charts.forEach(function (src) {
-    src.timeScale().subscribeVisibleTimeRangeChange(function (r) {
-      if (syncing || !r) return;
-      syncing = true;
-      charts.forEach(function (dst) { if (dst !== src) { try { dst.timeScale().setVisibleRange(r); } catch (e) {} } });
-      syncing = false;
-    });
+  (p.subpanels || []).forEach(function (spec, idx) {
+    var e = subs[idx]; if (!e) return;
+    if (e.hist && spec.histogram) e.hist.setData(spec.histogram);
+    (spec.lines || []).forEach(function (ln, i) { if (e.lines[i]) e.lines[i].setData(clean(ln.points)); });
   });
-  main.timeScale().fitContent();
+
+  if (fit) main.timeScale().fitContent();
+}
+
+function render(p) {
+  var k = structKeyOf(p);
+  if (k !== structKey) { buildStructure(p); structKey = k; update(p, true); }
+  else { update(p, false); }
 }
 
 window.setChart = function (payload) {

@@ -76,10 +76,13 @@ struct ChartPayload: Codable {
             let start = bars.count - slice.count
             return slice.enumerated().compactMap { i, v in v.isFinite ? Point(time: bars[start + i].time, value: v) : nil }
         }
-        var lines: [Line] = []
-        let e20 = align(tf.ema20Series); if !e20.isEmpty { lines.append(Line(color: "#5b8def", points: e20)) }
-        let e50 = align(tf.ema50Series); if !e50.isEmpty { lines.append(Line(color: "#f0a020", points: e50)) }
-        let e200 = align(tf.ema200Series); if !e200.isEmpty { lines.append(Line(color: "#b06be8", points: e200)) }
+        // Always emit all 3 EMA lines in a fixed order (empty points if a series is absent) so the
+        // JS side can map them to stable, persistent line series by index (no flash on data update).
+        let lines: [Line] = [
+            Line(color: "#5b8def", points: align(tf.ema20Series)),
+            Line(color: "#f0a020", points: align(tf.ema50Series)),
+            Line(color: "#b06be8", points: align(tf.ema200Series)),
+        ]
 
         // Curated watch levels (already deduped/capped/labeled by WatchLevels.build) → price lines.
         let priceLines: [PriceLine] = watchLevels.map {
@@ -140,8 +143,9 @@ struct WebChartView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.scrollView.isScrollEnabled = false   // let Lightweight Charts own horizontal pan; page scrolls via the parent
         webView.scrollView.bounces = false
-        webView.isOpaque = false
+        webView.isOpaque = false                      // no white WKWebView flash before the page paints
         webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
         context.coordinator.webView = webView
 
         if let url = Bundle.main.url(forResource: "chart", withExtension: "html", subdirectory: "chart")
