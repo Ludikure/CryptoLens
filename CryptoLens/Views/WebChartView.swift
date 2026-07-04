@@ -141,14 +141,17 @@ struct WebChartView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
-        // Gesture coexistence: keep the WKWebView's own scroll off (chart owns horizontal pan via
-        // Lightweight Charts' DOM touch handling), but let the WebView's pan recognize SIMULTANEOUSLY
-        // with the enclosing List/ScrollView so a vertical one-finger drag ON the chart scrolls the
-        // page (was inconsistent — the WebView swallowed the touch). Horizontal → chart pans;
-        // vertical → page scrolls.
-        webView.scrollView.isScrollEnabled = false
+        webView.scrollView.isScrollEnabled = false   // chart owns horizontal pan via Lightweight Charts' DOM touch
         webView.scrollView.bounces = false
-        webView.scrollView.panGestureRecognizer.delegate = context.coordinator
+        // Gesture coexistence: add our OWN pan recognizer (NOT the scrollView's built-in one — that
+        // one's delegate must stay the scrollView, or UIKit traps). It does nothing (cancelsTouchesInView
+        // = false, so Lightweight Charts still gets the touches) but its delegate permits SIMULTANEOUS
+        // recognition, so the enclosing List/ScrollView's pan can scroll the page on a vertical drag
+        // over the chart while horizontal drags still pan the bars.
+        let passthrough = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.passthroughPan(_:)))
+        passthrough.delegate = context.coordinator
+        passthrough.cancelsTouchesInView = false
+        webView.addGestureRecognizer(passthrough)
         webView.isOpaque = false                      // no white WKWebView flash before the page paints
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
@@ -171,7 +174,11 @@ struct WebChartView: UIViewRepresentable {
         private var pending: ChartPayload?
         private var lastJSON: String?   // dedup: updateUIView fires on any parent re-render; only push real changes
 
-        // Let the enclosing List/ScrollView's pan recognize alongside the WebView's — so a vertical
+        // No-op: exists only so our pass-through pan recognizer is valid; touches still reach the
+        // WebView (cancelsTouchesInView = false) so Lightweight Charts pans on horizontal drags.
+        @objc func passthroughPan(_ g: UIPanGestureRecognizer) {}
+
+        // Let the enclosing List/ScrollView's pan recognize alongside our recognizer — so a vertical
         // drag over the chart scrolls the page while Lightweight Charts handles horizontal pans.
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
