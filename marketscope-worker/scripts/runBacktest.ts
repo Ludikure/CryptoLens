@@ -16,7 +16,7 @@ import {
     type SentimentSignals,
 } from '../src/scoring-full.js';
 import { aggregate1HTo4H_ET } from '../src/aggregation.js';
-import { fetchBinanceKlines } from './fetchers/candles-binance.js';
+import { visionKlines } from './fetchers/vision.js';
 import { fetchD1Candles } from './fetchers/candles-d1.js';
 import { fetchYahooDaily, fetchYahoo1H } from './fetchers/yahoo.js';
 import { lookupDarkPool } from './fetchers/dark-pool.js';
@@ -362,10 +362,12 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
     let oneHAll: Candle[];
     let derivHistory: Awaited<ReturnType<typeof loadMergedDerivatives>> | null = null;
     if (isCrypto) {
+        // Candles from Binance Vision dumps (fetchers/vision.ts) — api.binance.com is
+        // HTTP-451 geoblocked from the dev Mac; Vision has full history + disk cache.
         const [d, h, o, dh] = await Promise.all([
-            fetchBinanceKlines(symbol, '1d', fetchStartMs, endMs),
-            fetchBinanceKlines(symbol, '4h', fetchStartMs, endMs),
-            fetchBinanceKlines(symbol, '1h', fetchStartMs, endMs),
+            visionKlines(symbol, '1d', fetchStartMs, endMs),
+            visionKlines(symbol, '4h', fetchStartMs, endMs),
+            visionKlines(symbol, '1h', fetchStartMs, endMs),
             loadMergedDerivatives(symbol, fetchStartMs, endMs, opts.d1Derivatives ?? null),
         ]);
         dailyAll = d; fourHAll = h; oneHAll = o; derivHistory = dh;

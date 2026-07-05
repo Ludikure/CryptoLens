@@ -23,3 +23,4 @@ ml-training/daily_candles_crypto.csv.gz
 ml-training/daily_candles_stock.csv.gz
 ml-training/cg_data/
 ml-training/whale_backfill/
+ml-training/vision_cache/

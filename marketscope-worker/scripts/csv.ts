@@ -94,6 +94,11 @@ export const CSV_HEADER = [
     'fwdMaxFavR48H', 'fwdMaxFavR72H',
     // Direction-aware horizons (signed close-to-close pct return).
     'fwdReturn48H', 'fwdReturn72H',
+    // Basis features (2026-07-05): computed by computeAllFeatures since v11 but never
+    // serialized — the audit found them MISSING from training CSVs (train/serve skew:
+    // live serving computes real basis, the model trained on nothing). Appended at the
+    // END so index-based readers of the existing columns are unaffected.
+    'basisPct', 'basisExtreme',
 ].join(',');
 
 const f1 = (v: number) => v.toFixed(1);
@@ -220,5 +225,7 @@ export function rowToCSV(o: BarOutput): string {
         f4(o.fwdMaxFavR72H),
         f4(o.fwdReturn48H),
         f4(o.fwdReturn72H),
+        f4(v('basisPct', 0)),
+        String(v('basisExtreme', 0)),
     ].join(',');
 }
