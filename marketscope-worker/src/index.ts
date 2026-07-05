@@ -424,6 +424,11 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
 }
 
+// A "whale" aggTrade = at least this much USD notional in one print, uniform across all symbols.
+// Shared definition with the historical backfill (scripts/backfill-whale-trades.ts) so archived
+// live data and backfilled history are directly comparable.
+export const WHALE_NOTIONAL_USD = 100_000;
+
 // Fetch the 7 live fapi/binance derivative endpoints for one symbol concurrently and parse them
 // into the raw values the ML uses. Shared by the cron's bounded-parallel pre-warm and the
 // in-loop cache-miss fallback. Returns 0 for any endpoint that failed (same as the original
@@ -438,7 +443,9 @@ async function fetchLiveDerivatives(symbol: string): Promise<any> {
     J(`${FAPI}/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=1`),
     J(`${FAPI}/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=4h&limit=1`),
     J(`${FAPI}/fapi/v1/premiumIndex?symbol=${symbol}`),
-    J(`https://api.binance.com/api/v3/aggTrades?symbol=${symbol}&limit=1000`),
+    // FUTURES aggTrades (was spot): whales trade perps, and this is the venue the rest of the
+    // derivatives signals come from. See WHALE_NOTIONAL_USD for the "large" definition.
+    J(`${FAPI}/fapi/v1/aggTrades?symbol=${symbol}&limit=1000`),
   ]);
   let fundingRate = 0, topTraderLongPct = 0, takerBuyVol = 0, takerSellVol = 0, takerRatio = 0;
   let openInterest = 0, markPrice = 0, indexPrice = 0, longPct = 0, basisPct = 0;
@@ -453,11 +460,13 @@ async function fetchLiveDerivatives(symbol: string): Promise<any> {
     if (indexPrice > 0) basisPct = (markPrice - indexPrice) / indexPrice * 100;
   }
   if (at && at.length) {
-    const lastPrice = at.length > 0 ? parseFloat(at[at.length - 1].p) : 1;
-    const threshold = lastPrice * 0.5;
+    // "Whale" = fixed $100k notional per aggTrade, consistent across symbols. The previous
+    // threshold (0.5 × price = 0.5 UNITS of the asset) meant ~$30k for BTC but literal cents for
+    // DOGE-class alts — not a whale definition at all. Zero counts on illiquid alts are honest
+    // signal (no whale prints), not a bug. Keep in sync with scripts/backfill-whale-trades.ts.
     for (const t of at) {
       const notional = parseFloat(t.q) * parseFloat(t.p);
-      if (notional < threshold) continue;
+      if (notional < WHALE_NOTIONAL_USD) continue;
       if (t.m) { largeSellVol += notional; largeSellCount++; } else { largeBuyVol += notional; largeBuyCount++; }
     }
   }

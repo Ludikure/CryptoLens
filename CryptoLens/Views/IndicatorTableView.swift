@@ -4,7 +4,7 @@ struct IndicatorTableView: View {
     let results: [IndicatorResult]
     var putCallRatio: Double? = nil
     var spotPressure: SpotPressure? = nil
-    @State private var expanded = false
+    @AppStorage("indicators_expanded") private var expanded = true
 
     private var hasStockIndicators: Bool {
         results.contains { $0.obv != nil }

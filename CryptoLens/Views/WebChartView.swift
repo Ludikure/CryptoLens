@@ -14,7 +14,7 @@ import UIKit
 struct ChartPayload: Codable {
     struct Bar: Codable { let time: Int; let open, high, low, close: Double }
     struct Point: Codable { let time: Int; let value: Double }
-    struct Line: Codable { let color: String; let points: [Point] }
+    struct Line: Codable { let label: String; let color: String; let points: [Point] }
     struct PriceLine: Codable { let price: Double; let color: String; let title: String; let dashed: Bool }
     struct VolumeBar: Codable { let time: Int; let value: Double; let color: String }
 
@@ -29,6 +29,9 @@ struct ChartPayload: Codable {
     }
 
     let dark: Bool
+    let symbol: String          // symbol + tf form the "data identity": when either changes, the JS
+    let tf: String              // side re-enables autoscale (a manual price range from BTC ~60k
+                                // would leave ETH ~3k entirely off-screen) and snaps to newest bar
     let precision: Int
     let candles: [Bar]
     let lines: [Line]           // EMA20/50/200
@@ -61,7 +64,7 @@ struct ChartPayload: Codable {
     /// Build the payload for one timeframe's candles + the analysis's watch levels.
     /// `panels` = enabled sub-panel ids in display order ("rsi","macd","stoch","adx");
     /// `showVolume` toggles the main-pane volume histogram.
-    static func build(tf: IndicatorResult, watchLevels: [WatchLevel], dark: Bool,
+    static func build(tf: IndicatorResult, symbol: String, watchLevels: [WatchLevel], dark: Bool,
                       panels: [String] = ["rsi", "macd"], showVolume: Bool = true) -> ChartPayload {
         let bars = tf.candles.map { Bar(time: Int($0.time.timeIntervalSince1970), open: $0.open, high: $0.high, low: $0.low, close: $0.close) }
         let last = tf.candles.last?.close ?? 1
@@ -79,9 +82,9 @@ struct ChartPayload: Codable {
         // Always emit all 3 EMA lines in a fixed order (empty points if a series is absent) so the
         // JS side can map them to stable, persistent line series by index (no flash on data update).
         let lines: [Line] = [
-            Line(color: "#5b8def", points: align(tf.ema20Series)),
-            Line(color: "#f0a020", points: align(tf.ema50Series)),
-            Line(color: "#b06be8", points: align(tf.ema200Series)),
+            Line(label: "EMA 20", color: "#5b8def", points: align(tf.ema20Series)),
+            Line(label: "EMA 50", color: "#f0a020", points: align(tf.ema50Series)),
+            Line(label: "EMA 200", color: "#b06be8", points: align(tf.ema200Series)),
         ]
 
         // Curated watch levels (already deduped/capped/labeled by WatchLevels.build) → price lines.
@@ -125,81 +128,107 @@ struct ChartPayload: Codable {
             }
         }
 
-        return ChartPayload(dark: dark, precision: precision, candles: bars, lines: lines, priceLines: priceLines,
-                            volume: volume, subpanels: subpanels)
+        return ChartPayload(dark: dark, symbol: symbol, tf: tf.label, precision: precision, candles: bars,
+                            lines: lines, priceLines: priceLines, volume: volume, subpanels: subpanels)
     }
 }
 
-// MARK: - WKWebView wrapper
+// MARK: - Shared persistent WKWebView (created once, survives tab switches)
 
-struct WebChartView: UIViewRepresentable {
-    let payload: ChartPayload
+/// ONE WKWebView for the chart, created once and kept for the app's lifetime.
+///
+/// WHY: the Chart tab is built via `switch selectedTab`, so a per-view WKWebView was torn down and
+/// recreated on EVERY tab visit — full web-process launch + HTML load + JS parse + chart build each
+/// time ("chart loads late"). The shared instance pays that cost once at app launch (prewarm), and
+/// `warmPush` renders data into it BEFORE the tab is opened, so the tab shows a ready chart.
+///
+/// No custom gesture recognizers: the chart lives on a non-scrolling full-screen tab now, so
+/// Lightweight Charts owns every touch directly — no arbitration layer to add latency.
+@MainActor
+final class ChartWebViewStore: NSObject, WKNavigationDelegate {
+    static let shared = ChartWebViewStore()
+    let webView: WKWebView
+    private var loaded = false
+    private var pendingJSON: String?
+    private var lastJSON: String?   // dedup: only push real changes (preserves pan/zoom, no re-render)
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeUIView(context: Context) -> WKWebView {
-        let config = WKWebViewConfiguration()
-        let webView = WKWebView(frame: .zero, configuration: config)
-        webView.navigationDelegate = context.coordinator
-        webView.scrollView.isScrollEnabled = false   // chart owns horizontal pan via Lightweight Charts' DOM touch
+    private override init() {
+        webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        super.init()
+        webView.navigationDelegate = self
+        webView.scrollView.isScrollEnabled = false   // Lightweight Charts owns all touch via DOM
         webView.scrollView.bounces = false
-        // Gesture coexistence: add our OWN pan recognizer (NOT the scrollView's built-in one — that
-        // one's delegate must stay the scrollView, or UIKit traps). It does nothing (cancelsTouchesInView
-        // = false, so Lightweight Charts still gets the touches) but its delegate permits SIMULTANEOUS
-        // recognition, so the enclosing List/ScrollView's pan can scroll the page on a vertical drag
-        // over the chart while horizontal drags still pan the bars.
-        let passthrough = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.passthroughPan(_:)))
-        passthrough.delegate = context.coordinator
-        passthrough.cancelsTouchesInView = false
-        webView.addGestureRecognizer(passthrough)
-        webView.isOpaque = false                      // no white WKWebView flash before the page paints
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        context.coordinator.webView = webView
-
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.allowsLinkPreview = false
+        // Opaque + solid background: a transparent WKWebView disables compositing fast paths and
+        // costs canvas frame rate. The chart fills its pane, so nothing shows through anyway.
+        webView.isOpaque = true
+        webView.backgroundColor = UIColor(red: 0.043, green: 0.055, blue: 0.078, alpha: 1) // #0b0e14
         if let url = Bundle.main.url(forResource: "chart", withExtension: "html", subdirectory: "chart")
             ?? Bundle.main.url(forResource: "chart", withExtension: "html") {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
-        return webView
     }
+
+    /// Kick off web-process + HTML + JS load at app launch so the first tab-open is instant.
+    static func prewarm() { _ = shared }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        loaded = true
+        // WKWebView keeps built-in double-tap recognizers (zoom heuristics) even with zooming
+        // disabled; they sit in the touch pipeline and misclassify quick single-finger drags as
+        // double-taps. Disable them — Lightweight Charts handles all its own gestures in the DOM.
+        disableDoubleTapRecognizers(in: webView)
+        if let json = pendingJSON { pendingJSON = nil; evaluate(json) }
+    }
+
+    private func disableDoubleTapRecognizers(in view: UIView) {
+        for gr in view.gestureRecognizers ?? [] {
+            if let tap = gr as? UITapGestureRecognizer, tap.numberOfTapsRequired >= 2 {
+                tap.isEnabled = false
+            }
+        }
+        for sub in view.subviews { disableDoubleTapRecognizers(in: sub) }
+    }
+
+    func push(_ payload: ChartPayload) {
+        guard let data = try? JSONEncoder().encode(payload),
+              let json = String(data: data, encoding: .utf8) else { return }
+        if json == lastJSON { return }
+        lastJSON = json
+        if loaded { evaluate(json) } else { pendingJSON = json }
+    }
+
+    private func evaluate(_ json: String) {
+        webView.evaluateJavaScript("window.setChart(\(json))", completionHandler: nil)
+    }
+
+    /// Render the chart BEFORE the Chart tab is opened (called from ContentView whenever fresh
+    /// analysis data lands). Reads the same persisted prefs the Chart tab uses, so the payload is
+    /// byte-identical to what the tab would build → the tab's own push dedups to a no-op.
+    static func warmPush(result: AnalysisResult, dark: Bool) {
+        guard !result.tf1.candles.isEmpty else { return }
+        let d = UserDefaults.standard
+        func flag(_ key: String, _ def: Bool) -> Bool { d.object(forKey: key) as? Bool ?? def }
+        let idx = d.object(forKey: "chart_tf_index") as? Int ?? 1
+        let panels = [flag("chart_rsi", true) ? "rsi" : nil, flag("chart_macd", true) ? "macd" : nil,
+                      flag("chart_stoch", false) ? "stoch" : nil, flag("chart_adx", false) ? "adx" : nil].compactMap { $0 }
+        let tfs = [result.tf1, result.tf2, result.tf3]
+        let selected = tfs[min(max(idx, 0), tfs.count - 1)]
+        let payload = ChartPayload.build(tf: selected.candles.isEmpty ? result.tf1 : selected,
+                                         symbol: result.symbol,
+                                         watchLevels: WatchLevels.build(result: result),
+                                         dark: dark, panels: panels, showVolume: flag("chart_vol", true))
+        shared.push(payload)
+    }
+}
+
+struct WebChartView: UIViewRepresentable {
+    let payload: ChartPayload
+
+    func makeUIView(context: Context) -> WKWebView { ChartWebViewStore.shared.webView }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        context.coordinator.push(payload)
-    }
-
-    final class Coordinator: NSObject, WKNavigationDelegate, UIGestureRecognizerDelegate {
-        weak var webView: WKWebView?
-        private var loaded = false
-        private var pending: ChartPayload?
-        private var lastJSON: String?   // dedup: updateUIView fires on any parent re-render; only push real changes
-
-        // No-op: exists only so our pass-through pan recognizer is valid; touches still reach the
-        // WebView (cancelsTouchesInView = false) so Lightweight Charts pans on horizontal drags.
-        @objc func passthroughPan(_ g: UIPanGestureRecognizer) {}
-
-        // Let the enclosing List/ScrollView's pan recognize alongside our recognizer — so a vertical
-        // drag over the chart scrolls the page while Lightweight Charts handles horizontal pans.
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
-
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            loaded = true
-            if let p = pending { send(p); pending = nil }
-        }
-
-        func push(_ payload: ChartPayload) {
-            if loaded { send(payload) } else { pending = payload }
-        }
-
-        private func send(_ payload: ChartPayload) {
-            guard let data = try? JSONEncoder().encode(payload),
-                  let json = String(data: data, encoding: .utf8) else { return }
-            // Skip redundant pushes — render() recreates the charts, so pushing an identical payload
-            // on every SwiftUI re-render would flicker + drop the user's pan/zoom state.
-            if json == lastJSON { return }
-            lastJSON = json
-            webView?.evaluateJavaScript("window.setChart(\(json))", completionHandler: nil)
-        }
+        ChartWebViewStore.shared.push(payload)
     }
 }

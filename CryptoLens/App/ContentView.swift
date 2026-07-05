@@ -5,9 +5,21 @@ struct ContentView: View {
     @EnvironmentObject var alertsStore: AlertsStore
     @EnvironmentObject var coordinator: NavigationCoordinator
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
+    @Environment(\.colorScheme) private var systemScheme
     @State private var showPicker = false
     @State private var showWatchlist = false
     @State private var showHistory = false
+
+    /// Effective dark-mode for the chart web view (honors the in-app override).
+    private var chartDark: Bool {
+        colorSchemeOverride == "dark" || (colorSchemeOverride != "light" && systemScheme == .dark)
+    }
+
+    /// Render fresh data into the persistent chart web view even while another tab is showing —
+    /// so opening the Chart tab presents an already-drawn chart instead of a late-loading one.
+    private func warmChart() {
+        if let r = service.currentResult { ChartWebViewStore.warmPush(result: r, dark: chartDark) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,6 +62,11 @@ struct ContentView: View {
             bottomTabBar
         }
         .preferredColorScheme(colorSchemeOverride == "light" ? .light : colorSchemeOverride == "dark" ? .dark : nil)
+        .task {
+            ChartWebViewStore.prewarm()   // web-process + JS startup at launch, not on first tab-open
+            warmChart()
+        }
+        .onChange(of: service.currentResult?.timestamp) { warmChart() }
     }
 
     @ViewBuilder
@@ -61,6 +78,8 @@ struct ContentView: View {
             MarketTabContent()
         case 2:
             AITabContent(showHistory: $showHistory)
+        case 4:
+            ChartScreenView()
         default:
             EmptyView()
         }
@@ -68,7 +87,8 @@ struct ContentView: View {
 
     private var bottomTabBar: some View {
         HStack(spacing: 0) {
-            tabBarItem(icon: "chart.xyaxis.line", label: "Chart", tag: 0)
+            tabBarItem(icon: "chart.bar.doc.horizontal", label: "Overview", tag: 0)
+            tabBarItem(icon: "chart.xyaxis.line", label: "Chart", tag: 4)
             tabBarItem(icon: "building.columns", label: "Market", tag: 1)
             tabBarItem(icon: "brain", label: "Analysis", tag: 2)
             tabBarItem(
@@ -112,30 +132,9 @@ struct ChartTabContent: View {
     @State private var biasChanges: [String] = []
     @State private var activeSetups: [TrackedSetup] = []
     @State private var tradesExpanded = false
-    @State private var chartTFIndex = 1     // 0=Daily, 1=4H(crypto)/1H(stock), 2=1H — default the medium TF
-    @Environment(\.colorScheme) private var colorScheme
-    // Toggleable sub-panels (persisted), mirroring the classic chart's panel switches.
-    @AppStorage("chart_rsi") private var chRsi = true
-    @AppStorage("chart_macd") private var chMacd = true
-    @AppStorage("chart_stoch") private var chStoch = false
-    @AppStorage("chart_adx") private var chAdx = false
-    @AppStorage("chart_vol") private var chVol = true
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
-    }
-
-    /// A small toggle chip for a chart sub-panel (RSI/MACD/Stoch/ADX/Vol).
-    @ViewBuilder private func panelChip(_ title: String, _ isOn: Binding<Bool>) -> some View {
-        Button { isOn.wrappedValue.toggle() } label: {
-            Text(title)
-                .font(.caption2).fontWeight(.medium)
-                .padding(.horizontal, 9).padding(.vertical, 4)
-                .background(isOn.wrappedValue ? Color.accentColor.opacity(0.22) : Color(.systemGray5))
-                .foregroundStyle(isOn.wrappedValue ? Color.accentColor : .secondary)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
     }
 
     private func switchToAdjacentFavorite(offset: Int) {
@@ -372,31 +371,9 @@ struct ChartTabContent: View {
             .padding(.vertical, 4)
         }
 
-        if !result.tf1.candles.isEmpty {
-            // TradingView Lightweight Charts (WKWebView) — the price chart (WebChartView).
-            let tfs = [result.tf1, result.tf2, result.tf3]
-            let selected = tfs[min(max(chartTFIndex, 0), tfs.count - 1)]
-            let panels: [String] = [chRsi ? "rsi" : nil, chMacd ? "macd" : nil, chStoch ? "stoch" : nil, chAdx ? "adx" : nil].compactMap { $0 }
-            VStack(spacing: 6) {
-                Picker("Timeframe", selection: $chartTFIndex) {
-                    Text(result.tf1.label).tag(0)
-                    Text(result.tf2.label).tag(1)
-                    Text(result.tf3.label).tag(2)
-                }
-                .pickerStyle(.segmented)
-                HStack(spacing: 6) {
-                    panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
-                    panelChip("ADX", $chAdx); panelChip("Vol", $chVol)
-                    Spacer()
-                }
-                WebChartView(payload: ChartPayload.build(
-                    tf: selected.candles.isEmpty ? result.tf1 : selected,
-                    watchLevels: WatchLevels.build(result: result),
-                    dark: colorScheme == .dark, panels: panels, showVolume: chVol))
-                    .frame(height: 340 + CGFloat(panels.count) * 170)   // main + 170/sub-panel
-            }
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-        }
+        // The interactive price chart lives in its own full-screen, non-scrolling Chart tab
+        // (ChartScreenView) so its pan/zoom/axis gestures never fight this page's scroll. This
+        // Overview tab keeps the price header, indicators, and analysis stack.
 
         IndicatorTableView(
             results: [result.tf1, result.tf2, result.tf3],
@@ -436,6 +413,125 @@ struct ChartTabContent: View {
             Text("Pull down to load data").font(.subheadline).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 60)
+    }
+}
+
+// MARK: - Chart tab (dedicated full-screen, non-scrolling)
+
+/// A TradingView-style dedicated chart screen. It does NOT scroll — the main chart + enabled
+/// sub-panels flex to fill the exact screen height (see chart.html), so the WKWebView owns every
+/// gesture (pan / pinch / axis-stretch) without fighting a page ScrollView. The Overview tab
+/// (ChartTabContent) keeps the price/indicators/analysis stack; this tab is purely the chart.
+struct ChartScreenView: View {
+    @EnvironmentObject var service: AnalysisService
+    @Environment(\.colorScheme) private var colorScheme
+    // Persisted (not @State): survives tab switches, and warmPush reads the same key so the
+    // pre-rendered chart matches what this tab builds.
+    @AppStorage("chart_tf_index") private var chartTFIndex = 1  // 0=Daily, 1=4H(crypto)/1H(stock), 2=1H
+    @State private var chartPayload: ChartPayload?   // memoized; rebuilt only when inputs change
+    // Toggleable sub-panels (persisted; shared keys with the classic panel switches).
+    @AppStorage("chart_rsi") private var chRsi = true
+    @AppStorage("chart_macd") private var chMacd = true
+    @AppStorage("chart_stoch") private var chStoch = false
+    @AppStorage("chart_adx") private var chAdx = false
+    @AppStorage("chart_vol") private var chVol = true
+
+    private var selectedSymbol: String { service.currentSymbol ?? Constants.allCoins[0].id }
+
+    private var panelsList: [String] {
+        [chRsi ? "rsi" : nil, chMacd ? "macd" : nil, chStoch ? "stoch" : nil, chAdx ? "adx" : nil].compactMap { $0 }
+    }
+
+    /// A cheap signature of everything the chart payload depends on — the heavy ChartPayload.build
+    /// (candle mapping + series alignment + JSON) runs only when THIS changes, not on every SwiftUI
+    /// pass, so a live-price publish doesn't re-encode the whole candle set on the main thread.
+    private var chartSignature: String {
+        let r = service.currentResult
+        let ts = r.map { Int($0.timestamp.timeIntervalSince1970) } ?? 0
+        return "\(r?.symbol ?? "")|\(ts)|\(chartTFIndex)|\(panelsList.joined(separator: ","))|\(chVol)|\(colorScheme == .dark)"
+    }
+
+    private func rebuildChart() {
+        guard let result = service.currentResult, !result.tf1.candles.isEmpty else { chartPayload = nil; return }
+        let tfs = [result.tf1, result.tf2, result.tf3]
+        let selected = tfs[min(max(chartTFIndex, 0), tfs.count - 1)]
+        chartPayload = ChartPayload.build(
+            tf: selected.candles.isEmpty ? result.tf1 : selected,
+            symbol: result.symbol,
+            watchLevels: WatchLevels.build(result: result),
+            dark: colorScheme == .dark, panels: panelsList, showVolume: chVol)
+    }
+
+    /// A small toggle chip for a chart sub-panel (RSI/MACD/Stoch/ADX/Vol).
+    @ViewBuilder private func panelChip(_ title: String, _ isOn: Binding<Bool>) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: {
+            Text(title)
+                .font(.caption2).fontWeight(.medium)
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(isOn.wrappedValue ? Color.accentColor.opacity(0.22) : Color(.systemGray5))
+                .foregroundStyle(isOn.wrappedValue ? Color.accentColor : .secondary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            // Instrument picker — same favorites pill row as Overview (tap to switch symbols).
+            FavoritePillsView()
+
+            if let result = service.currentResult, !result.tf1.candles.isEmpty {
+                // Timeframe selector + panel toggles (price lives on the Overview tab, not here).
+                Picker("Timeframe", selection: $chartTFIndex) {
+                    Text(result.tf1.label).tag(0)
+                    Text(result.tf2.label).tag(1)
+                    Text(result.tf3.label).tag(2)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 12)
+
+                HStack(spacing: 6) {
+                    panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
+                    panelChip("ADX", $chAdx); panelChip("Vol", $chVol)
+                    Spacer()
+                    Link("TradingView", destination: URL(string: "https://www.tradingview.com")!)
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+
+                // Fills all remaining height → the chart + panels divide it (chart.html flex; panes
+                // are drag-resizable). Rendered from the memoized payload, not rebuilt inline.
+                if let payload = chartPayload {
+                    WebChartView(payload: payload)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Color.clear.frame(maxHeight: .infinity)
+                }
+            } else {
+                Spacer()
+                if service.isLoading {
+                    ProgressView("Loading chart…").tint(.secondary)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "chart.xyaxis.line").font(.system(size: 44)).foregroundStyle(.tertiary)
+                        Text("No chart data").font(.subheadline).foregroundStyle(.tertiary)
+                        Button("Load") { Task { await service.refreshIndicators(symbol: selectedSymbol) } }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+                Spacer()
+            }
+        }
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
+        .task {
+            if service.currentSymbol == nil {
+                await service.selectSymbol(Constants.allCoins[0].id)
+            }
+            rebuildChart()
+        }
+        .onChange(of: chartSignature) { rebuildChart() }
     }
 }
 

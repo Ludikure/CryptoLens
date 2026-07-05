@@ -8,9 +8,28 @@
     font-family: -apple-system, system-ui, sans-serif; }
   #container { position: absolute; inset: 0; display: flex; flex-direction: column; }
   .pane { position: relative; width: 100%; }
-  #main { flex: 1 1 auto; min-height: 0; }
-  .sub { flex: 0 0 170px; border-top: 1px solid #1c2230; }
+  /* Fit-to-screen (TradingView-mobile style): the main chart + enabled sub-panels DIVIDE the
+     container height proportionally (main 3 : each sub 1) rather than each sub taking a fixed
+     height. So 0 panels → main fills; 2 panels → main ~60% / subs ~20% each; 4 panels → main ~43%
+     / subs ~14% each. Always fits one screen → the page never needs to scroll → no gesture fight. */
+  #main { flex: 3 1 0; min-height: 0; }
+  .sub { flex: 1 1 0; min-height: 0; border-top: 1px solid #1c2230; }
   .lbl { position: absolute; top: 3px; left: 6px; font-size: 10px; color: #9aa4b2; z-index: 3; pointer-events: none; }
+  /* EMA legend, top-left of the price pane (TradingView-style): colored name per overlay line. */
+  #legend { position: absolute; top: 3px; left: 6px; z-index: 3; pointer-events: none;
+    font-size: 10px; font-weight: 600; display: flex; gap: 10px; }
+  #legend span::before { content: '—'; margin-right: 3px; font-weight: 700; }
+  /* Reset button: re-enable autoscale + snap to the newest bar (replaces axis double-tap reset,
+     which WKWebView kept mis-triggering during fast drags). Sits left of the price axis. */
+  #resetBtn { position: absolute; right: 68px; bottom: 10px; z-index: 6; width: 32px; height: 32px;
+    border-radius: 16px; background: rgba(58,70,88,0.85); color: #cfd6e4; font-size: 17px;
+    line-height: 32px; text-align: center; touch-action: none; user-select: none; -webkit-user-select: none; }
+  /* Drag handle between panes (TradingView-style): drag to grow one pane / shrink its neighbor.
+     10px transparent strip with a visible grip; touch-action:none so the drag doesn't scroll/pan. */
+  .divider { flex: 0 0 11px; background: transparent; cursor: row-resize; touch-action: none;
+    position: relative; z-index: 5; }
+  .divider::after { content: ''; position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+    width: 34px; height: 3px; border-radius: 2px; background: #6b7787; }
 </style>
 <script src="lightweight-charts.standalone.production.js"></script>
 </head>
@@ -26,7 +45,7 @@
 // subsequent payloads. They are torn down + rebuilt only when the STRUCTURE changes (theme or the
 // enabled sub-panel set). Previously every payload did chart.remove()+recreate, so the several
 // staged payloads on first launch (cached → indicators → ML → analysis) flashed the chart.
-var main = null, candle = null, vol = null, emaSeries = [], priceLines = [], subs = [], structKey = null, pending = null;
+var main = null, candle = null, vol = null, emaSeries = [], priceLines = [], subs = [], structKey = null, pending = null, dataKey = null;
 
 function opts(dark, showTime) {
   return {
@@ -38,15 +57,18 @@ function opts(dark, showTime) {
     // squeezed all bars to fill the width, so Daily drew thick and 1H thin); scroll for history.
     timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime, rightOffset: 8, barSpacing: 7 },
     crosshair: { mode: 0 }, autoSize: true,
-    // TradingView-style touch, by REGION:
+    // TradingView-style touch. The chart lives on a NON-SCROLLING full-screen tab, so every touch
+    // belongs to the chart:
     //  - chart body, one finger horizontal → pan the bars
-    //  - chart body, one finger vertical   → scroll the page (vertTouchDrag off + the passthrough
-    //    pan recognizer in WebChartView)
+    //  - chart body, one finger vertical   → pan the price scale (vertTouchDrag ON — there is no
+    //    page scroll to yield to anymore)
     //  - PRICE axis drag (one finger)      → stretch/compress the price scale (spacing between prices)
     //  - TIME axis drag (one finger)       → stretch/compress the time scale
-    //  - two fingers                       → pinch-zoom
-    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false },
-    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: true },
+    //  - two fingers                       → pinch-zoom; double-tap an axis → reset it
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+    // axisDoubleClickReset OFF: WKWebView misclassified fast drags as double-taps, causing surprise
+    // scale resets mid-gesture. Reset lives on the explicit ⟲ button instead.
+    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: false },
     kineticScroll: { touch: true, mouse: false },
   };
 }
@@ -71,10 +93,12 @@ function buildStructure(p) {
   });
 
   var chartsForSync = [main];
+  var paneEls = [document.getElementById('main')];
   sp.forEach(function (spec, idx) {
     var div = document.createElement('div'); div.className = 'pane sub';
     var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = spec.id; div.appendChild(lbl);
     container.appendChild(div);
+    paneEls.push(div);
     var c = LightweightCharts.createChart(div, opts(dark, idx === sp.length - 1));
     var pf = { type: 'price', precision: spec.precision || 1, minMove: Math.pow(10, -(spec.precision || 1)) };
     var entry = { chart: c, hist: null, lines: [] };
@@ -96,6 +120,65 @@ function buildStructure(p) {
       syncing = false;
     });
   });
+
+  installDividers(paneEls);
+
+  // ⟲ reset button on the main pane (autoscale + newest bar).
+  var btn = document.getElementById('resetBtn');
+  if (!btn) {
+    btn = document.createElement('div'); btn.id = 'resetBtn'; btn.textContent = '⟲';
+    document.getElementById('main').appendChild(btn);
+    btn.addEventListener('pointerdown', function (e) { e.preventDefault(); e.stopPropagation(); resetView(); });
+  }
+}
+
+// Re-enable autoscale on every pane, restore the default bar spacing, snap to the newest bar.
+function resetView() {
+  if (!main) return;
+  [main].concat(subs.map(function (s) { return s.chart; })).forEach(function (c) {
+    try { c.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
+  });
+  try { main.timeScale().applyOptions({ barSpacing: 7, rightOffset: 8 }); } catch (e) {}
+  main.timeScale().scrollToRealTime();
+}
+
+// Insert a drag handle between each pair of panes. Dragging shifts flex-grow from one pane to its
+// neighbor (charts have autoSize → they resize automatically). TradingView-style: grow RSI and the
+// candles shrink. flex-grow is relative, so the split survives rotation / screen-size changes.
+function installDividers(paneEls) {
+  var container = document.getElementById('container');
+  Array.prototype.slice.call(container.querySelectorAll('.divider')).forEach(function (d) { container.removeChild(d); });
+  paneEls.forEach(function (el, i) { el.style.flexGrow = (i === 0 ? '3' : '1'); el.style.flexBasis = '0'; });
+  for (var i = 1; i < paneEls.length; i++) {
+    var div = document.createElement('div'); div.className = 'divider';
+    container.insertBefore(div, paneEls[i]);
+    attachDividerDrag(div, paneEls[i - 1], paneEls[i], container);
+  }
+}
+
+function attachDividerDrag(divider, above, below, container) {
+  var dragging = false, lastY = 0;
+  var MIN = 0.25; // a pane can't shrink below this share
+  divider.addEventListener('pointerdown', function (e) {
+    dragging = true; lastY = e.clientY;
+    try { divider.setPointerCapture(e.pointerId); } catch (x) {}
+    e.preventDefault();
+  });
+  divider.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    var h = container.clientHeight || 1;
+    var dy = e.clientY - lastY; lastY = e.clientY;
+    var total = 0;
+    Array.prototype.forEach.call(container.querySelectorAll('.pane'), function (p) { total += parseFloat(p.style.flexGrow || '1'); });
+    var dGrow = (dy / h) * total;
+    var a = parseFloat(above.style.flexGrow || '1') + dGrow;
+    var b = parseFloat(below.style.flexGrow || '1') - dGrow;
+    if (a < MIN || b < MIN) return;
+    above.style.flexGrow = a; below.style.flexGrow = b;
+  });
+  function end(e) { if (dragging) { dragging = false; try { divider.releasePointerCapture(e.pointerId); } catch (x) {} } }
+  divider.addEventListener('pointerup', end);
+  divider.addEventListener('pointercancel', end);
 }
 
 // Update data on the existing series (no teardown → no flash; preserves the user's zoom).
@@ -110,6 +193,20 @@ function update(p, fit) {
   emaSeries.forEach(function (s, i) { s.setData(lines[i] ? clean(lines[i].points) : []); });
   vol.setData(p.volume || []);
 
+  // EMA legend (top-left of the price pane) — only entries that actually have data.
+  var legend = document.getElementById('legend');
+  if (!legend) {
+    legend = document.createElement('div'); legend.id = 'legend';
+    document.getElementById('main').appendChild(legend);
+  }
+  legend.innerHTML = '';
+  lines.forEach(function (ln) {
+    if (!ln || !clean(ln.points).length) return;
+    var s = document.createElement('span');
+    s.style.color = ln.color; s.textContent = ln.label || '';
+    legend.appendChild(s);
+  });
+
   // Price lines are overlays on the persistent candle series — remove + re-add (no full-chart flash).
   priceLines.forEach(function (pl) { try { candle.removePriceLine(pl); } catch (e) {} });
   priceLines = [];
@@ -123,12 +220,23 @@ function update(p, fit) {
     (spec.lines || []).forEach(function (ln, i) { if (e.lines[i]) e.lines[i].setData(clean(ln.points)); });
   });
 
-  // On a fresh build (theme/panel change), scroll to the newest bar at the fixed barSpacing rather
-  // than fitContent (which would override barSpacing and re-introduce per-timeframe thickness).
-  if (fit) main.timeScale().scrollToRealTime();
+  // Reset the view when the DATA IDENTITY (symbol|timeframe) changes: the user's manual price
+  // range / pan from the previous instrument would leave the new one off-screen entirely (e.g.
+  // BTC ~60k manual range → ETH ~3k renders below the viewport). Re-enable autoscale on every
+  // pane and snap to the newest bar. Also runs on a fresh structure build (fit=true), using
+  // scrollToRealTime rather than fitContent to keep the fixed barSpacing.
+  var key = (p.symbol || '') + '|' + (p.tf || '');
+  var identityChanged = key !== dataKey; dataKey = key;
+  if (fit || identityChanged) {
+    [main].concat(subs.map(function (s) { return s.chart; })).forEach(function (c) {
+      try { c.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
+    });
+    main.timeScale().scrollToRealTime();
+  }
 }
 
 function render(p) {
+  document.body.style.background = p.dark ? '#0b0e14' : '#ffffff';
   var k = structKeyOf(p);
   if (k !== structKey) { buildStructure(p); structKey = k; update(p, true); }
   else { update(p, false); }
