@@ -127,3 +127,23 @@ a cascade *could* accelerate IF price reaches them), never a quantitative predic
 6mo/25-symbol single-regime data + single-leverage (25×) reconstruction — but the realized-liq
 null is the reliable half. Consistent with the earlier heatmap-direction null
 ([[edge-direction-primitive]]).
+
+## Whale-trade flow ($100k+ futures prints) as ML features — REJECTED (2026-07-05)
+The `large_*` archive columns (broken until 2026-07-04: spot trades, 0.5-UNIT threshold ≈
+cents on cheap alts; fixed to futures + $100k notional, `WHALE_NOTIONAL_USD`) were never model
+features. Backfilled 2yr of consistent whale flow from **Binance Vision** daily futures
+aggTrades dumps (`marketscope-worker/scripts/backfill-whale-trades.ts` → per-4h-bucket
+buy/sell vol+count, BTC/ETH/ADA/XRP/SOL) and tested 6 engineered features (imbalance 4h/24h,
+activity z-scores 7d, imbalance momentum, buy-share vs week) against the production 111 on
+the leak-clean v11_fixed bars, conservative one-bucket lag, canonical WF + purge
+(`ml-training/whale_feature_test.py`). **Δ AUC negative in 0/4 folds (goodR), inconsistent on
+tail4, both samplings.** Pre-declared robustness sweep (`whale_feature_sweep.py`): alt
+windows (2d/30d/8h/48h), whale×vol interactions, XGBoost cross-check, 72h slow target — **no
+variant passed** (best cell 3/4 folds at noise-level mean). Key nuance: **standalone whale
+features hit AUC ~0.57 on every target/fold** — the data is REAL but REDUNDANT: whale
+activity proxies the same volatility/activity state already encoded in volume ratio, ATR
+percentile, ADX, and derivatives features. Direction-flavored whale features (imbalance,
+buy-share) sit at/below 0.5 univariate — whales don't predict direction either. Untested
+residual: minutes-scale whale prints for entry timing (different labels; execution-layer
+question). Keep: the fixed collector + backfill script (data useful for display/whale-trap
+context); do NOT add whale columns to the feature set.
