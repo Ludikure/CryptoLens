@@ -559,6 +559,15 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-07-05 — Full feature+model audit (both markets): configs hold; derivatives features were never trained
+
+`ml-training/feature_model_audit.py` (pre-declared: canonical folds/weights/purge mirrored from the calibrate scripts; model bar = ΔAUC>+0.005 in ALL folds; ablation bar = ±0.005). Findings:
+- **Models keep their seats.** Crypto LGB d4/t150: no challenger passes (best +0.0015, 2/3 folds). Stocks XGB d5/t100: deeper configs (XGB/LGB d6-t200, LGB d5-t300) beat prod in **3/3 folds** at +0.0033..+0.0044 with better top-decile+Brier — under the bar, but re-validate d6-class capacity at the next stock retrain.
+- **The 20 derivatives features contributed ZERO splits — a coverage artifact, not a signal verdict.** Training data (v11_fixed): OI/taker/long%/crowding populated on only 1–2.5% of bars (30-day API window); funding 50% (yet still zero splits); `basisPct`/`basisExtreme` MISSING from the CSVs entirely → **train/serve skew** (live computes real basis; model trained on constant 0). Next regen must: emit basis, backfill funding to full history (Binance serves it retroactively), and will inherit the growing full-fidelity archive (real coverage started 2026-04).
+- **`volScalarML` ≡ `atrPercentile` (r=1.000)** — literal duplicate, drop one at next retrain.
+- **What carries crypto:** temporal group (−0.023 ablation; `dayOfWeek` is the top permutation feature +0.048 — real weekend/weekday vol seasonality) and 4H core (−0.009). Daily core near-neutral post-leak-fix. **Stocks:** `regimeCode`+`tfAlignment` dominate; `earningsProximity` earns its place; macro group is dead weight (+0.002 when dropped).
+- **~40–60 dead-weight features** (cross-market constants, 1H entry, 6-bar deltas, accel, macro-on-stocks): individually tiny, prune candidate list for next retrain (train pruned ~60 vs 111 on same folds, ship the winner). No permutation-negative features on either market (no overfit-suspects). Baselines reproduced doc numbers (crypto top-decile 0.768 ≈ 76.3%).
+
 ### 2026-07-04 — Whale-trade collection fixed + Binance Vision historical backfill
 
 The `large_*` whale-flow archive (derivatives_history) had a broken definition: threshold was `0.5 × price` = 0.5 UNITS of the asset (~$30k for BTC, literal cents for DOGE-class alts), sampled from **spot** aggTrades. Fixed in `fetchLiveDerivatives` (`src/index.ts`): **futures** aggTrades (`fapi/v1/aggTrades` — where whales actually trade, same venue as the other derivatives signals) + fixed **$100k notional** threshold (`WHALE_NOTIONAL_USD` export, uniform across symbols; zero counts on illiquid alts are honest signal, not a bug). This is a definition discontinuity in the archived series — acceptable because the backfill regenerates history under the new definition.
