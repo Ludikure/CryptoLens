@@ -59,18 +59,19 @@ function opts(dark, showTime) {
     // squeezed all bars to fill the width, so Daily drew thick and 1H thin); scroll for history.
     timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime, rightOffset: 8, barSpacing: 7 },
     crosshair: { mode: 0 }, autoSize: true,
-    // TradingView-style touch. The chart lives on a NON-SCROLLING full-screen tab, so every touch
-    // belongs to the chart:
-    //  - chart body, one finger horizontal → pan the bars
-    //  - chart body, one finger vertical   → pan the price scale (vertTouchDrag ON — there is no
-    //    page scroll to yield to anymore)
-    //  - PRICE axis drag (one finger)      → stretch/compress the price scale (spacing between prices)
-    //  - TIME axis drag (one finger)       → stretch/compress the time scale
-    //  - two fingers                       → pinch-zoom; double-tap an axis → reset it
-    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+    // TradingView-grade touch (hybrid native/DOM). The two hot gestures are handled by NATIVE
+    // UIKit recognizers (WebChartView) that call nativePanBy/nativePinch below — WebKit's DOM
+    // touch pipeline adds coalescing + IPC latency that reads as lag/jitter:
+    //  - chart body, one finger horizontal → NATIVE bar pan (+ momentum glide)
+    //  - two fingers on the body           → NATIVE pinch-zoom around the focal point
+    // Still DOM (they already feel right):
+    //  - chart body, one finger vertical   → price-scale pan (vertTouchDrag ON)
+    //  - PRICE / TIME axis drag            → stretch/compress that scale
+    //  - long-press → crosshair scrub; divider drag → pane resize
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: false, vertTouchDrag: true },
     // axisDoubleClickReset OFF: WKWebView misclassified fast drags as double-taps, causing surprise
     // scale resets mid-gesture. Reset lives on the explicit ⟲ button instead.
-    handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: false },
+    handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: false },
     kineticScroll: { touch: true, mouse: false },
   };
 }
@@ -158,7 +159,75 @@ function buildStructure(p) {
     document.getElementById('main').appendChild(btn);
     btn.addEventListener('pointerdown', function (e) { e.preventDefault(); e.stopPropagation(); resetView(); });
   }
+  requestAnimationFrame(reportGeom);
 }
+
+// ── Native gesture bridge ────────────────────────────────────────────────────────────────
+// Called by WebChartView's UIKit recognizers. All operate on the MAIN chart; the rAF pane
+// sync mirrors the sub-panes. CSS px == UIKit points (viewport width=device-width).
+
+function panByPx(dx) {
+  if (!main) return;
+  var ts = main.timeScale();
+  var r = ts.getVisibleLogicalRange(); if (!r) return;
+  var w = ts.width() || 1;
+  var perBar = w / (r.to - r.from);
+  var shift = dx / perBar;                       // drag right (dx>0) → view older bars
+  ts.setVisibleLogicalRange({ from: r.from - shift, to: r.to - shift });
+}
+window.nativePanBy = function (dx) { if (isFinite(dx)) panByPx(dx); };
+
+// Momentum glide after a native pan lifts (TradingView-style kinetic scroll).
+var glide = { v: 0, raf: null, last: 0 };
+window.nativeGlideStop = function () {
+  if (glide.raf) cancelAnimationFrame(glide.raf);
+  glide.raf = null; glide.v = 0;
+};
+function glideStep(ts) {
+  glide.raf = null;
+  var dt = Math.min(0.05, (ts - glide.last) / 1000); glide.last = ts;
+  panByPx(glide.v * dt);
+  glide.v *= Math.pow(0.1, dt);                  // ~10% of velocity remains after 1s
+  if (Math.abs(glide.v) > 15) glide.raf = requestAnimationFrame(glideStep);
+}
+window.nativePanEnd = function (vx) {
+  if (!main || !isFinite(vx) || Math.abs(vx) < 60) return;
+  glide.v = vx; glide.last = performance.now();
+  glide.raf = requestAnimationFrame(glideStep);
+};
+
+// Pinch: zoom the logical range around the focal point. `scale` is INCREMENTAL (Swift resets
+// the recognizer's scale to 1 after every event), so repeated calls compose.
+window.nativePinch = function (centerX, scale) {
+  if (!main || !(scale > 0) || !isFinite(centerX)) return;
+  var ts = main.timeScale();
+  var r = ts.getVisibleLogicalRange(); if (!r) return;
+  var w = ts.width() || 1;
+  var W = r.to - r.from;
+  var minW = Math.max(3, w / 50), maxW = w / 0.5; // barSpacing clamp [0.5, 50] px
+  var W2 = Math.min(maxW, Math.max(minW, W / scale));
+  var f = Math.min(1, Math.max(0, centerX / w));
+  var center = r.from + f * W;
+  var from2 = center - f * W2;
+  ts.setVisibleLogicalRange({ from: from2, to: from2 + W2 });
+};
+
+// Push the layout geometry to Swift so native recognizers YIELD over the price axis, time
+// axis, and dividers (those gestures stay DOM). Called after structure/data/divider changes.
+function reportGeom() {
+  try {
+    if (!window.webkit || !webkit.messageHandlers || !webkit.messageHandlers.chartGeom || !main) return;
+    var rect = function (el) { var r = el.getBoundingClientRect(); return { top: r.top, height: r.height }; };
+    var charts = [main].concat(subs.map(function (s) { return s.chart; }));
+    webkit.messageHandlers.chartGeom.postMessage({
+      priceAxisW: main.priceScale('right').width() || 0,
+      timeAxisH: (charts[charts.length - 1].timeScale().height()) || 0,
+      panes: Array.prototype.map.call(document.querySelectorAll('#container .pane'), rect),
+      dividers: Array.prototype.map.call(document.querySelectorAll('#container .divider'), rect),
+    });
+  } catch (e) { /* native gating falls back to permissive defaults */ }
+}
+window.addEventListener('resize', function () { requestAnimationFrame(reportGeom); });
 
 // Re-enable autoscale on every pane, restore the default bar spacing, snap to the newest bar.
 function resetView() {
@@ -204,7 +273,7 @@ function attachDividerDrag(divider, above, below, container) {
     if (a < MIN || b < MIN) return;
     above.style.flexGrow = a; below.style.flexGrow = b;
   });
-  function end(e) { if (dragging) { dragging = false; try { divider.releasePointerCapture(e.pointerId); } catch (x) {} } }
+  function end(e) { if (dragging) { dragging = false; try { divider.releasePointerCapture(e.pointerId); } catch (x) {} requestAnimationFrame(reportGeom); } }
   divider.addEventListener('pointerup', end);
   divider.addEventListener('pointercancel', end);
 }
@@ -262,6 +331,7 @@ function update(p, fit) {
     });
     main.timeScale().scrollToRealTime();
   }
+  requestAnimationFrame(reportGeom);   // price-axis width changes with label magnitude
 }
 
 function render(p) {
