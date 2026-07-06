@@ -61,7 +61,7 @@
 // staged payloads on first launch (cached → indicators → ML → analysis) flashed the chart.
 var main = null, candle = null, vol = null, emaSeries = [], priceLines = [], subs = [], structKey = null, pending = null, dataKey = null;
 
-function opts(dark, showTime) {
+function opts(dark, showTime, isSub) {
   return {
     layout: { background: { type: 'solid', color: dark ? '#0b0e14' : '#ffffff' }, textColor: dark ? '#9aa4b2' : '#4a5568' },
     grid: { vertLines: { color: dark ? '#141a25' : '#eef0f3' }, horzLines: { color: dark ? '#141a25' : '#eef0f3' } },
@@ -80,7 +80,10 @@ function opts(dark, showTime) {
     //  - chart body, one finger vertical   → price-scale pan (vertTouchDrag ON)
     //  - PRICE / TIME axis drag            → stretch/compress that scale
     //  - long-press → crosshair scrub; divider drag → pane resize
-    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: false, vertTouchDrag: true },
+    // vertTouchDrag only on the MAIN pane: sub-panes are autoscaled oscillators where a manual
+    // price range is never wanted — and an accidental vertical wobble during a pan/pinch start
+    // would silently disable their autoscale.
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: false, vertTouchDrag: !isSub },
     // axisDoubleClickReset OFF: WKWebView misclassified fast drags as double-taps, causing surprise
     // scale resets mid-gesture. Reset lives on the explicit ⟲ button instead.
     handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: false },
@@ -122,7 +125,7 @@ function buildStructure(p) {
     var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = spec.id; div.appendChild(lbl);
     container.appendChild(div);
     paneEls.push(div);
-    var c = LightweightCharts.createChart(div, opts(dark, idx === sp.length - 1));
+    var c = LightweightCharts.createChart(div, opts(dark, idx === sp.length - 1, true));
     var pf = { type: 'price', precision: spec.precision || 1, minMove: Math.pow(10, -(spec.precision || 1)) };
     var entry = { chart: c, hist: null, lines: [], name: spec.id, precision: spec.precision || 1, lblEl: lbl, valueMaps: [] };
     if (spec.histogram != null) entry.hist = c.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: pf });
@@ -343,6 +346,28 @@ window.nativePinch = function (centerX, scale) {
   var from2 = center - f * W2;
   setRangeClamped(from2, from2 + W2);
 };
+
+// ── Autoscale guard ─────────────────────────────────────────────────────────────────────────
+// LWC's DOM vertical price-pan can engage in the few ms BEFORE the native recognizer wins the
+// touch — silently switching the main pane to a manual price range the user never asked for
+// (candles then drift off-screen on every subsequent pan/zoom). Sample the autoscale state at
+// every DELIBERATE gesture end (touchend — a native takeover ends in touchcancel instead, so
+// accidental engagements are never sampled) and restore autoscale when a native gesture begins
+// having found it off without a deliberate opt-out.
+var priceWasAuto = true;
+function sampleAutoScale() {
+  if (!main) return;
+  try { priceWasAuto = main.priceScale('right').options().autoScale; } catch (e) {}
+}
+document.addEventListener('touchend', function () { setTimeout(sampleAutoScale, 60); }, true);
+window.nativeGestureBegan = function () {
+  if (!main) return;
+  try {
+    var ps = main.priceScale('right');
+    if (priceWasAuto && !ps.options().autoScale) ps.applyOptions({ autoScale: true });
+  } catch (e) {}
+};
+window.nativeGestureEnded = function () { sampleAutoScale(); };
 
 // ── Drawing tools (trend lines + horizontal lines) ──────────────────────────────────────────
 // TradingView-style: pick a tool in #drawbar, drag on the chart to draw a trend line or tap to
@@ -888,6 +913,7 @@ function update(p, fit) {
       try { c.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
     });
     main.timeScale().scrollToRealTime();
+    priceWasAuto = true;   // fresh instrument → autoscale is the sampled baseline again
   }
   requestAnimationFrame(reportGeom);   // price-axis width changes with label magnitude
 }

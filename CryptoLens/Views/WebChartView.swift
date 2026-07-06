@@ -7,58 +7,119 @@ import UIKit.UIGestureRecognizerSubclass
 //
 // WebKit's DOM touch pipeline (event coalescing, IPC hops) adds latency and jitter that
 // Lightweight Charts can't overcome from inside the page. The two hot gestures — one-finger
-// horizontal bar pan and two-finger pinch — are recognized NATIVELY and drive the chart via
-// tiny JS calls (nativePanBy / nativePanEnd / nativePinch in chart.html). Vertical price-pan,
-// axis drags, crosshair long-press, and divider drags stay in the DOM where they already feel
-// right; the page pushes its layout geometry (axis widths, divider rects) so the native
-// recognizers yield over those regions.
+// horizontal bar pan and two-finger pinch — are recognized NATIVELY by a SINGLE unified
+// recognizer (two separate recognizers mutually exclude under UIKit arbitration — see
+// ChartGestureRecognizer's doc comment) and drive the chart via tiny JS calls (nativePanBy /
+// nativePanEnd / nativePinch in chart.html). Vertical price-pan, axis drags, crosshair
+// long-press, and divider drags stay in the DOM where they already feel right; the page pushes
+// its layout geometry (axis widths, divider rects) so the native recognizer yields over those
+// regions.
 
-/// One-finger horizontal pan that begins on the FIRST horizontal movement (no UIPanGesture
-/// 10pt lag), yields to the DOM for vertical drags (price pan), for touches held ~stationary
-/// first (crosshair scrub), and hands off to the pinch recognizer when a second finger lands.
-private final class ChartPanRecognizer: UIGestureRecognizer {
+/// ONE continuous recognizer for both hot gestures: one-finger horizontal pan AND two-finger
+/// pinch. They must live in a single recognizer: as two separate recognizers, whichever began
+/// first forced the other to FAIL for the rest of the touch sequence (UIKit's default exclusion)
+/// — so any pinch whose first finger moved a few points before the second landed (i.e. nearly
+/// every real pinch) went permanently dead mid-gesture.
+///
+/// Behavior: begins on the FIRST horizontal movement (no UIPanGesture 10pt lag); stays in
+/// .possible (never fails early) for vertical drags (DOM price pan) and held touches (DOM
+/// crosshair scrub) so a second finger can still start a pinch; a second body-finger at ANY
+/// point switches to pinch mode (scale + focal-midpoint pan); lifting one finger drops back to
+/// pan mode with the survivor — one continuous gesture, TradingView-style.
+private final class ChartGestureRecognizer: UIGestureRecognizer {
     var isBodyPoint: (CGPoint) -> Bool = { _ in true }
-    private var start: CGPoint = .zero
-    private var startTime: TimeInterval = 0
-    private var lastX: CGFloat = 0
-    private var lastTime: TimeInterval = 0
-    /// Horizontal movement since the previous event (consumed by the action handler).
+
+    /// Horizontal movement since the previous event (finger in pan mode, midpoint in pinch mode).
     private(set) var deltaX: CGFloat = 0
+    /// Incremental pinch scale since the previous event (1 = none; JS composes successive scales).
+    private(set) var pinchScale: CGFloat = 1
+    /// Pinch focal x (midpoint of the two fingers).
+    private(set) var focalX: CGFloat = 0
     /// Smoothed horizontal velocity (pt/s) for the momentum glide on lift.
     private(set) var velocityX: CGFloat = 0
-    /// True when the pan ended because a second finger landed (pinch handoff) — the action
-    /// handler must NOT fire the momentum glide, or the chart flings while the pinch starts.
-    private(set) var handedOffToPinch = false
+    private(set) var isPinching = false
+
+    private var t1: UITouch?
+    private var t2: UITouch?
+    private var start: CGPoint = .zero
+    private var startTime: TimeInterval = 0
+    /// Vertical-dominant or held-first single-finger movement belongs to the DOM (price pan /
+    /// crosshair scrub). We stay in .possible rather than failing so a later second finger can
+    /// still begin a pinch — a failed recognizer is dead until every touch lifts.
+    private var panDisqualified = false
+    private var lastX: CGFloat = 0
+    private var lastTime: TimeInterval = 0
+    private var lastDist: CGFloat = 1
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let view, let t = touches.first else { return }
-        if state == .possible {
-            if (event.touches(for: view)?.count ?? 1) > 1 { state = .failed; return }
-            start = t.location(in: view)
-            startTime = t.timestamp
-            lastX = start.x; lastTime = t.timestamp; velocityX = 0
-            if !isBodyPoint(start) { state = .failed }
-        } else if state == .began || state == .changed {
-            handedOffToPinch = true
-            state = .ended   // second finger → let the pinch recognizer take over
+        guard let view else { return }
+        for t in touches {
+            let p = t.location(in: view)
+            if t1 == nil {
+                guard state == .possible else { ignore(t, for: event); continue }
+                if !isBodyPoint(p) { state = .failed; return }
+                t1 = t
+                start = p; startTime = t.timestamp
+                lastX = p.x; lastTime = t.timestamp
+                velocityX = 0; panDisqualified = false
+            } else if t2 == nil, t !== t1, state == .possible || state == .began || state == .changed {
+                // Second finger on the body → pinch mode (from pan, scrub-wait, or fresh).
+                guard isBodyPoint(p) else { ignore(t, for: event); continue }
+                t2 = t
+                beginPinch()
+            } else {
+                ignore(t, for: event)
+            }
         }
     }
 
+    private func beginPinch() {
+        guard let view, let a = t1, let b = t2 else { return }
+        let p1 = a.location(in: view), p2 = b.location(in: view)
+        isPinching = true
+        lastDist = max(1, hypot(p2.x - p1.x, p2.y - p1.y))
+        lastX = (p1.x + p2.x) / 2
+        lastTime = max(a.timestamp, b.timestamp)
+        deltaX = 0; pinchScale = 1; focalX = lastX; velocityX = 0
+        state = state == .possible ? .began : .changed
+    }
+
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        guard let view, let t = touches.first else { return }
+        guard let view else { return }
+        if isPinching {
+            guard state == .began || state == .changed, let a = t1, let b = t2 else { return }
+            let p1 = a.location(in: view), p2 = b.location(in: view)
+            let mid = (p1.x + p2.x) / 2
+            let dist = max(1, hypot(p2.x - p1.x, p2.y - p1.y))
+            deltaX = mid - lastX
+            pinchScale = dist / lastDist
+            focalX = mid
+            let ts = max(a.timestamp, b.timestamp)
+            let dt = ts - lastTime
+            if dt > 0 {
+                let v = deltaX / CGFloat(dt)
+                velocityX = velocityX == 0 ? v : 0.7 * v + 0.3 * velocityX
+            }
+            lastX = mid; lastDist = dist; lastTime = ts
+            state = .changed
+            return
+        }
+        guard let t = t1, touches.contains(t) else { return }
         let p = t.location(in: view)
         if state == .possible {
+            guard !panDisqualified else { return }
             let dx = p.x - start.x, dy = p.y - start.y
             guard dx * dx + dy * dy >= 36 else { return }   // 6pt slop before deciding
-            // Held first → crosshair scrub (DOM); vertical-dominant → price pan (DOM).
-            if t.timestamp - startTime > 0.25 || abs(dy) > abs(dx) { state = .failed; return }
+            if t.timestamp - startTime > 0.25 || abs(dy) > abs(dx) { panDisqualified = true; return }
             deltaX = dx                                      // include the slop distance
+            pinchScale = 1
             lastX = p.x; lastTime = t.timestamp
             state = .began
             return
         }
         guard state == .began || state == .changed else { return }
         deltaX = p.x - lastX
+        pinchScale = 1
         let dt = t.timestamp - lastTime
         if dt > 0 {
             let v = deltaX / CGFloat(dt)
@@ -69,12 +130,33 @@ private final class ChartPanRecognizer: UIGestureRecognizer {
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        state = (state == .began || state == .changed) ? .ended : .failed
+        guard let view else { return }
+        let endedT1 = t1.map(touches.contains) ?? false
+        let endedT2 = t2.map(touches.contains) ?? false
+        if endedT1 && (endedT2 || t2 == nil) {
+            state = (state == .began || state == .changed) ? .ended : .failed
+            return
+        }
+        if endedT1 { t1 = t2; t2 = nil }
+        if endedT2 { t2 = nil }
+        if isPinching, t2 == nil, let t = t1 {
+            // Pinch → pan continuation with the surviving finger (state stays .changed).
+            isPinching = false
+            let p = t.location(in: view)
+            lastX = p.x; lastTime = t.timestamp
+            deltaX = 0; pinchScale = 1; velocityX = 0
+        }
     }
+
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
         state = (state == .began || state == .changed) ? .cancelled : .failed
     }
-    override func reset() { deltaX = 0; velocityX = 0; handedOffToPinch = false }
+
+    override func reset() {
+        t1 = nil; t2 = nil
+        deltaX = 0; pinchScale = 1; velocityX = 0
+        isPinching = false; panDisqualified = false
+    }
 }
 
 /// TradingView Lightweight Charts hosted in a WKWebView (POC / Phase 0 of
@@ -225,7 +307,7 @@ struct ChartPayload: Codable {
 /// No custom gesture recognizers: the chart lives on a non-scrolling full-screen tab now, so
 /// Lightweight Charts owns every touch directly — no arbitration layer to add latency.
 @MainActor
-final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHandler, UIGestureRecognizerDelegate {
+final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     static let shared = ChartWebViewStore()
     let webView: WKWebView
     private var loaded = false
@@ -263,15 +345,12 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         webView.isOpaque = true
         webView.backgroundColor = UIColor(red: 0.043, green: 0.055, blue: 0.078, alpha: 1) // #0b0e14
 
-        // Native gestures for the hot paths (see file-top comment). cancelsTouchesInView (the
-        // default) sends the DOM a touchcancel the moment one begins — clean handoff, no double
+        // Native gesture for the hot paths (see file-top comment). cancelsTouchesInView (the
+        // default) sends the DOM a touchcancel the moment it begins — clean handoff, no double
         // handling (LWC's own horizontal pan + pinch are disabled in chart.html).
-        let pan = ChartPanRecognizer(target: self, action: #selector(onNativePan(_:)))
-        pan.isBodyPoint = { [weak self] p in self?.isBodyPoint(p) ?? true }
-        webView.addGestureRecognizer(pan)
-        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(onNativePinch(_:)))
-        pinch.delegate = self
-        webView.addGestureRecognizer(pinch)
+        let gesture = ChartGestureRecognizer(target: self, action: #selector(onNativeGesture(_:)))
+        gesture.isBodyPoint = { [weak self] p in self?.isBodyPoint(p) ?? true }
+        webView.addGestureRecognizer(gesture)
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(onDoubleTap(_:)))
         doubleTap.numberOfTapsRequired = 2
         webView.addGestureRecognizer(doubleTap)
@@ -294,18 +373,29 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         return true
     }
 
-    @objc private func onNativePan(_ g: ChartPanRecognizer) {
+    @objc private func onNativeGesture(_ g: ChartGestureRecognizer) {
         switch g.state {
         case .began:
-            evaluateGesture("window.nativeGlideStop && nativeGlideStop(); window.nativePanBy && nativePanBy(\(g.deltaX))")
+            // nativeGestureBegan restores autoscale if the DOM's vertical price-pan engaged
+            // accidentally in the ms before recognition (see chart.html autoscale guard).
+            evaluateGesture("window.nativeGestureBegan && nativeGestureBegan(); window.nativeGlideStop && nativeGlideStop();" + gestureJS(g))
         case .changed:
-            evaluateGesture("window.nativePanBy && nativePanBy(\(g.deltaX))")
+            let js = gestureJS(g)
+            if !js.isEmpty { evaluateGesture(js) }
         case .ended:
-            if !g.handedOffToPinch {
-                evaluateGesture("window.nativePanEnd && nativePanEnd(\(g.velocityX))")
-            }
+            // nativePanEnd self-gates on |velocity| — a stationary pinch lift won't glide.
+            evaluateGesture("window.nativePanEnd && nativePanEnd(\(g.velocityX)); window.nativeGestureEnded && nativeGestureEnded()")
+        case .cancelled:
+            evaluateGesture("window.nativeGestureEnded && nativeGestureEnded()")
         default: break
         }
+    }
+
+    private func gestureJS(_ g: ChartGestureRecognizer) -> String {
+        var js = ""
+        if g.isPinching && g.pinchScale != 1 { js += "window.nativePinch && nativePinch(\(g.focalX), \(g.pinchScale));" }
+        if g.deltaX != 0 { js += "window.nativePanBy && nativePanBy(\(g.deltaX));" }
+        return js
     }
 
     /// TradingView-style double-tap: zoom in one step around the tap point.
@@ -316,32 +406,9 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         evaluateGesture("window.nativeGlideStop && nativeGlideStop(); window.nativePinch && nativePinch(\(p.x), 1.5)")
     }
 
-    @objc private func onNativePinch(_ g: UIPinchGestureRecognizer) {
-        switch g.state {
-        case .began:
-            evaluateGesture("window.nativeGlideStop && nativeGlideStop()")
-            g.scale = 1
-        case .changed:
-            let s = g.scale
-            guard s.isFinite, s > 0 else { g.scale = 1; return }
-            let cx = g.location(in: webView).x
-            evaluateGesture("window.nativePinch && nativePinch(\(cx), \(s))")
-            g.scale = 1   // incremental: JS composes successive scales
-        default: break
-        }
-    }
-
     private func evaluateGesture(_ js: String) {
         guard loaded else { return }
         webView.evaluateJavaScript(js, completionHandler: nil)
-    }
-
-    /// Pinch begins only with both fingers on chart body (axis pinches stay DOM/no-op).
-    func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-        guard let pinch = g as? UIPinchGestureRecognizer else { return true }
-        guard pinch.numberOfTouches >= 2 else { return false }
-        return isBodyPoint(pinch.location(ofTouch: 0, in: webView))
-            && isBodyPoint(pinch.location(ofTouch: 1, in: webView))
     }
 
     nonisolated func userContentController(_ userContentController: WKUserContentController,
