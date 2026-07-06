@@ -385,8 +385,15 @@ function distToSegment(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - cx, py - cy);
 }
 
-var TWO_POINT = { trend: 1, fib: 1, rect: 1 };
+var TWO_POINT = { trend: 1, fib: 1, rect: 1, ruler: 1 };
 var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+
+function fmtDur(sec) {
+  var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d) return d + 'd' + (h ? ' ' + h + 'h' : '');
+  if (h) return h + 'h' + (m ? ' ' + m + 'm' : '');
+  return m + 'm';
+}
 
 function drawCoords(d) {
   var x1 = timeToX(d.p1.t), y1 = priceY(d.p1.price), x2 = timeToX(d.p2.t), y2 = priceY(d.p2.price);
@@ -420,7 +427,7 @@ function hitTestDraw(pt) {
           if (Math.abs(pt.y - ly) <= 7) return { idx: i, part: 'line' };
         }
       }
-    } else if (d.type === 'rect') {
+    } else if (d.type === 'rect' || d.type === 'ruler') {
       var cr = drawCoords(d); if (!cr) continue;
       var l = Math.min(cr.x1, cr.x2), r = Math.max(cr.x1, cr.x2);
       var t = Math.min(cr.y1, cr.y2), b = Math.max(cr.y1, cr.y2);
@@ -481,6 +488,39 @@ function drawTrendsRenderer(target) {
         ctx.lineWidth = sel ? 2 : 1;
         ctx.strokeStyle = col;
         ctx.strokeRect(l, t, w, h);
+      } else if (d.type === 'ruler') {
+        var rup = d.p2.price >= d.p1.price;
+        var base = rup ? '38,166,154' : '239,83,80';
+        var rl = Math.min(c.x1, c.x2), rt = Math.min(c.y1, c.y2);
+        var rw = Math.abs(c.x2 - c.x1), rh = Math.abs(c.y2 - c.y1);
+        ctx.fillStyle = 'rgba(' + base + ',0.14)';
+        ctx.fillRect(rl, rt, rw, rh);
+        // Direction arrow p1 → p2 with a small head.
+        ctx.lineWidth = sel ? 2 : 1.5;
+        ctx.strokeStyle = 'rgba(' + base + ',0.95)';
+        ctx.beginPath(); ctx.moveTo(c.x1, c.y1); ctx.lineTo(c.x2, c.y2); ctx.stroke();
+        var ang = Math.atan2(c.y2 - c.y1, c.x2 - c.x1);
+        ctx.beginPath();
+        ctx.moveTo(c.x2, c.y2);
+        ctx.lineTo(c.x2 - 8 * Math.cos(ang - 0.4), c.y2 - 8 * Math.sin(ang - 0.4));
+        ctx.moveTo(c.x2, c.y2);
+        ctx.lineTo(c.x2 - 8 * Math.cos(ang + 0.4), c.y2 - 8 * Math.sin(ang + 0.4));
+        ctx.stroke();
+        // Stats pill: Δ% (Δprice) · bars · duration — above the box for up moves, below for down.
+        var dp = d.p2.price - d.p1.price;
+        var pct = d.p1.price ? (dp / d.p1.price) * 100 : 0;
+        var bars = Math.abs(Math.round((timeLogical(d.p2.t) || 0) - (timeLogical(d.p1.t) || 0)));
+        var label = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%  (' + formatDrawPrice(dp) + ')   '
+                  + bars + ' bars   ' + fmtDur(Math.abs(d.p2.t - d.p1.t));
+        var tw = ctx.measureText(label).width;
+        var lx = rl + rw / 2 - tw / 2 - 7, lw2 = tw + 14;
+        var ly = rup ? rt - 22 : rt + rh + 6;
+        if (ly < 2) ly = rt + rh + 6;
+        ctx.fillStyle = 'rgba(' + base + ',0.92)';
+        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(lx, ly, lw2, 16, 4); ctx.fill(); }
+        else ctx.fillRect(lx, ly, lw2, 16);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(label, lx + 7, ly + 11.5);
       } else if (d.type === 'fib') {
         var lo = Math.min(c.x1, c.x2), hi = Math.max(c.x1, c.x2);
         // Faint diagonal anchor line for context.
@@ -514,7 +554,7 @@ function formatDrawPrice(p) { return isFinite(p) ? p.toFixed(curPrecision) : '';
 function saveDrawings() {
   try {
     if (window.webkit && webkit.messageHandlers && webkit.messageHandlers.chartDrawings && curSymbol) {
-      webkit.messageHandlers.chartDrawings.postMessage({ symbol: curSymbol, json: JSON.stringify(drawings) });
+      webkit.messageHandlers.chartDrawings.postMessage({ symbol: curSymbol, json: JSON.stringify(drawings.filter(function (d0) { return d0.type !== 'ruler'; })) });
     }
   } catch (e) {}
 }
@@ -556,7 +596,7 @@ function setChartInteraction(on) {
 
 function updateDrawbar() {
   var bar = document.getElementById('drawbar'); if (!bar) return;
-  ['trend', 'fib', 'rect', 'hline'].forEach(function (t) {
+  ['trend', 'fib', 'rect', 'hline', 'ruler'].forEach(function (t) {
     bar.querySelector('.t-' + t).className = 't-' + t + (drawTool === t ? ' on' : '');
   });
   var sel = selectedIdx != null ? drawings[selectedIdx] : null;
@@ -572,10 +612,11 @@ function installDrawTools(mainEl) {
   if (!bar) {
     bar = document.createElement('div'); bar.id = 'drawbar';
     bar.innerHTML = '<div class="t-trend">╱</div><div class="t-fib">F</div><div class="t-rect">▭</div>'
-                  + '<div class="t-hline">─</div><div class="t-ext hidden">→</div><div class="t-del hidden">🗑</div>';
+                  + '<div class="t-hline">─</div><div class="t-ruler">⤢</div>'
+                  + '<div class="t-ext hidden">→</div><div class="t-del hidden">🗑</div>';
     mainEl.appendChild(bar);
     bar.addEventListener('pointerdown', function (e) { e.preventDefault(); e.stopPropagation(); });
-    ['trend', 'fib', 'rect', 'hline'].forEach(function (tool) {
+    ['trend', 'fib', 'rect', 'hline', 'ruler'].forEach(function (tool) {
       bar.querySelector('.t-' + tool).addEventListener('pointerup', function (e) {
         e.stopPropagation();
         drawTool = drawTool === tool ? null : tool;
@@ -609,6 +650,7 @@ function installDrawTools(mainEl) {
     if (drawTool && TWO_POINT[drawTool]) {
       var t = xToTime(pt.x), pr = yPrice(pt.y);
       if (t == null || pr == null) return;
+      if (drawTool === 'ruler') drawings = drawings.filter(function (d0) { return d0.type !== 'ruler'; });
       drawings.push({ type: drawTool, p1: { t: t, price: pr }, p2: { t: t, price: pr } });
       draggingDraw = { idx: drawings.length - 1, part: 'p2' };
       try { mainEl.setPointerCapture(e.pointerId); } catch (x) {}
