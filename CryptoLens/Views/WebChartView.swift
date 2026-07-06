@@ -33,8 +33,12 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
     private(set) var deltaX: CGFloat = 0
     /// Incremental pinch scale since the previous event (1 = none; JS composes successive scales).
     private(set) var pinchScale: CGFloat = 1
-    /// Pinch focal x (midpoint of the two fingers).
+    /// Pinch focal point (midpoint of the two fingers).
     private(set) var focalX: CGFloat = 0
+    private(set) var focalY: CGFloat = 0
+    /// Orientation of the finger line: (Δx/dist)² — 1 = horizontal pinch, 0 = vertical pinch.
+    /// Used to split the raw scale into time-axis and price-axis components.
+    private(set) var pinchAxisX: CGFloat = 1
     /// Smoothed horizontal velocity (pt/s) for the momentum glide on lift.
     private(set) var velocityX: CGFloat = 0
     private(set) var isPinching = false
@@ -80,10 +84,12 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
         guard let view, let a = t1, let b = t2 else { return }
         let p1 = a.location(in: view), p2 = b.location(in: view)
         isPinching = true
-        lastDist = max(1, hypot(p2.x - p1.x, p2.y - p1.y))
+        let dx = p2.x - p1.x, dy = p2.y - p1.y
+        lastDist = max(1, hypot(dx, dy))
+        pinchAxisX = (dx * dx) / (lastDist * lastDist)
         lastX = (p1.x + p2.x) / 2
         lastTime = max(a.timestamp, b.timestamp)
-        deltaX = 0; pinchScale = 1; focalX = lastX; velocityX = 0
+        deltaX = 0; pinchScale = 1; focalX = lastX; focalY = (p1.y + p2.y) / 2; velocityX = 0
         state = state == .possible ? .began : .changed
     }
 
@@ -93,10 +99,13 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             guard state == .began || state == .changed, let a = t1, let b = t2 else { return }
             let p1 = a.location(in: view), p2 = b.location(in: view)
             let mid = (p1.x + p2.x) / 2
-            let dist = max(1, hypot(p2.x - p1.x, p2.y - p1.y))
+            let dx = p2.x - p1.x, dy = p2.y - p1.y
+            let dist = max(1, hypot(dx, dy))
             deltaX = mid - lastX
             pinchScale = dist / lastDist
+            pinchAxisX = (dx * dx) / (dist * dist)
             focalX = mid
+            focalY = (p1.y + p2.y) / 2
             let ts = max(a.timestamp, b.timestamp)
             let dt = ts - lastTime
             if dt > 0 {
@@ -398,7 +407,13 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
 
     private func gestureJS(_ g: ChartGestureRecognizer) -> String {
         var js = ""
-        if g.isPinching && g.pinchScale != 1 { js += "window.nativePinch && nativePinch(\(g.focalX), \(g.pinchScale));" }
+        if g.isPinching && g.pinchScale != 1 {
+            // Split the raw scale by finger-line orientation: horizontal spread zooms TIME,
+            // vertical spread zooms PRICE, diagonal blends both (TradingView-style 2D pinch).
+            let s = g.pinchScale, c = g.pinchAxisX
+            let sT = 1 + (s - 1) * c, sP = 1 + (s - 1) * (1 - c)
+            js += "window.nativePinch && nativePinch(\(g.focalX), \(g.focalY), \(sT), \(sP));"
+        }
         if g.deltaX != 0 { js += "window.nativePanBy && nativePanBy(\(g.deltaX));" }
         return js
     }
@@ -408,7 +423,7 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         guard g.state == .ended else { return }
         let p = g.location(in: webView)
         guard isBodyPoint(p) else { return }
-        evaluateGesture("window.nativeGlideStop && nativeGlideStop(); window.nativePinch && nativePinch(\(p.x), 1.5)")
+        evaluateGesture("window.nativeGlideStop && nativeGlideStop(); window.nativePinch && nativePinch(\(p.x), \(p.y), 1.5, 1)")
     }
 
     private func evaluateGesture(_ js: String) {

@@ -103,7 +103,11 @@ function buildStructure(p) {
 
   var dark = !!p.dark, sp = p.subpanels || [];
   main = LightweightCharts.createChart(document.getElementById('main'), opts(dark, sp.length === 0));
-  candle = main.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+  // autoscaleInfoProvider: when the native VERTICAL pinch has set a custom viewport (vRange),
+  // serve it through the autoscale path — LWC has no public price-range setter, so this is the
+  // supported way to drive the vertical zoom. vRange null → stock autoscale.
+  candle = main.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+    autoscaleInfoProvider: acProvider });
   vol = main.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
   main.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
   // 3 persistent EMA line series (index-stable; setData empty when a series is absent).
@@ -308,21 +312,62 @@ window.nativePanEnd = function (vx) {
   glide.raf = requestAnimationFrame(glideStep);
 };
 
-// Pinch: zoom the logical range around the focal point. `scale` is INCREMENTAL (Swift resets
-// the recognizer's scale to 1 after every event), so repeated calls compose.
-window.nativePinch = function (centerX, scale) {
-  if (!main || !(scale > 0) || !isFinite(centerX)) return;
-  var ts = main.timeScale();
-  var r = ts.getVisibleLogicalRange(); if (!r) return;
-  var w = ts.width();
-  if (!w || w < 10) return;                       // pane not laid out yet — a 0 width would
-  var W = r.to - r.from;                          // produce a zero-bar range (blank chart)
-  var minW = Math.max(3, w / 50), maxW = w / 0.5; // barSpacing clamp [0.5, 50] px
-  var W2 = Math.min(maxW, Math.max(minW, W / scale));
-  var f = Math.min(1, Math.max(0, centerX / w));
-  var center = r.from + f * W;
-  var from2 = center - f * W2;
-  setRangeClamped(from2, from2 + W2);
+// Pinch: TWO-AXIS zoom around the focal point (TradingView-style). Horizontal finger spread
+// stretches the TIME scale; vertical spread stretches the PRICE scale. Scales are INCREMENTAL
+// (Swift resets to 1 after every event), so repeated calls compose. Swift decomposes the raw
+// pinch by finger-line orientation: scaleT = time component, scaleP = price component.
+var vRange = null;   // custom vertical viewport {min,max}, served via autoscaleInfoProvider
+function acProvider(orig) { return vRange ? { priceRange: { minValue: vRange.min, maxValue: vRange.max } } : orig(); }
+// Set/clear the custom vertical viewport. While active, the price-scale margins are zeroed so
+// the served range maps EXACTLY to the pane (with the default 8% margins, re-anchoring from
+// screen pixels each pinch event would re-apply the margins every frame and drift the zoom).
+function setVRange(r2) {
+  var had = !!vRange;
+  vRange = r2;
+  try {
+    if (!had && r2) main.priceScale('right').applyOptions({ scaleMargins: { top: 0, bottom: 0 } });
+    if (had && !r2) main.priceScale('right').applyOptions({ scaleMargins: { top: 0.08, bottom: 0.08 } });
+    main.priceScale('right').applyOptions({ autoScale: true });
+    // Re-applying the provider invalidates the price scale, forcing a re-query even when the
+    // time range didn't move (the pure-vertical-pinch case).
+    candle.applyOptions({ autoscaleInfoProvider: acProvider });
+  } catch (e) {}
+}
+window.nativePinch = function (centerX, centerY, scaleT, scaleP) {
+  if (!main || !candle) return;
+  // ── time axis ──
+  if (isFinite(centerX) && scaleT > 0 && isFinite(scaleT) && scaleT !== 1) {
+    var ts = main.timeScale();
+    var r = ts.getVisibleLogicalRange();
+    var w = ts.width();
+    if (r && w && w >= 10) {                        // pane not laid out yet — a 0 width would
+      var W = r.to - r.from;                        // produce a zero-bar range (blank chart)
+      var minW = Math.max(3, w / 50), maxW = w / 0.5; // barSpacing clamp [0.5, 50] px
+      var W2 = Math.min(maxW, Math.max(minW, W / scaleT));
+      var f = Math.min(1, Math.max(0, centerX / w));
+      var center = r.from + f * W;
+      var from2 = center - f * W2;
+      setRangeClamped(from2, from2 + W2);
+    }
+  }
+  // ── price axis ──
+  if (isFinite(centerY) && scaleP > 0 && isFinite(scaleP) && scaleP !== 1) {
+    try {
+      var paneH = (main.paneSize() || {}).height || 0;
+      if (paneH >= 10) {
+        // (Re-)anchor the viewport to what's on screen RIGHT NOW — works whether the current
+        // vertical state is stock autoscale, a DOM price-pan (manual), or a prior vRange.
+        var top = candle.coordinateToPrice(0), bot = candle.coordinateToPrice(paneH);
+        if (top != null && bot != null && top > bot) {
+          var fp = candle.coordinateToPrice(Math.min(paneH, Math.max(0, centerY)));
+          if (fp == null) fp = (top + bot) / 2;
+          var min2 = fp - (fp - bot) / scaleP;
+          var max2 = fp + (top - fp) / scaleP;
+          if (max2 - min2 > 1e-12) setVRange({ min: min2, max: max2 });
+        }
+      }
+    } catch (e) {}
+  }
 };
 
 // ── Autoscale guard ─────────────────────────────────────────────────────────────────────────
@@ -407,6 +452,7 @@ window.addEventListener('resize', function () { requestAnimationFrame(reportGeom
 // Re-enable autoscale on every pane, restore the default bar spacing, snap to the newest bar.
 function resetView() {
   if (!main) return;
+  setVRange(null);   // drop the pinch-zoomed vertical viewport (also restores scale margins)
   [main].concat(subs.map(function (s) { return s.chart; })).forEach(function (c) {
     try { c.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
   });
@@ -517,6 +563,7 @@ function update(p, fit) {
   var key = (p.symbol || '') + '|' + (p.tf || '');
   var identityChanged = key !== dataKey; dataKey = key;
   if (fit || identityChanged) {
+    setVRange(null);   // pinch-zoomed vertical viewport is per-instrument — drop it
     [main].concat(subs.map(function (s) { return s.chart; })).forEach(function (c) {
       try { c.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
     });
