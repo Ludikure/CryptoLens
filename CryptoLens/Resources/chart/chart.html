@@ -6,8 +6,10 @@
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: transparent; overscroll-behavior: none;
     font-family: -apple-system, system-ui, sans-serif; }
-  #container { position: absolute; inset: 0; display: flex; flex-direction: column; }
-  .pane { position: relative; width: 100%; }
+  /* touch-action:none — the page never scrolls/zooms natively; without this WebKit holds touches
+     in gesture arbitration before handing them to the chart's DOM handlers (laggy drag starts). */
+  #container { position: absolute; inset: 0; display: flex; flex-direction: column; touch-action: none; }
+  .pane { position: relative; width: 100%; touch-action: none; }
   /* Fit-to-screen (TradingView-mobile style): the main chart + enabled sub-panels DIVIDE the
      container height proportionally (main 3 : each sub 1) rather than each sub taking a fixed
      height. So 0 panels → main fills; 2 panels → main ~60% / subs ~20% each; 4 panels → main ~43%
@@ -73,6 +75,14 @@ function opts(dark, showTime) {
   };
 }
 function clean(pts) { return (pts || []).filter(function (p) { return p && isFinite(p.value); }); }
+// Pad a (tail-aligned) series with leading whitespace points so its bar-index set matches the
+// candle series exactly — required for logical-range pane sync to mean the same bar everywhere.
+function padToTimes(pts, allTimes) {
+  if (!pts.length || !allTimes.length) return pts;
+  var first = pts[0].time, pad = [];
+  for (var i = 0; i < allTimes.length && allTimes[i] < first; i++) pad.push({ time: allTimes[i] });
+  return pad.concat(pts);
+}
 function structKeyOf(p) { return (p.dark ? 'd' : 'l') + '|' + (p.subpanels || []).map(function (s) { return s.id; }).join(','); }
 
 // Build the chart + pane skeleton (persistent series). Called only when structKey changes.
@@ -111,12 +121,16 @@ function buildStructure(p) {
     subs.push(entry); chartsForSync.push(c);
   });
 
-  // Sync visible TIME range across panes (time-based → robust to warmup-offset series lengths).
+  // Sync panes by LOGICAL range (bar indices) — the cheap, exact path. Time-based sync
+  // (setVisibleRange) converted time→bars on every frame of a pan/pinch and snapped to bar
+  // boundaries, which stuttered and rubber-banded the gesture on every time-scale change.
+  // Sub-series are whitespace-padded to the full candle range (padToTimes) so logical index
+  // N means the same bar in every pane.
   var syncing = false;
   chartsForSync.forEach(function (src) {
-    src.timeScale().subscribeVisibleTimeRangeChange(function (r) {
+    src.timeScale().subscribeVisibleLogicalRangeChange(function (r) {
       if (syncing || !r) return; syncing = true;
-      chartsForSync.forEach(function (dst) { if (dst !== src) { try { dst.timeScale().setVisibleRange(r); } catch (e) {} } });
+      chartsForSync.forEach(function (dst) { if (dst !== src) { try { dst.timeScale().setVisibleLogicalRange(r); } catch (e) {} } });
       syncing = false;
     });
   });
@@ -214,10 +228,11 @@ function update(p, fit) {
     priceLines.push(candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.title }));
   });
 
+  var allTimes = data.map(function (c) { return c.time; });
   (p.subpanels || []).forEach(function (spec, idx) {
     var e = subs[idx]; if (!e) return;
-    if (e.hist && spec.histogram) e.hist.setData(spec.histogram);
-    (spec.lines || []).forEach(function (ln, i) { if (e.lines[i]) e.lines[i].setData(clean(ln.points)); });
+    if (e.hist && spec.histogram) e.hist.setData(padToTimes(spec.histogram, allTimes));
+    (spec.lines || []).forEach(function (ln, i) { if (e.lines[i]) e.lines[i].setData(padToTimes(clean(ln.points), allTimes)); });
   });
 
   // Reset the view when the DATA IDENTITY (symbol|timeframe) changes: the user's manual price

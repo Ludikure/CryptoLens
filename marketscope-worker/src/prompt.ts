@@ -442,6 +442,7 @@ interface PromptSettings { accountSize?: number; riskPercent?: number; conformal
 
 export interface BuildPromptInput {
   symbol: string; nowMs: number; indicators: PromptIndicator[];
+  livePrice?: number | null;   // live ticker price — candles/indicators are CLOSED-bar and up to 4h stale
   sentiment?: CoinInfo | null; stockInfo?: StockInfo | null; derivatives?: DerivativesData | null;
   positioning?: PositioningSnapshot | null; stockSentiment?: StockSentimentData | null;
   economicEvents?: EconomicEvent[]; macro?: MacroSnapshot | null; weeklyContext?: string | null; spyContext?: string | null;
@@ -476,6 +477,22 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
   const lines: string[] = [`Symbol: ${symbol}`];
   const L = (s = '') => lines.push(s);
   const isCryptoSym = symbol.toUpperCase().endsWith('USDT');
+
+  // LIVE PRICE anchor. Every candle/indicator in this prompt is computed on CLOSED bars
+  // (training parity — the in-progress bar is dropped), so the newest "price" the sections
+  // below reference can be up to 4h stale. Without this anchor the model writes triggers
+  // that are already past ("if price holds over X" when live price blew through X hours ago).
+  const lp = input.livePrice ?? null;
+  if (lp != null && lp > 0 && indicators.length > 0) {
+    const closedRef = indicators[indicators.length - 1].price || indicators[0].price;
+    const dPct = closedRef > 0 ? ((lp - closedRef) / closedRef) * 100 : 0;
+    L();
+    L('=== LIVE PRICE (authoritative current price) ===');
+    L(`LIVE price right now: ${formatPrice(lp)}. The candles/indicators below end at the last CLOSED bar `
+      + `(${formatPrice(closedRef)}, ${dPct >= 0 ? '+' : ''}${dPct.toFixed(2)}% from live).`);
+    L('Anchor ALL statements about current price, level proximity, triggers, and entries to the LIVE price. '
+      + 'If a level or trigger is already past at the live price, say so explicitly — never present it as pending.');
+  }
   const newState: PromptState = { regime: prevState.regime ?? null, killDur: { ...(prevState.killDur ?? {}) }, killDurCandleMs: prevState.killDurCandleMs ?? null, nakedPOC: prevState.nakedPOC ?? null };
 
   // #6 — SINCE LAST ANALYSIS: a snapshot of the previous run for this symbol so the LLM can lead

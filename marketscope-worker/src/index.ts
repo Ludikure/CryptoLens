@@ -198,6 +198,12 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   // (riskStates.bbSqueeze4h, bias.fourH, the prompt's fourH local). Skip 1H in that rare case.
   if (fourH.length && oneH.length) indicators.push(computeFullIndicators(oneH as FullCandle[], { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
 
+  // Live price for the prompt: every candle/indicator above is CLOSED-bar (training parity),
+  // so without this the LLM believes price = the last closed 4H bar (up to 4h stale) and writes
+  // triggers that are already past ("if price holds over 62,900" while live is 63,700).
+  let livePrice: number | null = null;
+  try { livePrice = await fetchLivePrice(symbol, isCrypto); } catch { /* best-effort */ }
+
   // Phase 1: HAR-RV expected-range forecast (crypto-only; needs 721+ 1H closes for rv_30d). Best-effort.
   let volForecast = null;
   if (isCrypto) {
@@ -340,7 +346,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     cvdFalling: spotPressure?.cvdTrend === 'Falling',
   });
   const { prompt, newState } = buildUserPrompt({
-    symbol, nowMs, indicators, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
+    symbol, nowMs, indicators, livePrice, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
     mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
@@ -593,8 +599,15 @@ export default {
         ).bind(deviceId, storedToken).run();
       }
 
-      const globalLimited = await checkRateLimit(env, `global:${deviceId}`, 60, 60);
-      if (globalLimited) return json({ error: 'Rate limited. Try again in a minute.' }, 429);
+      // /full-analysis/result is exempt from the global budget: the client polls it every 3s
+      // (20/min) during an analysis, which combined with a refresh cycle (indicators + market +
+      // ml-predict + macro + per-favorite prefetch) blew the 60/min cap — and a rate-limited
+      // POLL killed the analysis UI while the detached job was still running fine. The poll is
+      // a single KV read, still auth-gated, with a per-job ownership check.
+      if (path !== '/full-analysis/result') {
+        const globalLimited = await checkRateLimit(env, `global:${deviceId}`, 60, 60);
+        if (globalLimited) return json({ error: 'Rate limited. Try again in a minute.' }, 429);
+      }
     }
 
     // === Alert sync (D1) ===

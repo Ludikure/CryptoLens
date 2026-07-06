@@ -179,6 +179,27 @@ enum WorkerIndicatorsService {
             let obvResult: OBVResult? = obv.map { OBVResult(current: 0, trend: $0.trend, divergence: nil) }
             let adResult: ADLineResult? = adLine.map { ADLineResult(current: 0, trend: $0.trend) }
 
+            // Forming bar (TradingView-style): the worker serves CLOSED bars only (indicator
+            // parity), so without this the newest 4H chart bar is up to 4h stale and each
+            // timeframe "ends" at a different price. Synthesize the in-progress bar from the
+            // live ticker price: open = last close, close = live. The wick is approximate
+            // (no intrabar high/low feed) and self-corrects when the bar closes. Indicator
+            // math is untouched — it was computed server-side on closed bars.
+            var chartCandles = (candles ?? []).map { $0.toCandle() }
+            var forming: Candle? = nil
+            if let live = priceOverride, live > 0, let last = chartCandles.last {
+                let interval: TimeInterval = timeframe == "1d" ? 86_400 : timeframe == "4h" ? 14_400 : 3_600
+                let bucketStart = floor(Date().timeIntervalSince1970 / interval) * interval
+                let t = max(bucketStart, last.time.timeIntervalSince1970 + interval)
+                let bar = Candle(time: Date(timeIntervalSince1970: t),
+                                 open: last.close,
+                                 high: Swift.max(last.close, live),
+                                 low: Swift.min(last.close, live),
+                                 close: live, volume: 0)
+                chartCandles.append(bar)
+                forming = bar
+            }
+
             var result = IndicatorResult(
                 timeframe: timeframe,
                 label: label,
@@ -204,8 +225,8 @@ enum WorkerIndicatorsService {
                 bullPercent: bullPercent ?? 50,
                 obv: obvResult,
                 adLine: adResult,
-                candles: (candles ?? []).map { $0.toCandle() },
-                inProgressCandle: nil,
+                candles: chartCandles,
+                inProgressCandle: forming,
                 rsiSeries: rsiSeries ?? [],
                 stochKSeries: stochKSeries ?? [],
                 stochDSeries: stochDSeries ?? [],

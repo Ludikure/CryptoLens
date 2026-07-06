@@ -107,6 +107,9 @@ enum WorkerFullAnalysisService {
 
     private static func isTransient(_ error: Error) -> Bool {
         if case FetchError.http(0) = error { return true }
+        // 429 on a POLL is the device's global rate budget momentarily exhausted (refresh cycle +
+        // polling overlap) — the box job is still running; keep polling instead of failing the UI.
+        if case FetchError.http(429) = error { return true }
         if let urlErr = error as? URLError {
             switch urlErr.code {
             case .networkConnectionLost, .timedOut, .cannotConnectToHost,

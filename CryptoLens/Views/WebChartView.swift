@@ -178,17 +178,23 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate {
         // WKWebView keeps built-in double-tap recognizers (zoom heuristics) even with zooming
         // disabled; they sit in the touch pipeline and misclassify quick single-finger drags as
         // double-taps. Disable them — Lightweight Charts handles all its own gestures in the DOM.
-        disableDoubleTapRecognizers(in: webView)
+        disableInterferingRecognizers(in: webView)
+        // The scroll view's own pan + pinch recognizers stay armed even with isScrollEnabled =
+        // false; they participate in gesture arbitration and delay/steal the start of chart-body
+        // drags and two-finger spreads. The chart owns every touch — take them out entirely.
+        webView.scrollView.panGestureRecognizer.isEnabled = false
+        webView.scrollView.pinchGestureRecognizer?.isEnabled = false
+        webView.scrollView.delaysContentTouches = false
         if let json = pendingJSON { pendingJSON = nil; evaluate(json) }
     }
 
-    private func disableDoubleTapRecognizers(in view: UIView) {
+    private func disableInterferingRecognizers(in view: UIView) {
         for gr in view.gestureRecognizers ?? [] {
             if let tap = gr as? UITapGestureRecognizer, tap.numberOfTapsRequired >= 2 {
                 tap.isEnabled = false
             }
         }
-        for sub in view.subviews { disableDoubleTapRecognizers(in: sub) }
+        for sub in view.subviews { disableInterferingRecognizers(in: sub) }
     }
 
     func push(_ payload: ChartPayload) {

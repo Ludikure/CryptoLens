@@ -559,6 +559,15 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-07-05 — Live-price anchor (AI + charts) + chart gesture fixes + 429 poll fix
+
+Three user-reported bugs, all stemming from the closed-bar-only data contract:
+- **AI told the user "if price holds over 62,900" when live was 63,700.** `/full-analysis` never fetched the live price — the whole prompt is closed-bar (training parity), so the LLM believed price = the last closed 4H bar. Fix: `runFullAnalysisCore` fetches `fetchLivePrice`, and `buildUserPrompt` (new `livePrice` input) opens with `=== LIVE PRICE (authoritative current price) ===` instructing the model to anchor all current-price/trigger/proximity statements to live and to call out already-passed triggers. Asserted in prompt-parity tests.
+- **Charts ended at different stale prices per TF.** Worker serves closed bars only, so the 4H chart's newest bar was up to 4h old. Fix (iOS `WorkerIndicatorsService`): synthesize the **forming bar** from livePrice (open = last close, close = live; wick approximate, self-corrects at close) and append to `tf.candles` + set `inProgressCandle`. Indicator math untouched (computed server-side on closed bars).
+- **Chart gestures janky (body pan + pinch) while price-axis drag was fine.** The tell: only time-scale-changing gestures were bad. Pane sync used time-based `setVisibleRange` per gesture frame (expensive + bar-snapping). Fix (`chart.html`): logical-range sync (`subscribeVisibleLogicalRangeChange`) with sub-series whitespace-padded to the candle range (`padToTimes`) so bar indices align across panes; `touch-action:none` on panes; WKWebView scrollView pan/pinch recognizers disabled + `delaysContentTouches=false` (`WebChartView`).
+- **429 killed analyses.** The global 60/min device budget was drained by the 3s result-poll (20/min) + refresh traffic, and a rate-limited POLL failed the UI while the box job kept running. Fix: `/full-analysis/result` exempt from the global budget (worker) + iOS treats poll-429 as transient and keeps polling.
+- Also this session: the MetroNow Android project accidentally duplicated into `MarketScopeWidget/app/` (6,327 files staged, broke the Xcode build with "no rule to process .java") was verified byte-identical to its real repo (`/Volumes/External/metronow-android`), unstaged, deleted, and the Xcode project regenerated clean.
+
 ### 2026-07-05 — Full feature+model audit (both markets): configs hold; derivatives features were never trained
 
 `ml-training/feature_model_audit.py` (pre-declared: canonical folds/weights/purge mirrored from the calibrate scripts; model bar = ΔAUC>+0.005 in ALL folds; ablation bar = ±0.005). Findings:
