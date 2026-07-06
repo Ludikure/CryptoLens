@@ -2,25 +2,37 @@
 alongside ML_WIN (which targets >=1.5 ATR and structurally can't flag the huge moves).
 Embeds heads.tail into the CLEAN ml-model-crypto.json (worker + iOS) — clean lineage,
 separate from the leak-era ml-model-crypto.heads.json. Emits the all-zero parity
-reference (for heads-parity.test.ts) + the HIGH/ELEVATED bucket thresholds."""
-import os, json, numpy as np, pandas as pd, lightgbm as lgb
+reference (for heads-parity.test.ts) + the HIGH/ELEVATED bucket thresholds.
+
+Usage: python3 train_tail_head.py [source_dir]     (default csv_exports_v14)
+RUN ORDER: after calibrate_v14.py --ship — this embeds into the EXISTING
+ml-model-crypto.json, so the main model must be in place first. After running,
+update the all-zero parity reference in heads-parity.test.ts from the printed value."""
+import os, sys, json, numpy as np, pandas as pd, lightgbm as lgb
 from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import roc_auc_score
-from calibrate_v12_crypto_clean import FEATURES, CRYPTO_SYMBOLS, extract_trees
+from calibrate_v12_crypto_clean import FEATURES, extract_trees
 
+# v14: volScalarML dropped (r=1.000 duplicate of atrPercentile) — keep the head
+# consistent with the main model's feature set.
+FEATURES=[f for f in FEATURES if f!='volScalarML']
+
+HERE=os.path.dirname(os.path.abspath(__file__))
+REPO=os.path.dirname(HERE)
+SRC=os.path.join(HERE, sys.argv[1] if len(sys.argv)>1 else 'csv_exports_v14')
 TAIL=4.0; CAP=0.60
-WORKER='/Users/bojanmihovilovic/CryptoLens/marketscope-worker/src/ml-model-crypto.json'
-IOS='/Users/bojanmihovilovic/CryptoLens/CryptoLens/ML/ml-model-crypto.json'
+WORKER=f'{REPO}/marketscope-worker/src/ml-model-crypto.json'
+IOS=f'{REPO}/CryptoLens/ML/ml-model-crypto.json'
 
 parts=[]
-for s in CRYPTO_SYMBOLS:
-    p=f'csv_exports_v11_fixed/{s}USDT.csv'
-    if not os.path.isfile(p): continue
-    df=pd.read_csv(p)
+for fn in sorted(os.listdir(SRC)):
+    if not fn.endswith('USDT.csv'): continue
+    df=pd.read_csv(os.path.join(SRC,fn))
     if 'fwdMaxFavR' not in df: continue
-    df=df[df['fwdMaxFavR'].notna()].copy(); df['symbol']=s
+    df=df[df['fwdMaxFavR'].notna()].copy(); df['symbol']=fn[:-4]
     df['date']=pd.to_datetime(df['timestamp'],unit='s').dt.date
     parts.append(df.groupby('date').tail(1))
+print(f"source: {SRC} ({len(parts)} symbols)")
 d=pd.concat(parts,ignore_index=True).sort_values('timestamp').reset_index(drop=True)
 for f in FEATURES:
     if f not in d.columns: d[f]=0.0
@@ -83,7 +95,7 @@ head={'trees':trees,'base_score':base_score,'threshold':TAIL,
       'buckets':{'elevated':round(float(q70),4),'high':round(float(q90),4)},
       'base_rate':round(float(y.mean()),4),'n_samples':int(n),
       'description':f'Big-move/tail risk head: P(fwdMaxFavR>={TAIL} ATR in 24h). LightGBM d4 t150, '
-                    f'clean csv_exports_v11_fixed. OOF AUC ~0.65. Sits alongside ML_WIN; aimed at the '
+                    f'{os.path.basename(SRC)}. Sits alongside ML_WIN; aimed at the '
                     f'huge moves ML_WIN (>=1.5 ATR target) structurally under-flags.'}
 for path in (WORKER,IOS):
     if not os.path.isfile(path): print(f"  SKIP missing {path}"); continue

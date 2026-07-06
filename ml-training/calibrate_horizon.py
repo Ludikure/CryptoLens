@@ -22,11 +22,22 @@ files untouched until you've evaluated the candidate).
 """
 
 import argparse
+import math
+import os
 import sys
-sys.path.insert(0, '/Users/bojanmihovilovic/CryptoLens/ml-training')
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
 
 import calibrate_v12_stocks as v12
+import numpy as np
 import pandas as pd
+
+# The repo moved from /Users/bojanmihovilovic/CryptoLens to /Volumes/External/
+# CryptoLens (2026-07 disk-full incident); the v12 module still hardcodes the
+# old path. Point its output at the real worker src.
+v12.WORKER = f'{REPO}/marketscope-worker/src'
 
 TARGET_COLUMN = {24: 'fwdMaxFavR', 48: 'fwdMaxFavR48H', 72: 'fwdMaxFavR72H'}
 
@@ -77,17 +88,45 @@ def main():
     ap.add_argument('--threshold', type=float, default=1.5,
                     help="goodR threshold in ATR multiples. 1.5 matches v12 baseline; "
                          "2.0 recommended for 72h horizon (1.5 saturates near 95%% base rate).")
+    ap.add_argument('--version', type=int, default=14,
+                    help="Version stamped into the output JSON (lineage marker).")
     args = ap.parse_args()
 
-    source_dir = f'/Users/bojanmihovilovic/CryptoLens/ml-training/{args.source}'
+    source_dir = os.path.join(HERE, args.source)
     horizon = args.horizon
     target_col = TARGET_COLUMN[horizon]
+
+    # Symbol universe = whatever the regen produced, not the module's hardcoded
+    # lists (v12_stocks has 76 crypto; v14 regen has 77).
+    csvs = [f[:-4] for f in os.listdir(source_dir) if f.endswith('.csv')]
+    v12.CRYPTO_SYMBOLS = sorted(s[:-4] for s in csvs if s.endswith('USDT'))
+    v12.STOCK_SYMBOLS = sorted(s for s in csvs if not s.endswith('USDT'))
 
     # Patch the v12 module's loader + output paths in-place. Lighter than
     # forking the whole training script for a target-column swap.
     v12.DOWNLOADS = source_dir
     original_load = v12.load_symbol
     v12.load_symbol = lambda sym, is_c: load_symbol_with_horizon(sym, is_c, horizon, source_dir, args.threshold)
+
+    # Calibration floor (2026-06-05 "no dishonest 0%" fix, previously applied
+    # out-of-band): Wilson LB of the bottom predicted decile's realized rate.
+    # A 0% calibrated prob claims the move is impossible, which is never true.
+    floor_cell = {'floor': 0.0}
+    original_fit = v12.fit_calibration
+    def fit_with_floor(probs, y_true):
+        x, y = original_fit(probs, y_true)
+        cutoff = np.percentile(probs, 10)
+        bottom = y_true[probs <= cutoff]
+        k, n = bottom.sum(), len(bottom)
+        if n > 0:
+            z = 1.96
+            p = k / n
+            lb = (p + z * z / (2 * n) - z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / (1 + z * z / n)
+            floor_cell['floor'] = round(max(0.0, lb), 4)
+        y = np.clip(np.array(y), floor_cell['floor'], v12.CAP).tolist()
+        print(f"  calibration floor (Wilson LB, bottom decile): {floor_cell['floor']}")
+        return x, y
+    v12.fit_calibration = fit_with_floor
 
     # Output filename includes suffix. Hijack export_model to redirect.
     original_export = v12.export_model
@@ -97,10 +136,11 @@ def main():
         model_type = 'lightgbm' if is_lgb else 'xgboost'
         m = {
             'features': v12.FEATURES, 'trees': trees, 'base_score': base_score,
-            'version': 12, 'market': market, 'engine': model_type,
+            'version': args.version, 'market': market, 'engine': model_type,
             'n_features': len(v12.FEATURES), 'n_trees': len(trees), 'n_samples': n_samples,
             'model_type': 'classifier', 'target': f'goodR_{horizon}h_{args.threshold}',
-            'calibration': {'x': x_cal, 'y': y_cal, 'cap': v12.CAP, 'method': 'isotonic'},
+            'calibration': {'x': x_cal, 'y': y_cal, 'cap': v12.CAP,
+                            'floor': floor_cell['floor'], 'method': 'isotonic'},
             'description': f'{market} ({model_type}) — goodR = {target_col}>={args.threshold}, {n_samples} bars',
         }
         out_path = f'{v12.WORKER}/ml-model-{market}-{args.suffix}.json'
