@@ -494,6 +494,15 @@ struct ChartScreenView: View {
                 HStack(spacing: 6) {
                     panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
                     panelChip("ADX", $chAdx); panelChip("Vol", $chVol); panelChip("Log", $chLog)
+                    // ⟲ reset (native — the chart page takes no touches): autoscale + newest bar.
+                    Button { ChartWebViewStore.shared.reset() } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 26, height: 22)
+                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
                     Spacer()
                     Link("TradingView", destination: URL(string: "https://www.tradingview.com")!)
                         .font(.system(size: 9)).foregroundStyle(.tertiary)

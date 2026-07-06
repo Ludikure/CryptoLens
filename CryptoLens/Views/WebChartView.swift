@@ -5,59 +5,56 @@ import UIKit.UIGestureRecognizerSubclass
 
 // MARK: - Native chart gestures (TradingView-grade touch)
 //
-// WebKit's DOM touch pipeline (event coalescing, IPC hops) adds latency and jitter that
-// Lightweight Charts can't overcome from inside the page. The two hot gestures — one-finger
-// horizontal bar pan and two-finger pinch — are recognized NATIVELY by a SINGLE unified
-// recognizer (two separate recognizers mutually exclude under UIKit arbitration — see
-// ChartGestureRecognizer's doc comment) and drive the chart via tiny JS calls (nativePanBy /
-// nativePanEnd / nativePinch in chart.html). Vertical price-pan, axis drags, crosshair
-// long-press, and divider drags stay in the DOM where they already feel right; the page pushes
-// its layout geometry (axis widths, divider rects) so the native recognizer yields over those
-// regions.
+// FULLY NATIVE TOUCH (2026-07-06 redesign, plan: cached-snuggling-fern). The page is a pure
+// renderer: chart.html handles NO touches at all, and ONE zone-routed recognizer below owns
+// every chart touch, driving the page through a small JS API (nativePanBy / nativePanEnd /
+// nativePinch / nativePriceStretch / nativeTimeStretch / nativeDividerDrag / nativeReset).
+// The previous hybrid split (native pan/pinch + DOM for crosshair/axis/dividers) caused every
+// gesture bug this chart ever had — UIKit arbitration killed the pinch, DOM vertTouchDrag
+// silently disabled autoscale, the crosshair sync stuck a cursor on cancelled touches. The
+// page pushes its layout geometry (axis widths, divider rects) so the recognizer can route
+// touches by zone.
 
-/// ONE continuous recognizer for both hot gestures: one-finger horizontal pan AND two-finger
-/// pinch. They must live in a single recognizer: as two separate recognizers, whichever began
-/// first forced the other to FAIL for the rest of the touch sequence (UIKit's default exclusion)
-/// — so any pinch whose first finger moved a few points before the second landed (i.e. nearly
-/// every real pinch) went permanently dead mid-gesture.
-///
-/// Behavior: begins on the FIRST horizontal movement (no UIPanGesture 10pt lag); stays in
-/// .possible (never fails early) for vertical drags (DOM price pan) and held touches (DOM
-/// crosshair scrub) so a second finger can still start a pinch; a second body-finger at ANY
-/// point switches to pinch mode (scale + focal-midpoint pan); lifting one finger drops back to
-/// pan mode with the survivor — one continuous gesture, TradingView-style.
+/// Chart zones, classified from the geometry the page reports (reportGeom).
+private enum ChartZone { case body, priceAxis, timeAxis, divider(Int) }
+
+/// THE single owner of every chart touch. Begins on first touch-down (the page needs none) and
+/// routes by zone:
+///   body:       horizontal drag → time pan (+ momentum glide); vertical drag → consumed, no-op
+///   price axis: vertical drag → price-scale stretch around the pane center
+///   time axis:  horizontal drag → bar-spacing stretch, right edge anchored
+///   divider:    vertical drag → pane resize
+///   2nd finger: pinch from ANY mode except divider, any timing/placement. Movement-decomposed:
+///               horizontal-separation change zooms TIME, vertical zooms PRICE, with activation
+///               hysteresis so the axis you are not deliberately moving never scales. Lifting
+///               one finger continues as pan with the survivor.
+/// One recognizer = no UIKit arbitration, no DOM handoff races — the two bug classes that
+/// plagued the previous hybrid design are structurally impossible.
 private final class ChartGestureRecognizer: UIGestureRecognizer {
-    var isBodyPoint: (CGPoint) -> Bool = { _ in true }
+    enum Mode { case bodyPending, hPan, deadVertical, priceAxis, timeAxis, divider(Int), pinch }
+    var classify: (CGPoint) -> ChartZone = { _ in .body }
 
-    /// Horizontal movement since the previous event (finger in pan mode, midpoint in pinch mode).
+    private(set) var mode: Mode = .bodyPending
+    /// Per-event payloads, consumed by the action handler.
     private(set) var deltaX: CGFloat = 0
-    /// Incremental per-axis pinch scales since the previous event (1 = none; JS composes
-    /// successive scales). Decomposed by MOVEMENT, not finger posture: the TIME scale follows
-    /// the change in the fingers' HORIZONTAL separation, the PRICE scale the VERTICAL one —
-    /// a horizontal spread widens bars at full rate even with diagonally-stacked fingers.
+    private(set) var deltaY: CGFloat = 0
     private(set) var pinchScaleT: CGFloat = 1
     private(set) var pinchScaleP: CGFloat = 1
-    /// Pinch focal point (midpoint of the two fingers).
     private(set) var focalX: CGFloat = 0
     private(set) var focalY: CGFloat = 0
     /// Smoothed horizontal velocity (pt/s) for the momentum glide on lift.
     private(set) var velocityX: CGFloat = 0
-    private(set) var isPinching = false
 
     private var t1: UITouch?
     private var t2: UITouch?
     private var start: CGPoint = .zero
-    private var startTime: TimeInterval = 0
-    /// Vertical-dominant or held-first single-finger movement belongs to the DOM (price pan /
-    /// crosshair scrub). We stay in .possible rather than failing so a later second finger can
-    /// still begin a pinch — a failed recognizer is dead until every finger lifts.
-    private var panDisqualified = false
     private var lastX: CGFloat = 0
+    private var lastY: CGFloat = 0
     private var lastTime: TimeInterval = 0
-    /// Per-axis separation tracking. An axis only starts scaling once the NET change in its
+    /// Pinch separation tracking. An axis only starts scaling once the NET change in its
     /// separation since pinch start crosses `axisActivation` (hysteresis — finger wobble on the
-    /// axis you are NOT deliberately moving never activates it, so a pure horizontal spread can
-    /// never bleed into price zoom and vice versa).
+    /// axis you are NOT deliberately moving never activates it), and ratios below
+    /// `minSeparation` are ignored as noise.
     private var lastAdx: CGFloat = 1
     private var lastAdy: CGFloat = 1
     private var startAdx: CGFloat = 1
@@ -70,20 +67,21 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let view else { return }
         for t in touches {
-            let p = t.location(in: view)
             if t1 == nil {
                 guard state == .possible else { ignore(t, for: event); continue }
                 t1 = t
-                start = p; startTime = t.timestamp
-                lastX = p.x; lastTime = t.timestamp
-                velocityX = 0
-                // Off-body first touch (price/time axis, divider): the DOM owns that drag, so
-                // single-finger pan is disqualified — but do NOT fail: a failed recognizer is
-                // dead until every finger lifts, which would kill a pinch whose first finger
-                // happened to land on an axis strip. TWO FINGERS DOWN = PINCH, ALWAYS.
-                panDisqualified = !isBodyPoint(p)
-            } else if t2 == nil, t !== t1, state == .possible || state == .began || state == .changed {
-                // Second finger ANYWHERE → pinch mode (from pan, scrub-wait, axis-drag, fresh).
+                let p = t.location(in: view)
+                start = p; lastX = p.x; lastY = p.y; lastTime = t.timestamp
+                deltaX = 0; deltaY = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
+                switch classify(p) {
+                case .divider(let i): mode = .divider(i)
+                case .priceAxis:      mode = .priceAxis
+                case .timeAxis:       mode = .timeAxis
+                case .body:           mode = .bodyPending
+                }
+                state = .began           // own the touch immediately; DOM gets touchcancel
+            } else if t2 == nil, t !== t1 {
+                if case .divider = mode { ignore(t, for: event); continue }  // divider stays 1-finger
                 t2 = t
                 beginPinch()
             } else {
@@ -95,21 +93,22 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
     private func beginPinch() {
         guard let view, let a = t1, let b = t2 else { return }
         let p1 = a.location(in: view), p2 = b.location(in: view)
-        isPinching = true
+        mode = .pinch
         lastAdx = max(1, abs(p2.x - p1.x)); startAdx = lastAdx
         lastAdy = max(1, abs(p2.y - p1.y)); startAdy = lastAdy
         hActive = false; vActive = false
         lastX = (p1.x + p2.x) / 2
         lastTime = max(a.timestamp, b.timestamp)
-        deltaX = 0; pinchScaleT = 1; pinchScaleP = 1
+        deltaX = 0; deltaY = 0; pinchScaleT = 1; pinchScaleP = 1
         focalX = lastX; focalY = (p1.y + p2.y) / 2; velocityX = 0
-        state = state == .possible ? .began : .changed
+        state = .changed
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let view else { return }
-        if isPinching {
-            guard state == .began || state == .changed, let a = t1, let b = t2 else { return }
+        switch mode {
+        case .pinch:
+            guard let a = t1, let b = t2 else { return }
             let p1 = a.location(in: view), p2 = b.location(in: view)
             let mid = (p1.x + p2.x) / 2
             let adx = max(1, abs(p2.x - p1.x)), ady = max(1, abs(p2.y - p1.y))
@@ -118,41 +117,54 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             pinchScaleT = (hActive && lastAdx >= minSeparation && adx >= minSeparation) ? adx / lastAdx : 1
             pinchScaleP = (vActive && lastAdy >= minSeparation && ady >= minSeparation) ? ady / lastAdy : 1
             deltaX = mid - lastX
-            focalX = mid
-            focalY = (p1.y + p2.y) / 2
-            let ts = max(a.timestamp, b.timestamp)
-            let dt = ts - lastTime
-            if dt > 0 {
-                let v = deltaX / CGFloat(dt)
-                velocityX = velocityX == 0 ? v : 0.7 * v + 0.3 * velocityX
-            }
-            lastX = mid; lastAdx = adx; lastAdy = ady; lastTime = ts
+            focalX = mid; focalY = (p1.y + p2.y) / 2
+            trackVelocity(at: max(a.timestamp, b.timestamp))
+            lastX = mid; lastAdx = adx; lastAdy = ady
             state = .changed
-            return
-        }
-        guard let t = t1, touches.contains(t) else { return }
-        let p = t.location(in: view)
-        if state == .possible {
-            guard !panDisqualified else { return }
+        case .bodyPending:
+            guard let t = t1, touches.contains(t) else { return }
+            let p = t.location(in: view)
             let dx = p.x - start.x, dy = p.y - start.y
             guard dx * dx + dy * dy >= 36 else { return }   // 6pt slop before deciding
-            if t.timestamp - startTime > 0.25 || abs(dy) > abs(dx) { panDisqualified = true; return }
-            deltaX = dx                                      // include the slop distance
-            pinchScaleT = 1; pinchScaleP = 1
-            lastX = p.x; lastTime = t.timestamp
-            state = .began
+            if abs(dy) > abs(dx) {
+                mode = .deadVertical                          // owned + consumed, no effect
+            } else {
+                mode = .hPan
+                deltaX = dx                                   // include the slop distance
+                lastX = p.x; lastTime = t.timestamp
+                state = .changed
+            }
+        case .hPan:
+            guard let t = t1, touches.contains(t) else { return }
+            let p = t.location(in: view)
+            deltaX = p.x - lastX
+            trackVelocity(at: t.timestamp)
+            lastX = p.x
+            state = .changed
+        case .priceAxis, .divider:
+            guard let t = t1, touches.contains(t) else { return }
+            let p = t.location(in: view)
+            deltaY = p.y - lastY
+            lastY = p.y
+            if deltaY != 0 { state = .changed }
+        case .timeAxis:
+            guard let t = t1, touches.contains(t) else { return }
+            let p = t.location(in: view)
+            deltaX = p.x - lastX
+            lastX = p.x
+            if deltaX != 0 { state = .changed }
+        case .deadVertical:
             return
         }
-        guard state == .began || state == .changed else { return }
-        deltaX = p.x - lastX
-        pinchScaleT = 1; pinchScaleP = 1
-        let dt = t.timestamp - lastTime
+    }
+
+    private func trackVelocity(at ts: TimeInterval) {
+        let dt = ts - lastTime
         if dt > 0 {
             let v = deltaX / CGFloat(dt)
             velocityX = velocityX == 0 ? v : 0.7 * v + 0.3 * velocityX
         }
-        lastX = p.x; lastTime = t.timestamp
-        state = .changed
+        lastTime = ts
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
@@ -160,14 +172,14 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
         let endedT1 = t1.map(touches.contains) ?? false
         let endedT2 = t2.map(touches.contains) ?? false
         if endedT1 && (endedT2 || t2 == nil) {
-            state = (state == .began || state == .changed) ? .ended : .failed
+            state = .ended
             return
         }
         if endedT1 { t1 = t2; t2 = nil }
         if endedT2 { t2 = nil }
-        if isPinching, t2 == nil, let t = t1 {
-            // Pinch → pan continuation with the surviving finger (state stays .changed).
-            isPinching = false
+        if case .pinch = mode, t2 == nil, let t = t1 {
+            // Pinch → pan continuation with the surviving finger.
+            mode = .hPan
             let p = t.location(in: view)
             lastX = p.x; lastTime = t.timestamp
             deltaX = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
@@ -175,13 +187,14 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        state = (state == .began || state == .changed) ? .cancelled : .failed
+        state = .cancelled
     }
 
     override func reset() {
         t1 = nil; t2 = nil
-        deltaX = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
-        isPinching = false; panDisqualified = false
+        mode = .bodyPending
+        deltaX = 0; deltaY = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
+        hActive = false; vActive = false
     }
 }
 
@@ -328,8 +341,9 @@ struct ChartPayload: Codable {
 /// time ("chart loads late"). The shared instance pays that cost once at app launch (prewarm), and
 /// `warmPush` renders data into it BEFORE the tab is opened, so the tab shows a ready chart.
 ///
-/// No custom gesture recognizers: the chart lives on a non-scrolling full-screen tab now, so
-/// Lightweight Charts owns every touch directly — no arbitration layer to add latency.
+/// ALL chart touch handling is native (see file-top comment): one zone-routed recognizer owns
+/// every touch, and the page renders. The ⟲ reset lives on a native SwiftUI chip (see
+/// ChartScreenView) calling `reset()`.
 @MainActor
 final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     static let shared = ChartWebViewStore()
@@ -338,9 +352,9 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
     private var pendingJSON: String?
     private var lastJSON: String?   // dedup: only push real changes (preserves pan/zoom, no re-render)
 
-    // Layout geometry pushed from chart.html (reportGeom) — native recognizers yield over the
-    // price axis / time axis / dividers so those gestures stay DOM. Defaults are permissive
-    // approximations in case the first geometry message hasn't arrived yet.
+    // Layout geometry pushed from chart.html (reportGeom) — the recognizer routes touches by
+    // zone (price axis / time axis / divider / body). Defaults are permissive approximations
+    // in case the first geometry message hasn't arrived yet.
     private var geomPriceAxisW: CGFloat = 70
     private var geomTimeAxisH: CGFloat = 28
     private var geomPanes: [CGRect] = []
@@ -356,7 +370,7 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         super.init()
         webView.configuration.userContentController.add(self, name: "chartGeom")
         webView.navigationDelegate = self
-        webView.scrollView.isScrollEnabled = false   // Lightweight Charts owns all touch via DOM
+        webView.scrollView.isScrollEnabled = false   // the native recognizer owns all touch
         webView.scrollView.bounces = false
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsLinkPreview = false
@@ -365,15 +379,11 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         webView.isOpaque = true
         webView.backgroundColor = UIColor(red: 0.043, green: 0.055, blue: 0.078, alpha: 1) // #0b0e14
 
-        // Native gesture for the hot paths (see file-top comment). cancelsTouchesInView (the
-        // default) sends the DOM a touchcancel the moment it begins — clean handoff, no double
-        // handling (LWC's own horizontal pan + pinch are disabled in chart.html).
+        // THE chart gesture recognizer (see file-top comment). cancelsTouchesInView (the
+        // default) starves the page of every owned touch — chart.html handles none by design.
         let gesture = ChartGestureRecognizer(target: self, action: #selector(onNativeGesture(_:)))
-        gesture.isBodyPoint = { [weak self] p in self?.isBodyPoint(p) ?? true }
+        gesture.classify = { [weak self] p in self?.classifyZone(p) ?? .body }
         webView.addGestureRecognizer(gesture)
-        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(onDoubleTap(_:)))
-        doubleTap.numberOfTapsRequired = 2
-        webView.addGestureRecognizer(doubleTap)
 
         if let url = Bundle.main.url(forResource: "chart", withExtension: "html", subdirectory: "chart")
             ?? Bundle.main.url(forResource: "chart", withExtension: "html") {
@@ -383,60 +393,85 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
 
     // MARK: Native gesture plumbing
 
-    /// True when the point is over chart BODY (bars) — not the price axis strip, the time axis,
-    /// or a pane divider. Those regions keep their DOM gestures.
-    private func isBodyPoint(_ p: CGPoint) -> Bool {
-        if p.x > webView.bounds.width - geomPriceAxisW - 4 { return false }
-        for d in geomDividers where p.y >= d.minY - 6 && p.y <= d.maxY + 6 { return false }
-        if let last = geomPanes.last, p.y > last.maxY - geomTimeAxisH { return false }
-        return true
+    /// Route a touch point to its chart zone (from the geometry the page reports). Divider
+    /// bands win first (they are thin), then the price-axis strip, then the time-axis strip.
+    private func classifyZone(_ p: CGPoint) -> ChartZone {
+        for (i, d) in geomDividers.enumerated() where p.y >= d.minY - 6 && p.y <= d.maxY + 6 { return .divider(i) }
+        if p.x > webView.bounds.width - geomPriceAxisW - 4 { return .priceAxis }
+        if let last = geomPanes.last, p.y > last.maxY - geomTimeAxisH { return .timeAxis }
+        return .body
     }
 
     @objc private func onNativeGesture(_ g: ChartGestureRecognizer) {
         #if DEBUG
-        // On-screen gesture telemetry (chart.html #gdbg badge) — Debug builds only. Shows what
-        // the native recognizer is actually receiving so on-device touch issues are diagnosable
-        // without a tethered console.
+        // On-screen gesture telemetry (chart.html #gdbg badge) — Debug builds only. Shows the
+        // recognizer's state, routed mode, and payload so on-device touch issues are
+        // diagnosable without a tethered console. Strip after the redesign is signed off.
         let st = ["possible", "began", "changed", "ended", "cancelled", "failed"][min(g.state.rawValue, 5)]
-        let mode = g.isPinching ? String(format: "pinch T×%.3f P×%.3f", g.pinchScaleT, g.pinchScaleP)
-                                : String(format: "pan Δ%.1f v%.0f", g.deltaX, g.velocityX)
-        evaluateGesture("window.gestureDebug && gestureDebug('\(st) \(mode)')")
+        evaluateGesture("window.gestureDebug && gestureDebug('\(st) \(debugLabel(g))')")
         #endif
         switch g.state {
         case .began:
-            // nativeGestureBegan restores autoscale if the DOM's vertical price-pan engaged
-            // accidentally in the ms before recognition (see chart.html autoscale guard).
-            evaluateGesture("window.nativeGestureBegan && nativeGestureBegan(); window.nativeGlideStop && nativeGlideStop();" + gestureJS(g))
+            evaluateGesture("window.nativeGlideStop && nativeGlideStop()")
         case .changed:
             let js = gestureJS(g)
             if !js.isEmpty { evaluateGesture(js) }
         case .ended:
-            // nativePanEnd self-gates on |velocity| — a stationary pinch lift won't glide.
-            evaluateGesture("window.nativePanEnd && nativePanEnd(\(g.velocityX)); window.nativeGestureEnded && nativeGestureEnded()")
-        case .cancelled:
-            evaluateGesture("window.nativeGestureEnded && nativeGestureEnded()")
+            switch g.mode {
+            case .hPan, .pinch:
+                // nativePanEnd self-gates on |velocity| — a stationary lift won't glide.
+                evaluateGesture("window.nativePanEnd && nativePanEnd(\(g.velocityX))")
+            case .divider:
+                evaluateGesture("window.nativeDividerEnd && nativeDividerEnd()")
+            default: break
+            }
         default: break
         }
     }
 
+    /// Per-mode payload → JS. Factors for the axis stretches are exponential in the drag delta
+    /// so successive events compose smoothly and reverse exactly.
     private func gestureJS(_ g: ChartGestureRecognizer) -> String {
-        var js = ""
-        if g.isPinching && (g.pinchScaleT != 1 || g.pinchScaleP != 1) {
-            // Per-axis scales, decomposed by MOVEMENT in the recognizer (see ChartGestureRecognizer):
-            // horizontal separation change → time zoom, vertical → price zoom, with activation
-            // hysteresis so the axis you are not deliberately moving never scales.
-            js += "window.nativePinch && nativePinch(\(g.focalX), \(g.focalY), \(g.pinchScaleT), \(g.pinchScaleP));"
+        switch g.mode {
+        case .hPan:
+            return g.deltaX != 0 ? "window.nativePanBy && nativePanBy(\(g.deltaX));" : ""
+        case .pinch:
+            var js = ""
+            if g.pinchScaleT != 1 || g.pinchScaleP != 1 {
+                js += "window.nativePinch && nativePinch(\(g.focalX), \(g.focalY), \(g.pinchScaleT), \(g.pinchScaleP));"
+            }
+            if g.deltaX != 0 { js += "window.nativePanBy && nativePanBy(\(g.deltaX));" }
+            return js
+        case .priceAxis:
+            // Drag DOWN (dy>0) → zoom out (range grows), matching LWC/TradingView axis drags.
+            return g.deltaY != 0 ? "window.nativePriceStretch && nativePriceStretch(\(exp(g.deltaY / 200)));" : ""
+        case .timeAxis:
+            // Drag RIGHT (dx>0) → bars wider (range shrinks), right edge anchored.
+            return g.deltaX != 0 ? "window.nativeTimeStretch && nativeTimeStretch(\(exp(-g.deltaX / 150)));" : ""
+        case .divider(let i):
+            return g.deltaY != 0 ? "window.nativeDividerDrag && nativeDividerDrag(\(i), \(g.deltaY));" : ""
+        case .bodyPending, .deadVertical:
+            return ""
         }
-        if g.deltaX != 0 { js += "window.nativePanBy && nativePanBy(\(g.deltaX));" }
-        return js
     }
 
-    /// TradingView-style double-tap: zoom in one step around the tap point.
-    @objc private func onDoubleTap(_ g: UITapGestureRecognizer) {
-        guard g.state == .ended else { return }
-        let p = g.location(in: webView)
-        guard isBodyPoint(p) else { return }
-        evaluateGesture("window.nativeGlideStop && nativeGlideStop(); window.nativePinch && nativePinch(\(p.x), \(p.y), 1.5, 1)")
+    #if DEBUG
+    private func debugLabel(_ g: ChartGestureRecognizer) -> String {
+        switch g.mode {
+        case .bodyPending:    return "pending"
+        case .hPan:           return String(format: "pan Δ%.1f v%.0f", g.deltaX, g.velocityX)
+        case .deadVertical:   return "dead-vert"
+        case .priceAxis:      return String(format: "priceAxis Δ%.1f", g.deltaY)
+        case .timeAxis:       return String(format: "timeAxis Δ%.1f", g.deltaX)
+        case .divider(let i): return String(format: "divider%d Δ%.1f", i, g.deltaY)
+        case .pinch:          return String(format: "pinch T×%.3f P×%.3f", g.pinchScaleT, g.pinchScaleP)
+        }
+    }
+    #endif
+
+    /// ⟲ — autoscale, default bar spacing, newest bar (called from the native SwiftUI chip).
+    func reset() {
+        evaluateGesture("window.nativeReset && nativeReset()")
     }
 
     private func evaluateGesture(_ js: String) {
@@ -473,8 +508,8 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loaded = true
         // WKWebView keeps built-in double-tap recognizers (zoom heuristics) even with zooming
-        // disabled; they sit in the touch pipeline and misclassify quick single-finger drags as
-        // double-taps. Disable them — Lightweight Charts handles all its own gestures in the DOM.
+        // disabled; they sit in the touch pipeline and delay/misclassify fast drags. Disable
+        // them — the chart recognizer is the only intended touch consumer.
         disableInterferingRecognizers(in: webView)
         // The scroll view's own pan + pinch recognizers stay armed even with isScrollEnabled =
         // false; they participate in gesture arbitration and delay/steal the start of chart-body

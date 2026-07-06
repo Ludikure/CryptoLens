@@ -26,11 +26,6 @@
     font-size: 10px; font-weight: 500; color: #9aa4b2; font-variant-numeric: tabular-nums; }
   #ohlc b { font-weight: 600; }
   .lbl { font-variant-numeric: tabular-nums; }
-  /* Reset button: re-enable autoscale + snap to the newest bar (replaces axis double-tap reset,
-     which WKWebView kept mis-triggering during fast drags). Sits left of the price axis. */
-  #resetBtn { position: absolute; right: 68px; bottom: 10px; z-index: 6; width: 32px; height: 32px;
-    border-radius: 16px; background: rgba(58,70,88,0.85); color: #cfd6e4; font-size: 17px;
-    line-height: 32px; text-align: center; touch-action: none; user-select: none; -webkit-user-select: none; }
   /* Drag handle between panes (TradingView-style): drag to grow one pane / shrink its neighbor.
      10px transparent strip with a visible grip; touch-action:none so the drag doesn't scroll/pan. */
   .divider { flex: 0 0 11px; background: transparent; cursor: row-resize; touch-action: none;
@@ -54,7 +49,7 @@
 // staged payloads on first launch (cached → indicators → ML → analysis) flashed the chart.
 var main = null, candle = null, vol = null, emaSeries = [], priceLines = [], subs = [], structKey = null, pending = null, dataKey = null;
 
-function opts(dark, showTime, isSub) {
+function opts(dark, showTime) {
   return {
     layout: { background: { type: 'solid', color: dark ? '#0b0e14' : '#ffffff' }, textColor: dark ? '#9aa4b2' : '#4a5568' },
     grid: { vertLines: { color: dark ? '#141a25' : '#eef0f3' }, horzLines: { color: dark ? '#141a25' : '#eef0f3' } },
@@ -63,24 +58,20 @@ function opts(dark, showTime, isSub) {
     // + its labels. FIXED barSpacing → bar thickness stays constant across timeframes (fitContent
     // squeezed all bars to fill the width, so Daily drew thick and 1H thin); scroll for history.
     timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, visible: !!showTime, rightOffset: 8, barSpacing: 7 },
-    crosshair: { mode: 0 }, autoSize: true,
-    // TradingView-grade touch (hybrid native/DOM). The two hot gestures are handled by NATIVE
-    // UIKit recognizers (WebChartView) that call nativePanBy/nativePinch below — WebKit's DOM
-    // touch pipeline adds coalescing + IPC latency that reads as lag/jitter:
-    //  - chart body, one finger horizontal → NATIVE bar pan (+ momentum glide)
-    //  - two fingers on the body           → NATIVE pinch-zoom around the focal point
-    // Still DOM (they already feel right):
-    //  - chart body, one finger vertical   → price-scale pan (vertTouchDrag ON)
-    //  - PRICE / TIME axis drag            → stretch/compress that scale
-    //  - long-press → crosshair scrub; divider drag → pane resize
-    // vertTouchDrag only on the MAIN pane: sub-panes are autoscaled oscillators where a manual
-    // price range is never wanted — and an accidental vertical wobble during a pan/pinch start
-    // would silently disable their autoscale.
-    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: false, vertTouchDrag: !isSub },
-    // axisDoubleClickReset OFF: WKWebView misclassified fast drags as double-taps, causing surprise
-    // scale resets mid-gesture. Reset lives on the explicit ⟲ button instead.
-    handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: false },
-    kineticScroll: { touch: true, mouse: false },
+    // Crosshair fully hidden: the page is a PURE RENDERER (2026-07-06 fully-native redesign) —
+    // no DOM input can move a crosshair, and the cross-pane sync that could leave one stuck is
+    // deleted. The OHLC readout always shows the last bar.
+    crosshair: { vertLine: { visible: false, labelVisible: false }, horzLine: { visible: false, labelVisible: false } }, autoSize: true,
+    // FULLY NATIVE TOUCH (2026-07-06): every chart touch is owned by ONE UIKit recognizer in
+    // WebChartView, which routes by zone (body pan/pinch, price-axis stretch, time-axis stretch,
+    // divider resize) and drives the chart through the window.native* API below. ALL of LWC's
+    // own touch handling is OFF — the previous hybrid split (native pan/pinch + DOM for the
+    // rest) caused every gesture bug this chart ever had: UIKit arbitration killed the pinch,
+    // DOM vertTouchDrag silently disabled autoscale mid-gesture, and the crosshair sync locked
+    // a stuck cursor when touches ended in a cancel.
+    handleScroll: { mouseWheel: true, pressedMouseMove: false, horzTouchDrag: false, vertTouchDrag: false },
+    handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: { time: false, price: false }, axisDoubleClickReset: false },
+    kineticScroll: { touch: false, mouse: false },
   };
 }
 function clean(pts) { return (pts || []).filter(function (p) { return p && isFinite(p.value); }); }
@@ -122,7 +113,7 @@ function buildStructure(p) {
     var lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = spec.id; div.appendChild(lbl);
     container.appendChild(div);
     paneEls.push(div);
-    var c = LightweightCharts.createChart(div, opts(dark, idx === sp.length - 1, true));
+    var c = LightweightCharts.createChart(div, opts(dark, idx === sp.length - 1));
     var pf = { type: 'price', precision: spec.precision || 1, minMove: Math.pow(10, -(spec.precision || 1)) };
     var entry = { chart: c, hist: null, lines: [], name: spec.id, precision: spec.precision || 1, lblEl: lbl, valueMaps: [] };
     if (spec.histogram != null) entry.hist = c.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, priceFormat: pf });
@@ -161,27 +152,17 @@ function buildStructure(p) {
       if (rafId == null) rafId = requestAnimationFrame(applySync);
     });
   });
-  attachCrosshairSync(chartsForSync);
-
   installDividers(paneEls);
-
-  // ⟲ reset button on the main pane (autoscale + newest bar).
-  var btn = document.getElementById('resetBtn');
-  if (!btn) {
-    btn = document.createElement('div'); btn.id = 'resetBtn'; btn.textContent = '⟲';
-    document.getElementById('main').appendChild(btn);
-    btn.addEventListener('pointerdown', function (e) { e.preventDefault(); e.stopPropagation(); resetView(); });
-  }
 
   requestAnimationFrame(reportGeom);
 }
 
-// ── Crosshair readouts + cross-pane sync (TradingView-style) ────────────────────────────────
+// ── OHLC / sub-pane readouts ────────────────────────────────────────────────────────────────
 // candleMap/volMap: time → bar/volume for the OHLC readout. Each sub-pane keeps valueMaps
-// (time → per-line values) for its label readout. Scrubbing ANY pane positions the crosshair
-// on the same bar in every other pane.
+// (time → per-line values) for its label readout. With the crosshair removed (fully-native
+// redesign), the readouts always show the LAST bar; renderReadouts keeps its `t` parameter
+// in case a native inspect gesture ever returns.
 var candleArr = [], candleMap = {}, volMap = {};
-var xhSyncing = false;
 
 function fmtVol(v) {
   if (!isFinite(v) || v <= 0) return '';
@@ -227,46 +208,9 @@ function renderReadouts(t) {
   });
 }
 
-// Position the crosshair on bar `t` in every chart except `src` (LWC 4.1+ API).
-function syncCrosshair(srcChart, t) {
-  var all = [{ chart: main, series: candle }].concat(subs.map(function (s) {
-    return { chart: s.chart, series: s.lines[0] || s.hist };
-  }));
-  all.forEach(function (e) {
-    if (!e.chart || e.chart === srcChart || !e.series) return;
-    try {
-      if (t == null) { e.chart.clearCrosshairPosition(); return; }
-      var v = e.chart === main ? (candleMap[t] && candleMap[t].close) : null;
-      if (e.chart !== main) {
-        var s0 = subs.filter(function (s) { return s.chart === e.chart; })[0];
-        var vm = s0 && s0.valueMaps && s0.valueMaps[0];
-        v = vm ? vm.map[t] : null;
-      }
-      if (v != null && isFinite(v)) e.chart.setCrosshairPosition(v, t, e.series);
-      else e.chart.clearCrosshairPosition();
-    } catch (x) { /* pre-4.1 lib */ }
-  });
-}
-
-function attachCrosshairSync(chartsForSync) {
-  chartsForSync.forEach(function (c) {
-    c.subscribeCrosshairMove(function (param) {
-      if (xhSyncing) return;
-      xhSyncing = true;
-      var t = param && param.time != null ? param.time : null;
-      // Only the chart under the finger drives; a null from it clears everywhere.
-      if (param && (param.point || t == null)) {
-        syncCrosshair(c, t);
-        renderReadouts(t);
-      }
-      xhSyncing = false;
-    });
-  });
-}
-
-// ── Native gesture bridge ────────────────────────────────────────────────────────────────
-// Called by WebChartView's UIKit recognizers. All operate on the MAIN chart; the rAF pane
-// sync mirrors the sub-panes. CSS px == UIKit points (viewport width=device-width).
+// ── Native gesture bridge (the page's ONLY input surface) ──────────────────────────────────
+// Called by WebChartView's single zone-routed recognizer. All operate on the MAIN chart; the
+// rAF pane sync mirrors the sub-panes. CSS px == UIKit points (viewport width=device-width).
 
 // Set the visible logical range, clamped so the view can never lose the data entirely —
 // an unclamped fling/zoom could scroll past every bar and leave a blank chart.
@@ -355,8 +299,8 @@ window.nativePinch = function (centerX, centerY, scaleT, scaleP) {
     try {
       var paneH = (main.paneSize() || {}).height || 0;
       if (paneH >= 10) {
-        // (Re-)anchor the viewport to what's on screen RIGHT NOW — works whether the current
-        // vertical state is stock autoscale, a DOM price-pan (manual), or a prior vRange.
+        // (Re-)anchor the viewport to what's on screen RIGHT NOW — works from stock
+        // autoscale, a prior vRange, or a prior axis stretch.
         var top = candle.coordinateToPrice(0), bot = candle.coordinateToPrice(paneH);
         if (top != null && bot != null && top > bot) {
           var fp = candle.coordinateToPrice(Math.min(paneH, Math.max(0, centerY)));
@@ -370,43 +314,55 @@ window.nativePinch = function (centerX, centerY, scaleT, scaleP) {
   }
 };
 
-// ── Autoscale guard ─────────────────────────────────────────────────────────────────────────
-// LWC's DOM vertical price-pan can engage in the few ms BEFORE the native recognizer wins the
-// touch — silently switching the main pane to a manual price range the user never asked for
-// (candles then drift off-screen on every subsequent pan/zoom). Sample the autoscale state at
-// every DELIBERATE gesture end (touchend — a native takeover ends in touchcancel instead, so
-// accidental engagements are never sampled) and restore autoscale when a native gesture begins
-// having found it off without a deliberate opt-out.
-var priceWasAuto = true;
-function sampleAutoScale() {
-  if (!main) return;
-  try { priceWasAuto = main.priceScale('right').options().autoScale; } catch (e) {}
-}
-document.addEventListener('touchend', function () { setTimeout(sampleAutoScale, 60); }, true);
-window.nativeGestureBegan = function () {
-  if (!main) return;
-  try {
-    var ps = main.priceScale('right');
-    if (priceWasAuto && !ps.options().autoScale) ps.applyOptions({ autoScale: true });
-  } catch (e) {}
-  clearAllCrosshairs();
-};
-window.nativeGestureEnded = function () { sampleAutoScale(); };
 
-// Stuck-crosshair guard. The cross-pane sync LOCKS a crosshair onto the other panes via
-// setCrosshairPosition; it is only released by an explicit clear, which normally rides the
-// scrubbing pane's "finger lifted" crosshairMove event. When the touch ends in a CANCEL
-// instead (a native pan/pinch taking over — the normal case here), that event never fires and
-// the synced crosshair stays pinned wherever it last was ("cursor stuck in the corner").
-// Clear everywhere on any touch cancel and whenever a native gesture begins.
-function clearAllCrosshairs() {
-  [{ chart: main }].concat(subs).forEach(function (e) {
-    if (e.chart) { try { e.chart.clearCrosshairPosition(); } catch (x) {} }
-  });
-  try { renderReadouts(null); } catch (x) {}
-}
-document.addEventListener('touchcancel', function () { clearAllCrosshairs(); }, true);
-document.addEventListener('pointercancel', function () { clearAllCrosshairs(); }, true);
+// Price-axis drag: stretch the price scale around the pane-center price (factor per event,
+// composed). Uses the same re-anchor-from-screen pattern as the pinch's price branch.
+window.nativePriceStretch = function (factor) {
+  if (!main || !candle || !(factor > 0) || !isFinite(factor) || factor === 1) return;
+  try {
+    var paneH = (main.paneSize() || {}).height || 0;
+    if (paneH < 10) return;
+    var top = candle.coordinateToPrice(0), bot = candle.coordinateToPrice(paneH);
+    if (top == null || bot == null || top <= bot) return;
+    var mid = (top + bot) / 2, half = ((top - bot) / 2) * factor;
+    if (half > 1e-12) setVRange({ min: mid - half, max: mid + half });
+  } catch (e) {}
+};
+
+// Time-axis drag: stretch bar spacing with the RIGHT EDGE anchored (TradingView semantics —
+// the newest bar stays put while history compresses/expands).
+window.nativeTimeStretch = function (factor) {
+  if (!main || !(factor > 0) || !isFinite(factor) || factor === 1) return;
+  var ts = main.timeScale();
+  var r = ts.getVisibleLogicalRange(); if (!r) return;
+  var w = ts.width(); if (!w || w < 10) return;
+  var W = r.to - r.from;
+  var minW = Math.max(3, w / 50), maxW = w / 0.5;   // same barSpacing clamps as nativePinch
+  var W2 = Math.min(maxW, Math.max(minW, W * factor));
+  setRangeClamped(r.to - W2, r.to);
+};
+
+// Divider drag (native): shift flex-grow between pane i and pane i+1 by dy points.
+window.nativeDividerDrag = function (i, dy) {
+  if (!isFinite(dy) || !isFinite(i)) return;
+  var container = document.getElementById('container');
+  var panes = container.querySelectorAll('.pane');
+  var above = panes[i], below = panes[i + 1];
+  if (!above || !below) return;
+  var h = container.clientHeight || 1;
+  var total = 0;
+  Array.prototype.forEach.call(panes, function (q) { total += parseFloat(q.style.flexGrow || '1'); });
+  var dGrow = (dy / h) * total;
+  var MIN = 0.25;   // a pane can't shrink below this share
+  var a = parseFloat(above.style.flexGrow || '1') + dGrow;
+  var b = parseFloat(below.style.flexGrow || '1') - dGrow;
+  if (a < MIN || b < MIN) return;
+  above.style.flexGrow = a; below.style.flexGrow = b;
+};
+window.nativeDividerEnd = function () { requestAnimationFrame(reportGeom); };
+
+// Reset (⟲ is a native SwiftUI button now): autoscale, default bar spacing, newest bar.
+window.nativeReset = function () { resetView(); };
 
 // Gesture telemetry badge (driven by Swift DEBUG builds only — never called in Release).
 window.gestureDebug = function (msg) {
@@ -421,19 +377,14 @@ window.gestureDebug = function (msg) {
   el.textContent = msg;
 };
 
-// ── Drawing tools: REMOVED (2026-07-06) ─────────────────────────────────────────────────────
-// The full TradingView-style drawing suite (trend/fib/rect/hline/ruler, per-symbol persistence,
-// tap-select/drag-edit) shipped 2026-07-05 and was unusable on device — the tools fought the
-// native pan/pinch recognizers for touches, and a synced crosshair could get permanently stuck.
-// Removed wholesale in favor of rock-solid pan/pinch/crosshair. Recoverable from git if ever
-// revisited (commits f07d762..a6c650b have the last full version).
+// Drawing tools were REMOVED 2026-07-06 (unusable on device; recoverable at f07d762..a6c650b).
 var candleTimes = [];         // main-pane candle times (unix seconds), set on every update()
 
 var curPrecision = 2;
 function formatDrawPrice(p) { return isFinite(p) ? p.toFixed(curPrecision) : ''; }
 
-// Push the layout geometry to Swift so native recognizers YIELD over the price axis, time
-// axis, and dividers (those gestures stay DOM). Called after structure/data/divider changes.
+// Push the layout geometry to Swift — the native recognizer ROUTES touches by zone (price
+// axis, time axis, divider index, body). Called after structure/data/divider/resize changes.
 function reportGeom() {
   try {
     if (!window.webkit || !webkit.messageHandlers || !webkit.messageHandlers.chartGeom || !main) return;
@@ -460,9 +411,9 @@ function resetView() {
   main.timeScale().scrollToRealTime();
 }
 
-// Insert a drag handle between each pair of panes. Dragging shifts flex-grow from one pane to its
-// neighbor (charts have autoSize → they resize automatically). TradingView-style: grow RSI and the
-// candles shrink. flex-grow is relative, so the split survives rotation / screen-size changes.
+// Insert the divider strips between panes (visuals + geometry only — the DRAG is native:
+// WebChartView routes divider-zone touches to nativeDividerDrag above). flex-grow is relative,
+// so the split survives rotation / screen-size changes.
 function installDividers(paneEls) {
   var container = document.getElementById('container');
   Array.prototype.slice.call(container.querySelectorAll('.divider')).forEach(function (d) { container.removeChild(d); });
@@ -470,33 +421,7 @@ function installDividers(paneEls) {
   for (var i = 1; i < paneEls.length; i++) {
     var div = document.createElement('div'); div.className = 'divider';
     container.insertBefore(div, paneEls[i]);
-    attachDividerDrag(div, paneEls[i - 1], paneEls[i], container);
   }
-}
-
-function attachDividerDrag(divider, above, below, container) {
-  var dragging = false, lastY = 0;
-  var MIN = 0.25; // a pane can't shrink below this share
-  divider.addEventListener('pointerdown', function (e) {
-    dragging = true; lastY = e.clientY;
-    try { divider.setPointerCapture(e.pointerId); } catch (x) {}
-    e.preventDefault();
-  });
-  divider.addEventListener('pointermove', function (e) {
-    if (!dragging) return;
-    var h = container.clientHeight || 1;
-    var dy = e.clientY - lastY; lastY = e.clientY;
-    var total = 0;
-    Array.prototype.forEach.call(container.querySelectorAll('.pane'), function (p) { total += parseFloat(p.style.flexGrow || '1'); });
-    var dGrow = (dy / h) * total;
-    var a = parseFloat(above.style.flexGrow || '1') + dGrow;
-    var b = parseFloat(below.style.flexGrow || '1') - dGrow;
-    if (a < MIN || b < MIN) return;
-    above.style.flexGrow = a; below.style.flexGrow = b;
-  });
-  function end(e) { if (dragging) { dragging = false; try { divider.releasePointerCapture(e.pointerId); } catch (x) {} requestAnimationFrame(reportGeom); } }
-  divider.addEventListener('pointerup', end);
-  divider.addEventListener('pointercancel', end);
 }
 
 // Update data on the existing series (no teardown → no flash; preserves the user's zoom).
@@ -540,7 +465,7 @@ function update(p, fit) {
   });
 
   var allTimes = data.map(function (c) { return c.time; });
-  candleTimes = allTimes;   // drawing anchors convert time ↔ x through this
+  candleTimes = allTimes;   // setRangeClamped bounds panning through this
   (p.subpanels || []).forEach(function (spec, idx) {
     var e = subs[idx]; if (!e) return;
     if (e.hist && spec.histogram) e.hist.setData(padToTimes(spec.histogram, allTimes));
@@ -568,7 +493,6 @@ function update(p, fit) {
       try { c.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
     });
     main.timeScale().scrollToRealTime();
-    priceWasAuto = true;   // fresh instrument → autoscale is the sampled baseline again
   }
   requestAnimationFrame(reportGeom);   // price-axis width changes with label magnitude
 }
