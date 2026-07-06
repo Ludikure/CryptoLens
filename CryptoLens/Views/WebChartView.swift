@@ -57,14 +57,17 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             let p = t.location(in: view)
             if t1 == nil {
                 guard state == .possible else { ignore(t, for: event); continue }
-                if !isBodyPoint(p) { state = .failed; return }
                 t1 = t
                 start = p; startTime = t.timestamp
                 lastX = p.x; lastTime = t.timestamp
-                velocityX = 0; panDisqualified = false
+                velocityX = 0
+                // Off-body first touch (price/time axis, divider): the DOM owns that drag, so
+                // single-finger pan is disqualified — but do NOT fail: a failed recognizer is
+                // dead until every finger lifts, which would kill a pinch whose first finger
+                // happened to land on an axis strip. TWO FINGERS DOWN = PINCH, ALWAYS.
+                panDisqualified = !isBodyPoint(p)
             } else if t2 == nil, t !== t1, state == .possible || state == .began || state == .changed {
-                // Second finger on the body → pinch mode (from pan, scrub-wait, or fresh).
-                guard isBodyPoint(p) else { ignore(t, for: event); continue }
+                // Second finger ANYWHERE → pinch mode (from pan, scrub-wait, axis-drag, fresh).
                 t2 = t
                 beginPinch()
             } else {
@@ -367,6 +370,15 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
     }
 
     @objc private func onNativeGesture(_ g: ChartGestureRecognizer) {
+        #if DEBUG
+        // On-screen gesture telemetry (chart.html #gdbg badge) — Debug builds only. Shows what
+        // the native recognizer is actually receiving so on-device touch issues are diagnosable
+        // without a tethered console.
+        let st = ["possible", "began", "changed", "ended", "cancelled", "failed"][min(g.state.rawValue, 5)]
+        let mode = g.isPinching ? String(format: "pinch ×%.3f @%.0f", g.pinchScale, g.focalX)
+                                : String(format: "pan Δ%.1f v%.0f", g.deltaX, g.velocityX)
+        evaluateGesture("window.gestureDebug && gestureDebug('\(st) \(mode)')")
+        #endif
         switch g.state {
         case .began:
             // nativeGestureBegan restores autoscale if the DOM's vertical price-pan engaged

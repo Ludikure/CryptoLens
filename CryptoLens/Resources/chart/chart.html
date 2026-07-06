@@ -363,6 +363,19 @@ function clearAllCrosshairs() {
 document.addEventListener('touchcancel', function () { clearAllCrosshairs(); }, true);
 document.addEventListener('pointercancel', function () { clearAllCrosshairs(); }, true);
 
+// Gesture telemetry badge (driven by Swift DEBUG builds only — never called in Release).
+window.gestureDebug = function (msg) {
+  var el = document.getElementById('gdbg');
+  if (!el) {
+    el = document.createElement('div'); el.id = 'gdbg';
+    el.style.cssText = 'position:fixed;top:4px;left:50%;transform:translateX(-50%);z-index:9;'
+      + 'background:rgba(0,0,0,0.65);color:#7fd4a8;font:10px ui-monospace,monospace;'
+      + 'padding:2px 8px;border-radius:6px;pointer-events:none;white-space:nowrap;';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+};
+
 // ── Drawing tools: REMOVED (2026-07-06) ─────────────────────────────────────────────────────
 // The full TradingView-style drawing suite (trend/fib/rect/hline/ruler, per-symbol persistence,
 // tap-select/drag-edit) shipped 2026-07-05 and was unusable on device — the tools fought the
