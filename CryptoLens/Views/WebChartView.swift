@@ -26,6 +26,9 @@ private final class ChartPanRecognizer: UIGestureRecognizer {
     private(set) var deltaX: CGFloat = 0
     /// Smoothed horizontal velocity (pt/s) for the momentum glide on lift.
     private(set) var velocityX: CGFloat = 0
+    /// True when the pan ended because a second finger landed (pinch handoff) — the action
+    /// handler must NOT fire the momentum glide, or the chart flings while the pinch starts.
+    private(set) var handedOffToPinch = false
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let view, let t = touches.first else { return }
@@ -36,6 +39,7 @@ private final class ChartPanRecognizer: UIGestureRecognizer {
             lastX = start.x; lastTime = t.timestamp; velocityX = 0
             if !isBodyPoint(start) { state = .failed }
         } else if state == .began || state == .changed {
+            handedOffToPinch = true
             state = .ended   // second finger → let the pinch recognizer take over
         }
     }
@@ -70,7 +74,7 @@ private final class ChartPanRecognizer: UIGestureRecognizer {
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
         state = (state == .began || state == .changed) ? .cancelled : .failed
     }
-    override func reset() { deltaX = 0; velocityX = 0 }
+    override func reset() { deltaX = 0; velocityX = 0; handedOffToPinch = false }
 }
 
 /// TradingView Lightweight Charts hosted in a WKWebView (POC / Phase 0 of
@@ -268,6 +272,9 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(onNativePinch(_:)))
         pinch.delegate = self
         webView.addGestureRecognizer(pinch)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(onDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        webView.addGestureRecognizer(doubleTap)
 
         if let url = Bundle.main.url(forResource: "chart", withExtension: "html", subdirectory: "chart")
             ?? Bundle.main.url(forResource: "chart", withExtension: "html") {
@@ -294,9 +301,19 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         case .changed:
             evaluateGesture("window.nativePanBy && nativePanBy(\(g.deltaX))")
         case .ended:
-            evaluateGesture("window.nativePanEnd && nativePanEnd(\(g.velocityX))")
+            if !g.handedOffToPinch {
+                evaluateGesture("window.nativePanEnd && nativePanEnd(\(g.velocityX))")
+            }
         default: break
         }
+    }
+
+    /// TradingView-style double-tap: zoom in one step around the tap point.
+    @objc private func onDoubleTap(_ g: UITapGestureRecognizer) {
+        guard g.state == .ended else { return }
+        let p = g.location(in: webView)
+        guard isBodyPoint(p) else { return }
+        evaluateGesture("window.nativeGlideStop && nativeGlideStop(); window.nativePinch && nativePinch(\(p.x), 1.5)")
     }
 
     @objc private func onNativePinch(_ g: UIPinchGestureRecognizer) {
