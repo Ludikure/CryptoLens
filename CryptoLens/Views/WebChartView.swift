@@ -110,6 +110,7 @@ struct ChartPayload: Codable {
     let volume: [VolumeBar]     // empty when the Volume panel is toggled off
     let subpanels: [SubPanel]   // only the enabled indicator panels, in display order
     let drawings: String?       // per-symbol user drawings (JSON array), persisted via chartDrawings
+    let logScale: Bool          // logarithmic price scale on the main pane
 
     /// Chart color + style for a watch-level role. Kept here (not on the model) so WatchLevel stays
     /// chart-agnostic. Mirrors the SwiftUI LevelsChartView palette.
@@ -137,7 +138,8 @@ struct ChartPayload: Codable {
     /// `panels` = enabled sub-panel ids in display order ("rsi","macd","stoch","adx");
     /// `showVolume` toggles the main-pane volume histogram.
     static func build(tf: IndicatorResult, symbol: String, watchLevels: [WatchLevel], dark: Bool,
-                      panels: [String] = ["rsi", "macd"], showVolume: Bool = true) -> ChartPayload {
+                      panels: [String] = ["rsi", "macd"], showVolume: Bool = true,
+                      logScale: Bool = false) -> ChartPayload {
         let bars = tf.candles.map { Bar(time: Int($0.time.timeIntervalSince1970), open: $0.open, high: $0.high, low: $0.low, close: $0.close) }
         let last = tf.candles.last?.close ?? 1
         // Precision by magnitude (sub-cent alts need more decimals than stocks/BTC).
@@ -203,7 +205,7 @@ struct ChartPayload: Codable {
         let savedDrawings = (UserDefaults.standard.dictionary(forKey: "chart_drawings") as? [String: String])?[symbol]
         return ChartPayload(dark: dark, symbol: symbol, tf: tf.label, precision: precision, candles: bars,
                             lines: lines, priceLines: priceLines, volume: volume, subpanels: subpanels,
-                            drawings: savedDrawings)
+                            drawings: savedDrawings, logScale: logScale)
     }
 }
 
@@ -417,7 +419,8 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         let payload = ChartPayload.build(tf: selected.candles.isEmpty ? result.tf1 : selected,
                                          symbol: result.symbol,
                                          watchLevels: WatchLevels.build(result: result),
-                                         dark: dark, panels: panels, showVolume: flag("chart_vol", true))
+                                         dark: dark, panels: panels, showVolume: flag("chart_vol", true),
+                                         logScale: flag("chart_log", false))
         shared.push(payload)
     }
 }

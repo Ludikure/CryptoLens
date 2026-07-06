@@ -435,6 +435,7 @@ struct ChartScreenView: View {
     @AppStorage("chart_stoch") private var chStoch = false
     @AppStorage("chart_adx") private var chAdx = false
     @AppStorage("chart_vol") private var chVol = true
+    @AppStorage("chart_log") private var chLog = false
 
     private var selectedSymbol: String { service.currentSymbol ?? Constants.allCoins[0].id }
 
@@ -448,7 +449,7 @@ struct ChartScreenView: View {
     private var chartSignature: String {
         let r = service.currentResult
         let ts = r.map { Int($0.timestamp.timeIntervalSince1970) } ?? 0
-        return "\(r?.symbol ?? "")|\(ts)|\(chartTFIndex)|\(panelsList.joined(separator: ","))|\(chVol)|\(colorScheme == .dark)"
+        return "\(r?.symbol ?? "")|\(ts)|\(chartTFIndex)|\(panelsList.joined(separator: ","))|\(chVol)|\(chLog)|\(colorScheme == .dark)"
     }
 
     private func rebuildChart() {
@@ -459,7 +460,7 @@ struct ChartScreenView: View {
             tf: selected.candles.isEmpty ? result.tf1 : selected,
             symbol: result.symbol,
             watchLevels: WatchLevels.build(result: result),
-            dark: colorScheme == .dark, panels: panelsList, showVolume: chVol)
+            dark: colorScheme == .dark, panels: panelsList, showVolume: chVol, logScale: chLog)
     }
 
     /// A small toggle chip for a chart sub-panel (RSI/MACD/Stoch/ADX/Vol).
@@ -492,7 +493,7 @@ struct ChartScreenView: View {
 
                 HStack(spacing: 6) {
                     panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
-                    panelChip("ADX", $chAdx); panelChip("Vol", $chVol)
+                    panelChip("ADX", $chAdx); panelChip("Vol", $chVol); panelChip("Log", $chLog)
                     Spacer()
                     Link("TradingView", destination: URL(string: "https://www.tradingview.com")!)
                         .font(.system(size: 9)).foregroundStyle(.tertiary)
