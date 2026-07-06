@@ -409,8 +409,13 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         var js = ""
         if g.isPinching && g.pinchScale != 1 {
             // Split the raw scale by finger-line orientation: horizontal spread zooms TIME,
-            // vertical spread zooms PRICE, diagonal blends both (TradingView-style 2D pinch).
-            let s = g.pinchScale, c = g.pinchAxisX
+            // vertical spread zooms PRICE. SNAPPED with a wide dead zone so a near-axis pinch
+            // never bleeds into the other axis (a 20°-off-horizontal pinch would otherwise leak
+            // ~12% into price and read as drift): within 30° of horizontal → pure time; within
+            // 30° of vertical → pure price; only a clearly diagonal pinch (30–60°) blends.
+            // pinchAxisX = cos²(angle): cos²(30°)=0.75, cos²(60°)=0.25.
+            let s = g.pinchScale
+            let c = g.pinchAxisX >= 0.75 ? 1 : g.pinchAxisX <= 0.25 ? 0 : g.pinchAxisX
             let sT = 1 + (s - 1) * c, sP = 1 + (s - 1) * (1 - c)
             js += "window.nativePinch && nativePinch(\(g.focalX), \(g.focalY), \(sT), \(sP));"
         }
