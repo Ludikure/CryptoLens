@@ -425,8 +425,10 @@ function distToSegment(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - cx, py - cy);
 }
 
-var TWO_POINT = { trend: 1, fib: 1, rect: 1, ruler: 1 };
-var FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+// NOTE: fib was removed 2026-07-06 (unused; its hit-test also went dead when an anchor mapped
+// off-screen, making placed fibs undeletable). Persisted 'fib' drawings are dropped on load by
+// the TWO_POINT filter in applyDrawings.
+var TWO_POINT = { trend: 1, rect: 1, ruler: 1 };
 
 function fmtDur(sec) {
   var d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
@@ -457,16 +459,6 @@ function hitTestDraw(pt) {
       var e = c;
       if (d.ext) e = extendRay(c);
       if (distToSegment(pt.x, pt.y, c.x1, c.y1, e.x2, e.y2) <= 10) return { idx: i, part: 'line' };
-    } else if (d.type === 'fib') {
-      var cf = drawCoords(d); if (!cf) continue;
-      if (distToSegment(pt.x, pt.y, cf.x1, cf.y1, cf.x2, cf.y2) <= 10) return { idx: i, part: 'line' };
-      var lo = Math.min(cf.x1, cf.x2), hi = Math.max(cf.x1, cf.x2);
-      if (pt.x >= lo - 4 && pt.x <= hi + 4) {
-        for (var k = 0; k < FIB_LEVELS.length; k++) {
-          var ly = cf.y2 + (cf.y1 - cf.y2) * FIB_LEVELS[k];
-          if (Math.abs(pt.y - ly) <= 7) return { idx: i, part: 'line' };
-        }
-      }
     } else if (d.type === 'rect' || d.type === 'ruler') {
       var cr = drawCoords(d); if (!cr) continue;
       var l = Math.min(cr.x1, cr.x2), r = Math.max(cr.x1, cr.x2);
@@ -561,22 +553,6 @@ function drawTrendsRenderer(target) {
         else ctx.fillRect(lx, ly, lw2, 16);
         ctx.fillStyle = '#fff';
         ctx.fillText(label, lx + 7, ly + 11.5);
-      } else if (d.type === 'fib') {
-        var lo = Math.min(c.x1, c.x2), hi = Math.max(c.x1, c.x2);
-        // Faint diagonal anchor line for context.
-        ctx.lineWidth = 1; ctx.strokeStyle = sel ? 'rgba(230,200,79,0.5)' : 'rgba(91,141,239,0.4)';
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath(); ctx.moveTo(c.x1, c.y1); ctx.lineTo(c.x2, c.y2); ctx.stroke();
-        ctx.setLineDash([]);
-        FIB_LEVELS.forEach(function (lvl) {
-          var y = c.y2 + (c.y1 - c.y2) * lvl;
-          var price = d.p2.price + (d.p1.price - d.p2.price) * lvl;
-          ctx.lineWidth = lvl === 0.5 ? 1.5 : 1;
-          ctx.strokeStyle = sel ? '#e6c84f' : '#c9a227';
-          ctx.beginPath(); ctx.moveTo(lo, y); ctx.lineTo(hi, y); ctx.stroke();
-          ctx.fillStyle = '#9aa4b2';
-          ctx.fillText(lvl.toFixed(3).replace(/\.?0+$/, '') + '  ' + formatDrawPrice(price), lo + 3, y - 3);
-        });
       }
 
       if (sel) [[c.x1, c.y1], [c.x2, c.y2]].forEach(function (hd) {
@@ -636,7 +612,7 @@ function setChartInteraction(on) {
 
 function updateDrawbar() {
   var bar = document.getElementById('drawbar'); if (!bar) return;
-  ['trend', 'fib', 'rect', 'hline', 'ruler'].forEach(function (t) {
+  ['trend', 'rect', 'hline', 'ruler'].forEach(function (t) {
     bar.querySelector('.t-' + t).className = 't-' + t + (drawTool === t ? ' on' : '');
   });
   var sel = selectedIdx != null ? drawings[selectedIdx] : null;
@@ -651,12 +627,12 @@ function installDrawTools(mainEl) {
   var bar = document.getElementById('drawbar');
   if (!bar) {
     bar = document.createElement('div'); bar.id = 'drawbar';
-    bar.innerHTML = '<div class="t-trend">╱</div><div class="t-fib">F</div><div class="t-rect">▭</div>'
+    bar.innerHTML = '<div class="t-trend">╱</div><div class="t-rect">▭</div>'
                   + '<div class="t-hline">─</div><div class="t-ruler">⤢</div>'
                   + '<div class="t-ext hidden">→</div><div class="t-del hidden">🗑</div>';
     mainEl.appendChild(bar);
     bar.addEventListener('pointerdown', function (e) { e.preventDefault(); e.stopPropagation(); });
-    ['trend', 'fib', 'rect', 'hline', 'ruler'].forEach(function (tool) {
+    ['trend', 'rect', 'hline', 'ruler'].forEach(function (tool) {
       bar.querySelector('.t-' + tool).addEventListener('pointerup', function (e) {
         e.stopPropagation();
         drawTool = drawTool === tool ? null : tool;
