@@ -1144,9 +1144,22 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (mlPct != null && mlPct < 50) autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);
       if (envAnyKilled) autoFlat.push('ANY_KILLED=true');
       if (envDivergenceEscalated) autoFlat.push('divergence_escalated_6+_candles');
-      // biases_MIXED → auto-FLAT. (The old "Stoch agreement overrides this" exemption was
-      // removed — Stoch direction is noise, so it can't rescue a mixed-bias setup.)
-      if (envAlignment === 'MIXED') autoFlat.push('biases_MIXED');
+      // biases_MIXED auto-FLAT is ML-GATED (2026-07-06, ml-training/mixed_flat_test.py on the
+      // clean v14 regen — 870K crypto + 503K stock bars). Non-aligned bars (daily/4H mixed or
+      // neutral) carry ~2× the goodR rate of aligned bars (crypto 61/59% vs 33/30%; stocks
+      // 70/71% vs 39/35%) — they are compression/transition states where a >=1.5-ATR move is
+      // MORE likely, and the unconditional MIXED auto-FLAT fired on ~60% of all bars while
+      // suppressing the system's best volatility cell (it also made the counter-trend reversal
+      // playbook unreachable: the envelope FLATted before the LLM could build the setup the
+      // playbook allows). Direction remains a coin flip in EVERY state (P(up24) 48–53%), so the
+      // opened window trades as a structure-led setup capped at MODERATE (the alignment
+      // highBlock keeps HIGH unreachable) — never as a trend-follow. Below ML 70 the hard block
+      // stands. (The old "Stoch agreement overrides this" exemption stays removed — Stoch
+      // direction is noise and can't rescue a mixed-bias setup; ML_WIN gates VOLATILITY, which
+      // is the edge that actually exists here.)
+      if (envAlignment === 'MIXED' && (mlPct == null || mlPct < 70)) {
+        autoFlat.push(mlPct == null ? 'biases_MIXED_(ML_unavailable)' : `biases_MIXED_and_ML_${mlPct}<70`);
+      }
       // Symmetry fix (2026-07-02): the envelope hard-blocked MIXED (no coherent trade) but only
       // WARNED on the opposite bad state — an aligned trend that has already run (CHASE HIGH).
       // Measured (trend_direction_test.py): a MATURE aligned trend has ~0% forward EV — entering
@@ -1212,6 +1225,9 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         if (highBlocks.length) L(`  HIGH_blocked_because: ${highBlocks.join(', ')}`);
         if (moderateBlocks.length) L(`  MODERATE_blocked_because: ${moderateBlocks.join(', ')}`);
         if (downgrade.length) L(`  downgrade_one_tier_if_LLM_decides: ${downgrade.join(', ')}`);
+        if (envAlignment === 'MIXED' && mlPct != null && mlPct >= 70) {
+          L(`  MIXED_HIGH_ML_WINDOW: timeframes disagree but ML_WIN ${mlPct}% >= 70 — statistically the BEST big-move cell (non-aligned bars carry ~2x the >=1.5-ATR move rate of aligned trends; measured on 1.37M clean bars). Direction is NOT implied: trade only a structure-led setup (4H reversal or range-edge level with tight invalidation), counter-trend bands apply, cap MODERATE. Do not frame this as trend-following and do not cite "wait for alignment" — by the time TFs align, the move is statistically spent.`);
+        }
         L('  LLM_judgment_required: failure_mode_specific_not_generic, thesis_intact_check');
         L('  → Pick conviction within max_allowed. You may NOT output a tier above max_allowed.');
       }

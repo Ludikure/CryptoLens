@@ -150,6 +150,31 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(raw.prompt).toContain('auto_FLAT_active: ML_WIN_42%<50');
   });
 
+  it('biases_MIXED auto-FLAT is ML-gated: high-ML mixed bars open the structure-led window', () => {
+    // mixed_flat_test.py (2026-07-06, clean v14 regen): non-aligned bars carry ~2× the goodR
+    // rate of aligned bars. MIXED + ML>=70 must NOT auto-FLAT (counter-trend playbook window);
+    // MIXED + ML<70 keeps the hard block.
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mirror = (cs: Candle[]) => cs.map(c => ({
+      time: c.time, open: 200 - c.open, high: 200 - c.low, low: 200 - c.high, close: 200 - c.close, volume: c.volume,
+    }));
+    const daily = computeFullIndicators(synthCandles(230, NOW - 230 * DAY, DAY, 100), { timeframe: '1d', label: 'Daily (1D)', isCrypto: true }) as unknown as PromptIndicator;
+    const fourH = computeFullIndicators(mirror(synthCandles(230, NOW - 230 * H4, H4, 100)), { timeframe: '4h', label: '4H', isCrypto: true }) as unknown as PromptIndicator;
+    const oneH = computeFullIndicators(synthCandles(120, NOW - 120 * H1, H1, 100), { timeframe: '1h', label: '1H', isCrypto: true }) as unknown as PromptIndicator;
+
+    daily.mlWinProbability = 0.74;
+    const open = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH] });
+    expect(open.prompt).toContain('Multi-TF Alignment: MIXED');
+    expect(open.prompt).not.toContain('biases_MIXED');
+    expect(open.prompt).toContain('MIXED_HIGH_ML_WINDOW');
+    expect(open.prompt).toContain('cap MODERATE');
+
+    daily.mlWinProbability = 0.55;   // above the ML<50 auto-FLAT, below the 70 window
+    const blocked = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH] });
+    expect(blocked.prompt).toContain('biases_MIXED_and_ML_55<70');
+    expect(blocked.prompt).not.toContain('MIXED_HIGH_ML_WINDOW');
+  });
+
   it('buildUserPrompt runs end-to-end over real computeFullIndicators output (crypto)', () => {
     const NOW = 1748736000000; // fixed (2025-06-01T00:00:00Z) — scripts can't use Date.now()
     const DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;

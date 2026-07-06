@@ -516,7 +516,7 @@ Per-symbol EV analysis on `csv_exports_v11/` + `csv_exports_v13/` (n=237) showed
 
 ## Counter-Trend Reversal Setup
 
-Backtesting (850K+ crypto, 192K+ stock bars) shows counter-trend setups (4H reverses vs daily) have 73-86% goodR vs 38-43% for aligned. Prompt allows counter-trend reversal when ML_WIN >= 70%, with tighter targets (TP1 1.0 ATR, TP2 2.0 ATR) and MODERATE conviction cap.
+Re-validated CLEAN 2026-07-06 (`ml-training/mixed_flat_test.py`, v14 regen — the original 73-86% numbers were leak-era): non-aligned bars (daily/4H conflict or neutral) carry ~2× the goodR rate of aligned bars — crypto 61/59% vs 33/30%, stocks 70/71% vs 39/35%; flat across trend age. Direction stays a coin flip in every state (P(up24) 48-53%). Prompt allows counter-trend reversal when ML_WIN >= 70%, with tighter targets (TP1 1.0 ATR, TP2 2.0 ATR) and MODERATE conviction cap. Since 2026-07-06 the Conviction Envelope's `biases_MIXED` auto-FLAT is ML-gated (fires only when ML < 70) so this playbook is actually reachable — see the 2026-07-06 decision entry.
 
 ## Direction Primitive Architecture (2026-05-30)
 
@@ -556,6 +556,10 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-07-06 — biases_MIXED auto-FLAT ML-gated: the envelope was suppressing the best vol cell
+
+User-spotted circularity: the envelope auto-FLATted MIXED timeframes ("wait for alignment") while the 2026-07-02 symmetry fix auto-FLATs the mature aligned chase — and by the time TFs align the move is statistically spent, so the AI cited auto-FLAT nearly every run. Measured on the clean v14 regen (`ml-training/mixed_flat_test.py`, 870K crypto + 503K stock bars, pre-declared decision rule): **non-aligned bars (conflict + neutral = ~60-66% of all bars, exactly the envelope's MIXED) carry ~2× the goodR rate of aligned bars** (crypto 61/59% vs 33/30%; stocks 70/71% vs 39/35%), flat across trend age; direction remains a coin flip in every state (P(up24) 48-53%; EV of following the daily bias ±0.1 ATR). Mechanism: goodR is ATR-normalized, and non-aligned states are compression/transition tape where a ≥1.5-ATR move is more likely — the same mechanism as "goodR falls in strong trends". The unconditional MIXED auto-FLAT therefore suppressed the system's single best volatility cell AND made the Counter-Trend Reversal playbook (ML≥70 → MODERATE cap, tighter bands) unreachable — an internal contradiction. Fix (`prompt.ts`): `biases_MIXED` auto-FLATs only when calibrated ML_WIN < 70; at ML ≥ 70 the envelope emits `MIXED_HIGH_ML_WINDOW` guidance (structure-led setup only — 4H reversal or range-edge level, tight invalidation, counter-trend bands, cap MODERATE via the existing alignment highBlock; explicitly forbids "wait for alignment" framing). Regression test added; 426/426 green. This also re-validates the counter-trend edge on clean data (old 73-86% numbers were leak-era).
 
 ### 2026-07-06 — v14 retrain shipped (all three models) on the full-coverage derivatives regen
 
