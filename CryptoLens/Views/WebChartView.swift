@@ -31,14 +31,15 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
 
     /// Horizontal movement since the previous event (finger in pan mode, midpoint in pinch mode).
     private(set) var deltaX: CGFloat = 0
-    /// Incremental pinch scale since the previous event (1 = none; JS composes successive scales).
-    private(set) var pinchScale: CGFloat = 1
+    /// Incremental per-axis pinch scales since the previous event (1 = none; JS composes
+    /// successive scales). Decomposed by MOVEMENT, not finger posture: the TIME scale follows
+    /// the change in the fingers' HORIZONTAL separation, the PRICE scale the VERTICAL one —
+    /// a horizontal spread widens bars at full rate even with diagonally-stacked fingers.
+    private(set) var pinchScaleT: CGFloat = 1
+    private(set) var pinchScaleP: CGFloat = 1
     /// Pinch focal point (midpoint of the two fingers).
     private(set) var focalX: CGFloat = 0
     private(set) var focalY: CGFloat = 0
-    /// Orientation of the finger line: (Δx/dist)² — 1 = horizontal pinch, 0 = vertical pinch.
-    /// Used to split the raw scale into time-axis and price-axis components.
-    private(set) var pinchAxisX: CGFloat = 1
     /// Smoothed horizontal velocity (pt/s) for the momentum glide on lift.
     private(set) var velocityX: CGFloat = 0
     private(set) var isPinching = false
@@ -49,11 +50,22 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
     private var startTime: TimeInterval = 0
     /// Vertical-dominant or held-first single-finger movement belongs to the DOM (price pan /
     /// crosshair scrub). We stay in .possible rather than failing so a later second finger can
-    /// still begin a pinch — a failed recognizer is dead until every touch lifts.
+    /// still begin a pinch — a failed recognizer is dead until every finger lifts.
     private var panDisqualified = false
     private var lastX: CGFloat = 0
     private var lastTime: TimeInterval = 0
-    private var lastDist: CGFloat = 1
+    /// Per-axis separation tracking. An axis only starts scaling once the NET change in its
+    /// separation since pinch start crosses `axisActivation` (hysteresis — finger wobble on the
+    /// axis you are NOT deliberately moving never activates it, so a pure horizontal spread can
+    /// never bleed into price zoom and vice versa).
+    private var lastAdx: CGFloat = 1
+    private var lastAdy: CGFloat = 1
+    private var startAdx: CGFloat = 1
+    private var startAdy: CGFloat = 1
+    private var hActive = false
+    private var vActive = false
+    private let axisActivation: CGFloat = 15   // pt of net separation change to engage an axis
+    private let minSeparation: CGFloat = 12    // below this, ratios are noise — don't scale
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let view else { return }
@@ -84,12 +96,13 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
         guard let view, let a = t1, let b = t2 else { return }
         let p1 = a.location(in: view), p2 = b.location(in: view)
         isPinching = true
-        let dx = p2.x - p1.x, dy = p2.y - p1.y
-        lastDist = max(1, hypot(dx, dy))
-        pinchAxisX = (dx * dx) / (lastDist * lastDist)
+        lastAdx = max(1, abs(p2.x - p1.x)); startAdx = lastAdx
+        lastAdy = max(1, abs(p2.y - p1.y)); startAdy = lastAdy
+        hActive = false; vActive = false
         lastX = (p1.x + p2.x) / 2
         lastTime = max(a.timestamp, b.timestamp)
-        deltaX = 0; pinchScale = 1; focalX = lastX; focalY = (p1.y + p2.y) / 2; velocityX = 0
+        deltaX = 0; pinchScaleT = 1; pinchScaleP = 1
+        focalX = lastX; focalY = (p1.y + p2.y) / 2; velocityX = 0
         state = state == .possible ? .began : .changed
     }
 
@@ -99,11 +112,12 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             guard state == .began || state == .changed, let a = t1, let b = t2 else { return }
             let p1 = a.location(in: view), p2 = b.location(in: view)
             let mid = (p1.x + p2.x) / 2
-            let dx = p2.x - p1.x, dy = p2.y - p1.y
-            let dist = max(1, hypot(dx, dy))
+            let adx = max(1, abs(p2.x - p1.x)), ady = max(1, abs(p2.y - p1.y))
+            if !hActive && abs(adx - startAdx) >= axisActivation { hActive = true }
+            if !vActive && abs(ady - startAdy) >= axisActivation { vActive = true }
+            pinchScaleT = (hActive && lastAdx >= minSeparation && adx >= minSeparation) ? adx / lastAdx : 1
+            pinchScaleP = (vActive && lastAdy >= minSeparation && ady >= minSeparation) ? ady / lastAdy : 1
             deltaX = mid - lastX
-            pinchScale = dist / lastDist
-            pinchAxisX = (dx * dx) / (dist * dist)
             focalX = mid
             focalY = (p1.y + p2.y) / 2
             let ts = max(a.timestamp, b.timestamp)
@@ -112,7 +126,7 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
                 let v = deltaX / CGFloat(dt)
                 velocityX = velocityX == 0 ? v : 0.7 * v + 0.3 * velocityX
             }
-            lastX = mid; lastDist = dist; lastTime = ts
+            lastX = mid; lastAdx = adx; lastAdy = ady; lastTime = ts
             state = .changed
             return
         }
@@ -124,14 +138,14 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             guard dx * dx + dy * dy >= 36 else { return }   // 6pt slop before deciding
             if t.timestamp - startTime > 0.25 || abs(dy) > abs(dx) { panDisqualified = true; return }
             deltaX = dx                                      // include the slop distance
-            pinchScale = 1
+            pinchScaleT = 1; pinchScaleP = 1
             lastX = p.x; lastTime = t.timestamp
             state = .began
             return
         }
         guard state == .began || state == .changed else { return }
         deltaX = p.x - lastX
-        pinchScale = 1
+        pinchScaleT = 1; pinchScaleP = 1
         let dt = t.timestamp - lastTime
         if dt > 0 {
             let v = deltaX / CGFloat(dt)
@@ -156,7 +170,7 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             isPinching = false
             let p = t.location(in: view)
             lastX = p.x; lastTime = t.timestamp
-            deltaX = 0; pinchScale = 1; velocityX = 0
+            deltaX = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
         }
     }
 
@@ -166,7 +180,7 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
 
     override func reset() {
         t1 = nil; t2 = nil
-        deltaX = 0; pinchScale = 1; velocityX = 0
+        deltaX = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
         isPinching = false; panDisqualified = false
     }
 }
@@ -384,7 +398,7 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         // the native recognizer is actually receiving so on-device touch issues are diagnosable
         // without a tethered console.
         let st = ["possible", "began", "changed", "ended", "cancelled", "failed"][min(g.state.rawValue, 5)]
-        let mode = g.isPinching ? String(format: "pinch ×%.3f @%.0f", g.pinchScale, g.focalX)
+        let mode = g.isPinching ? String(format: "pinch T×%.3f P×%.3f", g.pinchScaleT, g.pinchScaleP)
                                 : String(format: "pan Δ%.1f v%.0f", g.deltaX, g.velocityX)
         evaluateGesture("window.gestureDebug && gestureDebug('\(st) \(mode)')")
         #endif
@@ -407,17 +421,11 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
 
     private func gestureJS(_ g: ChartGestureRecognizer) -> String {
         var js = ""
-        if g.isPinching && g.pinchScale != 1 {
-            // Split the raw scale by finger-line orientation: horizontal spread zooms TIME,
-            // vertical spread zooms PRICE. SNAPPED with a wide dead zone so a near-axis pinch
-            // never bleeds into the other axis (a 20°-off-horizontal pinch would otherwise leak
-            // ~12% into price and read as drift): within 30° of horizontal → pure time; within
-            // 30° of vertical → pure price; only a clearly diagonal pinch (30–60°) blends.
-            // pinchAxisX = cos²(angle): cos²(30°)=0.75, cos²(60°)=0.25.
-            let s = g.pinchScale
-            let c = g.pinchAxisX >= 0.75 ? 1 : g.pinchAxisX <= 0.25 ? 0 : g.pinchAxisX
-            let sT = 1 + (s - 1) * c, sP = 1 + (s - 1) * (1 - c)
-            js += "window.nativePinch && nativePinch(\(g.focalX), \(g.focalY), \(sT), \(sP));"
+        if g.isPinching && (g.pinchScaleT != 1 || g.pinchScaleP != 1) {
+            // Per-axis scales, decomposed by MOVEMENT in the recognizer (see ChartGestureRecognizer):
+            // horizontal separation change → time zoom, vertical → price zoom, with activation
+            // hysteresis so the axis you are not deliberately moving never scales.
+            js += "window.nativePinch && nativePinch(\(g.focalX), \(g.focalY), \(g.pinchScaleT), \(g.pinchScaleP));"
         }
         if g.deltaX != 0 { js += "window.nativePanBy && nativePanBy(\(g.deltaX));" }
         return js
