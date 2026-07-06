@@ -66,11 +66,30 @@ targets:
     dependencies:
       - target: MarketScopeWidget
     scheme:
+      testTargets:
+        - MarketScopeUITests
       run:
         environmentVariables:
           - variable: IDEPreferLogStreaming
             value: "YES"
             isEnabled: true
+
+  # UI test target: drives REAL touches (pan / pinch / axis drags) against the chart on the
+  # simulator — the only way to verify the native gesture recognizer end-to-end without a
+  # physical device. Run: xcodebuild test -scheme MarketScope -only-testing MarketScopeUITests
+  MarketScopeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - MarketScopeUITests
+    dependencies:
+      - target: MarketScope
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens.uitests
+        CODE_SIGN_STYLE: Automatic
+        TEST_TARGET_NAME: MarketScope
+        GENERATE_INFOPLIST_FILE: YES
 
   MarketScopeWidget:
     type: app-extension

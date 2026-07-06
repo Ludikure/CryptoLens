@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -56,6 +56,7 @@
 		588B4147414891AE4D92827E /* PriceActionAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B687FAC230FEB7E33BE75288 /* PriceActionAnalyzer.swift */; };
 		5A12CD0571201B779989DCE1 /* NavigationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608D366EBB5762F3FAEB5E7B /* NavigationCoordinator.swift */; };
 		5C7FDA370C9AE19DFA2D31E3 /* BackgroundRefreshManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD5DC1D4B6985572D77BF179 /* BackgroundRefreshManager.swift */; };
+		5E23C171CF6CE9B8E98ADF88 /* ChartGesturesUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE8F481BE29774D9741E4F3B /* ChartGesturesUITests.swift */; };
 		5EECD991E44E2BD735AFDDBF /* LayerDiagnostic.swift in Sources */ = {isa = PBXBuildFile; fileRef = E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */; };
 		62795D11B0D1547323A7837D /* IndicatorTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ACC70EF9EA70BD6354CD915 /* IndicatorTableView.swift */; };
 		645957246AA55759B2DBDC92 /* DerivativesData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 082FF9FCE52776C592BFE849 /* DerivativesData.swift */; };
@@ -125,6 +126,13 @@
 			remoteGlobalIDString = 93CC97B8BC093C4D3073CED7;
 			remoteInfo = MarketScopeWidget;
 		};
+		8C7DCC596DEF6FFE81D323E3 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7EC50E815A0F689412EEBD7E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 184F1203E8466CCEFB5FAB44;
+			remoteInfo = MarketScope;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -189,7 +197,7 @@
 		712D5923C993CB356F7E558C /* FavoritesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesStore.swift; sourceTree = "<group>"; };
 		714F80BAAC4263133724FD5B /* AIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvider.swift; sourceTree = "<group>"; };
 		7202C20B67FFB645DBDABA14 /* PriceAlert.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceAlert.swift; sourceTree = "<group>"; };
-		726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MarketScopeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = MarketScopeWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		73C4840E1BE2BA2B2ABB66C9 /* MarketScopeWidget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MarketScopeWidget.entitlements; sourceTree = "<group>"; };
 		74570C8A1036839E5056F05A /* WebChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebChartView.swift; sourceTree = "<group>"; };
 		751F6418841B0076E433CBE6 /* PositioningSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositioningSnapshot.swift; sourceTree = "<group>"; };
@@ -206,6 +214,7 @@
 		9412F953130DE07CB5684628 /* CrossAssetContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CrossAssetContext.swift; sourceTree = "<group>"; };
 		95C1F0FBEEB3FCB16E4418C5 /* PositionSizeCalculatorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSizeCalculatorView.swift; sourceTree = "<group>"; };
 		97D8174D80F83C38A16FDA11 /* WhatsNewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhatsNewView.swift; sourceTree = "<group>"; };
+		990D543D1EACD0A68D9974AE /* MarketScopeUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MarketScopeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AE108B1457B5F3BB52077EF /* DerivativesCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesCardView.swift; sourceTree = "<group>"; };
 		9C188735F2331F1002B4B991 /* CoinPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinPickerView.swift; sourceTree = "<group>"; };
 		9C98ABE8F402ADB12ADC93C4 /* PushService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushService.swift; sourceTree = "<group>"; };
@@ -220,6 +229,7 @@
 		BB12F1B7515B8E8D3F24EFFE /* WorkerIndicatorsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerIndicatorsService.swift; sourceTree = "<group>"; };
 		BCE089BD3A094D186E3B2F2F /* InfoTooltip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoTooltip.swift; sourceTree = "<group>"; };
 		BDB023939777AFC1AC8D15B4 /* PositionSizeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSizeCard.swift; sourceTree = "<group>"; };
+		BE8F481BE29774D9741E4F3B /* ChartGesturesUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChartGesturesUITests.swift; sourceTree = "<group>"; };
 		C7A8F5A68318696489A9302B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		C8B95E399F9FF364CFF73C8D /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
 		C9543475960F1776ED8D9352 /* SplashView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashView.swift; sourceTree = "<group>"; };
@@ -239,7 +249,7 @@
 		DD8AFB3FA541ACB57F2BA870 /* ScoringParams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoringParams.swift; sourceTree = "<group>"; };
 		DE8553863BCB1F7D7A8E118D /* DirectionAccuracyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectionAccuracyService.swift; sourceTree = "<group>"; };
 		E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerDiagnostic.swift; sourceTree = "<group>"; };
-		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E687573C82B61768A3DA2604 /* AnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisService.swift; sourceTree = "<group>"; };
 		E969F0701C9DD31D4D15711C /* WorkerMarketService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerMarketService.swift; sourceTree = "<group>"; };
 		EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeSetup.swift; sourceTree = "<group>"; };
@@ -340,6 +350,7 @@
 			isa = PBXGroup;
 			children = (
 				E4C9B78005A59E85CF6BECFC /* MarketScope.app */,
+				990D543D1EACD0A68D9974AE /* MarketScopeUITests.xctest */,
 				726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */,
 			);
 			name = Products;
@@ -359,6 +370,7 @@
 			children = (
 				7AF095808B53BB891E6D66EB /* CryptoLens */,
 				1CAAF275740715E19EB37F5B /* CryptoLens */,
+				E8E7770BF48F6BCCEE7EB2D3 /* MarketScopeUITests */,
 				E07369BEDEDCC8391A678363 /* MarketScopeWidget */,
 				51AD67A2B3529F4F82C21534 /* Products */,
 			);
@@ -482,6 +494,14 @@
 			path = Utils;
 			sourceTree = "<group>";
 		};
+		E8E7770BF48F6BCCEE7EB2D3 /* MarketScopeUITests */ = {
+			isa = PBXGroup;
+			children = (
+				BE8F481BE29774D9741E4F3B /* ChartGesturesUITests.swift */,
+			);
+			path = MarketScopeUITests;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -522,6 +542,24 @@
 			productReference = 726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		DD4FFD6D4492A218752798AD /* MarketScopeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 265BBB8F0D9AD57B4A194E9F /* Build configuration list for PBXNativeTarget "MarketScopeUITests" */;
+			buildPhases = (
+				21C2295D97EAB782471221FC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				9E005BB9DA5AE316E5347D8F /* PBXTargetDependency */,
+			);
+			name = MarketScopeUITests;
+			packageProductDependencies = (
+			);
+			productName = MarketScopeUITests;
+			productReference = 990D543D1EACD0A68D9974AE /* MarketScopeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -529,7 +567,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2620;
+				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					184F1203E8466CCEFB5FAB44 = {
 						DevelopmentTeam = 6AS729C9FR;
@@ -538,6 +576,11 @@
 					93CC97B8BC093C4D3073CED7 = {
 						DevelopmentTeam = 6AS729C9FR;
 						ProvisioningStyle = Automatic;
+					};
+					DD4FFD6D4492A218752798AD = {
+						DevelopmentTeam = 6AS729C9FR;
+						ProvisioningStyle = Automatic;
+						TestTargetID = 184F1203E8466CCEFB5FAB44;
 					};
 				};
 			};
@@ -551,10 +594,12 @@
 			);
 			mainGroup = 6B2F66AD008C4C14684E2941;
 			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
 				184F1203E8466CCEFB5FAB44 /* MarketScope */,
+				DD4FFD6D4492A218752798AD /* MarketScopeUITests */,
 				93CC97B8BC093C4D3073CED7 /* MarketScopeWidget */,
 			);
 		};
@@ -579,6 +624,14 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		21C2295D97EAB782471221FC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5E23C171CF6CE9B8E98ADF88 /* ChartGesturesUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		38636B9F06B3B19D792E5511 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -700,6 +753,11 @@
 			target = 93CC97B8BC093C4D3073CED7 /* MarketScopeWidget */;
 			targetProxy = 7E139658AB42E754E4A249BB /* PBXContainerItemProxy */;
 		};
+		9E005BB9DA5AE316E5347D8F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 184F1203E8466CCEFB5FAB44 /* MarketScope */;
+			targetProxy = 8C7DCC596DEF6FFE81D323E3 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -760,7 +818,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_EMIT_LOC_STRINGS_RESOURCES = YES;
@@ -833,12 +890,47 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_EMIT_LOC_STRINGS_RESOURCES = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		5811FCD3313D6723015BED0B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ludikure.CryptoLens.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MarketScope;
+			};
+			name = Release;
+		};
+		5979F082673A2B9BB297A8C5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ludikure.CryptoLens.uitests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = MarketScope;
 			};
 			name = Debug;
 		};
@@ -924,6 +1016,15 @@
 			buildConfigurations = (
 				D70873E106E5E395AD64C23D /* Debug */,
 				BA31FEB029C96213BFE73157 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		265BBB8F0D9AD57B4A194E9F /* Build configuration list for PBXNativeTarget "MarketScopeUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5979F082673A2B9BB297A8C5 /* Debug */,
+				5811FCD3313D6723015BED0B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

@@ -503,7 +503,13 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
 
     private func evaluateGesture(_ js: String) {
         guard loaded else { return }
+        #if DEBUG
+        webView.evaluateJavaScript(js) { _, err in
+            if let err { NSLog("CHART-GESTURE JSERR %@ in: %@", String(describing: err), js) }
+        }
+        #else
         webView.evaluateJavaScript(js, completionHandler: nil)
+        #endif
     }
 
     nonisolated func userContentController(_ userContentController: WKUserContentController,

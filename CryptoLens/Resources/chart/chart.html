@@ -224,12 +224,25 @@ function setRangeClamped(from, to) {
   try { main.timeScale().setVisibleLogicalRange({ from: from, to: to }); } catch (e) {}
 }
 
+// Width of the chart PANE (bars area). NEVER use timeScale().width() for this: it reports the
+// TIME AXIS element's width, which is 0 whenever the main pane's axis is hidden (always, when
+// sub-panels are enabled — the bottom pane owns the shared axis). That zero silently no-op'd
+// every time-scale gesture behind the w<10 guards.
+function paneW() {
+  try { var ps = main.paneSize(); if (ps && ps.width >= 10) return ps.width; } catch (e) {}
+  try {
+    var el = document.getElementById('main');
+    if (el) return Math.max(0, el.clientWidth - (main.priceScale('right').width() || 0));
+  } catch (e) {}
+  return 0;
+}
+
 function panByPx(dx) {
   if (!main) return;
   var ts = main.timeScale();
   var r = ts.getVisibleLogicalRange(); if (!r) return;
-  var w = ts.width();
-  if (!w || w < 10) return;
+  var w = paneW();
+  if (w < 10) return;
   var perBar = w / (r.to - r.from);
   var shift = dx / perBar;                       // drag right (dx>0) → view older bars
   setRangeClamped(r.from - shift, r.to - shift);
@@ -283,8 +296,8 @@ window.nativePinch = function (centerX, centerY, scaleT, scaleP) {
   if (isFinite(centerX) && scaleT > 0 && isFinite(scaleT) && scaleT !== 1) {
     var ts = main.timeScale();
     var r = ts.getVisibleLogicalRange();
-    var w = ts.width();
-    if (r && w && w >= 10) {                        // pane not laid out yet — a 0 width would
+    var w = paneW();
+    if (r && w >= 10) {                        // pane not laid out yet — a 0 width would
       var W = r.to - r.from;                        // produce a zero-bar range (blank chart)
       var minW = Math.max(3, w / 50), maxW = w / 0.5; // barSpacing clamp [0.5, 50] px
       var W2 = Math.min(maxW, Math.max(minW, W / scaleT));
@@ -335,7 +348,7 @@ window.nativeTimeStretch = function (factor) {
   if (!main || !(factor > 0) || !isFinite(factor) || factor === 1) return;
   var ts = main.timeScale();
   var r = ts.getVisibleLogicalRange(); if (!r) return;
-  var w = ts.width(); if (!w || w < 10) return;
+  var w = paneW(); if (w < 10) return;
   var W = r.to - r.from;
   var minW = Math.max(3, w / 50), maxW = w / 0.5;   // same barSpacing clamps as nativePinch
   var W2 = Math.min(maxW, Math.max(minW, W * factor));
@@ -363,6 +376,14 @@ window.nativeDividerEnd = function () { requestAnimationFrame(reportGeom); };
 
 // Reset (⟲ is a native SwiftUI button now): autoscale, default bar spacing, newest bar.
 window.nativeReset = function () { resetView(); };
+
+// Debug probe: time-scale state, returned to Swift by DEBUG evaluateGesture calls.
+window.__dbgProbe = function () {
+  try {
+    var r = main ? main.timeScale().getVisibleLogicalRange() : null;
+    return JSON.stringify({ from: r && r.from, to: r && r.to, w: main ? main.timeScale().width() : -1, n: candleTimes.length });
+  } catch (e) { return 'probe-err ' + e; }
+};
 
 // Gesture telemetry badge (driven by Swift DEBUG builds only — never called in Release).
 window.gestureDebug = function (msg) {
