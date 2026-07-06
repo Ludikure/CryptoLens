@@ -470,13 +470,14 @@ enum OutcomeTracker {
     }
 
     /// Must match the `version` field of the worker's shipped ml-model-{crypto,stock}.json —
-    /// both 12 as of the 2026-06-02 v12-CLEAN crypto retrain (crypto LightGBM, stock XGBoost).
+    /// both 14 as of the 2026-07-06 v14 retrain (full-coverage derivatives regen; crypto
+    /// LightGBM d4 t150, stock XGBoost d5 t100, 110 features).
     /// Pre-2026-07-01 this returned 10 for crypto (a leak-era leftover) while the worker's
     /// outcome-feedback query filtered on 11/13 — so the LLM's trade-record lookup matched
-    /// nothing. The worker now queries IN(10,11,12) crypto / IN(12,13) stock; keep all three
-    /// registries (this, the worker query, the JSONs) in sync on retrains.
+    /// nothing. The worker now queries IN(10,11,12,14) crypto / IN(12,13,14) stock; keep all
+    /// three registries (this, the worker query, the JSONs) in sync on retrains.
     static func currentModelVersion(for symbol: String) -> Int {
-        symbol.hasSuffix("USDT") ? 12 : 12
+        symbol.hasSuffix("USDT") ? 14 : 14
     }
 
     /// Register a new setup for tracking. Classifies as market or conditional.

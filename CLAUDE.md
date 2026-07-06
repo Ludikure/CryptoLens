@@ -271,38 +271,35 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 
 Direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
 
-- **Crypto model (v11, retrained 2026-05-28):** LightGBM depth=4, 150 trees — 77 symbols, 136,551 bars, **62% WF accuracy** (folds 61.6/61.8/62.6). On identical fresh data, v11 beats v10 by +3.6 pp raw accuracy and +16.1 pp on the trade-critical top bucket (76.3% vs 60.2% for v10). The lower WF headline vs v10's stated 73.4% is because v10's number was measured on its own training data, not on fresh data — apples-to-oranges. See `marketscope-worker/scripts/evaluate-model.ts` for the apples-to-apples comparison.
-- **Stock model (v13, retrained 2026-05-29):** XGBoost depth=5, 100 trees — 159 symbols, 228,487 bars, **64.7% WF accuracy** (folds 63.4/64.5/66.2), top bucket **79.9%**. On identical fresh data, v13 beats v12 by +6.8 pp raw accuracy and +4.0 pp top bucket reliability. v12's stated 66.8% / 75.5% were measured on v12's own training data — same caveat as crypto.
-- **Features:** 111
+- **Crypto model (v14, retrained 2026-07-06):** LightGBM depth=4, 150 trees — 77 symbols, 145,045 daily-downsampled bars from the full-coverage derivatives regen (`csv_exports_v14`), **WF AUC 0.674** (folds 0.672/0.670/0.678), top-decile precision 76.6%. Config challengers (d5/d6-class) and the pruned-71 feature set all failed the pre-declared ship bar → incumbent config on the FULL (110-feature) set shipped.
+- **Stock model (v14, retrained 2026-07-06):** XGBoost depth=5, 100 trees — 159 symbols, 252,215 bars (`csv_exports_v14_stocks`), **WF AUC 0.686** (folds 0.678/0.687/0.693), top-decile 78.3%. d6-class challengers again beat prod in 3/3 folds (Δ+0.0042..+0.0043 — second consecutive retrain) but stayed under the +0.005 ship bar → incumbent shipped. If a third retrain repeats this, consider revising the bar.
+- **Features:** 110 (111-feature serving contract minus `volScalarML`, an r=1.000 duplicate of `atrPercentile`; the worker evaluates trees by feature name, so the trimmed training list is serving-safe)
 - **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
 - **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x)
 - **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85.
 - **Serving architecture (post-Phase 5, 2026-05-04):** Worker is the **single source of truth** for displayed ML and notifications. iOS reads from `/ml-predict?symbol=…` (cron-cached, 5-min KV TTL); local `MLScoring.predict` is retained only for `BacktestEngine` (training canonical). No local fallback in production — UI shows nothing if cache is missing.
-- **Inference:** Native Swift tree evaluator reads same JSON as worker (no CoreML). Worker `mlPredict()` (`marketscope-worker/src/ml-predict.ts`) uses identical tree evaluation logic. Worker↔BacktestEngine parity is asserted at 1e-7 absolute tolerance via `marketscope-worker/test/parity-vs-backtest.test.ts` (345/345 passing as of 2026-05-29 under v11/v13).
+- **Inference:** Native Swift tree evaluator reads same JSON as worker (no CoreML). Worker `mlPredict()` (`marketscope-worker/src/ml-predict.ts`) uses identical tree evaluation logic. Worker↔BacktestEngine parity is asserted at 1e-7 absolute tolerance via `marketscope-worker/test/parity-vs-backtest.test.ts` (fixture ML values refreshed for v14, 2026-07-06; 425/425 total worker tests green).
 
-### Calibrated Reliability (measured on /tmp/retrain_{crypto,stocks} regen data, full population)
+### Calibrated Reliability (v14, out-of-fold on the 2026-07 full-coverage regen)
 
-v11 crypto (819,231 bars, 50.5% baseline goodR):
+v14 crypto (145,045 bars, 50.5% baseline goodR; calibration floor 0.2498):
 
 | Predicted Range | Crypto Actual | Samples |
 |----------------|---------------|---------|
-| < 30% | 23.6% | 77,359 |
-| 30-50% | 40.2% | 318,198 |
-| 50-60% | 56.0% | 216,906 |
-| 60-70% | 66.4% | 114,163 |
-| 70-85% | **76.3%** | 92,605 |
+| < 30% | 23.7% | 6,356 |
+| 30-50% | 39.4% | 32,656 |
+| 50-60% | 55.9% | 23,153 |
+| 60-70% | 64.1% | 15,189 |
+| 70-85% | **75.9%** | 9,136 |
 
-v13 stocks (455,131 bars, 55.0% baseline goodR):
+v14 stocks (252,215 bars, 57.0% baseline goodR; calibration floor 0.3193 — no bucket below 30%):
 
 | Predicted Range | Stock Actual | Samples |
 |----------------|---------------|---------|
-| < 30% | 22.4% | 30,358 |
-| 30-50% | 41.2% | 191,358 |
-| 50-60% | 59.5% | 53,646 |
-| 60-70% | 70.0% | 109,674 |
-| 70-85% | **79.9%** | 70,095 |
-
-For reference: v10 crypto on the same data hit top-bucket 60.2% (32% of bars in top bucket, overpredicting). v12 stocks on the same data hit top-bucket 75.9%. The new models issue fewer high-confidence signals but each one wins more often.
+| 30-50% | 38.9% | 63,141 |
+| 50-60% | 55.0% | 11,419 |
+| 60-70% | 66.5% | 31,651 |
+| 70-85% | **73.8%** | 43,256 |
 
 ### Feature Groups (111 total)
 
@@ -355,12 +352,13 @@ For reference: v10 crypto on the same data hit top-bucket 60.2% (32% of bars in 
 | `marketscope-worker/src/scoring-full.ts` | Worker 111-feature computation (sector ETF mapping, VP from last 30 candles) |
 | `marketscope-worker/test/parity-vs-backtest.test.ts` | 1e-7 fixture-driven worker↔BacktestEngine parity (`npm test`) |
 | `marketscope-worker/test/fixtures/backtest-canonical/*.json` | I/O snapshots produced by `BacktestEngine` "Capture Parity Fixture" button |
-| `ml-training/calibrate_v13_stocks.py` | Active stock training script — XGBoost d5 t100, reads `csv_exports_v13/`, writes both worker + iOS JSONs |
-| `ml-training/calibrate_v11_crypto.py` | Active crypto training script — LightGBM d4 t150, reads `csv_exports_v11/`, writes both worker + iOS JSONs |
-| `ml-training/calibrate_v12_stocks.py` | Predecessor stock script (kept for reference; reads `csv_exports_v12/`) |
-| `ml-training/csv_exports_v11/` | 77-symbol crypto CSVs from Node-CLI regen (2026-05-28). Gitignored. |
-| `ml-training/csv_exports_v13/` | 159-symbol stock CSVs from Node-CLI regen (2026-05-29). Gitignored. |
-| `ml-training/csv_exports_v12/` | Predecessor 159-symbol stock CSVs (2026-05-04). Kept for v12 reproducibility. |
+| `ml-training/calibrate_v14.py` | Active training script (both markets) — `crypto\|stocks [--ship]`, challenger evaluation under the audit ship bar, staging in `models_v14/`, ship copies to worker + iOS |
+| `ml-training/calibrate_horizon.py` | 72h persistence retrain — writes worker `ml-model-{market}-h72t25.json` DIRECTLY (running it IS shipping) |
+| `ml-training/train_tail_head.py` | Tail head (crypto big-move) — embeds `heads.tail` into the shipped ml-model-crypto.json; run AFTER the main --ship |
+| `ml-training/calibrate_v13_stocks.py` / `calibrate_v11_crypto.py` / `calibrate_v12_stocks.py` | Predecessor scripts (kept for reference) |
+| `ml-training/csv_exports_v14/` | 77-symbol crypto CSVs, full-coverage derivatives regen (2026-07-05/06). Gitignored. Canonical. |
+| `ml-training/csv_exports_v14_stocks/` | 159-symbol stock CSVs, same regen. Gitignored. Canonical. |
+| `ml-training/csv_exports_v11_fixed/` `csv_exports_v13/` `csv_exports_v12/` | Predecessor CSV sets (leak-fixed v11, v13/v12 stocks). Kept for reproducibility. |
 | `ml-training/calibrate_v9.py` | Legacy combined crypto+stock script — name is stale (was used to bootstrap v10 crypto model) |
 | `ml-training/model_comparison.py` | Hyperparameter comparison (XGBoost d3-5 × t100-200 + LightGBM) |
 | `ml-training/finra_dark_pool.py` | Downloads FINRA RegSHO daily files, computes short volume Z-scores |
@@ -429,7 +427,7 @@ Cooldown is keyed by `push_token`, not `device_id` — iOS rotates `device_id` o
 - Batch export: separate "Crypto Only" / "Stocks Only" buttons
 - 1-second delay between stock symbols to avoid rate limiting
 - Stock daily features (`gapPercent`, `gapFilled`, `gapDirectionAligned`, `relStrengthVsSpy`, `relStrengthVsSector`, `iwmSpyRatio`, `beta`, `fiftyTwoWeekPct`, `distToFiftyTwoHigh`) read from a **post-drop** daily slice (`dailySliceForFeatures`) — pre-fix these used `dailyCandles[dailyIdx-1]` which pointed at today's in-progress bar, leaking intraday data into training that live cron (which drops in-progress) could never reproduce. Live cross-asset slices (`spyClosed`, `iwmClosed`, `sectorClosed`) are also `dropInProgress`-applied.
-- Active training: `ml-training/calibrate_v11_crypto.py` reads `csv_exports_v11/` (77-symbol crypto, 2026-05-28 regen); `ml-training/calibrate_v13_stocks.py` reads `csv_exports_v13/` (159-symbol stocks, 2026-05-29 regen). Both regens were done via the Node-CLI runner `marketscope-worker/scripts/runBacktest.ts`; the iOS BacktestEngine path is no longer used for production CSV generation.
+- Active training: `ml-training/calibrate_v14.py crypto|stocks` reads `csv_exports_v14/` (77-symbol crypto) + `csv_exports_v14_stocks/` (159 stocks), both from the 2026-07-05/06 full-coverage derivatives regen via the Node-CLI runner `marketscope-worker/scripts/runBacktest.ts`; the iOS BacktestEngine path is no longer used for production CSV generation.
 
 ### Backtester Symbols
 
@@ -474,7 +472,7 @@ Crypto LGB d4 t150, stocks XGB d5 t100 (deeper/more-trees showed diminishing ret
 
 ## Outcome Feedback Loop
 
-The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist with the current model_version: 11 for crypto, 13 for stocks). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column; each `TrackedSetup` also carries a `promptVersion` field (see A/B Testing Infrastructure) so we can compare populations by system iteration as well as by model.
+The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist matching the worker's model_version filter — IN(10,11,12,14) crypto / IN(12,13,14) stock as of v14). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column; each `TrackedSetup` also carries a `promptVersion` field (see A/B Testing Infrastructure) so we can compare populations by system iteration as well as by model.
 
 ## A/B Testing Infrastructure (2026-05-29; collapsed 2026-05-30)
 
@@ -549,7 +547,7 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 - No certificate pinning on network calls
 - Missing App Group entitlement on main app target (widget can't share data)
 - Worker: APNs tries sandbox first then production (doubles latency). Transient-error fallback was improved 2026-05-30 (only conclusive token-level errors like 410 Unregistered now break the loop; 429/5xx still attempt prod). JWT now cached for 50 min per cron (was rebuilt per send pre-2026-05-30).
-- Parity fixtures (BTC/ETH/TSLA at 2026-05-04) still in use under v11/v13 — `expected.mlProbability` values were updated in-place via `marketscope-worker/scripts/update-fixture-ml.ts`. Feature-level parity assertions are still measured against the 2026-05-04 feature snapshots; capturing fresh fixtures at a current date is a low-priority follow-up.
+- Parity fixtures (BTC/ETH/TSLA at 2026-05-04) still in use under v14 — `expected.mlProbability` values were updated in-place via `marketscope-worker/scripts/update-fixture-ml.ts`. Feature-level parity assertions are still measured against the 2026-05-04 feature snapshots; capturing fresh fixtures at a current date is a low-priority follow-up.
 - Backtester: crypto regen ~7h at concurrency 8 (Binance rate-limit cascade); stocks regen ~3.5h across two passes (Yahoo TCP drops at concurrency 8). Section H/K of `/Volumes/External/Downloads/marketscope-postponed-work.md` documents the concurrency tuning + raw candle cache opportunity.
 - ~~72h persistence model not yet retrained on fresh data~~ — RESOLVED 2026-06-05: retrained crypto on leak-clean `csv_exports_v11_fixed` (stock was leak-spared, reproduced identically). See the 2026-06-05 decision entry.
 - Schema drift: `derivatives_history` table has 4 columns (`large_buy_vol`, `large_sell_vol`, `large_buy_count`, `large_sell_count`) added out-of-band; `trade_outcomes.prompt_version` similarly added without a migration file. A fresh D1 created from `migrations/*.sql` alone would fail INSERTs. Migration file consolidation is a low-priority follow-up.
@@ -558,6 +556,15 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-07-06 — v14 retrain shipped (all three models) on the full-coverage derivatives regen
+
+All three models retrained on the v14 regen (77 crypto + 159 stock symbols, 2020-01→2026-06-30, via `runBacktest.ts` — basis emitted, funding/OI/taker/long% backfilled per the 2026-07-05 audit; derivatives coverage verified 95.6%/79%/72.6% funding/OI/basis on crypto vs 1-2.5% in v11_fixed). Scripted by `calibrate_v14.py` under the audit's pre-declared ship bar (ΔAUC > +0.005 in ALL folds):
+- **24h main (ML_WIN):** incumbents HOLD on both markets. Crypto LGB d4 t150 × FULL-110 (WF AUC 0.674, top-decile 76.6%; pruned-71 Δ+0.0032 not all-folds-positive; challengers ≤ +0.0008). Stocks XGB d5 t100 × FULL-110 (AUC 0.686, top-decile 78.3%); **d6-class again beat prod 3/3 folds at Δ+0.0042-43, under the bar for the second consecutive retrain** — if a third retrain repeats this, revise the bar or ship d6. `volScalarML` dropped (110 features; serving-safe — trees evaluate by name). Calibration floors: crypto 0.2498, stock 0.3193.
+- **72h persistence (h72t25):** both markets retrained via `calibrate_horizon.py` — monotone reliability (crypto 70-85 bucket realizes 75.5%, stocks 78.1%), written directly to worker src.
+- **Tail head (crypto):** `train_tail_head.py` — OOF AUC 0.641, thresholds ELEVATED ≥0.0832 / HIGH ≥0.1024, all-zero parity ref 0.1840390879 (heads-parity test updated).
+- **Registries synced to 14:** worker outcome query `IN(10,11,12,14)` crypto / `IN(12,13,14)` stock; iOS `currentModelVersion` → 14; JSON `version: 14`. Parity fixtures refreshed via `update-fixture-ml.ts` (BTC ml 0.386→0.250, ETH 0.502→0.391, TSLA 0.524→0.511). **425/425 worker tests green; iOS + server builds green.**
+- **Deploy pending:** box redeploy (TrueNAS Stop/Start pulls `:latest` after push→GHCR build) + iOS rebuild/install for the bundled JSONs (low priority — live serving is the worker).
 
 ### 2026-07-05 — Live-price anchor (AI + charts) + chart gesture fixes + 429 poll fix
 

@@ -49,7 +49,7 @@ describe('Phase 1/2 heads — worker TS vs Python export reference', () => {
     it('tail head matches Python reference (calibrated, crypto)', () => {
         const t = mlPredictTail(zero, true);
         expect(t).not.toBeNull();
-        expect(t!).toBeCloseTo(0.1654135338, 6);
+        expect(t!).toBeCloseTo(0.1840390879, 6);   // v14 tail head (2026-07-06)
     });
 
     it('tail head is crypto-only; buckets map to the exported thresholds', () => {

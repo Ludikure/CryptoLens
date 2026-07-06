@@ -298,13 +298,13 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   }
 
   // Outcome feedback loop — last resolved trades for this device+symbol. The model_version filter
-  // matches EVERY version iOS has ever stamped (crypto: 10 legacy → 12 current; stock: 12/13) —
+  // matches EVERY version iOS has ever stamped (crypto: 10 legacy → 14 current; stock: 12/13/14) —
   // pre-2026-07-01 this filtered on 11/13, which matched NOTHING iOS wrote, so outcomeHistory was
   // always [] and the LLM never saw the trade record. Keep this in sync with
   // OutcomeTracker.currentModelVersion + the shipped model JSON `version` fields.
   let outcomeHistory: Array<{ direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null }> = [];
   try {
-    const versions = isCrypto ? [10, 11, 12] : [12, 13];
+    const versions = isCrypto ? [10, 11, 12, 14] : [12, 13, 14];
     const res = await env.DB.prepare(
       `SELECT direction, entry_price, outcome, ml_probability, conviction FROM trade_outcomes
        WHERE device_id = ? AND symbol = ? AND model_version IN (${versions.map(() => '?').join(',')}) AND outcome IS NOT NULL
