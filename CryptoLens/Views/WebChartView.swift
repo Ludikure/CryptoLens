@@ -195,7 +195,6 @@ struct ChartPayload: Codable {
     let priceLines: [PriceLine] // curated watch levels (S/R, VWAP, POC/VA, Entry/SL/TP)
     let volume: [VolumeBar]     // empty when the Volume panel is toggled off
     let subpanels: [SubPanel]   // only the enabled indicator panels, in display order
-    let drawings: String?       // per-symbol user drawings (JSON array), persisted via chartDrawings
     let logScale: Bool          // logarithmic price scale on the main pane
 
     /// Chart color + style for a watch-level role. Kept here (not on the model) so WatchLevel stays
@@ -288,10 +287,9 @@ struct ChartPayload: Codable {
             }
         }
 
-        let savedDrawings = (UserDefaults.standard.dictionary(forKey: "chart_drawings") as? [String: String])?[symbol]
         return ChartPayload(dark: dark, symbol: symbol, tf: tf.label, precision: precision, candles: bars,
                             lines: lines, priceLines: priceLines, volume: volume, subpanels: subpanels,
-                            drawings: savedDrawings, logScale: logScale)
+                            logScale: logScale)
     }
 }
 
@@ -321,9 +319,6 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
     private var geomTimeAxisH: CGFloat = 28
     private var geomPanes: [CGRect] = []
     private var geomDividers: [CGRect] = []
-    /// True while a drawing tool is armed / a drawing is selected or dragged — native pan and
-    /// pinch stand down entirely so the DOM owns the touch (placing points, dragging handles).
-    private var drawingActive = false
 
     private override init() {
         let config = WKWebViewConfiguration()
@@ -334,7 +329,6 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         webView.configuration.userContentController.add(self, name: "chartGeom")
-        webView.configuration.userContentController.add(self, name: "chartDrawings")
         webView.navigationDelegate = self
         webView.scrollView.isScrollEnabled = false   // Lightweight Charts owns all touch via DOM
         webView.scrollView.bounces = false
@@ -366,7 +360,6 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
     /// True when the point is over chart BODY (bars) — not the price axis strip, the time axis,
     /// or a pane divider. Those regions keep their DOM gestures.
     private func isBodyPoint(_ p: CGPoint) -> Bool {
-        if drawingActive { return false }
         if p.x > webView.bounds.width - geomPriceAxisW - 4 { return false }
         for d in geomDividers where p.y >= d.minY - 6 && p.y <= d.maxY + 6 { return false }
         if let last = geomPanes.last, p.y > last.maxY - geomTimeAxisH { return false }
@@ -419,7 +412,6 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
             guard let self, let d = body else { return }
             switch name {
             case "chartGeom":
-                if let a = d["drawingActive"] as? Bool { self.drawingActive = a }
                 if let w = d["priceAxisW"] as? Double, w > 0 { self.geomPriceAxisW = CGFloat(w) }
                 if let h = d["timeAxisH"] as? Double, h > 0 { self.geomTimeAxisH = CGFloat(h) }
                 func rects(_ key: String) -> [CGRect] {
@@ -430,14 +422,6 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
                 }
                 if d["panes"] != nil { self.geomPanes = rects("panes") }
                 if d["dividers"] != nil { self.geomDividers = rects("dividers") }
-            case "chartDrawings":
-                // Persist per-symbol drawings (trend/horizontal lines) so they survive app
-                // restarts and re-render on any timeframe (anchors are time+price).
-                guard let symbol = d["symbol"] as? String, !symbol.isEmpty,
-                      let json = d["json"] as? String else { return }
-                var dict = UserDefaults.standard.dictionary(forKey: "chart_drawings") as? [String: String] ?? [:]
-                if json == "[]" { dict.removeValue(forKey: symbol) } else { dict[symbol] = json }
-                UserDefaults.standard.set(dict, forKey: "chart_drawings")
             default: break
             }
         }
