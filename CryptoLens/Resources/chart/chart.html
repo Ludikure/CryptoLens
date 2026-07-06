@@ -400,15 +400,20 @@ function reportGeom() {
 }
 window.addEventListener('resize', function () { requestAnimationFrame(reportGeom); });
 
-// Re-enable autoscale on every pane, restore the default bar spacing, snap to the newest bar.
+// Re-enable autoscale on every pane, restore the default bar spacing AND the default pane
+// split (3:1:…), snap to the newest bar — ⟲ must recover from ANY state, including panes
+// accidentally resized toward the minimum share.
 function resetView() {
   if (!main) return;
   setVRange(null);   // drop the pinch-zoomed vertical viewport (also restores scale margins)
   [main].concat(subs.map(function (s) { return s.chart; })).forEach(function (c) {
     try { c.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {}
   });
+  var panes = document.querySelectorAll('#container .pane');
+  Array.prototype.forEach.call(panes, function (q, i) { q.style.flexGrow = (i === 0 ? '3' : '1'); });
   try { main.timeScale().applyOptions({ barSpacing: 7, rightOffset: 8 }); } catch (e) {}
   main.timeScale().scrollToRealTime();
+  requestAnimationFrame(reportGeom);
 }
 
 // Insert the divider strips between panes (visuals + geometry only — the DRAG is native:

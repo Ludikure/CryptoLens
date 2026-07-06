@@ -31,7 +31,7 @@ private enum ChartZone { case body, priceAxis, timeAxis, divider(Int) }
 /// One recognizer = no UIKit arbitration, no DOM handoff races — the two bug classes that
 /// plagued the previous hybrid design are structurally impossible.
 private final class ChartGestureRecognizer: UIGestureRecognizer {
-    enum Mode { case bodyPending, hPan, deadVertical, priceAxis, timeAxis, divider(Int), pinch }
+    enum Mode { case bodyPending, hPan, deadVertical, priceAxis, timeAxis, dividerPending(Int), divider(Int), pinch }
     var classify: (CGPoint) -> ChartZone = { _ in .body }
 
     private(set) var mode: Mode = .bodyPending
@@ -74,7 +74,10 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
                 start = p; lastX = p.x; lastY = p.y; lastTime = t.timestamp
                 deltaX = 0; deltaY = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
                 switch classify(p) {
-                case .divider(let i): mode = .divider(i)
+                // Divider resolves by DIRECTION at slop (dividerPending): the strips cross the
+                // middle of the chart, and an unconditional grab made any pan that happened to
+                // START on one resize panes for the whole drag.
+                case .divider(let i): mode = .dividerPending(i)
                 case .priceAxis:      mode = .priceAxis
                 case .timeAxis:       mode = .timeAxis
                 case .body:           mode = .bodyPending
@@ -82,6 +85,7 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
                 state = .began           // own the touch immediately; DOM gets touchcancel
             } else if t2 == nil, t !== t1 {
                 if case .divider = mode { ignore(t, for: event); continue }  // divider stays 1-finger
+                if case .dividerPending = mode { ignore(t, for: event); continue }
                 t2 = t
                 beginPinch()
             } else {
@@ -134,6 +138,30 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
                 lastX = p.x; lastTime = t.timestamp
                 state = .changed
             }
+        case .dividerPending(let i):
+            guard let t = t1, touches.contains(t) else { return }
+            let p = t.location(in: view)
+            let dx = p.x - start.x, dy = p.y - start.y
+            guard dx * dx + dy * dy >= 36 else { return }
+            if abs(dy) > abs(dx) {
+                mode = .divider(i)
+                lastY = p.y
+            } else {
+                mode = .hPan                                  // horizontal from a divider = pan
+                deltaX = dx
+                lastX = p.x; lastTime = t.timestamp
+                state = .changed
+            }
+        case .deadVertical:
+            // Not a life sentence: a drag that STARTED vertical but is now clearly horizontal
+            // (J-shaped pans, wobbly starts) becomes a pan — otherwise the whole touch is dead
+            // with zero feedback, which reads as a broken chart.
+            guard let t = t1, touches.contains(t) else { return }
+            let p = t.location(in: view)
+            if abs(p.x - start.x) > abs(p.y - start.y) + 8 {
+                mode = .hPan
+                lastX = p.x; lastTime = t.timestamp
+            }
         case .hPan:
             guard let t = t1, touches.contains(t) else { return }
             let p = t.location(in: view)
@@ -153,8 +181,6 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             deltaX = p.x - lastX
             lastX = p.x
             if deltaX != 0 { state = .changed }
-        case .deadVertical:
-            return
         }
     }
 
@@ -450,7 +476,7 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
             return g.deltaX != 0 ? "window.nativeTimeStretch && nativeTimeStretch(\(exp(-g.deltaX / 150)));" : ""
         case .divider(let i):
             return g.deltaY != 0 ? "window.nativeDividerDrag && nativeDividerDrag(\(i), \(g.deltaY));" : ""
-        case .bodyPending, .deadVertical:
+        case .bodyPending, .deadVertical, .dividerPending:
             return ""
         }
     }
@@ -458,13 +484,14 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
     #if DEBUG
     private func debugLabel(_ g: ChartGestureRecognizer) -> String {
         switch g.mode {
-        case .bodyPending:    return "pending"
-        case .hPan:           return String(format: "pan Δ%.1f v%.0f", g.deltaX, g.velocityX)
-        case .deadVertical:   return "dead-vert"
-        case .priceAxis:      return String(format: "priceAxis Δ%.1f", g.deltaY)
-        case .timeAxis:       return String(format: "timeAxis Δ%.1f", g.deltaX)
-        case .divider(let i): return String(format: "divider%d Δ%.1f", i, g.deltaY)
-        case .pinch:          return String(format: "pinch T×%.3f P×%.3f", g.pinchScaleT, g.pinchScaleP)
+        case .bodyPending:           return "pending"
+        case .hPan:                  return String(format: "pan Δ%.1f v%.0f", g.deltaX, g.velocityX)
+        case .deadVertical:          return "dead-vert"
+        case .priceAxis:             return String(format: "priceAxis Δ%.1f", g.deltaY)
+        case .timeAxis:              return String(format: "timeAxis Δ%.1f", g.deltaX)
+        case .dividerPending(let i): return "divider\(i)?"
+        case .divider(let i):        return String(format: "divider%d Δ%.1f", i, g.deltaY)
+        case .pinch:                 return String(format: "pinch T×%.3f P×%.3f", g.pinchScaleT, g.pinchScaleP)
         }
     }
     #endif
