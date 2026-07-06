@@ -153,7 +153,12 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate {
     private var lastJSON: String?   // dedup: only push real changes (preserves pan/zoom, no re-render)
 
     private override init() {
-        webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let config = WKWebViewConfiguration()
+        // No text on the chart is selectable; the selection/loupe machinery (long-press
+        // recognizers) otherwise monitors EVERY touch, delaying second-finger registration
+        // (slow pinch start) and taxing drag frames.
+        config.preferences.isTextInteractionEnabled = false
+        webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         webView.navigationDelegate = self
         webView.scrollView.isScrollEnabled = false   // Lightweight Charts owns all touch via DOM
@@ -192,6 +197,12 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate {
         for gr in view.gestureRecognizers ?? [] {
             if let tap = gr as? UITapGestureRecognizer, tap.numberOfTapsRequired >= 2 {
                 tap.isEnabled = false
+            }
+            // Long-press recognizers (context menu / text selection / drag-and-drop) watch every
+            // touch and compete in arbitration — the chart has nothing to long-press natively
+            // (Lightweight Charts does its own crosshair long-press in the DOM).
+            if gr is UILongPressGestureRecognizer {
+                gr.isEnabled = false
             }
         }
         for sub in view.subviews { disableInterferingRecognizers(in: sub) }

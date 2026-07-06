@@ -126,12 +126,26 @@ function buildStructure(p) {
   // boundaries, which stuttered and rubber-banded the gesture on every time-scale change.
   // Sub-series are whitespace-padded to the full candle range (padToTimes) so logical index
   // N means the same bar in every pane.
-  var syncing = false;
+  //
+  // rAF-coalesced: applying the range to the other panes SYNCHRONOUSLY inside every range
+  // event made the gestured pane wait for 2+ full sub-pane re-renders per touch event —
+  // visible jitter on one-finger drags. Instead, stash the latest range and apply it once
+  // per display frame: the gestured pane pans at full rate, followers trail by ≤1 frame.
+  var syncing = false, pendingRange = null, pendingSrc = null, rafId = null;
+  function applySync() {
+    rafId = null;
+    var r = pendingRange, src = pendingSrc;
+    pendingRange = null; pendingSrc = null;
+    if (!r) return;
+    syncing = true;
+    chartsForSync.forEach(function (dst) { if (dst !== src) { try { dst.timeScale().setVisibleLogicalRange(r); } catch (e) {} } });
+    syncing = false;
+  }
   chartsForSync.forEach(function (src) {
     src.timeScale().subscribeVisibleLogicalRangeChange(function (r) {
-      if (syncing || !r) return; syncing = true;
-      chartsForSync.forEach(function (dst) { if (dst !== src) { try { dst.timeScale().setVisibleLogicalRange(r); } catch (e) {} } });
-      syncing = false;
+      if (syncing || !r) return;
+      pendingRange = r; pendingSrc = src;
+      if (rafId == null) rafId = requestAnimationFrame(applySync);
     });
   });
 
