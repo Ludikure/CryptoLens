@@ -38,9 +38,9 @@ final class ChartGesturesUITests: XCTestCase {
         logBadge("after-hpan")
         sleep(2)   // let the momentum glide settle
         let afterPan = shot(web, name: "1-after-hpan")
-        let panDiff = diff(base, afterPan)
-        NSLog("GESTURE-TEST pan diff = %.4f", panDiff)
-        XCTAssertGreaterThan(panDiff, 0.05, "horizontal body drag did NOT pan the chart")
+        let panDiff = diffMain(base, afterPan)   // MAIN pane only — candles must move, not just sub-panes
+        NSLog("GESTURE-TEST pan diff (main) = %.4f", panDiff)
+        XCTAssertGreaterThan(panDiff, 0.05, "horizontal body drag did NOT pan the CANDLES")
 
         // ── 2. Pinch on the body must zoom (bars wider) ──
         // XCUIElement.pinch centers on the element; the main pane spans the top ~55-60% with the
@@ -51,7 +51,7 @@ final class ChartGesturesUITests: XCTestCase {
         logBadge("after-pinch-out")
         sleep(1)
         let afterPinch = shot(web, name: "3-after-pinch")
-        let pinchDiff = diff(prePinch, afterPinch)
+        let pinchDiff = diffMain(prePinch, afterPinch)
         NSLog("GESTURE-TEST pinch-out diff = %.4f", pinchDiff)
         XCTAssertGreaterThan(pinchDiff, 0.05, "pinch-out did NOT zoom the chart")
 
@@ -60,7 +60,7 @@ final class ChartGesturesUITests: XCTestCase {
         web.pinch(withScale: 0.4, velocity: -2.0)
         sleep(1)
         let afterPinchIn = shot(web, name: "4-after-pinch-in")
-        let pinchInDiff = diff(prePinchIn, afterPinchIn)
+        let pinchInDiff = diffMain(prePinchIn, afterPinchIn)
         NSLog("GESTURE-TEST pinch-in diff = %.4f", pinchInDiff)
         XCTAssertGreaterThan(pinchInDiff, 0.05, "pinch-in did NOT zoom the chart back out")
 
@@ -128,6 +128,22 @@ final class ChartGesturesUITests: XCTestCase {
             if d > 30 { changed += 1 }
         }
         return Double(changed) / Double(pa.count / 4)
+    }
+
+    /// diff() restricted to the MAIN pane (top rows) — the candle area. Sub-pane sync moves the
+    /// RSI/MACD panes even when the candles are frozen, so a whole-webview diff can pass falsely.
+    private func diffMain(_ a: CGImage?, _ b: CGImage?) -> Double {
+        guard let pa = pixels(a), let pb = pixels(b), pa.count == pb.count, !pa.isEmpty else { return 1 }
+        let rowStride = 160 * 4, mainRows = Int(240 * 0.52)   // top ~52% = main pane
+        var changed = 0, total = 0
+        for row in 0..<mainRows {
+            for i in stride(from: row * rowStride, to: (row + 1) * rowStride, by: 4) {
+                total += 1
+                let d = abs(Int(pa[i]) - Int(pb[i])) + abs(Int(pa[i+1]) - Int(pb[i+1])) + abs(Int(pa[i+2]) - Int(pb[i+2]))
+                if d > 30 { changed += 1 }
+            }
+        }
+        return total > 0 ? Double(changed) / Double(total) : 1
     }
 
     /// Fraction of sampled pixels that are not near-background (any channel spread) — a blank

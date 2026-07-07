@@ -18,6 +18,40 @@ import UIKit.UIGestureRecognizerSubclass
 /// Chart zones, classified from the geometry the page reports (reportGeom).
 private enum ChartZone { case body, priceAxis, timeAxis, divider(Int) }
 
+/// Decomposes a two-finger pinch into independent TIME (horizontal) and PRICE (vertical) scale
+/// factors by MOVEMENT, not finger posture: the time factor tracks the change in the fingers'
+/// HORIZONTAL separation, the price factor the VERTICAL separation. Each axis engages only after
+/// its separation has changed by `axisActivation` since pinch start (hysteresis — wobble on the
+/// axis you are not deliberately moving never activates it), and separations below
+/// `minSeparation` are ignored as noise. Extracted from the recognizer so it is unit-testable
+/// without synthesizing UITouches (XCUIElement.pinch can only spread vertically).
+struct PinchAxisTracker {
+    private var startAdx: CGFloat, startAdy: CGFloat
+    private var lastAdx: CGFloat, lastAdy: CGFloat
+    private(set) var hActive = false
+    private(set) var vActive = false
+    let axisActivation: CGFloat
+    let minSeparation: CGFloat
+
+    init(_ p1: CGPoint, _ p2: CGPoint, axisActivation: CGFloat = 15, minSeparation: CGFloat = 12) {
+        startAdx = max(1, abs(p2.x - p1.x)); lastAdx = startAdx
+        startAdy = max(1, abs(p2.y - p1.y)); lastAdy = startAdy
+        self.axisActivation = axisActivation
+        self.minSeparation = minSeparation
+    }
+
+    /// Incremental (time, price) scale factors since the previous update (1 = no change).
+    mutating func update(_ p1: CGPoint, _ p2: CGPoint) -> (t: CGFloat, p: CGFloat) {
+        let adx = max(1, abs(p2.x - p1.x)), ady = max(1, abs(p2.y - p1.y))
+        if !hActive && abs(adx - startAdx) >= axisActivation { hActive = true }
+        if !vActive && abs(ady - startAdy) >= axisActivation { vActive = true }
+        let sT = (hActive && lastAdx >= minSeparation && adx >= minSeparation) ? adx / lastAdx : 1
+        let sP = (vActive && lastAdy >= minSeparation && ady >= minSeparation) ? ady / lastAdy : 1
+        lastAdx = adx; lastAdy = ady
+        return (sT, sP)
+    }
+}
+
 /// THE single owner of every chart touch. Begins on first touch-down (the page needs none) and
 /// routes by zone:
 ///   body:       horizontal drag → time pan (+ momentum glide); vertical drag → consumed, no-op
@@ -51,18 +85,8 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
     private var lastX: CGFloat = 0
     private var lastY: CGFloat = 0
     private var lastTime: TimeInterval = 0
-    /// Pinch separation tracking. An axis only starts scaling once the NET change in its
-    /// separation since pinch start crosses `axisActivation` (hysteresis — finger wobble on the
-    /// axis you are NOT deliberately moving never activates it), and ratios below
-    /// `minSeparation` are ignored as noise.
-    private var lastAdx: CGFloat = 1
-    private var lastAdy: CGFloat = 1
-    private var startAdx: CGFloat = 1
-    private var startAdy: CGFloat = 1
-    private var hActive = false
-    private var vActive = false
-    private let axisActivation: CGFloat = 15   // pt of net separation change to engage an axis
-    private let minSeparation: CGFloat = 12    // below this, ratios are noise — don't scale
+    /// Pinch axis decomposition (see PinchAxisTracker). Non-nil only while pinching.
+    private var pinch: PinchAxisTracker?
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
         guard let view else { return }
@@ -98,9 +122,7 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
         guard let view, let a = t1, let b = t2 else { return }
         let p1 = a.location(in: view), p2 = b.location(in: view)
         mode = .pinch
-        lastAdx = max(1, abs(p2.x - p1.x)); startAdx = lastAdx
-        lastAdy = max(1, abs(p2.y - p1.y)); startAdy = lastAdy
-        hActive = false; vActive = false
+        pinch = PinchAxisTracker(p1, p2)
         lastX = (p1.x + p2.x) / 2
         lastTime = max(a.timestamp, b.timestamp)
         deltaX = 0; deltaY = 0; pinchScaleT = 1; pinchScaleP = 1
@@ -115,15 +137,12 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
             guard let a = t1, let b = t2 else { return }
             let p1 = a.location(in: view), p2 = b.location(in: view)
             let mid = (p1.x + p2.x) / 2
-            let adx = max(1, abs(p2.x - p1.x)), ady = max(1, abs(p2.y - p1.y))
-            if !hActive && abs(adx - startAdx) >= axisActivation { hActive = true }
-            if !vActive && abs(ady - startAdy) >= axisActivation { vActive = true }
-            pinchScaleT = (hActive && lastAdx >= minSeparation && adx >= minSeparation) ? adx / lastAdx : 1
-            pinchScaleP = (vActive && lastAdy >= minSeparation && ady >= minSeparation) ? ady / lastAdy : 1
+            let s = pinch?.update(p1, p2) ?? (t: 1, p: 1)
+            pinchScaleT = s.t; pinchScaleP = s.p
             deltaX = mid - lastX
             focalX = mid; focalY = (p1.y + p2.y) / 2
             trackVelocity(at: max(a.timestamp, b.timestamp))
-            lastX = mid; lastAdx = adx; lastAdy = ady
+            lastX = mid
             state = .changed
         case .bodyPending:
             guard let t = t1, touches.contains(t) else { return }
@@ -206,6 +225,7 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
         if case .pinch = mode, t2 == nil, let t = t1 {
             // Pinch → pan continuation with the surviving finger.
             mode = .hPan
+            pinch = nil
             let p = t.location(in: view)
             lastX = p.x; lastTime = t.timestamp
             deltaX = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
@@ -218,9 +238,8 @@ private final class ChartGestureRecognizer: UIGestureRecognizer {
 
     override func reset() {
         t1 = nil; t2 = nil
-        mode = .bodyPending
+        mode = .bodyPending; pinch = nil
         deltaX = 0; deltaY = 0; pinchScaleT = 1; pinchScaleP = 1; velocityX = 0
-        hActive = false; vActive = false
     }
 }
 

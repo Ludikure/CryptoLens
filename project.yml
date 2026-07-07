@@ -67,12 +67,28 @@ targets:
       - target: MarketScopeWidget
     scheme:
       testTargets:
+        - MarketScopeTests
         - MarketScopeUITests
       run:
         environmentVariables:
           - variable: IDEPreferLogStreaming
             value: "YES"
             isEnabled: true
+
+  # Unit tests: pure logic (the pinch axis decomposition) that XCUIElement.pinch can't exercise
+  # — it only spreads vertically, so the horizontal-zoom path has no UI-test coverage.
+  MarketScopeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - MarketScopeTests
+    dependencies:
+      - target: MarketScope
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens.tests
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
 
   # UI test target: drives REAL touches (pan / pinch / axis drags) against the chart on the
   # simulator — the only way to verify the native gesture recognizer end-to-end without a

@@ -21,10 +21,6 @@
   #legend { position: absolute; top: 3px; left: 44px; z-index: 3; pointer-events: none;
     font-size: 10px; font-weight: 600; display: flex; gap: 10px; }
   #legend span::before { content: '—'; margin-right: 3px; font-weight: 700; }
-  /* OHLC readout (TradingView-style): crosshair bar's values, or the last bar when idle. */
-  #ohlc { position: absolute; top: 16px; left: 44px; z-index: 3; pointer-events: none;
-    font-size: 10px; font-weight: 500; color: #9aa4b2; font-variant-numeric: tabular-nums; }
-  #ohlc b { font-weight: 600; }
   .lbl { font-variant-numeric: tabular-nums; }
   /* Drag handle between panes (TradingView-style): drag to grow one pane / shrink its neighbor.
      10px transparent strip with a visible grip; touch-action:none so the drag doesn't scroll/pan. */
@@ -157,44 +153,17 @@ function buildStructure(p) {
   requestAnimationFrame(reportGeom);
 }
 
-// ── OHLC / sub-pane readouts ────────────────────────────────────────────────────────────────
-// candleMap/volMap: time → bar/volume for the OHLC readout. Each sub-pane keeps valueMaps
-// (time → per-line values) for its label readout. With the crosshair removed (fully-native
-// redesign), the readouts always show the LAST bar; renderReadouts keeps its `t` parameter
-// in case a native inspect gesture ever returns.
-var candleArr = [], candleMap = {}, volMap = {};
+// ── Sub-pane readouts ───────────────────────────────────────────────────────────────────────
+// Each sub-pane keeps valueMaps (time → per-line values) for its label readout. With the
+// crosshair removed (fully-native redesign), the readouts always show the LAST bar;
+// renderReadouts keeps its `t` parameter in case a native inspect gesture ever returns.
+var candleArr = [], candleMap = {};
 
-function fmtVol(v) {
-  if (!isFinite(v) || v <= 0) return '';
-  if (v >= 1e9) return (v / 1e9).toFixed(2) + 'B';
-  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
-  if (v >= 1e3) return (v / 1e3).toFixed(1) + 'K';
-  return String(Math.round(v));
-}
-
-// Render the OHLC row + each sub-pane's value readout for bar time `t` (null → last bar).
+// Render each sub-pane's value readout for bar time `t` (null → last bar). The OHLC price row
+// that used to sit at the top of the main pane was removed 2026-07-06 (user request) — the
+// sub-pane labels (RSI/MACD values) live INSIDE their panes, not over the candles.
 function renderReadouts(t) {
-  var el = document.getElementById('ohlc');
-  if (!el) {
-    el = document.createElement('div'); el.id = 'ohlc';
-    var m = document.getElementById('main'); if (!m) return;
-    m.appendChild(el);
-  }
   var key = t != null ? t : (candleArr.length ? candleArr[candleArr.length - 1].time : null);
-  var bar = key != null ? candleMap[key] : null;
-  if (!bar) { el.textContent = ''; return; }
-  var idx = candleArr.indexOf(bar);
-  var prev = idx > 0 ? candleArr[idx - 1] : null;
-  var ref = prev ? prev.close : bar.open;
-  var chg = ref ? ((bar.close - ref) / ref) * 100 : 0;
-  var up = bar.close >= ref;
-  var cc = up ? '#26a69a' : '#ef5350';
-  var f = formatDrawPrice;
-  var vol = volMap[key];
-  el.innerHTML = 'O <b style="color:' + cc + '">' + f(bar.open) + '</b> H <b style="color:' + cc + '">' + f(bar.high)
-    + '</b> L <b style="color:' + cc + '">' + f(bar.low) + '</b> C <b style="color:' + cc + '">' + f(bar.close)
-    + '</b> <b style="color:' + cc + '">' + (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%</b>'
-    + (vol != null ? ' · V <b>' + fmtVol(vol) + '</b>' : '');
 
   subs.forEach(function (e2) {
     if (!e2.lblEl) return;
@@ -401,9 +370,6 @@ window.gestureDebug = function (msg) {
 // Drawing tools were REMOVED 2026-07-06 (unusable on device; recoverable at f07d762..a6c650b).
 var candleTimes = [];         // main-pane candle times (unix seconds), set on every update()
 
-var curPrecision = 2;
-function formatDrawPrice(p) { return isFinite(p) ? p.toFixed(curPrecision) : ''; }
-
 // Push the layout geometry to Swift — the native recognizer ROUTES touches by zone (price
 // axis, time axis, divider index, body). Called after structure/data/divider/resize changes.
 function reportGeom() {
@@ -457,13 +423,11 @@ function update(p, fit) {
   candle.setData(data);
   if (!data.length) return;
   candle.applyOptions({ priceFormat: { type: 'price', precision: p.precision || 2, minMove: Math.pow(10, -(p.precision || 2)) } });
-  curPrecision = p.precision || 2;
   // Log/linear price scale (main pane only; sub-panels are oscillators).
   try { main.priceScale('right').applyOptions({ mode: p.logScale ? 1 : 0 }); } catch (e) {}
-  // Crosshair readout maps.
-  candleArr = data; candleMap = {}; volMap = {};
+  // Sub-pane readout maps (last-bar values).
+  candleArr = data; candleMap = {};
   data.forEach(function (c) { candleMap[c.time] = c; });
-  (p.volume || []).forEach(function (v) { volMap[v.time] = v.value; });
 
   var lines = p.lines || [];
   emaSeries.forEach(function (s, i) { s.setData(lines[i] ? clean(lines[i].points) : []); });

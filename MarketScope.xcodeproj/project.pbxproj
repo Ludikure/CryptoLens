@@ -110,6 +110,7 @@
 		E120E3822144D196C3381E48 /* TimestampBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFF49A906FD9BA3F4B4CF2A /* TimestampBar.swift */; };
 		E2FA3DF5F6C515786539B0BD /* WorkerPendingSetupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2194A97E79988E1EF8ACCC17 /* WorkerPendingSetupService.swift */; };
 		E5B52D181CC00BB83D52937F /* OutcomeDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04E451D5B1A589DBED045C12 /* OutcomeDashboardView.swift */; };
+		E7811DF2E1EFFDCA3B3F95C2 /* PinchAxisTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 295E0C6FB973BBCCCE586AB2 /* PinchAxisTrackerTests.swift */; };
 		E9E67799FFCDABFF60631C0A /* CoinPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C188735F2331F1002B4B991 /* CoinPickerView.swift */; };
 		ED59023079801F4E8ED088AE /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2375646B3479EA716AE7270B /* NetworkMonitor.swift */; };
 		EFC2732FC7C7873FBB88A6E4 /* EarningsCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774EAFA76A70F4924070E2BA /* EarningsCalendar.swift */; };
@@ -125,6 +126,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 93CC97B8BC093C4D3073CED7;
 			remoteInfo = MarketScopeWidget;
+		};
+		8C3269D130A62E1517A47F7B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7EC50E815A0F689412EEBD7E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 184F1203E8466CCEFB5FAB44;
+			remoteInfo = MarketScope;
 		};
 		8C7DCC596DEF6FFE81D323E3 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -171,6 +179,7 @@
 		2375646B3479EA716AE7270B /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		240E25E0B2FC9470C9FD86AF /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
 		269A7170910D8B8931CD2333 /* MarketScopeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketScopeWidget.swift; sourceTree = "<group>"; };
+		295E0C6FB973BBCCCE586AB2 /* PinchAxisTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchAxisTrackerTests.swift; sourceTree = "<group>"; };
 		29ADC5116EA585594CD2E515 /* CoinInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinInfo.swift; sourceTree = "<group>"; };
 		2E0C76F764DF28200D232422 /* dark_pool_history.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = dark_pool_history.json; sourceTree = "<group>"; };
 		2F38502C13543C7C5271A47D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -220,6 +229,7 @@
 		9C98ABE8F402ADB12ADC93C4 /* PushService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushService.swift; sourceTree = "<group>"; };
 		9D9485756A0FD554CED7F18F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		A4DE7A0E484EF355541AD623 /* CronHealthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronHealthService.swift; sourceTree = "<group>"; };
+		A58C293527EA657FB4BDBDA4 /* MarketScopeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MarketScopeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A66FEE5F0128956976944289 /* RetryHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetryHelper.swift; sourceTree = "<group>"; };
 		AAE82500326A2DCE4B7C4CFF /* WorkerMLService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerMLService.swift; sourceTree = "<group>"; };
 		AB439BCEE474102426A11B6A /* AssetToolbarModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssetToolbarModifier.swift; sourceTree = "<group>"; };
@@ -350,6 +360,7 @@
 			isa = PBXGroup;
 			children = (
 				E4C9B78005A59E85CF6BECFC /* MarketScope.app */,
+				A58C293527EA657FB4BDBDA4 /* MarketScopeTests.xctest */,
 				990D543D1EACD0A68D9974AE /* MarketScopeUITests.xctest */,
 				726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */,
 			);
@@ -370,6 +381,7 @@
 			children = (
 				7AF095808B53BB891E6D66EB /* CryptoLens */,
 				1CAAF275740715E19EB37F5B /* CryptoLens */,
+				966BEB38B7E2B60FA1ED8F8C /* MarketScopeTests */,
 				E8E7770BF48F6BCCEE7EB2D3 /* MarketScopeUITests */,
 				E07369BEDEDCC8391A678363 /* MarketScopeWidget */,
 				51AD67A2B3529F4F82C21534 /* Products */,
@@ -400,6 +412,14 @@
 				1C7BB8B80E33C13365E25DDE /* ml-model-stock.json */,
 			);
 			path = ML;
+			sourceTree = "<group>";
+		};
+		966BEB38B7E2B60FA1ED8F8C /* MarketScopeTests */ = {
+			isa = PBXGroup;
+			children = (
+				295E0C6FB973BBCCCE586AB2 /* PinchAxisTrackerTests.swift */,
+			);
+			path = MarketScopeTests;
 			sourceTree = "<group>";
 		};
 		B4CBFFAED037118319EA916E /* Views */ = {
@@ -505,6 +525,24 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		1747408B35FC224BA4943E63 /* MarketScopeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 56838F237ECA524988691DF2 /* Build configuration list for PBXNativeTarget "MarketScopeTests" */;
+			buildPhases = (
+				6DEEDDD2CD6ECC47122606BC /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				07EDC2D3393CD0817AC57F33 /* PBXTargetDependency */,
+			);
+			name = MarketScopeTests;
+			packageProductDependencies = (
+			);
+			productName = MarketScopeTests;
+			productReference = A58C293527EA657FB4BDBDA4 /* MarketScopeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		184F1203E8466CCEFB5FAB44 /* MarketScope */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 892D8B08068A04CF40069E1C /* Build configuration list for PBXNativeTarget "MarketScope" */;
@@ -569,6 +607,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1600;
 				TargetAttributes = {
+					1747408B35FC224BA4943E63 = {
+						DevelopmentTeam = 6AS729C9FR;
+						ProvisioningStyle = Automatic;
+					};
 					184F1203E8466CCEFB5FAB44 = {
 						DevelopmentTeam = 6AS729C9FR;
 						ProvisioningStyle = Automatic;
@@ -599,6 +641,7 @@
 			projectRoot = "";
 			targets = (
 				184F1203E8466CCEFB5FAB44 /* MarketScope */,
+				1747408B35FC224BA4943E63 /* MarketScopeTests */,
 				DD4FFD6D4492A218752798AD /* MarketScopeUITests */,
 				93CC97B8BC093C4D3073CED7 /* MarketScopeWidget */,
 			);
@@ -737,6 +780,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		6DEEDDD2CD6ECC47122606BC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E7811DF2E1EFFDCA3B3F95C2 /* PinchAxisTrackerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		7793F00CEFBB66C91514B194 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -748,6 +799,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		07EDC2D3393CD0817AC57F33 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 184F1203E8466CCEFB5FAB44 /* MarketScope */;
+			targetProxy = 8C3269D130A62E1517A47F7B /* PBXContainerItemProxy */;
+		};
 		09EB4D8EC9CD50226D691297 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 93CC97B8BC093C4D3073CED7 /* MarketScopeWidget */;
@@ -761,6 +817,24 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		0A7E3E14DF7642F29E335EA2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ludikure.CryptoLens.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MarketScope.app/MarketScope";
+			};
+			name = Release;
+		};
 		0C3D5D25224F103CCCA02FCC /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -825,6 +899,24 @@
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
+		};
+		43A69DDCB5DA8866068C6015 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.ludikure.CryptoLens.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MarketScope.app/MarketScope";
+			};
+			name = Debug;
 		};
 		4A5C7F468DBB56E0DE3CAEE7 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -1025,6 +1117,15 @@
 			buildConfigurations = (
 				5979F082673A2B9BB297A8C5 /* Debug */,
 				5811FCD3313D6723015BED0B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		56838F237ECA524988691DF2 /* Build configuration list for PBXNativeTarget "MarketScopeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				43A69DDCB5DA8866068C6015 /* Debug */,
+				0A7E3E14DF7642F29E335EA2 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
