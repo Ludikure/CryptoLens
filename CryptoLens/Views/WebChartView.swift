@@ -531,26 +531,25 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate, WKScriptMessageHa
         #endif
     }
 
+    // WKScriptMessageHandler. WebKit always delivers this on the main thread, and WKScriptMessage
+    // (.name/.body) plus webView.bounds are all @MainActor-isolated — so assert main-actor
+    // isolation rather than reading them from a nonisolated context (which warns) or bouncing
+    // through a Task (which needlessly defers the geometry a frame).
     nonisolated func userContentController(_ userContentController: WKUserContentController,
                                            didReceive message: WKScriptMessage) {
-        let name = message.name
-        let body = message.body as? [String: Any]
-        Task { @MainActor [weak self] in
-            guard let self, let d = body else { return }
-            switch name {
-            case "chartGeom":
-                if let w = d["priceAxisW"] as? Double, w > 0 { self.geomPriceAxisW = CGFloat(w) }
-                if let h = d["timeAxisH"] as? Double, h > 0 { self.geomTimeAxisH = CGFloat(h) }
-                func rects(_ key: String) -> [CGRect] {
-                    ((d[key] as? [[String: Any]]) ?? []).compactMap { r in
-                        guard let top = r["top"] as? Double, let h = r["height"] as? Double else { return nil }
-                        return CGRect(x: 0, y: top, width: self.webView.bounds.width, height: h)
-                    }
+        MainActor.assumeIsolated {
+            guard message.name == "chartGeom", let d = message.body as? [String: Any] else { return }
+            if let w = d["priceAxisW"] as? Double, w > 0 { geomPriceAxisW = CGFloat(w) }
+            if let h = d["timeAxisH"] as? Double, h > 0 { geomTimeAxisH = CGFloat(h) }
+            let width = webView.bounds.width
+            func rects(_ key: String) -> [CGRect] {
+                ((d[key] as? [[String: Any]]) ?? []).compactMap { r in
+                    guard let top = r["top"] as? Double, let h = r["height"] as? Double else { return nil }
+                    return CGRect(x: 0, y: top, width: width, height: h)
                 }
-                if d["panes"] != nil { self.geomPanes = rects("panes") }
-                if d["dividers"] != nil { self.geomDividers = rects("dividers") }
-            default: break
             }
+            if d["panes"] != nil { geomPanes = rects("panes") }
+            if d["dividers"] != nil { geomDividers = rects("dividers") }
         }
     }
 
