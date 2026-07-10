@@ -1,15 +1,10 @@
 import Foundation
 
 /// Calls the Worker `/full-analysis` — the shared analysis brain (indicators + the full
-/// pre-computed-flags prompt + LLM, all server-side). This is the Phase-4 migration path:
-/// when the `use_server_analysis` UserDefault is ON, `AnalysisService.runFullAnalysis` uses
-/// this instead of building the ~2,700-line prompt locally via `AnalysisPrompt.buildUserPrompt`
-/// and calling `/analyze`. Server uses Claude Sonnet + extended thinking.
-///
-/// Step 1 is intentionally side-by-side + flag-gated (default OFF) so the server output can be
-/// compared against the local engine before the Swift prompt builder is retired. The local
-/// indicator engine still runs for the chart/table + outcome tracking; only the prompt + LLM
-/// call move server-side here.
+/// pre-computed-flags prompt + LLM, all server-side). This is THE analysis path, unconditional:
+/// `AnalysisService.runFullAnalysis` always routes through here (the local Swift prompt builder
+/// and the `use_server_analysis` flag were deleted 2026-06-27 — see CLAUDE.md "Dead local-prompt
+/// path DELETED").
 enum WorkerFullAnalysisService {
 
     struct Result {

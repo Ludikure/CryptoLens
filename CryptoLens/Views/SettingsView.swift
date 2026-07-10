@@ -7,12 +7,9 @@ struct SettingsView: View {
     @State private var selectedProvider: AIProviderType = .deepseek
     @State private var selectedModel: String = ""
     @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
-    @AppStorage("experiments_enabled") private var experimentsEnabled: Bool = true
-    @AppStorage("conformal_gate_enabled") private var conformalGate: Bool = false
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 25000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
-    @AppStorage("contractSize") private var contractSize: Double = 0.01
     @AppStorage("daily_trade_cadence") private var dailyTradeCadence: Int = 2
     @AppStorage("max_leverage") private var maxLeverage: Double = 3.0
 
@@ -41,7 +38,9 @@ struct SettingsView: View {
                     // Source health badges
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 8) {
                         sourceBadge("Yahoo", state: status.yahooFinance)
-                        sourceBadge("Binance", state: status.binance)
+                        // "Crypto", not "Binance": in thin-client mode crypto data comes from the
+                        // box (worker), not Binance directly — the badge tracks crypto refreshes.
+                        sourceBadge("Crypto", state: status.binance)
                         sourceBadge("Finnhub", state: status.finnhub)
                         sourceBadge("FRED", state: status.macro)
                         sourceBadge("AI", state: status.ai)
@@ -129,17 +128,10 @@ struct SettingsView: View {
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                     }
-                    HStack {
-                        Text("Contract Size")
-                        Spacer()
-                        TextField("Size", value: $contractSize, format: .number)
-                            .keyboardType(.decimalPad)
-                            .multilineTextAlignment(.trailing)
-                    }
+                    // "Contract Size" field removed 2026-07-09: nothing read `contractSize` — its
+                    // only consumer was the legacy inline sizing block deleted 2026-07-02
+                    // (PositionSizer/Card/Calculator size from account × risk% ÷ stop distance).
                     Text("Max risk: \(Formatters.formatPrice(accountSize * riskPercent / 100)) per trade")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Text("Contract: \(String(format: "%g", contractSize)) units (e.g. 0.01 = nano BTC)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Stepper(value: $maxLeverage, in: 1...20, step: 0.5) {
@@ -154,25 +146,12 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section {
-                    Toggle("Enable A/B experiments", isOn: $experimentsEnabled)
-                        .onChange(of: experimentsEnabled) {
-                            UserDefaults.standard.set(experimentsEnabled, forKey: "experiments_enabled")
-                        }
-                } header: {
-                    Text("Experiments")
-                } footer: {
-                    Text("When enabled, new trade setups are bucketed into baseline or treatment prompt versions so outcome differences can be measured. Turn OFF to always use the baseline prompt.")
-                }
-
-                Section {
-                    Toggle("Conformal gate (crypto)", isOn: $conformalGate)
-                } header: {
-                    Text("ML — Conformal Abstention")
-                } footer: {
-                    Text("When ON, crypto setups must clear the worker's conformal confidence gate (calibrated ≥60% win) and use the adaptive q75 runner target. On a frozen-holdout backtest this lifted EV/trade from +0.245R to +0.754R while trading ~1/3 as often. OFF (default): the conformal status is shown as info only and does not affect setups. Watch the effect in Outcome Tracking.")
-                }
-
+                // "Enable A/B experiments" and "Conformal gate (crypto)" toggles removed 2026-07-09:
+                // both were dead. A/B: post-collapse (2026-05-30) baseline == treatment prompt
+                // version, so the toggle changed nothing (assignedPromptVersion stays for a future
+                // multi-user restart). Conformal: nothing reads `conformal_gate_enabled` and iOS
+                // never sent conformalGateEnabled to the worker — the leak-era conformal head was
+                // retired 2026-06-02.
 
                 Section("Data") {
                     NavigationLink("Outcome Tracking") {

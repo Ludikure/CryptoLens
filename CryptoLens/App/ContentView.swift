@@ -620,9 +620,6 @@ struct AITabContent: View {
     @EnvironmentObject var service: AnalysisService
     @Binding var showHistory: Bool
     @State private var historyCount: Int = 0
-    @AppStorage("accountSize") private var accountSize: Double = 25000
-    @AppStorage("riskPercent") private var riskPercent: Double = 2.0
-    @AppStorage("contractSize") private var contractSize: Double = 0.01
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
