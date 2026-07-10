@@ -7,6 +7,7 @@ import worker from '../src/index';
 import { buildEnv, assertApnsKeyValid } from './env';
 import { installFetchProxy } from './fetch-proxy';
 import { startCron } from './cron';
+import { startLiquidationCollector } from './liquidations';
 
 async function main() {
   installFetchProxy();          // must run before any fetch (worker imports may not fetch at load, but be safe)
@@ -47,6 +48,9 @@ async function main() {
 
   server.listen(PORT, () => console.log(`marketscope listening on :${PORT}`));
   startCron(worker as any, env);
+  // Binance forced-liquidation websocket → `liquidations` D1. Non-backfillable data — every
+  // uncollected day is gone forever, so this starts unconditionally with the process.
+  startLiquidationCollector(env);
 }
 
 main().catch((e) => {

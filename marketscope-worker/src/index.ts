@@ -7,6 +7,7 @@ import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
+import { registerTrackedSetups, resolveTrackedSetups, readActiveSetupsForPrompt, readTrackedSetups } from './outcome-tracking';
 import { forecastVol, bandMultipliers } from './vol';
 import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
@@ -188,6 +189,30 @@ async function callLLM(env: Env, opts: { provider?: string; model?: string; syst
 // (iOS fire-and-forget) share one code path. Returns a typed ok/error union for expected conditions;
 // throws on unexpected failures (callers wrap). Does NOT rate-limit or serialize — callers do.
 type CoreResult = { ok: true; result: any } | { ok: false; status: number; error: string };
+// Observed forced-liquidation flow for a symbol (from the box collector's `liquidations`
+// table — see server/liquidations.ts). Null when the table is missing/empty so the prompt
+// line simply doesn't render. Sampled feed: sums are lower bounds.
+export async function fetchLiquidationSummary(env: Env, symbol: string):
+  Promise<{ h1LongUsd: number; h1ShortUsd: number; h24LongUsd: number; h24ShortUsd: number } | null> {
+  try {
+    const now = Date.now();
+    const res = await env.DB.prepare(
+      `SELECT side,
+              SUM(CASE WHEN ts >= ? THEN notional ELSE 0 END) AS h1,
+              SUM(notional) AS h24
+       FROM liquidations WHERE symbol = ? AND ts >= ? GROUP BY side`
+    ).bind(now - 3_600_000, symbol, now - 86_400_000).all();
+    const rows = (res.results || []) as any[];
+    if (!rows.length) return null;
+    const out = { h1LongUsd: 0, h1ShortUsd: 0, h24LongUsd: 0, h24ShortUsd: 0 };
+    for (const r of rows) {
+      if (r.side === 'long') { out.h1LongUsd = r.h1 ?? 0; out.h24LongUsd = r.h24 ?? 0; }
+      else if (r.side === 'short') { out.h1ShortUsd = r.h1 ?? 0; out.h24ShortUsd = r.h24 ?? 0; }
+    }
+    return out;
+  } catch { return null; }   // table not created yet (collector never ran) — fine
+}
+
 async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, body: any, deviceId: string): Promise<CoreResult> {
   const { daily, fourH, oneH } = await fetchAllTimeframesCached(env, symbol, isCrypto);
   if (!daily.length) return { ok: false, status: 404, error: 'No candles' };
@@ -298,10 +323,12 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   }
 
   // Outcome feedback loop — last resolved trades for this device+symbol. The model_version filter
-  // matches EVERY version iOS has ever stamped (crypto: 10 legacy → 14 current; stock: 12/13/14) —
+  // matches EVERY version ever stamped (crypto: 10 legacy → 14 current; stock: 12/13/14) —
   // pre-2026-07-01 this filtered on 11/13, which matched NOTHING iOS wrote, so outcomeHistory was
-  // always [] and the LLM never saw the trade record. Keep this in sync with
-  // OutcomeTracker.currentModelVersion + the shipped model JSON `version` fields.
+  // always [] and the LLM never saw the trade record. Since the 2026-07-09 cutover new outcomes
+  // are written by the cron resolver with outcome-tracking.ts's TRACKED_MODEL_VERSION — that
+  // constant is the registry of record; keep it, this IN-list, and the model JSON `version`
+  // fields in sync on retrains.
   let outcomeHistory: Array<{ direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null }> = [];
   try {
     const versions = isCrypto ? [10, 11, 12, 14] : [12, 13, 14];
@@ -325,6 +352,9 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     !isCrypto ? fetchStockEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
   ]);
 
+  // Observed liquidation flow (crypto) — best-effort, from the box collector's archive.
+  const liquidations = isCrypto ? await fetchLiquidationSummary(env, symbol) : null;
+
   // Stateful prompt build — KV-backed prevState (regime staleness, kill durations, naked POC).
   const stateKey = `prompt:${symbol}`;
   let prevState: PromptState = {};
@@ -334,7 +364,12 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     riskPercent: Number.isFinite(body.riskPercent) && body.riskPercent > 0 ? Math.min(body.riskPercent, 100) : undefined,
     conformalGateEnabled: body.conformalGateEnabled === true,
   };
-  const activeSetups = Array.isArray(body.activeSetups) ? body.activeSetups : [];
+  // Active Trade State comes from the server's own tracked_setups (resolved by the cron) —
+  // the request-body path is a transition fallback for app builds that still send it, removed
+  // once iOS is fully cut over.
+  let activeSetups: any[] = [];
+  try { activeSetups = await readActiveSetupsForPrompt(env, deviceId, symbol); } catch { /* best-effort */ }
+  if (!activeSetups.length && Array.isArray(body.activeSetups)) activeSetups = body.activeSetups;
   const riskStates = computeRiskStates({
     isCrypto,
     atrPercentile: indicators[0].atrPercentile,
@@ -347,7 +382,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, livePrice, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing,
+    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing, liquidations,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });
@@ -373,6 +408,15 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   const llm = await callLLM(env, { provider, model: body.model, system, prompt, thinkingBudget });
   if (!llm.ok) return { ok: false, status: llm.status, error: llm.error };
   const setups = parseSetups(llm.text);
+
+  // Server-side outcome tracking (2026-07-09 thin-client cutover): register this analysis's
+  // setups (or its FLAT decision) in tracked_setups — the cron resolves them from here on,
+  // no phone involvement. Best-effort: registration failure must never fail the analysis.
+  try {
+    await registerTrackedSetups(env, { deviceId, symbol, isCrypto, setups, analysisText: llm.text, livePrice, indicators });
+  } catch (e) {
+    console.log(`[tracked] register failed ${symbol}: ${e}`);
+  }
 
   // #6 — the LLM run succeeded: NOW advance the SINCE LAST ANALYSIS baseline (fresh ML + timestamp
   // from newState) and persist the fresh Bottom Line. Unconditional on llm.ok — even if the Bottom
@@ -434,6 +478,46 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
 // Shared definition with the historical backfill (scripts/backfill-whale-trades.ts) so archived
 // live data and backfilled history are directly comparable.
 export const WHALE_NOTIONAL_USD = 100_000;
+
+// Order-book depth snapshot summarizer (2026-07-10). Sums USD-notional resting liquidity within
+// +/-0.5% / 1% / 2% of mid, per side, from a fapi depth response (bids desc, asks asc). The
+// fetched book (limit=500 levels/side) may not REACH a band on thick-tick symbols, so each
+// side's actual span is recorded — a sum whose span < band is a truncated lower bound, and the
+// data stays self-describing. Exported for unit tests.
+export function summarizeDepth(bids: Array<[string, string]>, asks: Array<[string, string]>): {
+  mid: number; bestBid: number; bestAsk: number;
+  bid05: number; ask05: number; bid1: number; ask1: number; bid2: number; ask2: number;
+  bidSpanPct: number; askSpanPct: number;
+} | null {
+  if (!bids?.length || !asks?.length) return null;
+  const bestBid = parseFloat(bids[0][0]), bestAsk = parseFloat(asks[0][0]);
+  if (!(bestBid > 0) || !(bestAsk > 0) || bestAsk < bestBid) return null;
+  const mid = (bestBid + bestAsk) / 2;
+  const out = { mid, bestBid, bestAsk, bid05: 0, ask05: 0, bid1: 0, ask1: 0, bid2: 0, ask2: 0, bidSpanPct: 0, askSpanPct: 0 };
+  for (const [ps, qs] of bids) {
+    const p = parseFloat(ps), q = parseFloat(qs);
+    if (!(p > 0) || !(q > 0)) continue;
+    const distPct = (mid - p) / mid * 100;
+    if (distPct > 2) break;                    // bids are sorted best->worse
+    const usd = p * q;
+    if (distPct <= 0.5) out.bid05 += usd;
+    if (distPct <= 1) out.bid1 += usd;
+    out.bid2 += usd;
+    out.bidSpanPct = distPct;
+  }
+  for (const [ps, qs] of asks) {
+    const p = parseFloat(ps), q = parseFloat(qs);
+    if (!(p > 0) || !(q > 0)) continue;
+    const distPct = (p - mid) / mid * 100;
+    if (distPct > 2) break;
+    const usd = p * q;
+    if (distPct <= 0.5) out.ask05 += usd;
+    if (distPct <= 1) out.ask1 += usd;
+    out.ask2 += usd;
+    out.askSpanPct = distPct;
+  }
+  return out;
+}
 
 // Fetch the 7 live fapi/binance derivative endpoints for one symbol concurrently and parse them
 // into the raw values the ML uses. Shared by the cron's bounded-parallel pre-warm and the
@@ -1899,6 +1983,19 @@ export default {
       try {
         const body = await request.json() as any;
         if (!body.symbol || !body.direction || !body.entry) return json({ error: 'Missing required fields' }, 400);
+        // Rollout dedupe (2026-07-09): the server now resolves outcomes itself (tracked_setups),
+        // but app builds from before the cutover still POST locally-resolved outcomes. A near-
+        // duplicate (same device/symbol/direction/outcome, entry within 0.05%, last 3 days) is
+        // acknowledged without inserting so the same trade isn't counted twice.
+        try {
+          const dupe = await env.DB.prepare(
+            `SELECT id FROM trade_outcomes
+             WHERE device_id = ? AND symbol = ? AND direction = ? AND outcome = ?
+               AND ABS(entry_price - ?) <= ? * 0.0005
+               AND opened_at >= datetime('now', '-3 days') LIMIT 1`
+          ).bind(deviceId, body.symbol, body.direction, body.outcome || null, body.entry, body.entry).first();
+          if (dupe) return json({ ok: true, deduped: true });
+        } catch { /* dedupe is best-effort */ }
         await env.DB.prepare(
           `INSERT INTO trade_outcomes
            (device_id, symbol, direction, entry_price, stop_loss, tp1, tp2,
@@ -1951,6 +2048,39 @@ export default {
       query += ' ORDER BY opened_at DESC LIMIT 100';
       const rows = await env.DB.prepare(query).bind(...params).all();
       return json(rows.results);
+    }
+
+    // === Tracked Setups (D1, server-resolved — 2026-07-09 thin-client cutover) ===
+    // Full per-device lifecycle rows (setups + flats) for the iOS dashboard/active-trades UI.
+    // The cron registers (at /full-analysis) and resolves these; iOS is a read-only display.
+    if (path === '/tracked-setups' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '200'), 500);
+      const result = await readTrackedSetups(env, deviceId, symbol, limit);
+      return json(result);
+    }
+
+    // === Liquidations (D1, box websocket collector — 2026-07-10) ===
+    // Per-symbol observed forced-liquidation aggregates + recent events. Sampled feed
+    // (Binance caps forceOrder at <=1 event/s/symbol) — lower bounds, not exact totals.
+    if (path === '/liquidations' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const hours = Math.min(Math.max(1, parseInt(url.searchParams.get('hours') || '24')), 168);
+      try {
+        const since = Date.now() - hours * 3_600_000;
+        const agg = await env.DB.prepare(
+          `SELECT side, SUM(notional) AS usd, COUNT(*) AS n, MAX(notional) AS largest
+           FROM liquidations WHERE symbol = ? AND ts >= ? GROUP BY side`
+        ).bind(symbol, since).all();
+        const recent = await env.DB.prepare(
+          'SELECT ts, side, price, qty, notional FROM liquidations WHERE symbol = ? AND ts >= ? ORDER BY ts DESC LIMIT 20'
+        ).bind(symbol, since).all();
+        return json({ symbol, hours, aggregates: agg.results ?? [], recent: recent.results ?? [] });
+      } catch {
+        return json({ symbol, hours, aggregates: [], recent: [] });   // table not created yet
+      }
     }
 
     // === Score History (D1) ===
@@ -2652,6 +2782,25 @@ async function checkAllDeviceScores(env: Env) {
     console.log(`[dirsignal] error: ${e}`);
   }
 
+  // Server-side setup-outcome resolution (2026-07-09): advance every open tracked_setups row
+  // against fresh candles (15m crypto / 1h stocks) and write counted terminals to
+  // trade_outcomes. Fault-isolated — a resolver hiccup must never block notifications.
+  // Fetchers injected to avoid a circular import (outcome-tracking.ts ← index.ts).
+  try {
+    await resolveTrackedSetups(env, predictions as any, {
+      cryptoKlines: (symbol, interval, limit) => fetchBinanceKlines(symbol, interval, limit),
+      livePrice: (symbol, isCrypto) => fetchLivePrice(symbol, isCrypto),
+      stock1hMap: async () => {
+        try {
+          const raw = await env.ALERTS.get('candles:all:1h');
+          return raw ? JSON.parse(raw) : {};
+        } catch { return {}; }
+      },
+    });
+  } catch (e) {
+    console.log(`[tracked] resolve error: ${e}`);
+  }
+
   for (const [deviceId, watchlist] of watchlistsByDevice) {
     try {
       await processDeviceNotifications(env, deviceId, watchlist, predictions);
@@ -2852,9 +3001,14 @@ async function computeSymbolPredictions(
   // clusters ourselves (the data Coinglass gates behind $699/mo), collected free going forward.
   const oiSnapBatchRaw = await env.ALERTS.get('oi_snap:all');
   const oiSnapMap: Record<string, number> = oiSnapBatchRaw ? JSON.parse(oiSnapBatchRaw) : {};
+  // Depth snapshots share the oi_snapshots cadence (every ~20 min per crypto symbol).
+  const depthSnapBatchRaw = await env.ALERTS.get('depth_snap:all');
+  const depthSnapMap: Record<string, number> = depthSnapBatchRaw ? JSON.parse(depthSnapBatchRaw) : {};
   try {
     await env.DB.prepare('CREATE TABLE IF NOT EXISTS oi_snapshots (symbol TEXT NOT NULL, timestamp INTEGER NOT NULL, open_interest REAL, mark_price REAL, funding_rate REAL, long_percent REAL, basis_pct REAL, PRIMARY KEY (symbol, timestamp))').run();
     await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_oi_snap ON oi_snapshots(symbol, timestamp DESC)').run();
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS depth_snapshots (symbol TEXT NOT NULL, timestamp INTEGER NOT NULL, mid REAL, best_bid REAL, best_ask REAL, bid_05 REAL, ask_05 REAL, bid_1 REAL, ask_1 REAL, bid_2 REAL, ask_2 REAL, bid_span_pct REAL, ask_span_pct REAL, PRIMARY KEY (symbol, timestamp))').run();
+    await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_depth_snap ON depth_snapshots(symbol, timestamp DESC)').run();
   } catch {}
   const candles1dRaw = await env.ALERTS.get('candles:all:1d');
   const candles4hRaw = await env.ALERTS.get('candles:all:4h');
@@ -3326,6 +3480,28 @@ async function computeSymbolPredictions(
             }
           } catch {}
         }
+
+        // Order-book depth snapshot (~every 20 min) -> depth_snapshots. The third leg of the
+        // homemade liquidation heatmap: oi_snapshots = where positions opened, liquidations =
+        // where they died, depth = the resting walls in between. Non-backfillable (books are
+        // ephemeral) - collected free going forward. limit=500 is fapi weight 10; 76 symbols
+        // every 20 min is noise next to the derivative batch.
+        const lastDepthSnap = depthSnapMap[symbol];
+        if (!lastDepthSnap || Date.now() - lastDepthSnap > 20 * 60 * 1000) {
+          try {
+            const depthResp = await fetch(`${FAPI}/fapi/v1/depth?symbol=${symbol}&limit=500`);
+            if (depthResp.ok) {
+              const book = await depthResp.json() as any;
+              const d = summarizeDepth(book?.bids ?? [], book?.asks ?? []);
+              if (d) {
+                await env.DB.prepare(
+                  'INSERT OR REPLACE INTO depth_snapshots (symbol, timestamp, mid, best_bid, best_ask, bid_05, ask_05, bid_1, ask_1, bid_2, ask_2, bid_span_pct, ask_span_pct) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+                ).bind(symbol, Math.floor(Date.now() / 1000), d.mid, d.bestBid, d.bestAsk, d.bid05, d.ask05, d.bid1, d.ask1, d.bid2, d.ask2, d.bidSpanPct, d.askSpanPct).run();
+                depthSnapMap[symbol] = Date.now();
+              }
+            }
+          } catch {}
+        }
       }
       const defaultMacro = { vix: vixValue, dxyAboveEma20 };
 
@@ -3502,6 +3678,7 @@ async function computeSymbolPredictions(
   await env.ALERTS.put('deriv_archive:all', JSON.stringify(derivArchiveMap), { expirationTtl: 14400 });
   await env.ALERTS.put('deriv_live:all', JSON.stringify(derivLiveMap), { expirationTtl: 86400 });
   await env.ALERTS.put('oi_snap:all', JSON.stringify(oiSnapMap), { expirationTtl: 14400 });
+  await env.ALERTS.put('depth_snap:all', JSON.stringify(depthSnapMap), { expirationTtl: 14400 });
   if (candlesDirty['1d']) await env.ALERTS.put('candles:all:1d', JSON.stringify(candles1dMap), { expirationTtl: 300 });
   if (candlesDirty['4h']) await env.ALERTS.put('candles:all:4h', JSON.stringify(candles4hMap), { expirationTtl: 300 });
   if (candlesDirty['1h']) await env.ALERTS.put('candles:all:1h', JSON.stringify(candles1hMap), { expirationTtl: 300 });

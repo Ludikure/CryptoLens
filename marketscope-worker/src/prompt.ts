@@ -458,6 +458,9 @@ export interface BuildPromptInput {
   mlTrajectory?: { points: number[]; hours: number } | null;                   // sampled ML_WIN path over the last N hours, oldest→newest (score_history D1)
   btcContext?: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null; // BTC regime read for alt analyses (ml_preds:all KV)
   volPricing?: { dvol: number; impliedMovePct: number; forecastMovePct: number } | null;  // options-implied vs model-forecast move (BTC/ETH, Deribit DVOL)
+  // Observed forced-liquidation flow (Binance forceOrder stream archive, crypto only).
+  // SAMPLED feed (Binance pushes <=1 event/s/symbol since 2021) - sums are lower bounds, not totals.
+  liquidations?: { h1LongUsd: number; h1ShortUsd: number; h24LongUsd: number; h24ShortUsd: number } | null;
   prevState?: PromptState; settings?: PromptSettings;
 }
 
@@ -1546,6 +1549,21 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         L(`  Tells: ${tells.join('; ')}.`);
         L(`  Read for the user: going ${crowdSide} here means JOINING the crowd that is most exposed to a flush — the setup where the majority gets hurt. It is a RISK flag, not a direction call (the squeeze can be slow or never come), but if the user is about to enter ${crowdSide}, they should know they'd be on the crowded, vulnerable side. Surface this in the Risk Map and name the cascade direction (${flush}).`);
       }
+    }
+  }
+
+  // Observed forced-liquidation flow (from the box's forceOrder websocket archive). This is
+  // OBSERVED forced selling/buying - it upgrades the inferred crowding reads (whale trap,
+  // squeeze risk) with what actually fired. Sampled feed: lower bounds, not exact totals.
+  if (isCryptoSym && input.liquidations) {
+    const lq = input.liquidations;
+    const fUsd = (v: number) => v >= 1_000_000 ? `$${(v / 1_000_000).toFixed(1)}M` : `$${Math.round(v / 1000)}k`;
+    const h1Total = lq.h1LongUsd + lq.h1ShortUsd;
+    const skew = h1Total > 0 ? (lq.h1LongUsd > lq.h1ShortUsd ? 'longs' : 'shorts') : null;
+    L();
+    L(`LIQUIDATIONS (observed, Binance futures - sampled feed, treat as lower bounds): last 1h ${fUsd(lq.h1LongUsd)} longs / ${fUsd(lq.h1ShortUsd)} shorts force-closed; 24h ${fUsd(lq.h24LongUsd)} / ${fUsd(lq.h24ShortUsd)}.`);
+    if (skew && h1Total >= 500_000) {
+      L(`  Interpretation: heavy one-sided ${skew === 'longs' ? 'LONG liquidations = forced SELLING already hit the tape (cascade risk if support breaks; exhaustion/capitulation if it holds)' : 'SHORT liquidations = forced BUYING already hit the tape (squeeze fuel burning off)'}. Recent-flow context, NOT a direction signal.`);
     }
   }
 
