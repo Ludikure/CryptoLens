@@ -89,7 +89,7 @@ struct MarketScopeApp: App {
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)
                     PushService.syncWatchlist(favoritesStore.orderedFavorites)
                     alertsStore.syncFromServer()
-                    Task { await OutcomeTracker.restoreFromServer() }
+                    Task { await OutcomeTracker.refresh() }   // server-resolved tracked setups (2026-07-09 cutover)
                     // Show What's New after splash dismisses
                     if WhatsNewManager.shouldShow {
                         Task {

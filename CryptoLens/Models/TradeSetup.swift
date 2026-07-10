@@ -75,6 +75,19 @@ struct TradeSetup: Codable, Identifiable {
         self.reasoning = reasoning
     }
 
+    /// Id-carrying init for server-sourced setups (GET /tracked-setups). The server mints the
+    /// uuid at registration; keeping it makes `TrackedSetup.id` stable across refreshes
+    /// (Identifiable — SwiftUI list diffing depends on it).
+    init(id: UUID, direction: String, entry: Double, stopLoss: Double, tp1: Double, tp2: Double? = nil, reasoning: String = "") {
+        self.id = id
+        self.direction = direction
+        self.entry = entry
+        self.stopLoss = stopLoss
+        self.tp1 = tp1
+        self.tp2 = tp2
+        self.reasoning = reasoning
+    }
+
     var risk: Double { abs(entry - stopLoss) }
 
     func rrRatio(for tp: Double) -> Double {
@@ -241,6 +254,18 @@ struct FlatOutcome: Codable {
         self.symbol = symbol; self.priceAtFlat = price
         self.timestamp = Date(); self.reason = reason
         self.refreshCount = 0; self.falseFlat = nil
+    }
+
+    /// Full init for server-sourced FLAT rows (GET /tracked-setups). The server grades FLATs at
+    /// a fixed +24h horizon; `refreshCount` is stamped 3 when resolved so the dashboard's
+    /// `falseFlat != nil` / evaluated filters keep working unchanged.
+    init(symbol: String, priceAtFlat: Double, timestamp: Date, reason: String,
+         priceAfter: Double?, falseFlat: Bool?) {
+        self.symbol = symbol; self.priceAtFlat = priceAtFlat
+        self.timestamp = timestamp; self.reason = reason
+        self.priceAfter3Refreshes = priceAfter
+        self.refreshCount = falseFlat != nil ? 3 : 0
+        self.falseFlat = falseFlat
     }
 }
 

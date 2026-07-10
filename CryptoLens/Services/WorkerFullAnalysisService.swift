@@ -145,30 +145,9 @@ enum WorkerFullAnalysisService {
         if acct > 0 { bodyDict["accountSize"] = acct }
         if risk > 0 { bodyDict["riskPercent"] = risk }
 
-        // Active tracked trades (Active Trade State / C8) — the one input the worker can't
-        // know on its own. Send the same subset the local prompt uses (active + entry hit)
-        // so the server emits an identical "manage this trade" section.
-        let active = await OutcomeTracker.activeSetupsAsync(symbol: symbol).filter {
-            $0.outcome.state == .active && $0.outcome.entryHit
-        }
-        let activeJSON: [[String: Any]] = active.compactMap { t in
-            guard let entryTime = t.outcome.entryHitTime, t.setup.entry > 0, t.setup.risk > 0 else { return nil }
-            var dict: [String: Any] = [
-                "direction": t.setup.direction,
-                "entry": t.setup.entry,
-                "risk": t.setup.risk,
-                "tp1": t.setup.tp1,
-                "entryHitTimeMs": entryTime.timeIntervalSince1970 * 1000,
-                "maxFavorable": t.outcome.maxFavorable,
-                "maxAdverse": t.outcome.maxAdverse,
-                "tp1Hit": t.outcome.tp1Hit,
-                "partialTaken": t.outcome.partialTaken,
-                "breakevenActivated": t.outcome.breakevenActivated,
-            ]
-            if let ml = t.mlProbability { dict["mlProbability"] = ml }
-            return dict
-        }
-        if !activeJSON.isEmpty { bodyDict["activeSetups"] = activeJSON }
+        // Active Trade State (C8) is no longer sent from the phone: the worker reads its own
+        // server-resolved tracked_setups (2026-07-09 cutover). The server keeps a body.activeSetups
+        // fallback only for pre-cutover app builds.
         return bodyDict
     }
 

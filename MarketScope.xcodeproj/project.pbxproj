@@ -16,6 +16,7 @@
 		09D02660E4C18D8A6CD520C1 /* Constants.swift in Sources */ = {isa = PBXBuildFile; fileRef = F93ABFA98862631B7B4607F9 /* Constants.swift */; };
 		0B074A729A333B3D2633AC73 /* CryptoLensApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCF26F2D0EBA68FCB4C82270 /* CryptoLensApp.swift */; };
 		0D2F46A261877FD24A78C794 /* ScoringFunction.swift in Sources */ = {isa = PBXBuildFile; fileRef = D68AA4413CFAC06C29184545 /* ScoringFunction.swift */; };
+		0F774DEDFEA67C32CD9E07E5 /* WorkerTrackedSetupsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85DB9C1704BB9E0E2FAB4DA1 /* WorkerTrackedSetupsService.swift */; };
 		1140CD06CADD39666C0308A3 /* PositionSizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7690F18BFB0CABCB24110D48 /* PositionSizer.swift */; };
 		12D56144BB9DE85950AB0C92 /* WebChartView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74570C8A1036839E5056F05A /* WebChartView.swift */; };
 		143344CDABBCFD511DE2E4C8 /* Market.swift in Sources */ = {isa = PBXBuildFile; fileRef = B016B993A2BC2F6E0DFA2C22 /* Market.swift */; };
@@ -108,7 +109,6 @@
 		D82E974BF87FC786836A9CB4 /* DarkPoolData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09AD174CC96B0CBAB38D9844 /* DarkPoolData.swift */; };
 		E0C6243F0A3BDFB3174FB782 /* MarketScopeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 269A7170910D8B8931CD2333 /* MarketScopeWidget.swift */; };
 		E120E3822144D196C3381E48 /* TimestampBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECFF49A906FD9BA3F4B4CF2A /* TimestampBar.swift */; };
-		E2FA3DF5F6C515786539B0BD /* WorkerPendingSetupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2194A97E79988E1EF8ACCC17 /* WorkerPendingSetupService.swift */; };
 		E5B52D181CC00BB83D52937F /* OutcomeDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04E451D5B1A589DBED045C12 /* OutcomeDashboardView.swift */; };
 		E9E67799FFCDABFF60631C0A /* CoinPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C188735F2331F1002B4B991 /* CoinPickerView.swift */; };
 		ED59023079801F4E8ED088AE /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2375646B3479EA716AE7270B /* NetworkMonitor.swift */; };
@@ -174,7 +174,6 @@
 		1B5DF5B97757DB990D9DEBEB /* DerivativesContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DerivativesContext.swift; sourceTree = "<group>"; };
 		1C7BB8B80E33C13365E25DDE /* ml-model-stock.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ml-model-stock.json"; sourceTree = "<group>"; };
 		1D96C0465266CF918A8844FA /* AnalysisHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisHistoryStore.swift; sourceTree = "<group>"; };
-		2194A97E79988E1EF8ACCC17 /* WorkerPendingSetupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerPendingSetupService.swift; sourceTree = "<group>"; };
 		2375646B3479EA716AE7270B /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		240E25E0B2FC9470C9FD86AF /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
 		269A7170910D8B8931CD2333 /* MarketScopeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketScopeWidget.swift; sourceTree = "<group>"; };
@@ -213,6 +212,7 @@
 		774EAFA76A70F4924070E2BA /* EarningsCalendar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarningsCalendar.swift; sourceTree = "<group>"; };
 		8165A07DFF6E9010BBFA1091 /* EconomicCalendarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EconomicCalendarService.swift; sourceTree = "<group>"; };
 		84D908C74E2725C15BE1CCCB /* HapticManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HapticManager.swift; sourceTree = "<group>"; };
+		85DB9C1704BB9E0E2FAB4DA1 /* WorkerTrackedSetupsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerTrackedSetupsService.swift; sourceTree = "<group>"; };
 		885D71681696A62F6B8F1E64 /* LevelsChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelsChartView.swift; sourceTree = "<group>"; };
 		8A04B3AA46E9815EE2047D9C /* ml-model-crypto.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ml-model-crypto.json"; sourceTree = "<group>"; };
 		8D87BB163A44C9CA82CFF0F1 /* AnalysisStateMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisStateMigration.swift; sourceTree = "<group>"; };
@@ -339,7 +339,7 @@
 				BB12F1B7515B8E8D3F24EFFE /* WorkerIndicatorsService.swift */,
 				E969F0701C9DD31D4D15711C /* WorkerMarketService.swift */,
 				AAE82500326A2DCE4B7C4CFF /* WorkerMLService.swift */,
-				2194A97E79988E1EF8ACCC17 /* WorkerPendingSetupService.swift */,
+				85DB9C1704BB9E0E2FAB4DA1 /* WorkerTrackedSetupsService.swift */,
 				DC9A005B372BCAA04AAAE663 /* YahooFinanceService.swift */,
 			);
 			path = Services;
@@ -771,7 +771,7 @@
 				50C760B00E08F8443B119E30 /* WorkerIndicatorsService.swift in Sources */,
 				98CC11CE748131B1C3DAF377 /* WorkerMLService.swift in Sources */,
 				9ECCAA9D938D5D4B00DCAD8B /* WorkerMarketService.swift in Sources */,
-				E2FA3DF5F6C515786539B0BD /* WorkerPendingSetupService.swift in Sources */,
+				0F774DEDFEA67C32CD9E07E5 /* WorkerTrackedSetupsService.swift in Sources */,
 				16D655DAF13FD9EEC310E60D /* YahooFinanceService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

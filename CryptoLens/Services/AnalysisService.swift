@@ -451,23 +451,10 @@ class AnalysisService: ObservableObject {
                 isAIStale = !result.claudeAnalysis.isEmpty && !result.claudeAnalysis.contains("not configured") && (result.analysisTimestamp == nil || result.timestamp.timeIntervalSince(result.analysisTimestamp!) > 600)
             }
             alertsStore?.checkAlerts(prices: [symbol: result.daily.price])
-            // Track setup/flat outcomes using 15m candles for precise wick detection
-            let outcomeCandles: [Candle]
-            if marketFor(symbol) == .crypto {
-                // Box proxies Binance behind the VPN; phone never hits fapi.binance.com (451).
-                outcomeCandles = await WorkerCandlesService.fetchCrypto(symbol: symbol, interval: "15m", limit: 96) ?? result.h1.candles
-            } else {
-                // Stocks: the 1H slice from /indicators is enough for wick detection.
-                outcomeCandles = result.h1.candles
-            }
-            OutcomeTracker.trackSetupOutcomes(symbol: symbol, currentPrice: result.daily.price, recentCandles: outcomeCandles, cachedResult: result)
-            // Cross-symbol PENDING sweep — catches timeouts and entry triggers on setups
-            // for symbols other than the one we just analyzed. Without this, a PENDING
-            // BTC setup can sit unrefreshed while the user works on ETH, the BTC entry
-            // touches live, and the re-eval never fires.
-            OutcomeTracker.scanAllPendingSetups()
-            OutcomeTracker.trackFlatOutcomes(symbol: symbol, currentPrice: result.daily.price)
-            OutcomeTracker.syncResolvedOutcomes(symbol: symbol)
+            // Outcome resolution is SERVER-SIDE since the 2026-07-09 thin-client cutover —
+            // the box's cron advances every open setup per minute (15m crypto candles / 1h
+            // stock candles), no phone involvement. Just pull the fresh snapshot for display.
+            Task { await OutcomeTracker.refresh() }
             saveCache(result)
 
             // Widget shared data disabled until App Group is provisioned
@@ -767,11 +754,8 @@ class AnalysisService: ObservableObject {
                 }
             }
 
-            // A/B bucket for this analysis run. Bound via TaskLocal so AnalysisPrompt
-            // sees the same version it uses for band-default selection that we later
-            // stamp on the resulting TrackedSetup — prompt and outcome stay in sync.
-            let assignedVersion = OutcomeTracker.assignedPromptVersion(deviceId: PushService.deviceId)
-
+            // (The A/B promptVersion stamp moved server-side with setup registration —
+            // the worker stamps TRACKED_PROMPT_VERSION on every tracked setup.)
             let claudeAnalysis: String
             let tradeSetups: [TradeSetup]
             // iOS runs entirely on the shared-brain Worker (Phase 4 complete): the prompt is built
@@ -842,29 +826,11 @@ class AnalysisService: ObservableObject {
             }
             AnalysisHistoryStore.save(result)
 
-            // Outcome tracking: register new setups (skip stocks outside market hours)
-            let shouldTrack = market == .crypto || MarketHours.isMarketOpen()
-            if shouldTrack {
-                let mlProb = result.daily.mlWinProbability
-                let archetype = AnalysisPrompt.classifyArchetype(indicators: [result.tf1, result.tf2, result.tf3])
-                // 4H ATR (price units) for the worker's entry-zone width.
-                let atrAtReg = result.tf2.atr?.atr
-                for setup in tradeSetups {
-                    OutcomeTracker.registerSetup(setup, symbol: symbol, analysisId: result.id,
-                                                  currentPrice: result.daily.price,
-                                                  mlProbability: mlProb,
-                                                  promptVersion: assignedVersion,
-                                                  archetype: archetype,
-                                                  atrAtRegistration: atrAtReg)
-                }
-            }
-            // Track FLAT/kill outcomes
-            if tradeSetups.isEmpty && !result.claudeAnalysis.isEmpty {
-                let reason = result.claudeAnalysis.contains("BLOCKED") ? "KILL" :
-                             result.claudeAnalysis.contains("Rule 2") ? "FLAT_Rule2" :
-                             result.claudeAnalysis.contains("NO SETUP") ? "FLAT" : "NO_SETUP"
-                OutcomeTracker.registerFlatOutcome(symbol: symbol, price: result.daily.price, reason: reason)
-            }
+            // Setup/FLAT registration is SERVER-SIDE since the 2026-07-09 cutover:
+            // /full-analysis registers this run's setups (or its FLAT decision) in
+            // tracked_setups at parse time, and the cron resolves them. Pull the snapshot
+            // so the new rows show up in Active Trades / the dashboard immediately.
+            Task { await OutcomeTracker.refresh() }
 
             if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
                 store.removeAlerts(forSymbol: symbol)

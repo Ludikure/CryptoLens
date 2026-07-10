@@ -1,7 +1,18 @@
 import Foundation
 
-/// Tracks trade setup outcomes and FLAT/kill outcomes across refresh cycles.
-/// Persists to disk alongside analysis history.
+/// Read-only display store over the SERVER's tracked-setup archive (2026-07-09 thin-client
+/// cutover). The box registers every setup/FLAT at analysis time (`/full-analysis` →
+/// `registerTrackedSetups`) and resolves them on its per-minute cron
+/// (`resolveTrackedSetups` in marketscope-worker/src/outcome-tracking.ts) — outcomes advance
+/// whether or not this app is ever opened. `refresh()` pulls `GET /tracked-setups` and caches
+/// a snapshot to disk so the dashboard works offline.
+///
+/// The pre-cutover on-device lifecycle (registerSetup / trackSetupOutcomes / reEvaluate /
+/// scanAllPendingSetups / syncResolvedOutcomes / registerFlatOutcome / trackFlatOutcomes /
+/// restoreFromServer — which was already broken: it read camelCase keys from a snake_case
+/// response) is DELETED. The legacy per-symbol archives (`setups_<SYM>.json` / `flats_<SYM>.json`)
+/// are kept read-only and merged into stats as history: terminal rows only — legacy
+/// pending/active rows would be frozen ghosts now that nothing on-device resolves them.
 enum OutcomeTracker {
     private static let ioQueue = DispatchQueue(label: "com.ludikure.CryptoLens.outcomeIO")
 
@@ -12,28 +23,106 @@ enum OutcomeTracker {
         return dir
     }
 
+    // Server snapshot files (distinct names from the legacy `setups_*`/`flats_*` per-symbol
+    // archives, which stay read-only history).
+    private static var serverSetupsURL: URL { outcomeDir.appendingPathComponent("server_setups.json") }
+    private static var serverFlatsURL: URL { outcomeDir.appendingPathComponent("server_flats.json") }
+
+    // MARK: - Server refresh
+
+    /// Pull the device's tracked-setup archive from the worker and cache it. Called after each
+    /// analysis refresh, at app launch, and when the Outcome dashboard opens. Best-effort — on
+    /// any failure the previous snapshot keeps serving (offline dashboards).
+    static func refresh() async {
+        guard let resp = await WorkerTrackedSetupsService.fetch() else { return }
+        let setups = resp.setups.compactMap { TrackedSetup(dto: $0) }
+        let flats = resp.flats.map { dto in
+            FlatOutcome(symbol: dto.symbol,
+                        priceAtFlat: dto.priceAtSetup,
+                        timestamp: Date(timeIntervalSince1970: dto.registeredAt / 1000),
+                        reason: dto.flatReason ?? "FLAT",
+                        priceAfter: dto.priceAfter,
+                        falseFlat: dto.falseFlat)
+        }
+        ioQueue.async {
+            save(setups, to: serverSetupsURL)
+            save(flats, to: serverFlatsURL)
+        }
+    }
+
+    // MARK: - Merged data sources (call on ioQueue)
+
+    private static func serverSetupsLocked() -> [TrackedSetup] {
+        loadTrackedSetups(url: serverSetupsURL)
+    }
+
+    private static func serverFlatsLocked() -> [FlatOutcome] {
+        loadFlatOutcomes(url: serverFlatsURL)
+    }
+
+    /// Legacy on-device archive, terminal rows only (resolved or counted). Unresolved legacy
+    /// rows are excluded everywhere — nothing on-device advances them anymore.
+    private static func legacySetupsLocked(symbol: String? = nil) -> [TrackedSetup] {
+        var all = [TrackedSetup]()
+        let files = (try? FileManager.default.contentsOfDirectory(at: outcomeDir, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.lastPathComponent.hasPrefix("setups_") {
+            if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
+            all.append(contentsOf: loadTrackedSetups(url: file).filter {
+                $0.outcome.resolved || $0.outcome.isCounted
+            })
+        }
+        return all
+    }
+
+    /// Legacy FLAT archive, evaluated rows only (unevaluated ones can never resolve now).
+    private static func legacyFlatsLocked(symbol: String? = nil) -> [FlatOutcome] {
+        var all = [FlatOutcome]()
+        let files = (try? FileManager.default.contentsOfDirectory(at: outcomeDir, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.lastPathComponent.hasPrefix("flats_") {
+            if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
+            all.append(contentsOf: loadFlatOutcomes(url: file).filter { $0.falseFlat != nil })
+        }
+        return all
+    }
+
+    /// Server snapshot + legacy terminal history, deduped by id (server wins), newest first.
+    private static func mergedSetupsLocked(symbol: String? = nil) -> [TrackedSetup] {
+        let server = serverSetupsLocked().filter { symbol == nil || $0.symbol == symbol }
+        var seen = Set(server.map { $0.id })
+        var merged = server
+        for legacy in legacySetupsLocked(symbol: symbol) where !seen.contains(legacy.id) {
+            seen.insert(legacy.id)
+            merged.append(legacy)
+        }
+        return merged.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    private static func mergedFlatsLocked(symbol: String? = nil) -> [FlatOutcome] {
+        serverFlatsLocked().filter { symbol == nil || $0.symbol == symbol } + legacyFlatsLocked(symbol: symbol)
+    }
+
     // MARK: - Active Setups Query
 
     /// Returns setups that are active (entered) or pending (conditional, waiting for trigger).
+    /// Server rows only — legacy unresolved rows are frozen ghosts by definition.
     static func activeSetups(symbol: String) -> [TrackedSetup] {
         return ioQueue.sync {
-            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-            return loadTrackedSetups(url: url).filter {
-                ($0.outcome.state == .active && $0.outcome.entryHit && !$0.outcome.isCounted) ||
-                $0.outcome.state == .pending
+            serverSetupsLocked().filter {
+                $0.symbol == symbol &&
+                (($0.outcome.state == .active && $0.outcome.entryHit && !$0.outcome.isCounted) ||
+                 $0.outcome.state == .pending)
             }
         }
     }
 
-    /// Non-blocking variant — call from UI contexts so heavy disk loads don't hitch
-    /// the main thread.
+    /// Non-blocking variant — call from UI contexts so disk loads don't hitch the main thread.
     static func activeSetupsAsync(symbol: String) async -> [TrackedSetup] {
         await withCheckedContinuation { continuation in
             ioQueue.async {
-                let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-                let setups = loadTrackedSetups(url: url).filter {
-                    ($0.outcome.state == .active && $0.outcome.entryHit && !$0.outcome.isCounted) ||
-                    $0.outcome.state == .pending
+                let setups = serverSetupsLocked().filter {
+                    $0.symbol == symbol &&
+                    (($0.outcome.state == .active && $0.outcome.entryHit && !$0.outcome.isCounted) ||
+                     $0.outcome.state == .pending)
                 }
                 continuation.resume(returning: setups)
             }
@@ -46,17 +135,7 @@ enum OutcomeTracker {
     /// Legacy stored setups (archetype == nil) are excluded.
     static func archetypeRecord(symbol: String, archetype: String, lookbackDays: Int = 30) -> (wins: Int, losses: Int, total: Int) {
         return ioQueue.sync {
-            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-            let cutoff = Date().addingTimeInterval(TimeInterval(-lookbackDays * 86400))
-            var wins = 0
-            var losses = 0
-            for s in loadTrackedSetups(url: url) {
-                guard s.archetype == archetype, s.timestamp >= cutoff else { continue }
-                if s.outcome.tp1Hit || s.outcome.tp2Hit { wins += 1 }
-                else if s.outcome.stopHit { losses += 1 }
-                // active/pending/expired-no-fill: no verdict yet, skip
-            }
-            return (wins, losses, wins + losses)
+            archetypeRecordLocked(symbol: symbol, archetype: archetype, lookbackDays: lookbackDays)
         }
     }
 
@@ -64,399 +143,62 @@ enum OutcomeTracker {
     static func archetypeRecordAsync(symbol: String, archetype: String, lookbackDays: Int = 30) async -> (wins: Int, losses: Int, total: Int) {
         await withCheckedContinuation { continuation in
             ioQueue.async {
-                let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-                let cutoff = Date().addingTimeInterval(TimeInterval(-lookbackDays * 86400))
-                var wins = 0
-                var losses = 0
-                for s in loadTrackedSetups(url: url) {
-                    guard s.archetype == archetype, s.timestamp >= cutoff else { continue }
-                    if s.outcome.tp1Hit || s.outcome.tp2Hit { wins += 1 }
-                    else if s.outcome.stopHit { losses += 1 }
-                }
-                continuation.resume(returning: (wins, losses, wins + losses))
+                continuation.resume(returning: archetypeRecordLocked(symbol: symbol, archetype: archetype, lookbackDays: lookbackDays))
             }
         }
     }
 
-    /// Returns every tracked setup across every symbol, newest first. `stats()` only
-    /// includes the first 10 in `recentSetups` (UI cap); this is for export paths
-    /// that need the full history.
+    private static func archetypeRecordLocked(symbol: String, archetype: String, lookbackDays: Int) -> (wins: Int, losses: Int, total: Int) {
+        let cutoff = Date().addingTimeInterval(TimeInterval(-lookbackDays * 86400))
+        var wins = 0
+        var losses = 0
+        for s in mergedSetupsLocked(symbol: symbol) {
+            guard s.archetype == archetype, s.timestamp >= cutoff else { continue }
+            if s.outcome.tp1Hit || s.outcome.tp2Hit { wins += 1 }
+            else if s.outcome.stopHit { losses += 1 }
+            // active/pending/expired-no-fill: no verdict yet, skip
+        }
+        return (wins, losses, wins + losses)
+    }
+
+    /// Returns every tracked setup (server + legacy terminal history), newest first. `stats()`
+    /// only includes the first 10 in `recentSetups` (UI cap); this is for export paths that
+    /// need the full history.
     static func allSetups(symbol: String? = nil) -> [TrackedSetup] {
-        return ioQueue.sync {
-            var all = [TrackedSetup]()
-            let dir = outcomeDir
-            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.lastPathComponent.hasPrefix("setups_") {
-                if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
-                all.append(contentsOf: loadTrackedSetups(url: file))
-            }
-            return all.sorted { $0.timestamp > $1.timestamp }
-        }
+        return ioQueue.sync { mergedSetupsLocked(symbol: symbol) }
     }
 
-    /// Non-blocking variant — preferred for dashboard views where the directory scan
-    /// can grow as outcome history accumulates.
+    /// Non-blocking variant — preferred for dashboard views.
     static func allSetupsAsync(symbol: String? = nil) async -> [TrackedSetup] {
         await withCheckedContinuation { continuation in
             ioQueue.async {
-                var all = [TrackedSetup]()
-                let dir = outcomeDir
-                let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-                for file in files where file.lastPathComponent.hasPrefix("setups_") {
-                    if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
-                    all.append(contentsOf: loadTrackedSetups(url: file))
-                }
-                continuation.resume(returning: all.sorted { $0.timestamp > $1.timestamp })
+                continuation.resume(returning: mergedSetupsLocked(symbol: symbol))
             }
         }
     }
 
-    // MARK: - Trade Setup Outcomes
+    // MARK: - Versioning constants
+    // The prompt/model version REGISTRY OF RECORD is now server-side
+    // (marketscope-worker/src/outcome-tracking.ts: TRACKED_PROMPT_VERSION /
+    // TRACKED_MODEL_VERSION) — the server stamps every tracked setup at registration.
+    // These constants remain for the prompt-TaskLocal plumbing and dashboard slicing.
 
-    /// Called during each refresh cycle with current price and recent candles.
-    /// `cachedResult` is the latest AnalysisResult for this symbol (from resultsBySymbol).
-    static func trackSetupOutcomes(symbol: String, currentPrice: Double,
-                                    recentCandles: [Candle] = [],
-                                    cachedResult: AnalysisResult? = nil) {
-        ioQueue.async {
-            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-            var tracked = loadTrackedSetups(url: url)
-            var changed = false
-
-            // Build price check points with open for same-candle heuristic
-            struct PricePoint { let open: Double; let high: Double; let low: Double; let time: Date }
-            var checkPoints = recentCandles.map { PricePoint(open: $0.open, high: $0.high, low: $0.low, time: $0.time) }
-            checkPoints.append(PricePoint(open: currentPrice, high: currentPrice, low: currentPrice, time: Date()))
-
-            for i in tracked.indices {
-                let state = tracked[i].outcome.state
-
-                // Skip resolved, invalidated, expired. `resolved` covers
-                // stopHit/tp2Hit — tp1Hit alone is NOT resolution because the runner
-                // continues until TP2 hits or the (now-breakeven) stop is hit. Was
-                // `isCounted` which included tp1Hit, short-circuiting the inner loop
-                // and freezing tracking at the first TP1 cross — 23 of 24 winners
-                // in production never registered TP2 because of it.
-                if state == .invalidated || state == .expired { continue }
-                if state == .active && tracked[i].outcome.resolved { continue }
-
-                // --- PENDING state: check timeout, proactive re-validation, and entry trigger ---
-                if state == .pending {
-                    let setupId = tracked[i].setup.id
-
-                    // Timeout check (12h)
-                    if let expires = tracked[i].outcome.pendingExpiresAt, Date() > expires {
-                        tracked[i].outcome.state = .expired
-                        tracked[i].outcome.reEvalResult = ReEvalResult(
-                            direction: "", mlWin: nil, killsActive: false,
-                            validated: false, reason: "Pending window expired (12h)")
-                        changed = true
-                        Task { await WorkerPendingSetupService.cancel(setupId: setupId) }
-                        continue
-                    }
-
-                    // Proactive re-validation for aging pending setups. Without this,
-                    // a setup created at 9am could sit in pending until entry is touched
-                    // at 3pm — by which time the original conditions (ML, kills, regime)
-                    // may have materially changed. Run reEvaluate on every refresh once
-                    // the setup is >= 1h old; if invalidated, mark immediately rather than
-                    // waiting for the entry touch to surface the staleness.
-                    let setupAge = Date().timeIntervalSince(tracked[i].timestamp)
-                    if setupAge >= 3600 {
-                        let proactiveEval = reEvaluate(original: tracked[i], cachedResult: cachedResult)
-                        if !proactiveEval.validated {
-                            tracked[i].outcome.state = .invalidated
-                            tracked[i].outcome.reEvalResult = proactiveEval
-                            changed = true
-                            print("[OutcomeTracker] Proactive invalidation \(symbol): \(proactiveEval.reason)")
-                            Task { await WorkerPendingSetupService.cancel(setupId: setupId) }
-                            continue
-                        }
-                    }
-
-                    // Check if entry price was touched
-                    let setup = tracked[i].setup
-                    let isLong = setup.direction == "LONG"
-                    let entryTouched = checkPoints.filter { $0.time >= tracked[i].timestamp }.contains { point in
-                        isLong ? point.low <= setup.entry : point.high >= setup.entry
-                    }
-
-                    if entryTouched {
-                        // Run lightweight re-evaluation at the entry-touch moment too.
-                        // (Proactive eval above may have validated 30 min ago; if state changed
-                        // since then we want to catch it before activating the trade.)
-                        let evalResult = reEvaluate(original: tracked[i], cachedResult: cachedResult)
-                        tracked[i].outcome.reEvalResult = evalResult
-
-                        if evalResult.validated {
-                            tracked[i].outcome.state = .active
-                            tracked[i].outcome.entryHit = true
-                            tracked[i].outcome.entryHitTime = Date()
-                        } else {
-                            tracked[i].outcome.state = .invalidated
-                        }
-                        changed = true
-                        // Either way, the setup is no longer pending — cancel worker tracking.
-                        Task { await WorkerPendingSetupService.cancel(setupId: setupId) }
-                    }
-                    continue
-                }
-
-                // --- ACTIVE state: normal outcome tracking ---
-                let setup = tracked[i].setup
-                let isLong = setup.direction == "LONG"
-                let setupTime = tracked[i].timestamp
-                let risk = setup.risk
-
-                // Determine active stop level based on management state
-                var activeStop: Double
-                if tracked[i].outcome.breakevenActivated {
-                    activeStop = setup.entry
-                } else if let entryTime = tracked[i].outcome.entryHitTime,
-                          Date().timeIntervalSince(entryTime) > 6 * 3600,
-                          risk > 0,
-                          tracked[i].outcome.maxFavorable / risk < 0.5 {
-                    let tightenedRisk = risk * 0.7
-                    activeStop = isLong ? setup.entry - tightenedRisk : setup.entry + tightenedRisk
-                } else {
-                    activeStop = setup.stopLoss
-                }
-
-                let relevantPoints = checkPoints.filter { $0.time >= setupTime }
-
-                let priceAtSetup = tracked[i].priceAtSetup
-
-                for point in relevantPoints {
-                    // Check entry hit (for market setups that weren't auto-entered).
-                    // Direction-aware: price must move FROM priceAtSetup TOWARD entry to fire.
-                    // - LONG below setup price (pullback long)  → low <= entry
-                    // - LONG above setup price (breakout long)  → high >= entry
-                    // - SHORT above setup price (pullback short)→ high >= entry
-                    // - SHORT below setup price (breakdown shrt)→ low <= entry
-                    // Without priceAtSetup (legacy setups), fall back to the old direction-only check.
-                    if !tracked[i].outcome.entryHit {
-                        let entryHit: Bool
-                        if priceAtSetup > 0 {
-                            if abs(setup.entry - priceAtSetup) / priceAtSetup < 0.001 {
-                                entryHit = true   // market entry (within 0.1%)
-                            } else if setup.entry < priceAtSetup {
-                                entryHit = point.low <= setup.entry  // price must fall to entry
-                            } else {
-                                entryHit = point.high >= setup.entry // price must rise to entry
-                            }
-                        } else {
-                            entryHit = isLong ? point.low <= setup.entry : point.high >= setup.entry
-                        }
-                        if entryHit {
-                            tracked[i].outcome.entryHit = true
-                            tracked[i].outcome.entryHitTime = point.time
-                            changed = true
-                        }
-                        continue
-                    }
-
-                    // Skip candles before entry
-                    if let entryTime = tracked[i].outcome.entryHitTime, point.time < entryTime {
-                        continue
-                    }
-
-                    // Track excursions
-                    let favorable = isLong ? point.high - setup.entry : setup.entry - point.low
-                    let adverse = isLong ? setup.entry - point.low : point.high - setup.entry
-                    if favorable > tracked[i].outcome.maxFavorable {
-                        tracked[i].outcome.maxFavorable = favorable; changed = true
-                    }
-                    if adverse > tracked[i].outcome.maxAdverse {
-                        tracked[i].outcome.maxAdverse = adverse; changed = true
-                    }
-
-                    // Once resolved, only track excursions. tp1Hit alone is NOT resolution —
-                    // the runner continues until TP2 hits or the (now-breakeven) stop is hit.
-                    // Pre-2026-05-09 this used `isCounted` which included tp1Hit, causing every
-                    // post-TP1 bar to skip tracking and stamp the trade tp1_win permanently —
-                    // 23/24 winners in the production data never registered TP2 because of it.
-                    if tracked[i].outcome.stopHit || tracked[i].outcome.tp2Hit { continue }
-
-                    // Check breakeven activation: price reached +1.0 R:R from entry
-                    if !tracked[i].outcome.breakevenActivated && risk > 0 {
-                        let favorableRR = favorable / risk
-                        if favorableRR >= 1.0 {
-                            tracked[i].outcome.breakevenActivated = true
-                            tracked[i].outcome.partialTaken = true
-                            activeStop = setup.entry
-                            changed = true
-                        }
-                    }
-
-                    // Check stop and TP1 with open-proximity heuristic
-                    let stopHit = isLong ? point.low <= activeStop : point.high >= activeStop
-                    let tp1Hit = isLong ? point.high >= setup.tp1 : point.low <= setup.tp1
-
-                    if stopHit && tp1Hit && !tracked[i].outcome.tp1Hit {
-                        let distToStop = abs(point.open - activeStop)
-                        let distToTP1 = abs(point.open - setup.tp1)
-                        if distToStop <= distToTP1 {
-                            tracked[i].outcome.stopHit = true
-                            tracked[i].outcome.outcomeTime = point.time
-                            changed = true; break
-                        } else {
-                            tracked[i].outcome.tp1Hit = true
-                            changed = true
-                        }
-                    } else if stopHit {
-                        tracked[i].outcome.stopHit = true
-                        tracked[i].outcome.outcomeTime = point.time
-                        changed = true; break
-                    } else if tp1Hit && !tracked[i].outcome.tp1Hit {
-                        tracked[i].outcome.tp1Hit = true
-                        changed = true
-                    }
-
-                    // Check TP2
-                    if let tp2 = setup.tp2, !tracked[i].outcome.tp2Hit {
-                        let hit = isLong ? point.high >= tp2 : point.low <= tp2
-                        if hit {
-                            tracked[i].outcome.tp2Hit = true
-                            tracked[i].outcome.outcomeTime = point.time
-                            changed = true; break
-                        }
-                    }
-                }
-            }
-
-            // Expire old pending setups and untriggered active setups (7 days)
-            let cutoff = Date().addingTimeInterval(-7 * 86400)
-            let before = tracked.count
-            tracked.removeAll { !$0.outcome.entryHit && $0.outcome.state == .active && $0.timestamp < cutoff }
-            if tracked.count != before { changed = true }
-
-            if changed { save(tracked, to: url) }
-        }
-    }
-
-    // MARK: - Lightweight Re-Evaluation
-
-    /// Compare the original setup against cached analysis data.
-    /// No LLM call — uses ML score, kill conditions, and direction from the latest refresh.
-    private static func reEvaluate(original: TrackedSetup,
-                                    cachedResult: AnalysisResult?) -> ReEvalResult {
-        // If no cached result (symbol not currently selected), conservative invalidation
-        guard let result = cachedResult else {
-            return ReEvalResult(direction: "", mlWin: nil, killsActive: false,
-                                validated: false,
-                                reason: "No cached data — symbol not active")
-        }
-
-        let newDirection = result.tradeSetups.first?.direction ?? "FLAT"
-        let newMLWin = result.daily.mlWinProbability
-        let originalML = original.mlProbability ?? 0
-
-        // Check 1: Direction agreement
-        if newDirection != original.setup.direction && newDirection != "FLAT" {
-            return ReEvalResult(direction: newDirection, mlWin: newMLWin,
-                                killsActive: false, validated: false,
-                                reason: "Direction changed: \(original.setup.direction) → \(newDirection)")
-        }
-
-        // Check 2: Latest analysis produced no setup (FLAT)
-        if result.tradeSetups.isEmpty && !result.claudeAnalysis.isEmpty {
-            let hasNoSetup = result.claudeAnalysis.contains("NO SETUP") ||
-                             result.claudeAnalysis.contains("BLOCKED")
-            if hasNoSetup {
-                return ReEvalResult(direction: "FLAT", mlWin: newMLWin,
-                                    killsActive: false, validated: false,
-                                    reason: "Latest analysis: no setup proposed")
-            }
-        }
-
-        // Check 3: Kill conditions active
-        let killDurKey = "killDur_\(original.symbol)"
-        let durState = UserDefaults.standard.dictionary(forKey: killDurKey) as? [String: Int] ?? [:]
-        let killsActive = (durState["divergence"] ?? 0) > 0 ||
-                          (durState["volume"] ?? 0) > 0 ||
-                          (durState["funding"] ?? 0) > 0
-        if killsActive {
-            var reasons = [String]()
-            if (durState["divergence"] ?? 0) > 0 { reasons.append("divergence") }
-            if (durState["volume"] ?? 0) > 0 { reasons.append("counter-volume") }
-            if (durState["funding"] ?? 0) > 0 { reasons.append("funding flip") }
-            return ReEvalResult(direction: newDirection, mlWin: newMLWin,
-                                killsActive: true, validated: false,
-                                reason: "Kill conditions active: \(reasons.joined(separator: ", "))")
-        }
-
-        // Check 4: ML score drift (24h gate)
-        if let ml = newMLWin {
-            if ml < 0.50 {
-                return ReEvalResult(direction: newDirection, mlWin: ml,
-                                    killsActive: false, validated: false,
-                                    reason: "ML_WIN below 50% (\(Int(ml * 100))%)")
-            }
-            if originalML > 0 {
-                let drift = originalML - ml
-                if drift > 0.15 {
-                    return ReEvalResult(direction: newDirection, mlWin: ml,
-                                        killsActive: false, validated: false,
-                                        reason: "ML_WIN dropped \(Int(drift * 100))pp (\(Int(originalML * 100))% → \(Int(ml * 100))%)")
-                }
-            }
-        }
-
-        // Check 5: ML Persistence drop (72h exit-strategy gate). If persistence collapses
-        // below 40% (deep LOW bucket) on a runner-dependent setup, the exit thesis is
-        // broken even if the 24h ML is still favorable — the runner won't reach TP2 and
-        // tight TP1-only setups are usually presented as conditional anyway.
-        if let mlH72 = result.daily.mlPersistenceProbability {
-            if mlH72 < 0.40 {
-                return ReEvalResult(direction: newDirection, mlWin: newMLWin,
-                                    killsActive: false, validated: false,
-                                    reason: "ML Persistence collapsed below 40% (\(Int(mlH72 * 100))%) — runner thesis broken")
-            }
-        }
-
-        // All checks passed
-        return ReEvalResult(direction: newDirection, mlWin: newMLWin,
-                            killsActive: false, validated: true,
-                            reason: "Re-eval confirmed: \(original.setup.direction), ML \(newMLWin.map { "\(Int($0 * 100))%" } ?? "n/a")")
-    }
-
-    // MARK: - Registration
-
-    /// Baseline prompt+system version. Collapsed to match the treatment version
-    /// 2026-05-30 because this is a single-user system — an A/B with n=1 user
-    /// cannot generate statistical power, and the worker's notification gate
-    /// change (bias OR Stoch union) was creating an asymmetric UX where baseline
-    /// users got Stoch-routed notifications that the baseline prompt couldn't
-    /// interpret (biases_MIXED auto-FLAT would kill the LLM analysis even though
-    /// the worker had reasons to fire the notification). Both constants now equal
-    /// the same string so the entire system runs the consolidated current-best
-    /// prompt. If MarketScope grows to multiple users later, set treatmentPromptVersion
-    /// to a new tag to restart A/B testing relative to this consolidated baseline.
+    /// Baseline prompt+system version. Collapsed to match the treatment version 2026-05-30
+    /// because this is a single-user system — an A/B with n=1 user cannot generate
+    /// statistical power. If MarketScope grows to multiple users later, set
+    /// treatmentPromptVersion to a new tag to restart A/B testing.
     static let baselinePromptVersion = "2026-05-30-stoch-direction"
 
-    /// Treatment prompt+system version. Bundles the six changes shipped 2026-05-30:
-    ///   - Band-default inversion (carried over from 2026-05-29-experiment)
-    ///   - STOCH_CROSS direction signal (co-equal direction primitive — broadened
-    ///     2026-05-30 after the direction_primitive_sweep backtest)
-    ///   - LONG confirmation gate (relStrengthVsSpy >= 1 AND dRsiDelta >= 1)
-    ///   - BB extreme inversion (don't fade band touches at 24h)
-    ///   - aligned_bearish SHORT restrictions (stocks only — crypto SHORTs are
-    ///     +0.95R EV; restriction would block the highest-EV cell on crypto)
-    ///   - TRANSITIONING regime conviction boost (allow HIGH when other gates pass)
-    ///   - MACRO_CONTEXT block (DXY/VIX/IWM-SPY interpretive labels)
-    /// Equal to baselinePromptVersion now (see comment above on the A/B collapse).
+    /// Treatment prompt+system version. Equal to baselinePromptVersion (A/B collapse).
     static let treatmentPromptVersion = "2026-05-30-stoch-direction"
 
     /// Back-compat alias for callers that didn't go through `assignedPromptVersion`.
-    /// New code should call the bucketing function instead.
     static let currentPromptVersion = baselinePromptVersion
 
-    /// Deterministic A/B bucket. Same `(deviceId, day)` always maps to the same
-    /// version so a single user's day isn't split mid-session. Different days
-    /// re-randomize, so over weeks a device contributes to both populations.
-    /// Honors `experiments_enabled` UserDefault (default true) — when false, always
-    /// returns baseline. Hash is a UTF-8 byte sum (stable across processes, unlike
-    /// Swift's seeded `Hasher`).
+    /// Deterministic A/B bucket. Same `(deviceId, day)` always maps to the same version.
+    /// Post-collapse both branches return the same string; kept for a future multi-user
+    /// restart. Honors `experiments_enabled` (Settings toggle removed 2026-07-09 — the
+    /// UserDefault only exists on devices that set it historically).
     static func assignedPromptVersion(deviceId: String, date: Date = Date()) -> String {
         let experimentsEnabled = (UserDefaults.standard.object(forKey: "experiments_enabled") as? Bool) ?? true
         guard experimentsEnabled else { return baselinePromptVersion }
@@ -470,207 +212,20 @@ enum OutcomeTracker {
     }
 
     /// Must match the `version` field of the worker's shipped ml-model-{crypto,stock}.json —
-    /// both 14 as of the 2026-07-06 v14 retrain (full-coverage derivatives regen; crypto
-    /// LightGBM d4 t150, stock XGBoost d5 t100, 110 features).
-    /// Pre-2026-07-01 this returned 10 for crypto (a leak-era leftover) while the worker's
-    /// outcome-feedback query filtered on 11/13 — so the LLM's trade-record lookup matched
-    /// nothing. The worker now queries IN(10,11,12,14) crypto / IN(12,13,14) stock; keep all
-    /// three registries (this, the worker query, the JSONs) in sync on retrains.
+    /// both 14 as of the 2026-07-06 v14 retrain. The server's TRACKED_MODEL_VERSION
+    /// (outcome-tracking.ts) is the registry of record now; keep this, the worker outcome
+    /// query, and the JSONs in sync on retrains.
     static func currentModelVersion(for symbol: String) -> Int {
         symbol.hasSuffix("USDT") ? 14 : 14
     }
 
-    /// Register a new setup for tracking. Classifies as market or conditional.
-    /// `modelVersion` defaults to the asset-class-appropriate value via the resolver
-    /// above, so callers don't need to keep crypto/stock mapping in sync separately.
-    static func registerSetup(_ setup: TradeSetup, symbol: String, analysisId: UUID,
-                              currentPrice: Double = 0,
-                              mlProbability: Double? = nil, conviction: String? = nil,
-                              modelVersion: Int? = nil,
-                              promptVersion: String = currentPromptVersion,
-                              archetype: String? = nil,
-                              atrAtRegistration: Double? = nil) {
-        let resolvedModelVersion = modelVersion ?? currentModelVersion(for: symbol)
-        ioQueue.async {
-            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-            var tracked = loadTrackedSetups(url: url)
-
-            // Don't duplicate
-            guard !tracked.contains(where: { $0.setup.id == setup.id }) else { return }
-
-            let setupType = currentPrice > 0
-                ? SetupType.classify(entry: setup.entry, currentPrice: currentPrice, reasoning: setup.reasoning)
-                : .market  // Fallback if no price provided
-
-            // Log breakout/breakdown entries (entry on the "wrong" side of price for a
-            // pullback) so we can track how often the LLM produces these vs pullback entries.
-            if currentPrice > 0 {
-                let isLong = setup.direction == "LONG"
-                let entryAboveCurrent = setup.entry > currentPrice
-                let isBreakoutLong = isLong && entryAboveCurrent
-                let isBreakdownShort = !isLong && !entryAboveCurrent
-                if isBreakoutLong {
-                    print("[OutcomeTracker] Breakout LONG setup for \(symbol): entry $\(setup.entry) > current $\(currentPrice). Price must rise to enter.")
-                } else if isBreakdownShort {
-                    print("[OutcomeTracker] Breakdown SHORT setup for \(symbol): entry $\(setup.entry) < current $\(currentPrice). Price must fall to enter.")
-                }
-            }
-
-            var ts = TrackedSetup(setup: setup, symbol: symbol, analysisId: analysisId,
-                                   mlProbability: mlProbability, conviction: conviction,
-                                   modelVersion: resolvedModelVersion, setupType: setupType,
-                                   priceAtSetup: currentPrice, promptVersion: promptVersion,
-                                   archetype: archetype)
-
-            if setupType == .conditional {
-                ts.outcome.state = .pending
-                ts.outcome.pendingExpiresAt = Date().addingTimeInterval(12 * 3600)
-            } else {
-                ts.outcome.state = .active
-            }
-
-            tracked.insert(ts, at: 0)
-
-            // Cap at 50 per symbol
-            if tracked.count > 50 { tracked = Array(tracked.prefix(50)) }
-
-            save(tracked, to: url)
-
-            // Register pending setups with the worker so the cron can fire an
-            // "entry zone reached" APN when the latest 4H bar touches entry ± 0.3 × ATR
-            // AND ML is still favorable. Fire-and-forget; failures don't block local
-            // tracking. Only conditional setups go to the worker — market setups are
-            // already at-current-price so there's nothing to wait for.
-            if setupType == .conditional, let atr = atrAtRegistration, atr > 0,
-               let expiresAt = ts.outcome.pendingExpiresAt {
-                Task {
-                    await WorkerPendingSetupService.register(
-                        setupId: setup.id, symbol: symbol,
-                        direction: setup.direction, entry: setup.entry,
-                        atr: atr, mlAtRegistration: mlProbability,
-                        expiresAt: expiresAt)
-                }
-            }
-        }
-    }
-
-    /// Sync resolved outcomes to the worker (D1) for cross-device tracking.
-    static func syncResolvedOutcomes(symbol: String) {
-        ioQueue.async {
-            let url = outcomeDir.appendingPathComponent("setups_\(symbol).json")
-            let tracked = loadTrackedSetups(url: url)
-            let resolved = tracked.filter { $0.outcome.isCounted && !$0.synced }
-
-            guard !resolved.isEmpty else { return }
-
-            Task {
-                await PushService.ensureAuth()
-                for t in resolved {
-                    guard let endpoint = URL(string: "\(PushService.workerURL)/outcomes") else { continue }
-                    var request = URLRequest(url: endpoint)
-                    request.httpMethod = "POST"
-                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    PushService.addAuthHeaders(&request)
-
-                    let payload: [String: Any] = [
-                        "symbol": t.symbol,
-                        "direction": t.setup.direction,
-                        "entry": t.setup.entry,
-                        "stopLoss": t.setup.stopLoss,
-                        "tp1": t.setup.tp1,
-                        "tp2": t.setup.tp2 as Any,
-                        "outcome": t.outcome.result,
-                        "pnlPercent": 0,
-                        "mlProb": t.mlProbability ?? 0,
-                        "conviction": t.conviction ?? "",
-                        "modelVersion": t.modelVersion,
-                        "promptVersion": t.promptVersion,
-                    ]
-                    request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-                    _ = try? await URLSession.shared.data(for: request)
-                }
-
-                // Mark as synced
-                ioQueue.async {
-                    var all = loadTrackedSetups(url: url)
-                    for i in all.indices where resolved.contains(where: { $0.setup.id == all[i].setup.id }) {
-                        all[i].synced = true
-                    }
-                    save(all, to: url)
-                }
-            }
-        }
-    }
-
-    // MARK: - FLAT/Kill Outcomes
-
-    /// Register a FLAT or kill-blocked outcome for tracking.
-    static func registerFlatOutcome(symbol: String, price: Double, reason: String) {
-        ioQueue.async {
-            let url = outcomeDir.appendingPathComponent("flats_\(symbol).json")
-            var flats = loadFlatOutcomes(url: url)
-
-            flats.insert(FlatOutcome(symbol: symbol, price: price, reason: reason), at: 0)
-
-            // Cap at 50
-            if flats.count > 50 { flats = Array(flats.prefix(50)) }
-
-            save(flats, to: url)
-        }
-    }
-
-    /// Called during refresh to track price movement after FLAT decisions.
-    static func trackFlatOutcomes(symbol: String, currentPrice: Double) {
-        ioQueue.async {
-            let url = outcomeDir.appendingPathComponent("flats_\(symbol).json")
-            var flats = loadFlatOutcomes(url: url)
-            var changed = false
-
-            for i in flats.indices {
-                guard flats[i].falseFlat == nil, flats[i].refreshCount < 3 else { continue }
-
-                flats[i].refreshCount += 1
-                changed = true
-
-                if flats[i].refreshCount >= 3 {
-                    flats[i].priceAfter3Refreshes = currentPrice
-                    let move = abs(currentPrice - flats[i].priceAtFlat) / flats[i].priceAtFlat * 100
-                    flats[i].falseFlat = move > 1.5
-                    changed = true
-                }
-            }
-
-            // Expire old entries (30 days)
-            let cutoff = Date().addingTimeInterval(-30 * 86400)
-            let before = flats.count
-            flats.removeAll { $0.timestamp < cutoff }
-            if flats.count != before { changed = true }
-
-            if changed { save(flats, to: url) }
-        }
-    }
-
     // MARK: - Stats
 
-    /// Compute outcome statistics for dashboard.
+    /// Compute outcome statistics for dashboard (server snapshot + legacy terminal history).
     static func stats(symbol: String? = nil) -> OutcomeStats {
         return ioQueue.sync {
-            var allSetups = [TrackedSetup]()
-            var allFlats = [FlatOutcome]()
-
-            let dir = outcomeDir
-            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-
-            for file in files {
-                if file.lastPathComponent.hasPrefix("setups_") {
-                    if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
-                    allSetups.append(contentsOf: loadTrackedSetups(url: file))
-                }
-                if file.lastPathComponent.hasPrefix("flats_") {
-                    if let sym = symbol, !file.lastPathComponent.contains(sym) { continue }
-                    allFlats.append(contentsOf: loadFlatOutcomes(url: file))
-                }
-            }
+            let allSetups = mergedSetupsLocked(symbol: symbol)
+            let allFlats = mergedFlatsLocked(symbol: symbol)
 
             // Only count setups that reached ACTIVE state
             let counted = allSetups.filter { $0.outcome.state == .active }
@@ -735,22 +290,14 @@ enum OutcomeTracker {
 
     // MARK: - Per-version A/B aggregation
 
-    /// Outcome stats sliced by `promptVersion`. Same definitions as `OutcomeStats`
-    /// but keyed by the version string the setup was registered under. Use this
-    /// to compare baseline vs treatment populations in the dashboard.
-    /// Returns one entry per version found in the lookback window (so versions
-    /// with zero setups in the window are omitted from the map).
+    /// Outcome stats sliced by `promptVersion`. Same definitions as `OutcomeStats` but keyed
+    /// by the version string the setup was registered under.
     static func versionStats(lookbackDays: Int = 30) -> [String: VersionStats] {
         return ioQueue.sync {
             let cutoff = Date().addingTimeInterval(-Double(lookbackDays) * 86400)
             var setupsByVersion: [String: [TrackedSetup]] = [:]
-
-            let dir = outcomeDir
-            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-            for file in files where file.lastPathComponent.hasPrefix("setups_") {
-                for ts in loadTrackedSetups(url: file) where ts.timestamp >= cutoff {
-                    setupsByVersion[ts.promptVersion, default: []].append(ts)
-                }
+            for ts in mergedSetupsLocked() where ts.timestamp >= cutoff {
+                setupsByVersion[ts.promptVersion, default: []].append(ts)
             }
 
             return setupsByVersion.mapValues { setups in
@@ -788,59 +335,6 @@ enum OutcomeTracker {
         }
     }
 
-    // MARK: - Restore from Server
-
-    /// Fetch resolved outcomes from D1 and merge into local cache.
-    static func restoreFromServer() async {
-        let dir = outcomeDir
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        let hasSetups = files.contains { $0.lastPathComponent.hasPrefix("setups_") }
-        guard !hasSetups else { return }
-
-        guard let url = URL(string: "\(PushService.workerURL)/outcomes") else { return }
-        await PushService.ensureAuth()
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        PushService.addAuthHeaders(&request)
-
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]]
-        else { return }
-
-        ioQueue.async {
-            for item in json {
-                guard let symbol = item["symbol"] as? String,
-                      let direction = item["direction"] as? String,
-                      let entry = item["entry"] as? Double,
-                      let stopLoss = item["stopLoss"] as? Double,
-                      let tp1 = item["tp1"] as? Double
-                else { continue }
-
-                let tp2 = item["tp2"] as? Double
-                let setup = TradeSetup(direction: direction, entry: entry, stopLoss: stopLoss, tp1: tp1, tp2: tp2)
-                let mlProb = item["mlProb"] as? Double
-                let conviction = item["conviction"] as? String
-
-                let fileURL = dir.appendingPathComponent("setups_\(symbol).json")
-                var tracked = loadTrackedSetups(url: fileURL)
-                var ts = TrackedSetup(setup: setup, symbol: symbol, analysisId: UUID(),
-                                       mlProbability: mlProb, conviction: conviction)
-                ts.synced = true
-
-                // Restore outcome state — these are already resolved
-                if let outcome = item["outcome"] as? String {
-                    if outcome == "tp1_win" { ts.outcome.entryHit = true; ts.outcome.tp1Hit = true }
-                    else if outcome == "tp2_win" { ts.outcome.entryHit = true; ts.outcome.tp1Hit = true; ts.outcome.tp2Hit = true }
-                    else if outcome == "loss" { ts.outcome.entryHit = true; ts.outcome.stopHit = true }
-                }
-
-                tracked.insert(ts, at: 0)
-                save(tracked, to: fileURL)
-            }
-        }
-    }
-
     // MARK: - Persistence
 
     private static func loadTrackedSetups(url: URL) -> [TrackedSetup] {
@@ -859,23 +353,6 @@ enum OutcomeTracker {
         }
     }
 
-    // MARK: - Cross-Symbol PENDING Scan
-
-    /// Walks every symbol's `setups_*.json` and processes PENDING setups regardless of
-    /// which symbol the user is currently analyzing. Catches the case where a PENDING
-    /// setup for BTC sits unrefreshed while the user works on ETH — without this, the
-    /// BTC entry can touch live, conditions can change, and the re-eval never fires
-    /// until the user returns to BTC by which point the trigger is stale.
-    ///
-    /// Per-symbol behaviour:
-    ///   - Timeout check (12h expiry) runs even when no cached AnalysisResult exists.
-    ///   - Entry-trigger check needs cached AnalysisResult; falls through silently when
-    ///     no recent analysis is available for the symbol.
-    ///
-    /// Limitation: the cached AnalysisResult for a non-currently-analyzed symbol can be
-    /// hours old. Entry triggers fire against cached price data, so a stale cache may
-    /// either miss a live touch or trigger on a level the price has long since moved
-    /// past. Background price polling would fix this; out of scope here.
     // MARK: - F-4 Overtrading / cooling-off guard
 
     /// Number of setups surfaced to the user today (local calendar day), across all symbols.
@@ -964,64 +441,6 @@ enum OutcomeTracker {
         }
         return parts.joined(separator: " ")
     }
-
-    static func scanAllPendingSetups() {
-        ioQueue.async {
-            let dir = outcomeDir
-            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-            for file in files {
-                guard file.lastPathComponent.hasPrefix("setups_") else { continue }
-                let symbol = file.lastPathComponent
-                    .replacingOccurrences(of: "setups_", with: "")
-                    .replacingOccurrences(of: ".json", with: "")
-                var tracked = loadTrackedSetups(url: file)
-                guard tracked.contains(where: { $0.outcome.state == .pending }) else { continue }
-
-                let cachedResult = AnalysisHistoryStore.load(symbol: symbol).first
-                var changed = false
-
-                for i in tracked.indices {
-                    guard tracked[i].outcome.state == .pending else { continue }
-
-                    // Timeout check first — runs without cached data.
-                    if let expires = tracked[i].outcome.pendingExpiresAt, Date() > expires {
-                        tracked[i].outcome.state = .expired
-                        tracked[i].outcome.reEvalResult = ReEvalResult(
-                            direction: "", mlWin: nil, killsActive: false,
-                            validated: false, reason: "Pending window expired (12h)")
-                        changed = true
-                        continue
-                    }
-
-                    // Entry trigger needs cached price data — skip if no recent analysis.
-                    guard let result = cachedResult else { continue }
-                    let setup = tracked[i].setup
-                    let isLong = setup.direction == "LONG"
-                    let currentPrice = result.tf1.price
-                    let h1Candles = result.tf3.candles
-
-                    let entryTouched = isLong
-                        ? (currentPrice <= setup.entry || h1Candles.contains { $0.low <= setup.entry })
-                        : (currentPrice >= setup.entry || h1Candles.contains { $0.high >= setup.entry })
-
-                    if entryTouched {
-                        let evalResult = reEvaluate(original: tracked[i], cachedResult: result)
-                        tracked[i].outcome.reEvalResult = evalResult
-                        if evalResult.validated {
-                            tracked[i].outcome.state = .active
-                            tracked[i].outcome.entryHit = true
-                            tracked[i].outcome.entryHitTime = Date()
-                        } else {
-                            tracked[i].outcome.state = .invalidated
-                        }
-                        changed = true
-                    }
-                }
-
-                if changed { save(tracked, to: file) }
-            }
-        }
-    }
 }
 
 // MARK: - Models
@@ -1038,13 +457,11 @@ struct TrackedSetup: Codable, Identifiable {
     let conviction: String?
     let modelVersion: Int
     let setupType: SetupType
-    /// Live price at the moment the setup was registered. Used by the tracker to choose
-    /// the correct entry-detection direction (price must move TOWARD entry from this side).
-    /// 0 if missing on legacy stored setups.
+    /// Live price at the moment the setup was registered. Used to distinguish pullback vs
+    /// breakout (chase) entries in the debrief. 0 if missing on legacy stored setups.
     let priceAtSetup: Double
-    /// Prompt + system-behavior version snapshot at registration time. See
-    /// `OutcomeTracker.currentPromptVersion`. Lets us slice the outcome archive by
-    /// system-iteration without conflating the data across material changes.
+    /// Prompt + system-behavior version snapshot at registration time (stamped server-side
+    /// since the 2026-07-09 cutover). Lets us slice the outcome archive by system-iteration.
     let promptVersion: String
     /// Setup archetype at registration time (e.g. COUNTER_TREND_PULLBACK,
     /// MOMENTUM_CONTINUATION). Optional so legacy stored data decodes as nil.
@@ -1080,6 +497,49 @@ struct TrackedSetup: Codable, Identifiable {
         self.priceAtSetup = priceAtSetup
         self.promptVersion = promptVersion
         self.archetype = archetype
+    }
+
+    /// Map a server tracked_setups row (GET /tracked-setups) into the local display model.
+    /// Returns nil for rows missing the core setup fields (shouldn't happen for kind='setup').
+    init?(dto: WorkerTrackedSetupsService.SetupDTO) {
+        guard let direction = dto.direction, let entry = dto.entry,
+              let stopLoss = dto.stopLoss, let tp1 = dto.tp1 else { return nil }
+        // The server mints real UUIDs (crypto.randomUUID); keep them so Identifiable is
+        // stable across refreshes. Unparseable ids fall back to a fresh UUID.
+        let id = UUID(uuidString: dto.id) ?? UUID()
+        self.setup = TradeSetup(id: id, direction: direction, entry: entry, stopLoss: stopLoss,
+                                tp1: tp1, tp2: dto.tp2, reasoning: dto.reasoning ?? "")
+        self.symbol = dto.symbol
+        self.analysisId = UUID()   // not tracked server-side; unused by consumers
+        self.timestamp = Date(timeIntervalSince1970: dto.registeredAt / 1000)
+        self.killsAtGeneration = nil
+        self.synced = true         // server rows ARE the synced record
+        self.mlProbability = dto.mlAtRegistration
+        self.conviction = dto.conviction
+        self.modelVersion = dto.modelVersion
+        self.setupType = SetupType(rawValue: dto.setupType ?? "market") ?? .market
+        self.priceAtSetup = dto.priceAtSetup
+        self.promptVersion = dto.promptVersion
+        self.archetype = dto.archetype
+
+        var o = TradeOutcome()
+        o.state = SetupState(rawValue: dto.state) ?? .active
+        o.entryHit = dto.entryHit
+        if let hitAt = dto.entryHitAt { o.entryHitTime = Date(timeIntervalSince1970: hitAt / 1000) }
+        o.stopHit = dto.stopHit
+        o.tp1Hit = dto.tp1Hit
+        o.tp2Hit = dto.tp2Hit
+        o.breakevenActivated = dto.breakevenActivated
+        o.partialTaken = dto.partialTaken
+        o.maxFavorable = dto.maxFavorable
+        o.maxAdverse = dto.maxAdverse
+        if let resolvedAt = dto.resolvedAt { o.outcomeTime = Date(timeIntervalSince1970: resolvedAt / 1000) }
+        if let expiresAt = dto.pendingExpiresAt { o.pendingExpiresAt = Date(timeIntervalSince1970: expiresAt / 1000) }
+        if let reason = dto.invalidReason {
+            o.reEvalResult = ReEvalResult(direction: "", mlWin: nil, killsActive: false,
+                                          validated: false, reason: reason)
+        }
+        self.outcome = o
     }
 
     init(from decoder: Decoder) throws {
@@ -1122,8 +582,7 @@ struct TrackedSetup: Codable, Identifiable {
 }
 
 /// One row of the A/B comparison table. Computed by `OutcomeTracker.versionStats`
-/// from the existing tracked-setup archive — no separate storage, just a
-/// `groupBy promptVersion` over the same files `stats()` reads.
+/// from the tracked-setup archive — no separate storage, just a `groupBy promptVersion`.
 struct VersionStats {
     let totalSetups: Int          // All setups registered under this version
     let countedSetups: Int        // Reached ACTIVE state (entry triggered)

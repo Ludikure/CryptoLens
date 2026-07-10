@@ -138,6 +138,7 @@ struct OutcomeDashboardView: View {
         }
         .navigationTitle("Outcome Tracking")
         .task {
+            await OutcomeTracker.refresh()   // pull server-resolved setups before computing stats
             stats = OutcomeTracker.stats()
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
@@ -147,6 +148,7 @@ struct OutcomeDashboardView: View {
             cronStale = await CronHealthService.isStale()
         }
         .refreshable {
+            await OutcomeTracker.refresh()
             stats = OutcomeTracker.stats()
             versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
