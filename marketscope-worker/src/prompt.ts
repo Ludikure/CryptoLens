@@ -1622,16 +1622,21 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
   const atrForRR = indicators.length > 2 ? indicators[2].atr?.atr : indicators[1]?.atr?.atr;
   if (currentPrice && atrForRR != null) {
     const atr = atrForRR;
+    // ONE price anchor for all level geometry: the LIVE price when available (the closed-bar
+    // `currentPrice` can be up to 4h stale intra-bar, and the LIVE PRICE section declares live
+    // authoritative). Every proximity/atrDistance below — tagged-level display AND the candidate-
+    // setup entry filter — measures from this same anchor.
+    const refPx = (lp != null && lp > 0) ? lp : currentPrice;
     const allLevels: TaggedLevel[] = [];
     const prox = (dist: number) => dist <= 1.0 ? 'IN_PLAY' : dist <= 2.0 ? 'NEARBY' : 'DISTANT';
     for (const ind of indicators) {
       const prefix = ind.label, srStrength = prefix.includes('Daily') ? 2.5 : prefix.includes('4H') ? 2.0 : 1.5;
-      for (const s of ind.supportResistance.supports) { const dist = Math.abs(currentPrice - s) / Math.max(atr, 0.0001); allLevels.push({ price: s, type: `${prefix} support`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
-      for (const r of ind.supportResistance.resistances) { const dist = Math.abs(currentPrice - r) / Math.max(atr, 0.0001); allLevels.push({ price: r, type: `${prefix} resistance`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
-      if (ind.vwap != null) { const dist = Math.abs(currentPrice - ind.vwap) / Math.max(atr, 0.0001); allLevels.push({ price: ind.vwap, type: `${prefix} VWAP`, proximity: prox(dist), atrDistance: dist, strength: 2.0, freshness: 0.5, candlesAgo: 0, isStructural: false }); }
+      for (const s of ind.supportResistance.supports) { const dist = Math.abs(refPx - s) / Math.max(atr, 0.0001); allLevels.push({ price: s, type: `${prefix} support`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
+      for (const r of ind.supportResistance.resistances) { const dist = Math.abs(refPx - r) / Math.max(atr, 0.0001); allLevels.push({ price: r, type: `${prefix} resistance`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
+      if (ind.vwap != null) { const dist = Math.abs(refPx - ind.vwap) / Math.max(atr, 0.0001); allLevels.push({ price: ind.vwap, type: `${prefix} VWAP`, proximity: prox(dist), atrDistance: dist, strength: 2.0, freshness: 0.5, candlesAgo: 0, isStructural: false }); }
       if (ind.volumeProfile) {
         for (const [label, price] of [['POC', ind.volumeProfile.poc], ['VAH', ind.volumeProfile.vah], ['VAL', ind.volumeProfile.val]] as Array<[string, number]>) {
-          const dist = Math.abs(currentPrice - price) / Math.max(atr, 0.0001);
+          const dist = Math.abs(refPx - price) / Math.max(atr, 0.0001);
           allLevels.push({ price, type: `${prefix} ${label}`, proximity: prox(dist), atrDistance: dist, strength: label === 'POC' ? 3.5 : 3.0, freshness: 1.0, candlesAgo: 0, isStructural: false });
         }
       }
@@ -1640,7 +1645,7 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (ind.marketStructure) {
         const tfWeight = ind.label.includes('Daily') ? 1.5 : ind.label.includes('4H') ? 1.0 : 0.5;
         for (const level of ind.marketStructure.levelTests) {
-          const dist = Math.abs(currentPrice - level.price) / Math.max(atr, 0.0001);
+          const dist = Math.abs(refPx - level.price) / Math.max(atr, 0.0001);
           const freshnessText = level.candlesAgo <= 3 ? 'fresh' : level.candlesAgo <= 10 ? 'recent' : 'old';
           const levelStrength = Math.min(Math.min(level.tests, 5) * tfWeight, 5.0);
           const levelFreshness = level.candlesAgo <= 3 ? 1.0 : level.candlesAgo <= 10 ? 0.5 : 0.0;
@@ -1668,13 +1673,33 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const minCandlesAgo = Math.min(...members.map(m => m.candlesAgo));
       const anyStructural = members.some(m => m.isStructural);
       const typeStr = members.length === 1 ? anchor.type : members.map(m => m.type).join(' + ');
-      const dist = Math.abs(currentPrice - anchor.price) / Math.max(atr, 0.0001);
+      // Distance/proximity anchored to the LIVE price (refPx), not the closed bar: the LIVE PRICE
+      // section declares live authoritative, and this atrDistance/proximity feeds BOTH the TAGGED
+      // LEVELS display AND the CANDIDATE SETUPS entry filter below — one anchor, one geometry.
+      // (Previously the display re-anchored to live while the setups kept closed-bar proximity,
+      // so a single prompt carried two contradictory distances for the same level.)
+      const dist = Math.abs(refPx - anchor.price) / Math.max(atr, 0.0001);
       clustered.push({ price: anchor.price, type: typeStr, proximity: prox(dist), atrDistance: dist, strength: totalStrength, freshness: bestFreshness, candlesAgo: minCandlesAgo, isStructural: anyStructural });
     }
     const uniqueLevels = clustered;
     if (uniqueLevels.length) {
+      // Each level is tagged ABOVE / BELOW live and the list is ordered high→low so the model
+      // reads the geometry correctly and never mislabels a one-sided cluster as a "squeeze":
+      // the previous bare list let it call two below-price supports "squeezed between", which is
+      // geometrically wrong.
       L(); L('=== TAGGED LEVELS ===');
-      for (const level of uniqueLevels.slice(0, 15)) L(`${formatPrice(level.price)} (${level.type}) [${level.proximity}, ${f(level.atrDistance, 1)}x ATR, str=${f(level.strength, 1)}]`);
+      L(`(ABOVE / BELOW is each level's side of the LIVE price ${formatPrice(refPx)} — resistance sits ABOVE, support BELOW. `
+        + `Only call price "between"/"squeezed"/"pinned"/"caught" when at least one ABOVE level AND one BELOW level bracket it. `
+        + `A cluster entirely on one side means price is sitting ABOVE it or BELOW it — not squeezed. Name the actual bracketing levels, not just any two.)`);
+      // Cap by NEAREST-to-live (the actionable levels), then display high→low. Slicing the
+      // high→low sort kept the 15 highest prices and silently dropped the nearest below-live
+      // supports — exactly the levels the bracketing directive above depends on.
+      const nearest = [...uniqueLevels].sort((a, b) => a.atrDistance - b.atrDistance).slice(0, 15);
+      const sortedForDisplay = nearest.sort((a, b) => b.price - a.price);   // high → low
+      for (const level of sortedForDisplay) {
+        const side = level.price >= refPx ? 'ABOVE live' : 'BELOW live';
+        L(`${formatPrice(level.price)} [${side}] (${level.type}) [${level.proximity}, ${f(level.atrDistance, 1)}x ATR from live, str=${f(level.strength, 1)}]`);
+      }
     }
 
     if (indicators.length >= 2) {

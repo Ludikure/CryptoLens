@@ -214,6 +214,27 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(['TRENDING', 'TRANSITIONING', 'RANGING']).toContain(newState.regime);
   });
 
+  it('TAGGED LEVELS tag each level ABOVE/BELOW the LIVE price so one-sided clusters cannot be called a "squeeze"', () => {
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mk = (n: number, step: number, label: string, tf: string) =>
+      computeFullIndicators(synthCandles(n, NOW - n * step, step, 100), { timeframe: tf, label, isCrypto: true }) as unknown as PromptIndicator;
+    const daily = mk(230, DAY, 'Daily (1D)', '1d');
+    const fourH = mk(230, H4, '4H', '4h');
+    const oneH = mk(120, H1, '1H', '1h');
+
+    // The user's exact bug: live price sits ABOVE the whole level cluster, yet the model narrated
+    // it as "squeezed between" two below-price levels. With live price above every computed level,
+    // every tagged line must read "BELOW live" and NONE "ABOVE live" — proving the geometry is
+    // anchored to live, not to the (stale) closed bar, and the anti-squeeze directive is present.
+    const { prompt } = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH], livePrice: 1_000_000,
+    });
+    expect(prompt).toContain('=== TAGGED LEVELS ===');
+    expect(prompt).toContain('Only call price "between"/"squeezed"');   // geometry directive present
+    expect(prompt).toContain('[BELOW live]');                            // levels tagged by side
+    expect(prompt).not.toContain('[ABOVE live]');                        // nothing is above 1,000,000
+  });
+
   it('#6: SINCE LAST ANALYSIS surfaces the ML delta + prior Bottom Line, and stamps newState for the next run', () => {
     const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
     const mk = (n: number, step: number, label: string, tf: string) =>
