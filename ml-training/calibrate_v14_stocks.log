@@ -1,0 +1,25 @@
+stocks: 252215 daily bars, 159 symbols, goodR base 0.570
+
+feature sets: FULL=110 (111 minus volScalarML), PRUNED=78
+
+===== BASELINE: XGB d5 t100 × FULL =====
+  AUC 0.6778 0.6868 0.6926 (mean 0.6857) | top10% 0.751 0.797 0.800 (mean 0.783)
+
+===== PRUNED feature set (XGB d5 t100) =====
+  AUC 0.6778 0.6874 0.6959 (mean 0.6871) | top10% 0.755 0.804 0.808 (mean 0.789)  Δ+0.0013
+
+===== CONFIG CHALLENGERS (FULL) =====
+  XGB d6 t200  AUC 0.6856 0.6878 0.6963 (mean 0.6899) | top10% 0.756 0.809 0.812 (mean 0.792)  Δ+0.0042
+  LGB d6 t200  AUC 0.6843 0.6903 0.6957 (mean 0.6901) | top10% 0.763 0.811 0.808 (mean 0.794)  Δ+0.0043
+  LGB d5 t300  AUC 0.6844 0.6879 0.6954 (mean 0.6892) | top10% 0.764 0.809 0.808 (mean 0.794)  Δ+0.0035
+
+===== WINNER: XGB d5 t100 × FULL (mean AUC 0.6857) =====
+  calibration: 160 breakpoints, floor=0.3193, cap=0.85
+  reliability (calibrated bucket → realized goodR):
+    [0.30,0.50): n= 63141 realized=38.9%
+    [0.50,0.60): n= 11419 realized=55.0%
+    [0.60,0.70): n= 31651 realized=66.5%
+    [0.70,0.85): n= 43256 realized=73.8%
+
+  wrote /Volumes/External/CryptoLens/ml-training/models_v14/ml-model-stock.json (100 trees, xgboost)
+  staging only — re-run with --ship to install into worker + iOS

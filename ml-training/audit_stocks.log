@@ -1,0 +1,69 @@
+stocks: 228487 daily bars, 159 symbols, goodR base 0.560
+
+================ A. BASELINE (production config) ================
+  AUC 0.6694 0.6856 0.6961 (mean 0.6837) | top10% 0.745 0.797 0.798 (mean 0.780) | Brier 0.2231
+
+================ B. MODEL GRID ================
+  PROD XGB d5 t100 lr.03   AUC 0.6694 0.6856 0.6961 (mean 0.6837) | top10% 0.745 0.797 0.798 (mean 0.780) | Brier 0.2231  Δ+0.0000 folds>0/3
+  LGB d3 t150 lr.03        AUC 0.6640 0.6843 0.6898 (mean 0.6793) | top10% 0.736 0.787 0.781 (mean 0.768) | Brier 0.2244  Δ-0.0043 folds>0/3
+  LGB d3 t300 lr.03        AUC 0.6654 0.6875 0.6941 (mean 0.6823) | top10% 0.735 0.791 0.795 (mean 0.774) | Brier 0.2235  Δ-0.0013 folds>1/3
+  LGB d4 t300 lr.03        AUC 0.6730 0.6879 0.6974 (mean 0.6861) | top10% 0.754 0.802 0.806 (mean 0.787) | Brier 0.2226  Δ+0.0024 folds>3/3
+  LGB d4 t150 lr.05        AUC 0.6701 0.6883 0.6975 (mean 0.6853) | top10% 0.750 0.798 0.805 (mean 0.784) | Brier 0.2227  Δ+0.0016 folds>3/3
+  LGB d5 t150 lr.03        AUC 0.6740 0.6867 0.6978 (mean 0.6862) | top10% 0.754 0.801 0.802 (mean 0.786) | Brier 0.2224  Δ+0.0025 folds>3/3
+  LGB d5 t300 lr.03        AUC 0.6747 0.6859 0.7004 (mean 0.6870) | top10% 0.754 0.807 0.813 (mean 0.791) | Brier 0.2224  Δ+0.0033 folds>3/3
+  LGB d6 t200 lr.03        AUC 0.6757 0.6857 0.7015 (mean 0.6877) | top10% 0.757 0.801 0.815 (mean 0.791) | Brier 0.2220  Δ+0.0040 folds>3/3
+  XGB d4 t150 lr.03        AUC 0.6706 0.6866 0.6947 (mean 0.6840) | top10% 0.749 0.792 0.797 (mean 0.779) | Brier 0.2231  Δ+0.0003 folds>2/3
+  XGB d5 t100 lr.03        AUC 0.6694 0.6856 0.6961 (mean 0.6837) | top10% 0.745 0.797 0.798 (mean 0.780) | Brier 0.2231  Δ+0.0000 folds>0/3
+  XGB d6 t200 lr.03        AUC 0.6754 0.6869 0.7020 (mean 0.6881) | top10% 0.761 0.798 0.816 (mean 0.792) | Brier 0.2219  Δ+0.0044 folds>3/3
+
+================ C. FEATURE-GROUP ABLATION (drop group, prod config) ================
+  -daily_core       (19 feats) ΔAUC/fold: -0.0048 -0.0033 -0.0044 mean -0.0042  → neutral
+  -fourh_core       (19 feats) ΔAUC/fold: -0.0011 -0.0007 -0.0014 mean -0.0011  → neutral
+  -oneh             ( 4 feats) ΔAUC/fold: +0.0002 +0.0005 +0.0001 mean +0.0003  → DEAD WEIGHT?
+  -deriv_signals    ( 5 feats) ΔAUC/fold: +0.0028 +0.0000 +0.0007 mean +0.0012  → DEAD WEIGHT?
+  -deriv_raw        ( 4 feats) ΔAUC/fold: -0.0001 +0.0002 +0.0003 mean +0.0001  → DEAD WEIGHT?
+  -deriv_interact   ( 2 feats) ΔAUC/fold: -0.0001 +0.0008 +0.0004 mean +0.0004  → DEAD WEIGHT?
+  -macro            ( 3 feats) ΔAUC/fold: +0.0033 +0.0011 +0.0021 mean +0.0022  → DEAD WEIGHT?
+  -candle3          ( 4 feats) ΔAUC/fold: +0.0019 -0.0005 +0.0006 mean +0.0007  → DEAD WEIGHT?
+  -stock_only       (18 feats) ΔAUC/fold: +0.0058 -0.0022 -0.0020 mean +0.0006  → neutral
+  -context_atr      ( 2 feats) ΔAUC/fold: +0.0006 -0.0009 -0.0002 mean -0.0002  → neutral
+  -cross_tf         ( 3 feats) ΔAUC/fold: -0.0031 -0.0046 -0.0013 mean -0.0030  → neutral
+  -temporal         ( 5 feats) ΔAUC/fold: +0.0010 -0.0009 +0.0001 mean +0.0000  → DEAD WEIGHT?
+  -deltas_6bar      ( 5 feats) ΔAUC/fold: +0.0018 +0.0011 +0.0003 mean +0.0011  → DEAD WEIGHT?
+  -deltas_1bar      ( 3 feats) ΔAUC/fold: -0.0020 +0.0008 -0.0002 mean -0.0005  → neutral
+  -accel            ( 3 feats) ΔAUC/fold: -0.0008 +0.0009 -0.0002 mean -0.0000  → neutral
+  -sentiment        ( 2 feats) ΔAUC/fold: +0.0012 +0.0001 +0.0007 mean +0.0007  → DEAD WEIGHT?
+  -eth_btc          ( 2 feats) ΔAUC/fold: +0.0012 +0.0001 +0.0007 mean +0.0007  → DEAD WEIGHT?
+  -basis            ( 2 feats) ΔAUC/fold: +0.0012 +0.0001 +0.0007 mean +0.0007  → DEAD WEIGHT?
+  -volume_profile   ( 6 feats) ΔAUC/fold: +0.0011 -0.0002 -0.0000 mean +0.0003  → neutral
+
+================ D. DEAD FEATURES + PERMUTATION (last fold) ================
+  top-15 permutation importance (AUC drop, last fold):
+    regimeCode               +0.0422
+    tfAlignment              +0.0339
+    dAdx                     +0.0073
+    dStackBull               +0.0064
+    earningsProximity        +0.0061
+    atrPercentile            +0.0028
+    dEmaCross                +0.0027
+    volScalarML              +0.0025
+    hEmaCross                +0.0023
+    vixTermStructure         +0.0016
+    dVolumeRatio             +0.0015
+    hVolumeRatio             +0.0013
+    dStackBear               +0.0012
+    dxyMomentum              +0.0012
+    dStructBear              +0.0012
+  permutation-NEGATIVE (shuffling HELPS ≥0.001; overfit-suspect): []
+
+================ E. REDUNDANCY (|corr| > 0.9) ================
+  dRsi ↔ hRsi  r=0.937
+  dEmaCross ↔ hEmaCross  r=0.907
+  dEmaCross ↔ tfAlignment  r=0.929
+  dBBPercentB ↔ hRsi  r=0.942
+  hEmaCross ↔ tfAlignment  r=0.902
+  volScalarML ↔ atrPercentile  r=1.000
+  dRsiDelta ↔ hRsiDelta  r=0.946
+  relStrengthVsSpy ↔ relStrengthVsSector  r=0.927
+
+Saved audit_stocks_results.json. Bars: model change needs ΔAUC>+0.005 in ALL folds; group is load-bearing at −0.005.
