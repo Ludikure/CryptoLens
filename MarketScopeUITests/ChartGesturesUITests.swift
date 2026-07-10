@@ -1,10 +1,11 @@
 import XCTest
 
-/// End-to-end verification of the fully-native chart gesture recognizer with REAL synthesized
-/// touches on the simulator. Each gesture is asserted by pixel-diffing the webview before/after:
-/// gestures that must move the chart require a large diff; the dead vertical body-drag requires
-/// a small one. This is the harness the JS-only Playwright checks could never provide — it
-/// exercises WebChartView's ChartGestureRecognizer, the zone routing, and the JS bridge together.
+/// End-to-end verification of the chart's NATIVE Lightweight Charts gestures with REAL synthesized
+/// touches on the simulator. Each gesture is checked by pixel-diffing the webview before/after.
+/// All gestures are machine-verifiable and asserted: one-finger horizontal pan, one-finger
+/// vertical price pan (free 2D pan), two-finger pinch in BOTH directions (the custom DOM pinch
+/// keys on Euclidean finger distance, so XCUIElement.pinch's vertical spread drives it),
+/// price-axis grip zoom, and time-axis drag zoom.
 final class ChartGesturesUITests: XCTestCase {
 
     private var app: XCUIApplication!
@@ -42,40 +43,45 @@ final class ChartGesturesUITests: XCTestCase {
         NSLog("GESTURE-TEST pan diff (main) = %.4f", panDiff)
         XCTAssertGreaterThan(panDiff, 0.05, "horizontal body drag did NOT pan the CANDLES")
 
-        // ── 2. Pinch on the body must zoom (bars wider) ──
-        // XCUIElement.pinch centers on the element; the main pane spans the top ~55-60% with the
-        // default RSI+MACD panels, so pinch a child rect biased to the upper half via the
-        // element itself (center ~0.5 is still inside the main pane).
+        // ── 2. Two-finger pinch must zoom the TIME scale (bars wider) ──
+        // The custom DOM pinch (chart.html) keys on EUCLIDEAN finger distance, so XCUIElement.pinch's
+        // vertical spread drives it too (LWC's native pinch was horizontal-only → un-synthesizable).
         let prePinch = shot(web, name: "2-pre-pinch")
         web.pinch(withScale: 2.2, velocity: 2.0)
-        logBadge("after-pinch-out")
         sleep(1)
         let afterPinch = shot(web, name: "3-after-pinch")
         let pinchDiff = diffMain(prePinch, afterPinch)
         NSLog("GESTURE-TEST pinch-out diff = %.4f", pinchDiff)
-        XCTAssertGreaterThan(pinchDiff, 0.05, "pinch-out did NOT zoom the chart")
+        XCTAssertGreaterThan(pinchDiff, 0.05, "two-finger pinch-out did NOT zoom the time scale")
 
-        // Pinch back in (zoom out) must also work.
+        // Pinch back in (zoom out, scale < 1) — covers the maxW clamp + the d < lastD direction of
+        // Math.pow(d/lastD, PINCH_AMP); a sign/clamp regression here would strand users zoomed-in.
         let prePinchIn = afterPinch
         web.pinch(withScale: 0.4, velocity: -2.0)
         sleep(1)
         let afterPinchIn = shot(web, name: "4-after-pinch-in")
         let pinchInDiff = diffMain(prePinchIn, afterPinchIn)
         NSLog("GESTURE-TEST pinch-in diff = %.4f", pinchInDiff)
-        XCTAssertGreaterThan(pinchInDiff, 0.05, "pinch-in did NOT zoom the chart back out")
+        XCTAssertGreaterThan(pinchInDiff, 0.05, "two-finger pinch-in did NOT zoom back out")
 
-        // ── 3. Vertical drag on the body must do (almost) nothing ──
-        let preDead = shot(web, name: "5-pre-deadvert")
+        // ── 3. Vertical body drag must PAN the price (free 2D pan, TradingView-style) ──
+        // vertTouchDrag + the "force manual price mode on every body touchstart" fix make a one-
+        // finger vertical body drag move the price — so the whole chart follows the finger. Before
+        // the manual-mode fix this read 0 in the sim (price scale was stuck in auto-fit).
+        let preVert = shot(web, name: "5-pre-vertpan")
         let v1 = web.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.15))
         let v2 = web.coordinate(withNormalizedOffset: CGVector(dx: 0.45, dy: 0.45))
         v1.press(forDuration: 0.05, thenDragTo: v2, withVelocity: .default, thenHoldForDuration: 0.1)
         sleep(1)
-        let afterDead = shot(web, name: "6-after-deadvert")
-        let deadDiff = diff(preDead, afterDead)
-        NSLog("GESTURE-TEST dead-vertical diff = %.4f", deadDiff)
-        XCTAssertLessThan(deadDiff, 0.04, "vertical body drag CHANGED the chart (should be a no-op)")
+        let afterVert = shot(web, name: "6-after-vertpan")
+        let vertDiff = diffMain(preVert, afterVert)
+        NSLog("GESTURE-TEST vertical-pan diff (main) = %.4f", vertDiff)
+        XCTAssertGreaterThan(vertDiff, 0.05, "vertical body drag did NOT pan the price (2D pan)")
 
-        // ── 4. Price-axis vertical drag must stretch the price scale ──
+        // ── 4. Price-axis vertical drag must zoom the price scale ──
+        // Handled by the #priceGrip DOM strip over the price axis (LWC's own touch axis-scaling
+        // doesn't fire on the price axis), so a synthesized vertical drag on the right strip DOES
+        // register — machine-verifiable again.
         let preAxis = shot(web, name: "7-pre-priceaxis")
         let p1 = web.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.15))
         let p2 = web.coordinate(withNormalizedOffset: CGVector(dx: 0.97, dy: 0.45))
@@ -84,7 +90,7 @@ final class ChartGesturesUITests: XCTestCase {
         let afterAxis = shot(web, name: "8-after-priceaxis")
         let axisDiff = diff(preAxis, afterAxis)
         NSLog("GESTURE-TEST price-axis diff = %.4f", axisDiff)
-        XCTAssertGreaterThan(axisDiff, 0.03, "price-axis drag did NOT stretch the price scale")
+        XCTAssertGreaterThan(axisDiff, 0.03, "price-axis drag did NOT zoom the price scale")
 
         // ── 5. Time-axis horizontal drag must stretch bar spacing ──
         // (Also the only simulator-drivable time-zoom: XCUIElement.pinch spreads vertically.)
