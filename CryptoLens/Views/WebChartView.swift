@@ -191,6 +191,10 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate {
         webView.isOpaque = true
         webView.backgroundColor = UIColor(red: 0.043, green: 0.055, blue: 0.078, alpha: 1) // #0b0e14
 
+        loadChartPage()
+    }
+
+    private func loadChartPage() {
         if let url = Bundle.main.url(forResource: "chart", withExtension: "html", subdirectory: "chart")
             ?? Bundle.main.url(forResource: "chart", withExtension: "html") {
             webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
@@ -207,6 +211,19 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate {
 
     /// Kick off web-process + HTML + JS load at app launch so the first tab-open is instant.
     static func prewarm() { _ = shared }
+
+    /// iOS kills backgrounded WKWebView content processes under memory pressure. Without this
+    /// hook the persistent chart webview comes back as a blank WHITE view after reopening the
+    /// app — and the next payload push for the CURRENT timeframe was deduped against `lastJSON`
+    /// (identical data → no re-render), so the chart stayed white until the user switched
+    /// timeframes (a different payload forced a real push). Recover: reload the page and replay
+    /// the last payload once it finishes; never dedupe across a process relaunch.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        loaded = false
+        pendingJSON = lastJSON   // replay the last known data after the reload
+        lastJSON = nil           // the fresh page has no chart — a dedup here would leave it white
+        loadChartPage()
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loaded = true
