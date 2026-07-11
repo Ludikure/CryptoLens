@@ -213,6 +213,83 @@ export async function fetchLiquidationSummary(env: Env, symbol: string):
   } catch { return null; }   // table not created yet (collector never ran) — fine
 }
 
+// Live ML calibration lookup + the calibration-corrected ML_WIN used by the auto-FLAT/quality
+// GATE (2026-07-02). The static isotonic calibration drifts: live data showed the 30-50% bucket
+// realizing ~65%, so the raw number over-triggers "no trade". Blend raw 35/65 toward the measured
+// bucket rate (n>=100) — a symmetric RE-calibration (also LOWERS an over-confident top bucket).
+// Shared by runFullAnalysisCore and the notification envelope precheck.
+async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boolean):
+  Promise<{ mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null; calibratedMlWin: number | null }> {
+  let mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null = null;
+  if (curWin != null) {
+    try {
+      const bounds: Array<[number, number, string]> = [[0, 0.3, '<30%'], [0.3, 0.5, '30-50%'], [0.5, 0.6, '50-60%'], [0.6, 0.7, '60-70%'], [0.7, 1.01, '70%+']];
+      const [lo, hi, label] = bounds.find(([l, h]) => curWin >= l && curWin < h) ?? bounds[bounds.length - 1];
+      const row = await env.DB.prepare(
+        `SELECT COUNT(*) as n, AVG(good_r) * 100 as realized FROM ml_calibration
+         WHERE resolved = 1 AND is_crypto = ? AND logged_at > ? AND predicted_prob >= ? AND predicted_prob < ?`
+      ).bind(isCrypto ? 1 : 0, Date.now() - 90 * 86400_000, lo, hi).first();
+      const n = (row?.n as number) ?? 0;
+      if (n > 0 && row?.realized != null) mlCalibration = { n, realizedPct: row.realized as number, windowDays: 90, bucketLabel: label };
+    } catch { /* calibration best-effort */ }
+  }
+  let calibratedMlWin: number | null = null;
+  if (mlCalibration && mlCalibration.n >= 100 && curWin != null) {
+    calibratedMlWin = 0.35 * curWin + 0.65 * (mlCalibration.realizedPct / 100);
+  }
+  return { mlCalibration, calibratedMlWin };
+}
+
+// ── Notification envelope precheck (2026-07-11) ────────────────────────────────────────────
+// "Don't page me into an auto-FLAT analysis": an ML rising-edge alone isn't a reason to
+// notify if the Conviction Envelope would immediately auto-FLAT the setup (chase into an
+// extended trend, kills active, macro IMMINENT, mixed biases below the calibrated gate...).
+// Zero-drift by construction: instead of re-implementing the envelope, build the REAL prompt
+// (the cron already has all three candle sets) and parse its `auto_FLAT_active:` line.
+//
+// The precheck runs WITHOUT enrichment (no derivatives/stock inputs), so enrichment-dependent
+// auto-FLAT contributors (e.g. the funding kill) cannot fire here — it can only UNDER-suppress
+// (an occasional still-flat notification), never over-suppress. Errors fail OPEN (notify).
+
+/** Extract the envelope's auto-FLAT reasons from a built prompt. Empty = would not auto-FLAT. */
+export function parseAutoFlatReasons(prompt: string): string[] {
+  const m = prompt.match(/^\s*auto_FLAT_active:\s*(.+)$/m);
+  if (!m) return [];
+  return m[1].split(',').map(s => s.trim()).filter(Boolean);
+}
+
+/** Defer-not-drop suppression transition (the 2026-05-30 notify-window lesson: silently
+ *  DROPPING off-window crosses lost most signals — so a suppressed cross stays pending and
+ *  fires when the envelope clears while ML is still elevated).
+ *  flat=null means the precheck itself failed → fail open. */
+export function nextSuppressionState(args: { crossed: boolean; wasSuppressed: boolean; flat: boolean | null }):
+  { effectiveCross: boolean; suppressed: boolean } {
+  if (args.flat === true) return { effectiveCross: false, suppressed: true };
+  return { effectiveCross: args.crossed || args.wasSuppressed, suppressed: false };
+}
+
+/** Build the real prompt from the cron's candles and return its auto-FLAT reasons
+ *  (null = precheck failed, fail open). READ-ONLY: buildUserPrompt's newState is discarded —
+ *  the SINCE-LAST-ANALYSIS baseline and kill-duration state only advance on real analyses. */
+async function envelopePrecheck(env: Env, symbol: string, isCrypto: boolean, mlProb: number,
+  daily: ScoreCandle[], fourH: FullCandle[], oneH: FullCandle[],
+  economicEvents: any[]): Promise<string[] | null> {
+  try {
+    const indicators: PromptIndicator[] = [computeFullIndicators(daily as unknown as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
+    if (fourH.length) indicators.push(computeFullIndicators(fourH, { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
+    if (fourH.length && oneH.length) indicators.push(computeFullIndicators(oneH, { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
+    (indicators[0] as any).mlWinProbability = mlProb;
+    const { calibratedMlWin } = await fetchMlCalibration(env, mlProb, isCrypto);
+    let prevState: PromptState = {};
+    try { const s = await env.ALERTS.get(`prompt:${symbol}`); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh */ }
+    const { prompt } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin });
+    return parseAutoFlatReasons(prompt);
+  } catch (e) {
+    console.log(`[notify] envelope precheck failed ${symbol}: ${e}`);
+    return null;
+  }
+}
+
 async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, body: any, deviceId: string): Promise<CoreResult> {
   const { daily, fourH, oneH } = await fetchAllTimeframesCached(env, symbol, isCrypto);
   if (!daily.length) return { ok: false, status: 404, error: 'No candles' };
@@ -269,30 +346,9 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   //     last 90d (ml_calibration D1, universe-wide) so the prompt cites an audited number;
   // (b) ML_WIN trajectory — the last-24h path from this device's score_history (cron writes a row
   //     per minute for watchlisted symbols), downsampled to ~6 points.
-  let mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null = null;
-  let mlTrajectory: { points: number[]; hours: number } | null = null;
   const curWin = indicators[0].mlWinProbability;
-  if (curWin != null) {
-    try {
-      const bounds: Array<[number, number, string]> = [[0, 0.3, '<30%'], [0.3, 0.5, '30-50%'], [0.5, 0.6, '50-60%'], [0.6, 0.7, '60-70%'], [0.7, 1.01, '70%+']];
-      const [lo, hi, label] = bounds.find(([l, h]) => curWin >= l && curWin < h) ?? bounds[bounds.length - 1];
-      const row = await env.DB.prepare(
-        `SELECT COUNT(*) as n, AVG(good_r) * 100 as realized FROM ml_calibration
-         WHERE resolved = 1 AND is_crypto = ? AND logged_at > ? AND predicted_prob >= ? AND predicted_prob < ?`
-      ).bind(isCrypto ? 1 : 0, Date.now() - 90 * 86400_000, lo, hi).first();
-      const n = (row?.n as number) ?? 0;
-      if (n > 0 && row?.realized != null) mlCalibration = { n, realizedPct: row.realized as number, windowDays: 90, bucketLabel: label };
-    } catch { /* calibration best-effort */ }
-  }
-  // Calibration-corrected ML_WIN for the auto-FLAT/quality GATE (2026-07-02). The static isotonic
-  // calibration drifts: live data shows the 30-50% bucket realizing ~65% (compressed model), so the
-  // raw number over-triggers "no trade". Blend the raw value 35/65 toward the measured bucket rate
-  // (n>=100). This is a symmetric RE-calibration, not a loosening — it also LOWERS an over-confident
-  // top bucket (70-85 raw realizing only ~67%). Display still shows raw + the calibration line.
-  let calibratedMlWin: number | null = null;
-  if (mlCalibration && mlCalibration.n >= 100 && curWin != null) {
-    calibratedMlWin = 0.35 * curWin + 0.65 * (mlCalibration.realizedPct / 100);
-  }
+  const { mlCalibration, calibratedMlWin } = await fetchMlCalibration(env, curWin ?? null, isCrypto);
+  let mlTrajectory: { points: number[]; hours: number } | null = null;
   try {
     const res = await env.DB.prepare(
       `SELECT ml_probability FROM score_history
@@ -2975,6 +3031,18 @@ async function computeSymbolPredictions(
   // Phase 5: previous-tick risk states (for transition-into-HIGH detection) + current accumulator.
   let prevRiskStates: Record<string, { names: string[]; high: string[] }> = {};
   try { const r = await env.ALERTS.get('risk_states:all'); if (r) prevRiskStates = JSON.parse(r); } catch { /* ignore */ }
+  // Envelope-precheck suppression state (defer-not-drop): symbol -> ms of the suppressed cross.
+  let suppressedMap: Record<string, number> = {};
+  try { const s = await env.ALERTS.get('notif_suppressed:all'); if (s) suppressedMap = JSON.parse(s); } catch { /* ignore */ }
+  // Economic events for the precheck's macro_IMMINENT gate — fetched at most once per pass,
+  // and only when some symbol actually needs a precheck.
+  let econEventsCache: any[] | null = null;
+  const econEvents = async (): Promise<any[]> => {
+    if (econEventsCache === null) {
+      try { econEventsCache = await fetchEconomicEvents(Date.now()); } catch { econEventsCache = []; }
+    }
+    return econEventsCache;
+  };
   const curRiskStates: Record<string, { names: string[]; high: string[]; detail: Record<string, string> }> = {};
   // Accumulates per-symbol ML predictions for a single batched KV write after the loop —
   // replaces what used to be 76 individual `ml_pred:<symbol>` writes per cron run.
@@ -3603,12 +3671,35 @@ async function computeSymbolPredictions(
       curRiskStates[symbol] = { names: states.map(s => s.state), high: highValidated,
         detail: Object.fromEntries(states.map(s => [s.state, s.detail])) };
 
+      // ── Envelope precheck: only page the user when the analysis could actually trade ──
+      // Runs on a rising-edge cross OR while a prior cross sits suppressed, and only when the
+      // direction primitive would notify at all. A suppressed cross DEFERS (re-checked every
+      // tick) and fires the moment the envelope clears with ML still >= threshold; it cancels
+      // silently if ML fades below threshold first, and expires after 24h.
+      let effectiveCross = crossed;
+      const wasSuppressed = suppressedMap[symbol] !== undefined;
+      if (mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0) {
+        const reasons = await envelopePrecheck(env, symbol, isCrypto, mlProb, candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[], await econEvents());
+        const next = nextSuppressionState({ crossed, wasSuppressed, flat: reasons === null ? null : reasons.length > 0 });
+        effectiveCross = next.effectiveCross;
+        if (next.suppressed) {
+          if (!wasSuppressed) suppressedMap[symbol] = Date.now();
+          console.log(`[notify] ${symbol} cross suppressed — envelope would auto-FLAT (${(reasons ?? []).join(', ')})`);
+        } else if (wasSuppressed) {
+          delete suppressedMap[symbol];
+          if (effectiveCross) console.log(`[notify] ${symbol} envelope cleared — deferred notification firing`);
+        }
+      } else if (wasSuppressed && mlProb < ML_THRESHOLD) {
+        delete suppressedMap[symbol];   // the signal faded while suppressed — cancel, don't page
+        console.log(`[notify] ${symbol} suppressed cross cancelled (ML faded to ${Math.round(mlProb * 100)}%)`);
+      }
+
       predictions.set(symbol, {
         symbol,
         isCrypto,
         mlProb,
         dailyScore: features.dailyScore,
-        crossed,
+        crossed: effectiveCross,
         dStochCross: features.dStochCross || 0,
         biasAlignment,
         last4HHigh,
@@ -3662,6 +3753,11 @@ async function computeSymbolPredictions(
   } catch (e) { console.log(`[cal] flush err ${e}`); }
 
   // Save ML snapshots for next cron's rate-of-change deltas
+  // Suppression map: prune stale entries (a >24h-old suppressed cross is no longer meaningful).
+  for (const [sym, since] of Object.entries(suppressedMap)) {
+    if (Date.now() - (since as number) > 24 * 3600_000) delete suppressedMap[sym];
+  }
+  await env.ALERTS.put('notif_suppressed:all', JSON.stringify(suppressedMap), { expirationTtl: 86400 });
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
 
   // Batched KV blobs written once per cron in place of 4-5 × 76 per-symbol writes.
