@@ -11,13 +11,14 @@ RUN npm run build:server \
  && npm prune --omit=dev   # drop esbuild/vitest/tsx; keeps better-sqlite3 (runtime dep)
 
 FROM node:22-slim
+ARG GIT_SHA=unknown
 WORKDIR /app
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules ./node_modules
 # Non-root runtime; /data is the volume mount (marketscope.db + models live there).
 RUN useradd -r -u 10001 appuser && mkdir -p /data && chown appuser /data
 USER appuser
-ENV PORT=8787 DATA_DIR=/data
+ENV PORT=8787 DATA_DIR=/data GIT_SHA=${GIT_SHA}
 EXPOSE 8787
 # Liveness: /health must return 2xx. (node:22 has global fetch.)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

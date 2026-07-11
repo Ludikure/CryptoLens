@@ -631,7 +631,10 @@ export default {
 
     // Health check — no KV, no auth
     if (path === '/' || path === '/health') {
-      return json({ status: 'ok' });
+      // `build` = the git SHA baked into the image (GIT_SHA build-arg) — lets anyone verify
+      // which commit the box is ACTUALLY running after a TrueNAS pull-and-restart.
+      const build = (globalThis as any).process?.env?.GIT_SHA ?? 'unknown';
+      return json({ status: 'ok', build });
     }
 
     // Dead-man's-switch for the cron pipeline. Public (no auth) so an external uptime
@@ -2736,6 +2739,10 @@ interface SymbolPrediction {
   // The notification gate fires only on this rising edge, not on continued elevation —
   // a symbol that sits at 0.75 for hours pages once when it crossed up, not every cron.
   crossed: boolean;
+  // Envelope precheck verdict for this tick (2026-07-11): true = the Conviction Envelope would
+  // auto-FLAT an analysis right now — gate EVERY proactive push on it (ML cross, risk-state,
+  // entry-zone). null = not evaluated this tick / precheck failed (fail open).
+  envelopeFlat?: boolean | null;
   // Daily Stochastic RSI crossover direction (+1 = bullish cross, -1 = bearish cross,
   // 0 = no recent cross). Combined with biasAlignment as the notification direction
   // primitive via the union rule (bias OR Stoch, skip conflicts).
@@ -3034,6 +3041,13 @@ async function computeSymbolPredictions(
   // Envelope-precheck suppression state (defer-not-drop): symbol -> ms of the suppressed cross.
   let suppressedMap: Record<string, number> = {};
   try { const s = await env.ALERTS.get('notif_suppressed:all'); if (s) suppressedMap = JSON.parse(s); } catch { /* ignore */ }
+  // Symbols with live pending setups — their entry-zone pushes are envelope-gated too, so the
+  // precheck must run for them every tick (bounded: typically 0-3 symbols).
+  let pendingSetupSymbols = new Set<string>();
+  try {
+    const r = await env.DB.prepare('SELECT DISTINCT symbol FROM pending_setups WHERE notified = 0').all();
+    pendingSetupSymbols = new Set((r.results || []).map((x: any) => x.symbol as string));
+  } catch { /* table may not exist yet */ }
   // Economic events for the precheck's macro_IMMINENT gate — fetched at most once per pass,
   // and only when some symbol actually needs a precheck.
   let econEventsCache: any[] | null = null;
@@ -3672,19 +3686,27 @@ async function computeSymbolPredictions(
         detail: Object.fromEntries(states.map(s => [s.state, s.detail])) };
 
       // ── Envelope precheck: only page the user when the analysis could actually trade ──
-      // Runs on a rising-edge cross OR while a prior cross sits suppressed, and only when the
-      // direction primitive would notify at all. A suppressed cross DEFERS (re-checked every
-      // tick) and fires the moment the envelope clears with ML still >= threshold; it cancels
+      // Evaluated for any symbol that could page this tick: an ML rising-edge (or a prior cross
+      // sitting suppressed), a new HIGH risk-state transition, or a live pending setup whose
+      // entry zone could be touched. ONE verdict gates all three push types in the device pass.
+      const wasSuppressed = suppressedMap[symbol] !== undefined;
+      const crossCandidate = mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0;
+      let envelopeFlat: boolean | null = null;
+      if (crossCandidate || newHighStates.length > 0 || pendingSetupSymbols.has(symbol)) {
+        const reasons = await envelopePrecheck(env, symbol, isCrypto, mlProb, candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[], await econEvents());
+        envelopeFlat = reasons === null ? null : reasons.length > 0;
+        if (envelopeFlat) console.log(`[notify] ${symbol} envelope would auto-FLAT (${(reasons ?? []).join(', ')}) — proactive pushes gated`);
+      }
+
+      // ML-cross suppression transition (defer-not-drop): a suppressed cross re-checks every
+      // tick and fires the moment the envelope clears with ML still >= threshold; it cancels
       // silently if ML fades below threshold first, and expires after 24h.
       let effectiveCross = crossed;
-      const wasSuppressed = suppressedMap[symbol] !== undefined;
-      if (mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0) {
-        const reasons = await envelopePrecheck(env, symbol, isCrypto, mlProb, candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[], await econEvents());
-        const next = nextSuppressionState({ crossed, wasSuppressed, flat: reasons === null ? null : reasons.length > 0 });
+      if (crossCandidate) {
+        const next = nextSuppressionState({ crossed, wasSuppressed, flat: envelopeFlat });
         effectiveCross = next.effectiveCross;
         if (next.suppressed) {
           if (!wasSuppressed) suppressedMap[symbol] = Date.now();
-          console.log(`[notify] ${symbol} cross suppressed — envelope would auto-FLAT (${(reasons ?? []).join(', ')})`);
         } else if (wasSuppressed) {
           delete suppressedMap[symbol];
           if (effectiveCross) console.log(`[notify] ${symbol} envelope cleared — deferred notification firing`);
@@ -3700,6 +3722,7 @@ async function computeSymbolPredictions(
         mlProb,
         dailyScore: features.dailyScore,
         crossed: effectiveCross,
+        envelopeFlat,
         dStochCross: features.dStochCross || 0,
         biasAlignment,
         last4HHigh,
@@ -3828,7 +3851,11 @@ async function processDeviceNotifications(
     // Phase 5: risk-state transition notification — fires once when a symbol newly enters a
     // HIGH *validated* state (COMPRESSION/EVENT_WINDOW: vol-grounded). Independent of the ML
     // cross below; 6h per-(token,symbol) cooldown. Honest "a big move may be brewing" heads-up.
-    if (pushToken && pred.newHighStates && pred.newHighStates.length) {
+    // Envelope-gated (2026-07-11): a COMPRESSION heads-up that opens into an auto-FLAT
+    // analysis is a wasted page — and coiled/extended tape is exactly where the envelope
+    // FLATs. Skipping drops this transition (prevHigh already recorded it) — acceptable for
+    // an FYI push; the ML-cross path keeps its defer semantics for the actual signal.
+    if (pushToken && pred.newHighStates && pred.newHighStates.length && pred.envelopeFlat !== true) {
       const cdKey = `riskstate-cd:${pushToken}:${symbol}`;
       if (!(await env.ALERTS.get(cdKey))) {
         const st = pred.newHighStates[0];
@@ -3930,6 +3957,10 @@ async function processDeviceNotifications(
           ? pred.last4HLow <= zoneHigh && pred.last4HLow >= zoneLow
           : pred.last4HHigh >= zoneLow && pred.last4HHigh <= zoneHigh;
         if (!touched) continue;
+        // Envelope-gated (2026-07-11): don't page "open the app to confirm + act" into an
+        // auto-FLAT analysis. Deliberately does NOT mark notified — the touch re-checks next
+        // tick and the push fires if the envelope clears while price is still in the zone.
+        if (pred.envelopeFlat === true) continue;
         // Send the notification
         const name = setup.symbol.replace('USDT', '');
         const title = `${name} entry zone reached`;

@@ -45,3 +45,7 @@ jobs:
           tags: |
             ghcr.io/ludikure/marketscope:latest
             ghcr.io/ludikure/marketscope:${{ github.sha }}
+          # Baked into the image so /health can report which commit is actually running —
+          # the only way to verify a TrueNAS pull-and-restart deployed what you think it did.
+          build-args: |
+            GIT_SHA=${{ github.sha }}
