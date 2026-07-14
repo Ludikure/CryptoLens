@@ -5,8 +5,6 @@ struct OutcomeDashboardView: View {
     @EnvironmentObject var service: AnalysisService
     @State private var stats: OutcomeStats?
     @State private var liveSetups: [TrackedSetup] = []
-    @State private var versionComparison: [String: VersionStats] = [:]
-    @State private var directionReport: DirectionAccuracyService.Report?
     @State private var calibration: MLCalibrationService.Report?
     @State private var cronStale: Bool?
     @State private var overtradingNudge: String?              // F-4
@@ -50,21 +48,6 @@ struct OutcomeDashboardView: View {
                             }
                         }
                     }
-                }
-
-                // Historical track record of the RETIRED direction model (crypto). The 94.7%
-                // backtest claim was a data-leak artifact (2026-06-02); this section is kept as
-                // the honest "direction models fail live" exhibit, not a live scoreboard.
-                if let dir = directionReport, (dir.resolved > 0 || dir.pending > 0) {
-                    directionSection(dir)
-                    if !dir.bySymbol.isEmpty {
-                        directionBySymbolSection(dir)
-                    }
-                }
-
-                // A/B comparison — baseline vs treatment slice of the same archive
-                if hasABData {
-                    abSection
                 }
 
                 // Setup performance — generated vs counted
@@ -140,20 +123,16 @@ struct OutcomeDashboardView: View {
         .task {
             await OutcomeTracker.refresh()   // pull server-resolved setups before computing stats
             stats = OutcomeTracker.stats()
-            versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
             loadPersonaInsights()
-            directionReport = await DirectionAccuracyService.fetch()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
         }
         .refreshable {
             await OutcomeTracker.refresh()
             stats = OutcomeTracker.stats()
-            versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
             loadPersonaInsights()
-            directionReport = await DirectionAccuracyService.fetch()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
         }
@@ -206,248 +185,6 @@ struct OutcomeDashboardView: View {
             Text("ML Quality Calibration — Live")
         } footer: {
             Text("Is the ML Win model still honest in the wild? Each predicted-probability bucket vs the realized rate of a ≥1.5 ATR move within 24h (the model's direction-agnostic target). Gap within ±5 = well-calibrated; a persistent large gap = drift. Builds over time.")
-        }
-    }
-
-    // MARK: - Direction model live track record
-
-    @ViewBuilder
-    private func directionSection(_ dir: DirectionAccuracyService.Report) -> some View {
-        Section {
-            if let acc = dir.accuracy, dir.resolved > 0 {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Live Accuracy").foregroundStyle(.secondary)
-                    Spacer()
-                    Text(String(format: "%.0f%%", acc))
-                        .font(.title3).fontWeight(.bold)
-                        .foregroundStyle(acc >= 70 ? .green : acc >= 55 ? .orange : .red)
-                    Text("~coin flip, as expected")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
-                .font(.subheadline)
-                statRow("Graded signals", value: "\(dir.resolved)")
-            } else {
-                statRow("Live Accuracy", value: "pending", color: .secondary)
-            }
-            // Per-side accuracy — graded longs vs shorts separately. Shows "pending"
-            // until at least one signal on that side resolves.
-            sideRow("Long", dir.longSide)
-            sideRow("Short", dir.shortSide)
-            if dir.pending > 0 {
-                statRow("Awaiting 24h grade", value: "\(dir.pending)", color: .blue)
-            }
-
-            // Accuracy by the model's own confidence band — does higher conviction
-            // actually mean higher accuracy live, the way it does in the backtest?
-            ForEach(dir.byConfidence.filter { $0.n > 0 }) { band in
-                HStack {
-                    Text("  pUp \(band.band)").font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(String(format: "%.0f%% (n=%d)", band.accuracy, band.n))
-                        .font(.caption2)
-                        .foregroundStyle(band.accuracy >= 70 ? .green : .secondary)
-                }
-            }
-        } header: {
-            Text("Direction Model — RETIRED (historical)")
-        } footer: {
-            Text("This model was retired 2026-06-02: its 94.7% backtest accuracy turned out to be a data-leak artifact, and the live forward test resolved near coin-flip. The graded signals are kept as the honest exhibit of why MarketScope does not predict direction. No new signals are logged.")
-        }
-    }
-
-    // One per-side accuracy row. "pending" until a signal on that side is graded.
-    @ViewBuilder
-    private func sideRow(_ label: String, _ side: DirectionAccuracyService.SideStats?) -> some View {
-        if let s = side, s.n > 0 {
-            HStack {
-                Text(label).foregroundStyle(.secondary)
-                Spacer()
-                Text(String(format: "%.0f%%", s.accuracy))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(s.accuracy >= 70 ? .green : s.accuracy >= 55 ? .orange : .red)
-                Text("(n=\(s.n))").font(.caption2).foregroundStyle(.tertiary)
-            }
-            .font(.subheadline)
-        } else {
-            statRow(label, value: "pending", color: .secondary)
-        }
-    }
-
-    // Per-instrument accuracy — which coins the model reads well, most-evidenced first.
-    // Each row: symbol, overall accuracy + n, and the long/short split underneath.
-    @ViewBuilder
-    private func directionBySymbolSection(_ dir: DirectionAccuracyService.Report) -> some View {
-        Section {
-            ForEach(dir.bySymbol) { s in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(s.symbol.replacingOccurrences(of: "USDT", with: ""))
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Text(String(format: "%.0f%%", s.accuracy))
-                            .fontWeight(.semibold)
-                            .foregroundStyle(s.accuracy >= 70 ? .green : s.accuracy >= 55 ? .orange : .red)
-                        Text("(\(s.correct)/\(s.n))").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    .font(.subheadline)
-                    HStack(spacing: 10) {
-                        if s.longs > 0 {
-                            Text("L \(s.longCorrect)/\(s.longs) (\(pctStr(s.longCorrect, s.longs)))")
-                                .foregroundStyle(.secondary)
-                        }
-                        if s.shorts > 0 {
-                            Text("S \(s.shortCorrect)/\(s.shorts) (\(pctStr(s.shortCorrect, s.shorts)))")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.caption2)
-                }
-            }
-        } header: {
-            Text("By Instrument — Live (crypto)")
-        } footer: {
-            Text("Graded dual-gate signals per symbol (correct/total), with the long (L) and short (S) split. Most-evidenced symbols first. Small samples swing — weight by n.")
-        }
-    }
-
-    private func pctStr(_ correct: Int, _ total: Int) -> String {
-        total > 0 ? String(format: "%.0f%%", Double(correct) / Double(total) * 100) : "—"
-    }
-
-    // MARK: - A/B comparison
-
-    private var hasABData: Bool {
-        let b = versionComparison[OutcomeTracker.baselinePromptVersion]
-        let t = versionComparison[OutcomeTracker.treatmentPromptVersion]
-        return (b?.countedSetups ?? 0) + (t?.countedSetups ?? 0) > 0
-    }
-
-    @ViewBuilder
-    private var abSection: some View {
-        let baseline = versionComparison[OutcomeTracker.baselinePromptVersion]
-        let treatment = versionComparison[OutcomeTracker.treatmentPromptVersion]
-
-        Section {
-            // Header row
-            HStack {
-                Text("").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Baseline")
-                    .font(.caption2).fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 80, alignment: .trailing)
-                Text("Treatment")
-                    .font(.caption2).fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 80, alignment: .trailing)
-            }
-            abMetricRow("Counted", baseline?.countedSetups, treatment?.countedSetups)
-            abMetricRow("Resolved", baseline?.resolvedSetups, treatment?.resolvedSetups)
-            abMetricRow("Wins / Losses",
-                        baselineText: pairText(baseline?.wins, baseline?.losses),
-                        treatmentText: pairText(treatment?.wins, treatment?.losses))
-            abMetricRow("Win Rate",
-                        baselineText: percentText(baseline?.winRate, samples: baseline?.resolvedSetups),
-                        treatmentText: percentText(treatment?.winRate, samples: treatment?.resolvedSetups),
-                        baselineColor: rateColor(baseline?.winRate, samples: baseline?.resolvedSetups),
-                        treatmentColor: rateColor(treatment?.winRate, samples: treatment?.resolvedSetups))
-            abMetricRow("Avg R Achieved",
-                        baselineText: rrText(baseline?.avgRRAchieved, samples: baseline?.resolvedSetups),
-                        treatmentText: rrText(treatment?.avgRRAchieved, samples: treatment?.resolvedSetups))
-
-            // Significance verdict (only when both sides have enough samples)
-            if let verdict = significanceVerdict(baseline: baseline, treatment: treatment) {
-                HStack {
-                    Image(systemName: verdict.icon)
-                        .foregroundStyle(verdict.color)
-                    Text(verdict.label)
-                        .font(.caption)
-                        .foregroundStyle(verdict.color)
-                }
-            }
-        } header: {
-            HStack {
-                Text("A/B: Prompt Version (30d)")
-                Spacer()
-            }
-        } footer: {
-            Text("Setups split deterministically by (device, day). Counted = entry triggered; Resolved = terminal state reached.")
-                .font(.caption2)
-        }
-    }
-
-    private func abMetricRow(_ label: String, _ baselineVal: Int?, _ treatmentVal: Int?) -> some View {
-        abMetricRow(label,
-                    baselineText: baselineVal.map { "\($0)" } ?? "—",
-                    treatmentText: treatmentVal.map { "\($0)" } ?? "—")
-    }
-
-    private func abMetricRow(_ label: String,
-                              baselineText: String, treatmentText: String,
-                              baselineColor: Color = .primary, treatmentColor: Color = .primary) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(baselineText).fontWeight(.semibold).foregroundStyle(baselineColor)
-                .frame(width: 80, alignment: .trailing)
-            Text(treatmentText).fontWeight(.semibold).foregroundStyle(treatmentColor)
-                .frame(width: 80, alignment: .trailing)
-        }
-        .font(.subheadline)
-    }
-
-    private func pairText(_ a: Int?, _ b: Int?) -> String {
-        guard a != nil || b != nil else { return "—" }
-        return "\(a ?? 0)/\(b ?? 0)"
-    }
-
-    private func percentText(_ rate: Double?, samples: Int?) -> String {
-        guard let rate, let samples, samples > 0 else { return "—" }
-        return String(format: "%.0f%%", rate)
-    }
-
-    private func rrText(_ rr: Double?, samples: Int?) -> String {
-        guard let rr, let samples, samples > 0 else { return "—" }
-        return String(format: "%.2fR", rr)
-    }
-
-    private func rateColor(_ rate: Double?, samples: Int?) -> Color {
-        guard let rate, let samples, samples >= 10 else { return .secondary }
-        return rate >= 50 ? .green : .red
-    }
-
-    private struct ABVerdict {
-        let label: String
-        let color: Color
-        let icon: String
-    }
-
-    /// 2x2 chi-square on (wins/losses, baseline/treatment). Requires both sides to
-    /// have >= 30 resolved setups for the test to be meaningful. p < 0.05 ↔ chi² > 3.841.
-    private func significanceVerdict(baseline: VersionStats?, treatment: VersionStats?) -> ABVerdict? {
-        guard let b = baseline, let t = treatment else { return nil }
-        let a = Double(b.wins), c = Double(b.losses)
-        let d = Double(t.wins), e = Double(t.losses)
-        let nBaseline = b.resolvedSetups, nTreatment = t.resolvedSetups
-        if nBaseline < 30 || nTreatment < 30 {
-            return ABVerdict(label: "Need ≥30 resolved per side for significance (\(nBaseline)/\(nTreatment) so far)",
-                              color: .secondary, icon: "hourglass")
-        }
-        let n = a + c + d + e
-        let denom = (a + c) * (d + e) * (a + d) * (c + e)
-        guard denom > 0 else {
-            return ABVerdict(label: "Insufficient variance to test", color: .secondary, icon: "minus.circle")
-        }
-        let chi2 = pow((a * e - c * d), 2) * n / denom
-        let treatmentBetter = (t.winRate > b.winRate)
-        if chi2 > 3.841 {
-            return ABVerdict(label: treatmentBetter
-                                ? "Treatment wins (p < 0.05)"
-                                : "Baseline wins (p < 0.05)",
-                              color: treatmentBetter ? .green : .red,
-                              icon: "checkmark.circle.fill")
-        } else {
-            return ABVerdict(label: "Not significant (χ² = \(String(format: "%.2f", chi2)))",
-                              color: .secondary, icon: "equal.circle")
         }
     }
 
