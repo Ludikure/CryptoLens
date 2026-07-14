@@ -66,9 +66,14 @@ enum WorkerIndicatorsService {
         // TradingView) — apply it as the displayed current price across all TFs. Indicator math
         // (RSI/EMA/levels) stays on closed bars; only the "current price" scalar is overridden.
         let live = body.livePrice
+        // Feed each coarse TF the finer TF's closed bars so its forming-bar wick is REAL, not the
+        // open/live approximation: Daily forms from 4H bars, 4H forms from 1H bars. (1H is the finest
+        // fetched, so its forming bar keeps the approximation.)
+        let fourHBars = body.fourH?.decodedCandles
+        let oneHBars = body.oneH?.decodedCandles
         return Bundle(
-            daily: body.daily.toIndicatorResult(priceOverride: live),
-            fourH: body.fourH?.toIndicatorResult(priceOverride: live),
+            daily: body.daily.toIndicatorResult(priceOverride: live, subCandles: fourHBars),
+            fourH: body.fourH?.toIndicatorResult(priceOverride: live, subCandles: oneHBars),
             oneH: body.oneH?.toIndicatorResult(priceOverride: live),
             livePrice: live
         )
@@ -144,7 +149,10 @@ enum WorkerIndicatorsService {
         let ema50Series: [Double]?
         let ema200Series: [Double]?
 
-        func toIndicatorResult(priceOverride: Double? = nil) -> IndicatorResult {
+        /// Finer-timeframe closed bars, for reconstructing this TF's forming-bar wick (see below).
+        var decodedCandles: [Candle] { (candles ?? []).map { $0.toCandle() } }
+
+        func toIndicatorResult(priceOverride: Double? = nil, subCandles: [Candle]? = nil) -> IndicatorResult {
             // Use the live ticker price for the "current price" scalar + price-relative display
             // (VWAP distance, ATR stop suggestions). Falls back to the closed-bar close.
             let px = (priceOverride.map { $0 > 0 ? $0 : price }) ?? price
@@ -181,21 +189,33 @@ enum WorkerIndicatorsService {
 
             // Forming bar (TradingView-style): the worker serves CLOSED bars only (indicator
             // parity), so without this the newest 4H chart bar is up to 4h stale and each
-            // timeframe "ends" at a different price. Synthesize the in-progress bar from the
-            // live ticker price: open = last close, close = live. The wick is approximate
-            // (no intrabar high/low feed) and self-corrects when the bar closes. Indicator
-            // math is untouched — it was computed server-side on closed bars.
+            // timeframe "ends" at a different price. Synthesize the in-progress bar: open = last
+            // close, close = live. Indicator math is untouched — computed server-side on closed bars.
+            //
+            // The wick: open+live ALONE misses any spike/dip WITHIN the forming bar — e.g. a 4H bar
+            // that ran to 64.2k then fell back would draw as a clean wickless body while the 1H chart
+            // plainly shows the spike. So reconstruct the real high/low (and volume) from the finer
+            // timeframe's CLOSED bars falling in this bucket (1H→4H, 4H→Daily); each carries the true
+            // intrabar extremes. Falls back to the open/live approximation when no sub-bars are given
+            // (the 1H forming bar — finest TF fetched — keeps the approximation; a 1h window is minor).
             var chartCandles = (candles ?? []).map { $0.toCandle() }
             var forming: Candle? = nil
             if let live = priceOverride, live > 0, let last = chartCandles.last {
                 let interval: TimeInterval = timeframe == "1d" ? 86_400 : timeframe == "4h" ? 14_400 : 3_600
                 let bucketStart = floor(Date().timeIntervalSince1970 / interval) * interval
                 let t = max(bucketStart, last.time.timeIntervalSince1970 + interval)
+                // Window off the forming bar's actual open time `t` (derived from the last CLOSED
+                // bar), not a UTC-floored bucket — so it aligns for crypto (UTC) AND stocks (the
+                // worker's 4H bars are ET-session-aggregated).
+                let subInBucket = (subCandles ?? []).filter {
+                    let ts = $0.time.timeIntervalSince1970
+                    return ts >= t && ts < t + interval
+                }
+                let hi = ([last.close, live] + subInBucket.map { $0.high }).max() ?? Swift.max(last.close, live)
+                let lo = ([last.close, live] + subInBucket.map { $0.low }).min() ?? Swift.min(last.close, live)
+                let vol = subInBucket.reduce(0) { $0 + $1.volume }
                 let bar = Candle(time: Date(timeIntervalSince1970: t),
-                                 open: last.close,
-                                 high: Swift.max(last.close, live),
-                                 low: Swift.min(last.close, live),
-                                 close: live, volume: 0)
+                                 open: last.close, high: hi, low: lo, close: live, volume: vol)
                 chartCandles.append(bar)
                 forming = bar
             }
