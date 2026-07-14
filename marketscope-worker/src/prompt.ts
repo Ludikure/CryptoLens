@@ -82,8 +82,37 @@ function decodeSetups(jsonString: string): TradeSetup[] {
         tp2: typeof x.tp2 === 'number' ? x.tp2 : null,
         reasoning: typeof x.reasoning === 'string' ? x.reasoning : undefined,
         suggestedQty: typeof x.suggestedQty === 'number' ? x.suggestedQty : undefined,
-      }));
+      }))
+      // Geometry gate: the LLM occasionally emits a directionally-INVALID setup (e.g. a SHORT
+      // with its stop BELOW entry, on the same side as the targets — the stop lands in profit
+      // territory). Such a setup is unsizable (risk-per-unit points the wrong way) and would
+      // mis-register in the outcome tracker. Drop it rather than surface a broken trade — better
+      // to show no setup than one whose stop can't stop anything. Logged so we can see the rate.
+      .filter((s) => {
+        if (isValidSetupGeometry(s)) return true;
+        console.log(`[setup] dropped invalid ${s.direction} geometry: entry=${s.entry} stop=${s.stopLoss} tp1=${s.tp1} tp2=${s.tp2}`);
+        return false;
+      });
   } catch { return []; }
+}
+
+/// A setup is geometrically valid only when the stop sits on the LOSING side of entry and every
+/// target on the WINNING side — LONG: stop < entry < tp1(/tp2); SHORT: stop > entry > tp1(/tp2).
+export function isValidSetupGeometry(s: { direction: string; entry: number; stopLoss: number; tp1: number; tp2?: number | null }): boolean {
+  const dir = s.direction.toUpperCase();
+  const { entry, stopLoss: stop, tp1, tp2 } = s;
+  if (![entry, stop, tp1].every(Number.isFinite) || entry <= 0) return false;
+  if (dir === 'LONG') {
+    if (!(stop < entry && tp1 > entry)) return false;
+    if (tp2 != null && !(tp2 > entry)) return false;
+    return true;
+  }
+  if (dir === 'SHORT') {
+    if (!(stop > entry && tp1 < entry)) return false;
+    if (tp2 != null && !(tp2 < entry)) return false;
+    return true;
+  }
+  return false;  // unknown direction
 }
 export function parseSetups(text: string): TradeSetup[] {
   const fenced = text.match(/```json\n([\s\S]*?)\n```/);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { systemPrompt, classifyArchetype, useTighterBands, parseSetups, formatPrice, buildUserPrompt, type PromptIndicator } from '../src/prompt';
+import { systemPrompt, classifyArchetype, useTighterBands, parseSetups, formatPrice, buildUserPrompt, isValidSetupGeometry, type PromptIndicator } from '../src/prompt';
 import { computeFullIndicators } from '../src/indicators-full';
 import type { Candle } from '../src/scoring-full';
 
@@ -358,5 +358,43 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(prompt).toContain('ML Bucket: MARGINAL (ML_WIN 55%)');
     expect(prompt).toContain('Earnings Proximity: 5d');
     expect(prompt).toContain('Next Daily Close:');
+  });
+});
+
+describe('setup geometry gate (isValidSetupGeometry + parseSetups)', () => {
+  it('rejects the reported bug: a SHORT with its stop BELOW entry (on the target side)', () => {
+    // The exact Jul 14 case: SHORT, stop $62,958 is below entry $63,732 — same side as the targets.
+    expect(isValidSetupGeometry({ direction: 'SHORT', entry: 63732.66, stopLoss: 62958.31, tp1: 63283.26, tp2: 62932.73 })).toBe(false);
+  });
+
+  it('accepts a correct SHORT (stop above entry, targets below)', () => {
+    expect(isValidSetupGeometry({ direction: 'SHORT', entry: 63732.66, stopLoss: 64299.0, tp1: 63283.26, tp2: 62932.73 })).toBe(true);
+  });
+
+  it('accepts a correct LONG and rejects a LONG with stop above entry', () => {
+    expect(isValidSetupGeometry({ direction: 'LONG', entry: 65000, stopLoss: 63500, tp1: 67000, tp2: 69000 })).toBe(true);
+    expect(isValidSetupGeometry({ direction: 'LONG', entry: 65000, stopLoss: 66000, tp1: 67000, tp2: 69000 })).toBe(false);
+  });
+
+  it('rejects wrong-side targets and unknown direction', () => {
+    expect(isValidSetupGeometry({ direction: 'SHORT', entry: 100, stopLoss: 110, tp1: 105 })).toBe(false); // tp1 above entry
+    expect(isValidSetupGeometry({ direction: 'LONG', entry: 100, stopLoss: 95, tp1: 110, tp2: 90 })).toBe(false); // tp2 below entry
+    expect(isValidSetupGeometry({ direction: 'FLAT', entry: 100, stopLoss: 95, tp1: 110 })).toBe(false);
+  });
+
+  it('tolerates a valid SHORT with no tp2', () => {
+    expect(isValidSetupGeometry({ direction: 'SHORT', entry: 100, stopLoss: 105, tp1: 95, tp2: null })).toBe(true);
+  });
+
+  it('parseSetups drops the invalid setup from a full JSON block', () => {
+    const text = 'blah\n```json\n[{"direction":"SHORT","entry":63732.66,"stopLoss":62958.31,"tp1":63283.26,"tp2":62932.73}]\n```';
+    expect(parseSetups(text)).toEqual([]);   // dropped by the geometry gate
+  });
+
+  it('parseSetups keeps a valid setup', () => {
+    const text = '```json\n[{"direction":"SHORT","entry":63732.66,"stopLoss":64299.0,"tp1":63283.26,"tp2":62932.73}]\n```';
+    const out = parseSetups(text);
+    expect(out.length).toBe(1);
+    expect(out[0].stopLoss).toBe(64299.0);
   });
 });
