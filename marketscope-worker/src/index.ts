@@ -638,6 +638,24 @@ export default {
       // missing-secret misconfig (e.g. the app's Finnhub badge going red) is diagnosable remotely
       // without auth. A red badge + finnhub:false here = the key wasn't carried to the box env.
       const providers = { finnhub: !!env.FINNHUB_API_KEY };
+      // `/health?probe=finnhub` does ONE live market-status ping and returns the upstream HTTP
+      // status (cached 60s) — so "key present but badge still red" is diagnosable in one curl:
+      //   403 = market-status is a premium endpoint (free-tier key) · 401 = bad key · 429 = rate limit.
+      if (url.searchParams.get('probe') === 'finnhub') {
+        let probe: any = { configured: !!env.FINNHUB_API_KEY };
+        if (env.FINNHUB_API_KEY) {
+          try {
+            const cached = await env.ALERTS.get('cache:fh:probe');
+            if (cached) probe = JSON.parse(cached);
+            else {
+              const r = await fetch(`${FINNHUB_BASE}/stock/market-status?exchange=US`, { headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY } });
+              probe = { configured: true, upstreamStatus: r.status, ok: r.ok };
+              await env.ALERTS.put('cache:fh:probe', JSON.stringify(probe), { expirationTtl: 60 });
+            }
+          } catch (e) { probe = { configured: true, error: `${e}` }; }
+        }
+        return json({ status: 'ok', build, finnhub: probe });
+      }
       return json({ status: 'ok', build, providers });
     }
 
