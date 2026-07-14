@@ -3848,39 +3848,41 @@ async function runAutoAnalysis(
 ): Promise<void> {
   const name = symbol.replace('USDT', '');
   const mlPct = Math.round(mlProb * 100);
-  const bareTitle = `${name} — ML ${mlPct}% · big move likely`;
-  const bareBody = 'Elevated probability of a ≥1.5 ATR move (direction not predicted). Open the app to read structure and pick a side.';
-  const bareFallback = async () => {
-    const r = await sendAPNs(env, pushToken, bareTitle, bareBody);
-    if (r === 'unregistered') await deleteDevice(env, deviceId);
-  };
   try {
     // Per-symbol dedup: at most one auto-run per cooldown window across devices / overlapping crons.
     const guardKey = `autorun:${symbol}`;
-    if (await env.ALERTS.get(guardKey)) { await bareFallback(); return; }
+    if (await env.ALERTS.get(guardKey)) return;   // already handled this window — no duplicate work or push
     await env.ALERTS.put(guardKey, String(Date.now()), { expirationTtl: NOTIFY_COOLDOWN_SEC });
 
     // The real analysis pipeline — same one /full-analysis runs. Registers setups + persists the
     // SINCE-LAST-ANALYSIS baseline internally. Fixed to Sonnet 5 + extended thinking.
     const r = await runFullAnalysisCore(env, symbol, isCrypto,
       { provider: 'claude', model: 'claude-sonnet-5', thinkingBudget: 8000 }, deviceId);
-    if (!r.ok || !r.result?.analysis) { console.log(`[autorun] ${symbol} analysis not ok — bare push`); await bareFallback(); return; }
+    if (!r.ok || !r.result?.analysis) { console.log(`[autorun] ${symbol} analysis failed — suppressed`); return; }
 
-    // Cache the full result so the app can show it instantly on open (iOS pickup is the fast-follow).
+    // Cache the full result so the app can show it instantly on open (iOS pickup is the fast-follow),
+    // regardless of whether we notify.
     await env.ALERTS.put(`autoanalysis:${symbol}`,
       JSON.stringify({ result: r.result, at: Date.now(), deviceId }), { expirationTtl: 3600 }).catch(() => {});
 
-    // Richer push: lead with the Bottom Line; flag when a concrete setup came out of it.
+    // ── THE GATE (2026-07-14): only page the user when the enriched analysis actually produced a
+    // trade SETUP. An ML cross that opens into no setup — envelope auto-FLAT under enrichment, no
+    // clean risk-defined level, or a setup the geometry guard dropped — is exactly the "notification
+    // that leads nowhere" the user asked to stop. The enrichment-free precheck can only under-suppress;
+    // THIS is the ground-truth gate (the real analysis said trade-or-not). No setup → suppress silently.
+    const setups = Array.isArray(r.result.setups) ? r.result.setups : [];
+    if (setups.length === 0) { console.log(`[autorun] ${symbol} produced no setup — notification suppressed`); return; }
+
     const m = String(r.result.analysis).match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
     const bl = m ? m[1].replace(/\s+/g, ' ').trim() : '';
-    const setupCount = Array.isArray(r.result.setups) ? r.result.setups.length : 0;
-    const title = setupCount > 0 ? `${name} — setup ready · ML ${mlPct}%` : bareTitle;
-    const body = bl.length ? bl.slice(0, 178) : bareBody;
+    const dir = String(setups[0]?.direction ?? '').toUpperCase();
+    const title = `${name}${dir ? ' ' + dir : ''} setup · ML ${mlPct}%`;
+    const body = bl.length ? bl.slice(0, 178) : `A risk-defined ${dir || ''} setup is on the table — open to act.`;
     const sent = await sendAPNs(env, pushToken, title, body);
     if (sent === 'unregistered') await deleteDevice(env, deviceId);
+    console.log(`[autorun] ${symbol} setup push sent (${setups.length} setup(s))`);
   } catch (e) {
-    console.log(`[autorun] ${symbol} failed: ${e}`);
-    try { await bareFallback(); } catch { /* give up — nothing else to do */ }
+    console.log(`[autorun] ${symbol} failed: ${e}`);   // suppress on error — never a false page
   }
 }
 
