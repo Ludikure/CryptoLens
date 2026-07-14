@@ -196,15 +196,40 @@ export function computeSpotPressure(klines: any[], depth: any): SpotPressure | n
   }
   return { takerBuyRatio: buyRatio, takerBuyLabel: buyLabel, cvd24h: cvd, cvdTrend, bookRatio, bookLabel };
 }
-export async function fetchSpotPressureEnrichment(symbol: string): Promise<SpotPressure | null> {
+// Instrumented fetch so a spot-pressure MISS is diagnosable instead of silent. We log the failure
+// CLASS so the box logs reveal WHY CVD/spot gaps happen and which fix is warranted:
+//   http:429 / http:418 → Binance IP rate-limit/ban  → a second VPN exit doubles the weight budget
+//   http:451             → geoblock                    → PROXIED_HOSTS routing is wrong (config)
+//   net:<code>           → timeout / connection reset  → retry + backoff, NOT a VPN problem
+//   shape / empty        → upstream returned no data    → not a reachability issue
+// Behavior is UNCHANGED — still returns null on any miss; this only adds a console line per failure
+// (failure-only, so log volume == the real failure rate we want to measure). No fix yet: measure first.
+async function fetchSpotJson(url: string, label: string, symbol: string): Promise<any | null> {
   try {
-    const [klines, depth] = await Promise.all([
-      fetch(`${BINANCE_DATA}/klines?symbol=${symbol}&interval=1h&limit=24`).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${BINANCE_DATA}/depth?symbol=${symbol}&limit=20`).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]);
-    if (!Array.isArray(klines)) return null;
-    return computeSpotPressure(klines, depth);
-  } catch { return null; }
+    const r = await fetch(url);
+    if (!r.ok) { console.log(`[spot] ${symbol} ${label} miss: http:${r.status}`); return null; }
+    const data = await r.json().catch(() => null);
+    if (data == null) { console.log(`[spot] ${symbol} ${label} miss: shape:non-json`); return null; }
+    return data;
+  } catch (e: any) {
+    const cause = String(e?.cause?.code || e?.code || e?.name || e?.message || e).slice(0, 60);
+    console.log(`[spot] ${symbol} ${label} miss: net:${cause}`);
+    return null;
+  }
+}
+
+export async function fetchSpotPressureEnrichment(symbol: string): Promise<SpotPressure | null> {
+  // klines is row-critical (CVD + taker ratio); depth is optional (computeSpotPressure tolerates null).
+  const [klines, depth] = await Promise.all([
+    fetchSpotJson(`${BINANCE_DATA}/klines?symbol=${symbol}&interval=1h&limit=24`, 'klines', symbol),
+    fetchSpotJson(`${BINANCE_DATA}/depth?symbol=${symbol}&limit=20`, 'depth', symbol),
+  ]);
+  if (!Array.isArray(klines)) {
+    if (klines != null) console.log(`[spot] ${symbol} klines miss: shape:not-array`);  // null already logged
+    return null;
+  }
+  if (klines.length === 0) { console.log(`[spot] ${symbol} klines miss: empty`); return null; }
+  return computeSpotPressure(klines, depth);
 }
 
 // ── Sentiment (CoinInfo, crypto) — CoinGecko coin market_data → the 4 fields the prompt prints ──
