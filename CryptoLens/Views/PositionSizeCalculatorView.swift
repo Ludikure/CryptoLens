@@ -25,9 +25,9 @@ struct PositionSizeCalculatorView: View {
         _entry = State(initialValue: entry)
         _stop = State(initialValue: stop)
         let d = UserDefaults.standard
-        _accountSize = State(initialValue: d.object(forKey: "accountSize") as? Double ?? 25000)
+        _accountSize = State(initialValue: d.object(forKey: "accountSize") as? Double ?? 28000)
         _riskPercent = State(initialValue: d.object(forKey: "riskPercent") as? Double ?? 2.0)
-        _maxLeverage = State(initialValue: d.object(forKey: "max_leverage") as? Double ?? 3.0)
+        _maxLeverage = State(initialValue: d.object(forKey: "max_leverage") as? Double ?? 3.5)
     }
 
     private var sizing: PositionSizing? {
@@ -37,9 +37,9 @@ struct PositionSizeCalculatorView: View {
 
     private var differsFromSaved: Bool {
         let d = UserDefaults.standard
-        return accountSize != (d.object(forKey: "accountSize") as? Double ?? 25000)
+        return accountSize != (d.object(forKey: "accountSize") as? Double ?? 28000)
             || riskPercent != (d.object(forKey: "riskPercent") as? Double ?? 2.0)
-            || maxLeverage != (d.object(forKey: "max_leverage") as? Double ?? 3.0)
+            || maxLeverage != (d.object(forKey: "max_leverage") as? Double ?? 3.5)
     }
 
     var body: some View {
@@ -98,7 +98,12 @@ struct PositionSizeCalculatorView: View {
 
                 Section("Size") {
                     if let s = sizing {
-                        row("Quantity", "\(PositionSizer.formatQuantity(s.quantity)) \(s.unitLabel)", bold: true)
+                        if let n = s.contracts, let spec = s.contractSpec {
+                            row("Contracts", "\(PositionSizer.formatContracts(n)) × \(spec.label)", bold: true)
+                            row("= Quantity", "\(PositionSizer.formatQuantity(s.quantity)) \(s.unitLabel)")
+                        } else {
+                            row("Quantity", "\(PositionSizer.formatQuantity(s.quantity)) \(s.unitLabel)", bold: true)
+                        }
                         row("Dollars at risk", Formatters.formatPrice(s.riskDollars))
                         row("Stop distance", String(format: "%.2f%%", s.stopDistancePercent))
                         row("Notional", Formatters.formatPrice(s.notional))

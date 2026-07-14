@@ -8,10 +8,10 @@ struct SettingsView: View {
     @State private var selectedModel: String = ""
     @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
-    @AppStorage("accountSize") private var accountSize: Double = 25000
+    @AppStorage("accountSize") private var accountSize: Double = 28000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
     @AppStorage("daily_trade_cadence") private var dailyTradeCadence: Int = 2
-    @AppStorage("max_leverage") private var maxLeverage: Double = 3.0
+    @AppStorage("max_leverage") private var maxLeverage: Double = 3.5
 
     var body: some View {
         NavigationStack {
@@ -138,6 +138,9 @@ struct SettingsView: View {
                         Text("Max leverage: \(String(format: "%.1f", maxLeverage))×")
                     }
                     Text("Warns on the setup card when a size's notional exceeds this multiple of your account.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("BTC & ETH setups size in whole Coinbase nano contracts (nano BTC = 0.01 BTC, nano ETH = 0.1 ETH) — the count you place at the broker. Other symbols size in raw units.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Stepper("Trades per day: \(dailyTradeCadence)", value: $dailyTradeCadence, in: 1...10)

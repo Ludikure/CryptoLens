@@ -58,7 +58,7 @@ struct MarketScopeApp: App {
         // @AppStorage shows 25000/2.0 in the UI without persisting, so WorkerFullAnalysisService
         // (which reads UserDefaults.double, 0 if unset) sent NO sizing until the user opened
         // Settings — the card showed "$500 of $25,000" while the LLM got nothing. (2026-07-02)
-        UserDefaults.standard.register(defaults: ["accountSize": 25000.0, "riskPercent": 2.0, "max_leverage": 3.0])
+        UserDefaults.standard.register(defaults: ["accountSize": 28000.0, "riskPercent": 2.0, "max_leverage": 3.5])
         // Analysis runs entirely on the shared-brain Worker (Phase 4 complete) — no on-device
         // engine, no toggle. The Worker is the single source of truth for the prompt + LLM.
         BackgroundRefreshManager.register()

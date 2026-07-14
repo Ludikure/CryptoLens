@@ -10,9 +10,9 @@ struct PositionSizeCard: View {
     let symbol: String
     let setup: TradeSetup
 
-    @AppStorage("accountSize") private var accountSize: Double = 25000
+    @AppStorage("accountSize") private var accountSize: Double = 28000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
-    @AppStorage("max_leverage") private var maxLeverage: Double = 3.0
+    @AppStorage("max_leverage") private var maxLeverage: Double = 3.5
     @State private var showCalculator = false
 
     var body: some View {
@@ -29,9 +29,17 @@ struct PositionSizeCard: View {
                         .font(.caption)
                 }
 
-                Text("\(PositionSizer.formatQuantity(s.quantity)) \(s.unitLabel)")
-                    .font(.title3).fontWeight(.bold)
-                    .foregroundStyle(setup.direction.uppercased() == "SHORT" ? .red : .green)
+                if let n = s.contracts, let spec = s.contractSpec {
+                    Text("\(PositionSizer.formatContracts(n)) contract\(n == 1 ? "" : "s")")
+                        .font(.title3).fontWeight(.bold)
+                        .foregroundStyle(setup.direction.uppercased() == "SHORT" ? .red : .green)
+                    Text("\(spec.label) · \(units(spec.unitsPerContract)) \(s.unitLabel)/contract = \(PositionSizer.formatQuantity(s.quantity)) \(s.unitLabel)")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("\(PositionSizer.formatQuantity(s.quantity)) \(s.unitLabel)")
+                        .font(.title3).fontWeight(.bold)
+                        .foregroundStyle(setup.direction.uppercased() == "SHORT" ? .red : .green)
+                }
 
                 Text("Risking \(money(s.riskDollars)) — \(pct(riskPercent)) of \(money(accountSize)) · stop \(String(format: "%.2f", s.stopDistancePercent))% away")
                     .font(.caption).foregroundStyle(.secondary)
@@ -63,4 +71,8 @@ struct PositionSizeCard: View {
 
     private func money(_ v: Double) -> String { Formatters.formatPrice(v) }
     private func pct(_ v: Double) -> String { String(format: "%.1f%%", v) }
+    /// 0.01 → "0.01", 0.1 → "0.1" (strip trailing zeros).
+    private func units(_ v: Double) -> String {
+        String(format: "%g", v)
+    }
 }
