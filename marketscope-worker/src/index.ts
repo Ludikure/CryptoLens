@@ -3805,6 +3805,59 @@ async function computeSymbolPredictions(
   return predictions;
 }
 
+// Automated analysis (2026-07-14): when a watchlisted symbol's ML cross has cleared the direction
+// gate, the envelope precheck, AND the 3.5h cooldown claim, run the FULL LLM analysis server-side
+// and push its Bottom Line — replacing the bare "ML 73%" ping — instead of making the user open the
+// app and spend a call to see it. It also registers the resulting setups into tracked_setups
+// (autonomous outcome tracking) and caches the result for the app to pick up on open.
+//
+// Runs DETACHED (the caller does `void runAutoAnalysis(...)` — the box is a persistent Node process,
+// so this outlives the cron pass; a 30-90s LLM call must NEVER be awaited inside the minute cron).
+// Model is fixed to Sonnet 5 + extended thinking (the user's standing pick — auto-runs don't see the
+// per-request model the app normally sends). Dedup-guarded per SYMBOL (`autorun:<sym>`, cooldown TTL)
+// so multi-device / cron re-entrancy can't double-spend. Best-effort throughout: on ANY failure it
+// falls back to the bare move-likelihood push so a real cross is never silently lost.
+async function runAutoAnalysis(
+  env: Env, symbol: string, isCrypto: boolean, deviceId: string, pushToken: string, mlProb: number,
+): Promise<void> {
+  const name = symbol.replace('USDT', '');
+  const mlPct = Math.round(mlProb * 100);
+  const bareTitle = `${name} — ML ${mlPct}% · big move likely`;
+  const bareBody = 'Elevated probability of a ≥1.5 ATR move (direction not predicted). Open the app to read structure and pick a side.';
+  const bareFallback = async () => {
+    const r = await sendAPNs(env, pushToken, bareTitle, bareBody);
+    if (r === 'unregistered') await deleteDevice(env, deviceId);
+  };
+  try {
+    // Per-symbol dedup: at most one auto-run per cooldown window across devices / overlapping crons.
+    const guardKey = `autorun:${symbol}`;
+    if (await env.ALERTS.get(guardKey)) { await bareFallback(); return; }
+    await env.ALERTS.put(guardKey, String(Date.now()), { expirationTtl: NOTIFY_COOLDOWN_SEC });
+
+    // The real analysis pipeline — same one /full-analysis runs. Registers setups + persists the
+    // SINCE-LAST-ANALYSIS baseline internally. Fixed to Sonnet 5 + extended thinking.
+    const r = await runFullAnalysisCore(env, symbol, isCrypto,
+      { provider: 'claude', model: 'claude-sonnet-5', thinkingBudget: 8000 }, deviceId);
+    if (!r.ok || !r.result?.analysis) { console.log(`[autorun] ${symbol} analysis not ok — bare push`); await bareFallback(); return; }
+
+    // Cache the full result so the app can show it instantly on open (iOS pickup is the fast-follow).
+    await env.ALERTS.put(`autoanalysis:${symbol}`,
+      JSON.stringify({ result: r.result, at: Date.now(), deviceId }), { expirationTtl: 3600 }).catch(() => {});
+
+    // Richer push: lead with the Bottom Line; flag when a concrete setup came out of it.
+    const m = String(r.result.analysis).match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
+    const bl = m ? m[1].replace(/\s+/g, ' ').trim() : '';
+    const setupCount = Array.isArray(r.result.setups) ? r.result.setups.length : 0;
+    const title = setupCount > 0 ? `${name} — setup ready · ML ${mlPct}%` : bareTitle;
+    const body = bl.length ? bl.slice(0, 178) : bareBody;
+    const sent = await sendAPNs(env, pushToken, title, body);
+    if (sent === 'unregistered') await deleteDevice(env, deviceId);
+  } catch (e) {
+    console.log(`[autorun] ${symbol} failed: ${e}`);
+    try { await bareFallback(); } catch { /* give up — nothing else to do */ }
+  }
+}
+
 // Device pass: reads device's watchlist from the precomputed predictions Map (no fresh
 // candle/derivative fetches), writes per-(device, symbol) score_history, and applies
 // per-device notification gating (notify-window + ML threshold + cooldown).
@@ -3982,28 +4035,14 @@ async function processDeviceNotifications(
 
   if (triggered.length === 0 || !pushToken) return;
 
-  // Single APN per device, batching all crossings in this window. Single-symbol case
-  // keeps the original wording with the ML% so a glance at the lock screen still tells
-  // the user the conviction; multi-symbol case lists tickers without per-symbol probs
-  // (they all cleared 70%) to keep the title scannable.
-  // ML_WIN is a VOLATILITY signal — a ≥1.5 ATR move is likely; the DIRECTION is not predicted
-  // (the old LONG/SHORT label came from bias/Stoch, which clean-data validation showed are
-  // ~chance for next-24h crypto direction). So notifications announce the move-likelihood, not a side.
-  const tickers = triggered.map(t => t.symbol.replace('USDT', ''));
-  let title: string;
-  let body: string;
-  if (triggered.length === 1) {
-    const t = triggered[0];
-    title = `${tickers[0]} — ML ${Math.round(t.mlProb * 100)}% · big move likely`;
-    body = `Elevated probability of a ≥1.5 ATR move (direction not predicted). Open the app to read structure and pick a side.`;
-  } else {
-    title = `${triggered.length} symbols: big move likely`;
-    body = `ML ≥ 70%: ${tickers.join(', ')} — direction is your call.`;
-  }
-  const result = await sendAPNs(env, pushToken, title, body);
-  if (result === 'unregistered') {
-    await deleteDevice(env, deviceId);
-    return;
+  // Automated analysis (2026-07-14): each survived cross now runs the FULL analysis and pushes its
+  // Bottom Line — replacing the bare "ML 73%" ping — and auto-registers its setups into
+  // tracked_setups. Fired per symbol WITHOUT await: the box is a persistent process, so these
+  // outlive the cron pass; a 30-90s LLM call must never block the minute cron. Each call self-sends
+  // its richer push (or a bare move-likelihood push on failure). Per-symbol instead of the old
+  // grouped push — every triggered symbol is now a real analyzed signal, not a batched ticker list.
+  for (const t of triggered) {
+    void runAutoAnalysis(env, t.symbol, t.symbol.endsWith('USDT'), deviceId, pushToken, t.mlProb);
   }
   // Log every triggered symbol regardless of how many APNs we sent — `notifications`
   // is the per-symbol audit trail, not the per-push log.
