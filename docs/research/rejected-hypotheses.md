@@ -31,6 +31,25 @@ The variance-harvest strategy is net-negative (−0.04..−0.07R) at Coinbase de
 (~0.23-0.28% round-trip); break-even is ~0.165%. Viable only on a cheaper venue (Binance
 regular ~0.06-0.13%). Not a model problem — a cost-tier problem. `strategy_stop_sweep.py`.
 
+## Rejection at a major S/R level → short-horizon direction — REJECTED (2026-07-14)
+"Given a CONFIRMED rejection (wick pierces a major level, closes back away), is the 3-4 bar
+continuation tradeable?" Motivated as an *observed event at a known location*, not a momentum
+prediction — the category that could carry an edge where direction-prediction (a coin flip here)
+does not. `ml-training/level_rejection_direction.py` (740k crypto / 207k stock loose events;
+300k / 80k strict-wick, on the same validated swing-level detection as `level_validation.py`).
+```
+DIRECTION hit-rate (continuation)   crypto 50.1-50.4%   stock 50.2%   ← coin flip, both horizons
+  crypto support→LONG     +1.8pp vs base P(up)     (just the known upward drift)
+  crypto resistance→SHORT −1.0 to −1.7pp           (WORSE than base — anti-predictive)
+gross EV/trade            crypto +0.005..+0.059%   stock ~0   → break-even round-trip ≤0.06%
+walk-forward @0.10% fees  0-2 / 6 positive folds   (negative EVERY year incl. 2022 bear)
+```
+Files under the same coin-flip null as every other direction test. Fully consistent with
+[[strategy-levels]]: a level is a real REACTION *location* (+4.3pp hold rate) but that reaction
+carries **no tradeable directional EV** — a location, not a direction signal. Short horizons are
+where fees bite hardest, and there was no gross edge to spend on them anyway. The "it's an observed
+event, not a prediction" framing did not rescue it.
+
 ## Direction primitives (vs the [[edge-direction-primitive]] union)
 Sweep: `ml-training/direction_primitive_sweep.py`, re-validated `edge_revalidate.py`.
 ```

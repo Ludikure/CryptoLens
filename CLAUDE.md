@@ -372,6 +372,7 @@ v14 stocks (252,215 bars, 57.0% baseline goodR; calibration floor 0.3193 — no 
 | `ml-training/calibrate_v9.py` | Legacy combined crypto+stock script — name is stale (was used to bootstrap v10 crypto model) |
 | `ml-training/model_comparison.py` | Hyperparameter comparison (XGBoost d3-5 × t100-200 + LightGBM) |
 | `ml-training/finra_dark_pool.py` | Downloads FINRA RegSHO daily files, computes short volume Z-scores |
+| `ml-training/level_rejection_direction.py` | Tests whether a confirmed rejection at a major S/R level predicts 3-4 bar direction — REJECTED (coin flip, gross EV below Binance fees, 0-2/6 folds). Reuses `level_validation.py` detection. See graveyard |
 | `ml-training/earnings_backfill.py` | Downloads historical earnings via yfinance |
 
 ### ML in Live Predictions
@@ -573,6 +574,10 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-07-14 — Rejection-at-a-level → short-horizon direction: tested, REJECTED (graveyard)
+
+User asked whether a confirmed rejection at a major S/R level predicts tradeable 3-4 bar direction (never measured — `level_validation.py` only measured the hold-vs-break RATE, not execution EV). Built `ml-training/level_rejection_direction.py` on the same validated swing-level detection: at each bar, a major level poked by the wick and closed back away by ≥REJECT_ATR = a confirmed rejection → enter the continuation (resistance→SHORT / support→LONG), stop beyond the wick, measure forward 3-4 bars + a full fee cost-curve + walk-forward folds incl. 2022. **Result: coin flip.** Continuation hit-rate 50.1-50.4% both markets/horizons (loose 740k/207k events AND strict-wick 300k/80k); crypto support→LONG +1.8pp is just the known upward drift while resistance→SHORT is −1 to −1.7pp (worse than base); gross EV +0.005..+0.059% crypto / ~0 stock → break-even round-trip ≤0.06%, below Binance ~0.10%; WF 0-2/6 positive folds, negative every year. Fully consistent with the S/R subsystem finding (`strategy-levels.md`): a level is a real REACTION location (+4.3pp hold) but carries **no tradeable directional EV** — a location, not a direction signal. Filed in `docs/research/rejected-hypotheses.md`; the "observed event not a prediction" framing did not rescue it (unlike trend-continuation, this one genuinely wasn't in the graveyard — now it is). No code/product change.
 
 ### 2026-07-14 — Automated analysis runs on favorable ML crosses (worker v1)
 
