@@ -27,7 +27,7 @@
 //
 // D1 constraint (server/d1-adapter.ts): positional `?` placeholders ONLY — never `?N`.
 
-import { classifyArchetype, type TradeSetup } from './prompt';
+import { classifyArchetype, isValidSetupGeometry, type TradeSetup } from './prompt';
 
 // Minimal structural env — index.ts's Env satisfies it; tests can pass a bare adapter.
 interface Env { DB: any; ALERTS: { get(k: string): Promise<string | null> } }
@@ -629,6 +629,48 @@ export async function resolveTrackedSetups(
   const terminals = countedInserts.length;
   if (updates.length || terminals) {
     console.log(`[tracked] updated ${updates.length} row(s), ${terminals} counted outcome(s) synced (${synced} ok)`);
+  }
+}
+
+// One-time retroactive cleanup (2026-07-14): void any tracked_setup whose geometry is directionally
+// INVALID — stop on the wrong side of entry (e.g. a SHORT with its stop BELOW entry, on the target
+// side). Such a setup is not a real trade: the wrong-side stop is ALREADY breached at registration,
+// so the state machine records an INSTANT phantom "loss" — even when the entry condition never fired
+// — polluting the win/loss track record. The registration guard (parseSetups/isValidSetupGeometry)
+// blocks these going forward; this sweeps the ones registered BEFORE that guard shipped. Voided rows
+// become state='invalidated' outcome='invalid_geometry' (a NON-counted state) and their trade_outcomes
+// row is deleted so they drop out of the counted stats entirely. KV-gated → runs once; idempotent
+// (re-running would find nothing). On error the flag is NOT set, so it retries next cron.
+export async function voidInvalidGeometrySetups(env: Env): Promise<void> {
+  const FLAG = 'geometry_void_v1_done';
+  try {
+    if (await env.ALERTS.get(FLAG)) return;
+    await ensureTrackedSetupsTable(env);
+    const all = await env.DB.prepare(
+      'SELECT id, direction, entry, stop_loss, tp1, tp2, outcome, outcome_row_id, state FROM tracked_setups'
+    ).all();
+    const rows = (all.results || []) as Array<any>;
+    let voided = 0;
+    for (const r of rows) {
+      if (r.state === 'invalidated' && r.outcome === 'invalid_geometry') continue;  // already voided
+      if (r.entry == null || r.stop_loss == null || r.tp1 == null || !r.direction) continue;  // FLAT/partial rows
+      if (isValidSetupGeometry({ direction: r.direction, entry: r.entry, stopLoss: r.stop_loss, tp1: r.tp1, tp2: r.tp2 })) continue;
+      const stmts: any[] = [];
+      if (r.outcome_row_id != null) {
+        stmts.push(env.DB.prepare('DELETE FROM trade_outcomes WHERE id = ?').bind(r.outcome_row_id));  // drop the phantom loss
+      }
+      stmts.push(env.DB.prepare(
+        `UPDATE tracked_setups SET state = 'invalidated', terminal = 1, outcome = 'invalid_geometry',
+           invalid_reason = 'invalid_geometry (voided retroactively)', outcome_row_id = NULL WHERE id = ?`
+      ).bind(r.id));
+      await env.DB.batch(stmts);
+      voided++;
+      console.log(`[tracked] voided invalid-geometry setup ${r.id} (${r.direction} entry=${r.entry} stop=${r.stop_loss} was outcome=${r.outcome})`);
+    }
+    await env.ALERTS.put(FLAG, String(Date.now()));
+    console.log(`[tracked] geometry void sweep complete: ${voided} invalid setup(s) removed from counted stats`);
+  } catch (e) {
+    console.log(`[tracked] geometry void sweep failed (will retry): ${e}`);
   }
 }
 

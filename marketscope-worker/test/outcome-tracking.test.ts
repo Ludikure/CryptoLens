@@ -475,3 +475,42 @@ describe('registration + resolution (D1 glue)', () => {
     expect(a.setups[0].id).not.toBe(b.setups[0].id);
   });
 });
+
+describe('voidInvalidGeometrySetups (retroactive cleanup)', () => {
+  it('voids an invalid-geometry SHORT (stop below entry) and deletes its phantom trade_outcomes loss; leaves valid rows', async () => {
+    const { voidInvalidGeometrySetups } = await import('../src/outcome-tracking');
+    _resetForTests();                       // clear the module-level trackedTableReady from prior tests
+    const db = new D1Adapter(':memory:');
+    const kv: Record<string, string> = {};
+    const env = { DB: db, ALERTS: { get: async (k: string) => kv[k] ?? null, put: async (k: string, v: string) => { kv[k] = v; } } } as any;
+    await ensureTrackedSetupsTable(env);
+    await db.prepare(`CREATE TABLE trade_outcomes (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, outcome TEXT)`).run();
+
+    // Phantom loss from the invalid SHORT (stop 62958 BELOW entry 63732 — the reported bug).
+    const oc = await db.prepare(`INSERT INTO trade_outcomes (symbol, outcome) VALUES ('BTCUSDT','loss')`).run();
+    const ocId = (oc as any).meta.last_row_id;
+    const base = (id: string, dir: string, entry: number, stop: number, tp1: number, tp2: number, outcome: string, rowId: number | null) =>
+      db.prepare(`INSERT INTO tracked_setups (id, device_id, symbol, is_crypto, kind, direction, entry, stop_loss, tp1, tp2,
+          price_at_setup, model_version, prompt_version, state, terminal, outcome, outcome_row_id, registered_at)
+        VALUES (?, 'dev', 'BTCUSDT', 1, 'setup', ?, ?, ?, ?, ?, 0, 14, 'v', 'active', 1, ?, ?, 1)`).bind(id, dir, entry, stop, tp1, tp2, outcome, rowId).run();
+    await base('bad', 'SHORT', 63732.66, 62958.31, 63283.26, 62932.73, 'loss', ocId);
+    await base('good', 'SHORT', 63984.35, 64390.71, 63648.42, 63000, 'loss', null);   // valid geometry (real loss)
+
+    await voidInvalidGeometrySetups(env);
+
+    const bad = await db.prepare(`SELECT state, outcome, outcome_row_id FROM tracked_setups WHERE id='bad'`).first();
+    expect(bad.state).toBe('invalidated');
+    expect(bad.outcome).toBe('invalid_geometry');
+    expect(bad.outcome_row_id).toBeNull();
+    const phantom = await db.prepare(`SELECT COUNT(*) as n FROM trade_outcomes WHERE id=?`).bind(ocId).first();
+    expect(phantom.n).toBe(0);                                   // phantom loss deleted
+    const good = await db.prepare(`SELECT state, outcome FROM tracked_setups WHERE id='good'`).first();
+    expect(good.outcome).toBe('loss');                           // valid real loss untouched
+    expect(kv['geometry_void_v1_done']).toBeDefined();           // flag set → one-time
+
+    // Idempotent: a second run finds nothing to do (and is short-circuited by the flag anyway).
+    await voidInvalidGeometrySetups(env);
+    const stillGood = await db.prepare(`SELECT outcome FROM tracked_setups WHERE id='good'`).first();
+    expect(stillGood.outcome).toBe('loss');
+  });
+});

@@ -7,7 +7,7 @@ import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type
 import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
-import { registerTrackedSetups, resolveTrackedSetups, readActiveSetupsForPrompt, readTrackedSetups } from './outcome-tracking';
+import { registerTrackedSetups, resolveTrackedSetups, readActiveSetupsForPrompt, readTrackedSetups, voidInvalidGeometrySetups } from './outcome-tracking';
 import { forecastVol, bandMultipliers } from './vol';
 import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
@@ -634,7 +634,11 @@ export default {
       // `build` = the git SHA baked into the image (GIT_SHA build-arg) — lets anyone verify
       // which commit the box is ACTUALLY running after a TrueNAS pull-and-restart.
       const build = (globalThis as any).process?.env?.GIT_SHA ?? 'unknown';
-      return json({ status: 'ok', build });
+      // Report which optional provider keys are present (booleans only — never the values) so a
+      // missing-secret misconfig (e.g. the app's Finnhub badge going red) is diagnosable remotely
+      // without auth. A red badge + finnhub:false here = the key wasn't carried to the box env.
+      const providers = { finnhub: !!env.FINNHUB_API_KEY };
+      return json({ status: 'ok', build, providers });
     }
 
     // Dead-man's-switch for the cron pipeline. Public (no auth) so an external uptime
@@ -2849,6 +2853,10 @@ async function checkAllDeviceScores(env: Env) {
   // against fresh candles (15m crypto / 1h stocks) and write counted terminals to
   // trade_outcomes. Fault-isolated — a resolver hiccup must never block notifications.
   // Fetchers injected to avoid a circular import (outcome-tracking.ts ← index.ts).
+  // One-time retroactive void of any invalid-geometry setups registered before the parseSetups
+  // guard shipped (they recorded phantom losses). KV-gated → self-disables after the first pass.
+  try { await voidInvalidGeometrySetups(env); } catch (e) { console.log(`[tracked] geometry void error: ${e}`); }
+
   try {
     await resolveTrackedSetups(env, predictions as any, {
       cryptoKlines: (symbol, interval, limit) => fetchBinanceKlines(symbol, interval, limit),
