@@ -90,11 +90,9 @@ struct SettingsView: View {
                         get: { UserDefaults.standard.bool(forKey: "notify_bias_flips") },
                         set: { UserDefaults.standard.set($0, forKey: "notify_bias_flips") }
                     ))
-                    Toggle("Score Threshold Alerts", isOn: Binding(
-                        get: { UserDefaults.standard.bool(forKey: "notify_score_threshold") },
-                        set: { UserDefaults.standard.set($0, forKey: "notify_score_threshold") }
-                    ))
-                    Text("Notifies when ML win probability crosses 60% for any watchlist asset")
+                    // "Score Threshold Alerts" (ML>=60 "tap to analyze") removed 2026-07-14 — it
+                    // paged into no-setup analyses; the server auto-analysis push (setup-gated) replaces it.
+                    Text("Push alerts fire from the server only when an analysis actually produces a trade setup.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } header: {

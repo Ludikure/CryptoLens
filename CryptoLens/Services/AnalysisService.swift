@@ -467,28 +467,11 @@ class AnalysisService: ObservableObject {
                 BiasNotificationManager.send(ticker: ticker, oldBias: prev.daily.bias, newBias: result.daily.bias)
             }
 
-            // Note: bias flip and ML threshold notifications are independent —
-            // both can fire for the same refresh if a flip coincides with a threshold crossing.
-            // ML probability notification — fires when win probability crosses 0.60
-            if let prev = prevResult,
-               UserDefaults.standard.bool(forKey: "notify_score_threshold") {
-                let prevML = prev.daily.mlWinProbability ?? 0
-                let newML = result.daily.mlWinProbability ?? 0
-                let mlThreshold = 0.60
-
-                // Only notify when ML probability CROSSES above threshold (not every refresh)
-                if prevML < mlThreshold && newML >= mlThreshold {
-                    let ticker = Constants.asset(for: symbol)?.ticker ?? symbol
-                    let dailyScore = result.daily.biasScore
-                    let fourHScore = result.h4.biasScore
-                    let strongerScore = abs(dailyScore) >= abs(fourHScore) ? dailyScore : fourHScore
-                    let direction = strongerScore > 0 ? "Bullish" : "Bearish"
-                    BiasNotificationManager.sendScoreAlert(
-                        ticker: ticker,
-                        score: strongerScore,
-                        direction: "\(direction) (ML: \(Int(newML * 100))%)")
-                }
-            }
+            // ML-threshold local notification REMOVED (2026-07-14): it fired at ML >= 0.60 with a
+            // "Daily score: +N. Tap to analyze setup" alert that guaranteed no setup — analyzing at
+            // ML 60-69 sits below the 70 conviction gate and usually auto-FLATs, so it trained the
+            // user to chase notifications that led nowhere. The server-side auto-analysis push now
+            // fires ONLY when the enriched analysis actually produces a setup, which supersedes this.
 
         } catch is CancellationError {
             // Expected when switching symbols — silently ignore
