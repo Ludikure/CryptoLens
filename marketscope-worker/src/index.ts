@@ -648,8 +648,23 @@ export default {
             const cached = await env.ALERTS.get('cache:fh:probe');
             if (cached) probe = JSON.parse(cached);
             else {
-              const r = await fetch(`${FINNHUB_BASE}/stock/market-status?exchange=US`, { headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY } });
-              probe = { configured: true, upstreamStatus: r.status, ok: r.ok };
+              // Ping every endpoint FinnhubProvider (which drives the app's badge) actually calls,
+              // for a sample stock — so we see WHICH one 403s (premium) / 429s (rate limit) while
+              // market-status is 200. That's what makes the badge stick red.
+              const eps: Record<string, string> = {
+                'market-status': '/stock/market-status?exchange=US',
+                recommendation: '/stock/recommendation?symbol=AAPL',
+                metric: '/stock/metric?symbol=AAPL&metric=all',
+                earnings: '/calendar/earnings?symbol=AAPL',
+                news: `/company-news?symbol=AAPL&from=${new Date(Date.now()-7*86400_000).toISOString().split('T')[0]}&to=${new Date().toISOString().split('T')[0]}`,
+                insider: '/stock/insider-transactions?symbol=AAPL',
+              };
+              const statuses: Record<string, number | string> = {};
+              for (const [name, p] of Object.entries(eps)) {
+                try { const r = await fetch(`${FINNHUB_BASE}${p}`, { headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY } }); statuses[name] = r.status; }
+                catch (e) { statuses[name] = `err:${e}`; }
+              }
+              probe = { configured: true, statuses };
               await env.ALERTS.put('cache:fh:probe', JSON.stringify(probe), { expirationTtl: 60 });
             }
           } catch (e) { probe = { configured: true, error: `${e}` }; }
