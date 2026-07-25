@@ -31,7 +31,7 @@ struct SettingsView: View {
                                 .foregroundStyle(.orange)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.orange.opacity(0.12), in: Capsule())
+                                .background(Theme.caution.opacity(0.12), in: Capsule())
                         }
                     }
 

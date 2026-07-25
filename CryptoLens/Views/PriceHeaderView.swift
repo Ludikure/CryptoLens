@@ -12,14 +12,14 @@ struct PriceHeaderView: View {
     var body: some View {
         VStack(spacing: 6) {
             Text(Formatters.formatPrice(result.daily.price))
-                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .font(Theme.headlineNumber)
 
             HStack(spacing: 8) {
                 if let change = change24h {
                     Text(Formatters.formatPercent(change))
                         .font(.subheadline)
                         .fontWeight(.semibold)
-                        .foregroundStyle(change >= 0 ? .green : .red)
+                        .foregroundStyle(Theme.forChange(change))
                 }
                 regimeBadge
             }
@@ -33,9 +33,9 @@ struct PriceHeaderView: View {
             if let stats = outcomeStats, stats.resolvedSetups > 0 {
                 HStack(spacing: 4) {
                     Text("\(stats.wins)W")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Theme.bullish)
                     Text("\(stats.losses)L")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Theme.bearish)
                 }
                 .font(.caption2)
             }
@@ -74,9 +74,9 @@ struct PriceHeaderView: View {
 
         var color: Color {
             switch self {
-            case .trending: return .blue
-            case .ranging: return .orange
-            case .transitioning: return .purple
+            case .trending: return Theme.info
+            case .ranging: return Theme.caution
+            case .transitioning: return Theme.neutral
             }
         }
     }
@@ -116,8 +116,8 @@ struct CandleMomentumPill: View {
     }
 
     private func color(for candle: Candle) -> Color {
-        if candle.close > candle.open { return .green }
-        if candle.close < candle.open { return .red }
+        if candle.close > candle.open { return Theme.bullish }
+        if candle.close < candle.open { return Theme.bearish }
         return .secondary
     }
 

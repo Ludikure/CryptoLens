@@ -35,12 +35,12 @@ struct ClaudeAnalysisView: View {
                                 .font(.caption2)
                                 .fontWeight(.semibold)
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 9, weight: .bold))
+                                .font(Theme.micro.weight(.bold))
                         }
                         .foregroundStyle(isStale ? .orange : .secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background((isStale ? Color.orange : Color.secondary).opacity(0.12), in: Capsule())
+                        .background((isStale ? Theme.caution : Color.secondary).opacity(0.12), in: Capsule())
                     }
                     .buttonStyle(.borderless)
                 }

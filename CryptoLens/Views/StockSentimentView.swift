@@ -76,9 +76,9 @@ struct StockSentimentView: View {
                 }
                 .frame(height: 4)
                 HStack {
-                    Text("52w Low").font(.system(size: 8)).foregroundStyle(.tertiary)
+                    Text("52w Low").font(Theme.micro).foregroundStyle(.tertiary)
                     Spacer()
-                    Text("52w High").font(.system(size: 8)).foregroundStyle(.tertiary)
+                    Text("52w High").font(Theme.micro).foregroundStyle(.tertiary)
                 }
             }
 

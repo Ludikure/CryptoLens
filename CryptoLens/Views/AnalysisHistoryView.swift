@@ -135,7 +135,7 @@ struct AnalysisHistoryView: View {
 
     private func biasBadge(_ label: String, _ bias: String) -> some View {
         Text(label)
-            .font(.system(size: 9, weight: .bold))
+            .font(Theme.micro.weight(.bold))
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(biasColor(bias).opacity(0.2))
@@ -413,7 +413,7 @@ struct HistoryDetailView: View {
                     .fontWeight(.bold)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(setup.direction == "LONG" ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
+                    .background(setup.direction == "LONG" ? Theme.bullish.opacity(0.2) : Theme.bearish.opacity(0.2))
                     .foregroundStyle(setup.direction == "LONG" ? .green : .red)
                     .clipShape(Capsule())
             }

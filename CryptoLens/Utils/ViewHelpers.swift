@@ -4,19 +4,19 @@ import SwiftUI
 
 /// Returns a color representing the bias direction, with Strong variants at full opacity
 /// and regular variants slightly dimmed.
+///
+/// Delegates to `Theme` (2026-07-24) so every existing call site picks up the shared, dark-mode-tuned
+/// palette without being touched individually.
 func biasColor(_ bias: String) -> Color {
-    if bias.contains("Strong Bull") { return .green }
-    if bias.contains("Bull") { return .green.opacity(0.7) }
-    if bias.contains("Strong Bear") { return .red }
-    if bias.contains("Bear") { return .red.opacity(0.7) }
-    return .secondary
+    Theme.forBias(bias)
 }
 
-/// Simplified bias color that returns full-opacity green/red without Strong distinction.
+/// Simplified bias color without the Strong distinction. Also theme-backed; note this returns
+/// `Theme.neutral` (secondary) rather than the old flat `.gray`, which was invisible on dark.
 func biasColorSimple(_ bias: String) -> Color {
-    if bias.contains("Bullish") { return .green }
-    if bias.contains("Bearish") { return .red }
-    return .gray
+    if bias.contains("Bullish") { return Theme.bullish }
+    if bias.contains("Bearish") { return Theme.bearish }
+    return Theme.neutral
 }
 
 /// Shortens bias labels for compact display.

@@ -56,7 +56,7 @@ struct LevelsChartView: View {
                         let bw = max(1.5, step * 0.6)
                         for (i, c) in candles.enumerated() {
                             let x = CGFloat(i) * step + step / 2
-                            let col = (c.close >= c.open) ? Color.green : Color.red
+                            let col = (c.close >= c.open) ? Theme.bullish : Theme.bearish
                             var wick = Path()
                             wick.move(to: CGPoint(x: x, y: y(c.high, h)))
                             wick.addLine(to: CGPoint(x: x, y: y(c.low, h)))
@@ -85,7 +85,10 @@ struct LevelsChartView: View {
                                     style: StrokeStyle(lineWidth: lvl.proximity == .inPlay ? 1.6 : 1,
                                                        dash: lvl.role.isSetupLevel ? [4, 3] : []))
                         Text(labelText(lvl))
-                            .font(.system(size: 9, weight: lvl.proximity == .inPlay ? .bold : .regular))
+                            // Fixed point size on purpose (floor raised from 7-8pt for legibility, 2026-07-25):
+                            // these labels are placed against fixed chart geometry, so Dynamic Type scaling
+                            // would push them outside the plot area at the larger accessibility sizes.
+                            .font(.system(size: 10, weight: lvl.proximity == .inPlay ? .bold : .regular))
                             .foregroundStyle(lvl.role.color)
                             .lineLimit(1)
                             .frame(width: labelGutter - 4, alignment: .leading)

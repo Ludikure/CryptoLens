@@ -4,7 +4,9 @@ struct IndicatorTableView: View {
     let results: [IndicatorResult]
     var putCallRatio: Double? = nil
     var spotPressure: SpotPressure? = nil
-    @AppStorage("indicators_expanded") private var expanded = true
+    // Defaults CLOSED since 2026-07-25: the verdict card now leads the Now tab, so the full
+    // indicator grid is evidence you open on purpose rather than the first thing in your way.
+    @AppStorage("indicators_expanded") private var expanded = false
 
     private var hasStockIndicators: Bool {
         results.contains { $0.obv != nil }
@@ -29,7 +31,7 @@ struct IndicatorTableView: View {
                         HStack(spacing: 4) {
                             ForEach(results) { r in
                                 Text(r.label.replacingOccurrences(of: " (Trend)", with: "").replacingOccurrences(of: " (Bias)", with: "").replacingOccurrences(of: " (Entry)", with: ""))
-                                    .font(.system(size: 9, weight: .semibold))
+                                    .font(Theme.micro)
                                     .foregroundStyle(biasColorSimple(r.bias))
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
@@ -69,7 +71,7 @@ struct IndicatorTableView: View {
                     if let ml = r.mlWinProbability {
                         let pct = Int(ml * 100)
                         let color: Color = pct >= 70 ? .green :
-                                           pct >= 60 ? Color.green.opacity(0.7) :
+                                           pct >= 60 ? Theme.bullish.opacity(0.7) :
                                            pct >= 50 ? .secondary :
                                            .red
                         Text("\(pct)%")
@@ -81,7 +83,7 @@ struct IndicatorTableView: View {
                     if let mlH72 = r.mlPersistenceProbability {
                         let pct = Int(mlH72 * 100)
                         let color: Color = pct >= 70 ? .green :
-                                           pct >= 60 ? Color.green.opacity(0.7) :
+                                           pct >= 60 ? Theme.bullish.opacity(0.7) :
                                            pct >= 50 ? .secondary :
                                            .red
                         Text("\(pct)%")

@@ -51,7 +51,7 @@ struct AlertsView: View {
                     if alertsStore.alerts.isEmpty {
                         VStack(spacing: 12) {
                             Image(systemName: "bell.slash")
-                                .font(.system(size: 44)).foregroundStyle(.tertiary)
+                                .font(Theme.emptyGlyph).foregroundStyle(.tertiary)
                             Text("No Alerts").font(.headline).foregroundStyle(.secondary)
                             Text("Pull down on Analysis to generate trade setups, or tap + to create manually.")
                                 .font(.caption).foregroundStyle(.tertiary)

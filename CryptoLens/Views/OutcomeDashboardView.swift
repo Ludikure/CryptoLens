@@ -217,11 +217,11 @@ struct OutcomeDashboardView: View {
                     .foregroundStyle(tracked.setup.direction == "LONG" ? .green : .red)
                 if tracked.setupType == .conditional {
                     Text("COND")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(Theme.micro.weight(.bold))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .foregroundStyle(.purple)
-                        .background(Color.purple.opacity(0.15), in: Capsule())
+                        .background(Theme.info.opacity(0.15), in: Capsule())
                 }
                 Spacer()
                 Text(tracked.outcome.result)
@@ -306,7 +306,7 @@ struct OutcomeDashboardView: View {
                     .font(.caption2).fontWeight(.bold)
                     .foregroundStyle(tracked.setup.direction == "LONG" ? .green : .red)
                 Text("PENDING")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(Theme.micro.weight(.bold))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
                     .foregroundStyle(.blue)

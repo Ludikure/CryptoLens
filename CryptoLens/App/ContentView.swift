@@ -22,44 +22,48 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Content area
-            Group {
-                if coordinator.selectedTab == 3 {
-                    NavigationStack {
-                        AlertsView()
-                    }
-                } else {
-                    NavigationStack {
-                        assetContent
-                            .modifier(AssetToolbarModifier(showPicker: $showPicker, showWatchlist: $showWatchlist))
-                            .sheet(isPresented: $showPicker) {
-                                CoinPickerView(selectedSymbol: Binding(
-                                    get: { service.currentSymbol ?? Constants.allCoins[0].id },
-                                    set: { newSymbol in selectSymbol(newSymbol) }
-                                ))
-                            }
-                            .sheet(isPresented: $showWatchlist) {
-                                WatchlistView(selectedSymbol: Binding(
-                                    get: { service.currentSymbol ?? Constants.allCoins[0].id },
-                                    set: { newSymbol in selectSymbol(newSymbol) }
-                                ))
-                            }
-                            .sheet(isPresented: $coordinator.showSettings) {
-                                SettingsView()
-                            }
-                            .sheet(isPresented: $showHistory) {
-                                AnalysisHistoryView(
-                                    symbol: service.currentSymbol ?? Constants.allCoins[0].id,
-                                    currentPrice: service.currentResult?.daily.price
-                                )
-                            }
-                    }
-                }
-            }
+        // Native TabView (2026-07-25). This replaced a hand-rolled HStack of plain Buttons, which
+        // silently gave up everything the platform provides for free: proper tab accessibility
+        // traits for VoiceOver, tap-the-active-tab-to-scroll-to-top, selection haptics, and correct
+        // safe-area/blur behaviour. It also drove content through a `switch` that rebuilt each
+        // screen from scratch on every switch.
+        //
+        // Five destinations, each answering ONE question — the previous set was organised by data
+        // source, which is why the app's own conclusion wasn't on the screen you land on:
+        //   Now     — what's the read, and what do I do? (verdict first, then price/indicators)
+        //   Chart   — show me the tape
+        //   Market  — the surrounding context (derivatives, macro, calendar, sentiment)
+        //   Record  — is this system actually working? (was buried in Settings)
+        //   Alerts  — my alerts
+        // The full AI analysis is no longer a peer tab: it's PUSHED from the verdict card on Now,
+        // which is both the right hierarchy (you land on the answer, tap for the reasoning) and what
+        // freed the fifth slot for Record without spilling into iOS's "More" tab.
+        TabView(selection: $coordinator.selectedTab) {
+            symbolScopedTab { ChartTabContent(showHistory: $showHistory) }
+                .tabItem { Label("Now", systemImage: "bolt.horizontal.circle") }
+                .tag(0)
 
-            // Bottom tab bar
-            bottomTabBar
+            symbolScopedTab { ChartScreenView() }
+                .tabItem { Label("Chart", systemImage: "chart.xyaxis.line") }
+                .tag(4)
+
+            symbolScopedTab { MarketTabContent() }
+                .tabItem { Label("Market", systemImage: "building.columns") }
+                .tag(1)
+
+            NavigationStack {
+                OutcomeDashboardView()
+            }
+            .tabItem { Label("Record", systemImage: "checkmark.seal") }
+            .tag(5)
+
+            NavigationStack {
+                AlertsView()
+            }
+            .tabItem {
+                Label("Alerts", systemImage: alertsStore.activeAlerts.isEmpty ? "bell" : "bell.badge")
+            }
+            .tag(3)
         }
         .preferredColorScheme(colorSchemeOverride == "light" ? .light : colorSchemeOverride == "dark" ? .dark : nil)
         .task {
@@ -69,54 +73,36 @@ struct ContentView: View {
         .onChange(of: service.currentResult?.timestamp) { warmChart() }
     }
 
+    /// The three symbol-scoped tabs share one chrome: a NavigationStack plus the asset toolbar and
+    /// its sheets. Record and Alerts deliberately opt out — neither is scoped to a symbol, so the
+    /// symbol picker there would be meaningless.
     @ViewBuilder
-    private var assetContent: some View {
-        switch coordinator.selectedTab {
-        case 0:
-            ChartTabContent()
-        case 1:
-            MarketTabContent()
-        case 2:
-            AITabContent(showHistory: $showHistory)
-        case 4:
-            ChartScreenView()
-        default:
-            EmptyView()
+    private func symbolScopedTab<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        NavigationStack {
+            content()
+                .modifier(AssetToolbarModifier(showPicker: $showPicker, showWatchlist: $showWatchlist))
+                .sheet(isPresented: $showPicker) {
+                    CoinPickerView(selectedSymbol: Binding(
+                        get: { service.currentSymbol ?? Constants.allCoins[0].id },
+                        set: { newSymbol in selectSymbol(newSymbol) }
+                    ))
+                }
+                .sheet(isPresented: $showWatchlist) {
+                    WatchlistView(selectedSymbol: Binding(
+                        get: { service.currentSymbol ?? Constants.allCoins[0].id },
+                        set: { newSymbol in selectSymbol(newSymbol) }
+                    ))
+                }
+                .sheet(isPresented: $coordinator.showSettings) {
+                    SettingsView()
+                }
+                .sheet(isPresented: $showHistory) {
+                    AnalysisHistoryView(
+                        symbol: service.currentSymbol ?? Constants.allCoins[0].id,
+                        currentPrice: service.currentResult?.daily.price
+                    )
+                }
         }
-    }
-
-    private var bottomTabBar: some View {
-        HStack(spacing: 0) {
-            tabBarItem(icon: "chart.bar.doc.horizontal", label: "Overview", tag: 0)
-            tabBarItem(icon: "chart.xyaxis.line", label: "Chart", tag: 4)
-            tabBarItem(icon: "building.columns", label: "Market", tag: 1)
-            tabBarItem(icon: "brain", label: "Analysis", tag: 2)
-            tabBarItem(
-                icon: alertsStore.activeAlerts.isEmpty ? "bell" : "bell.badge",
-                label: "Alerts",
-                tag: 3
-            )
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-        .background(.bar)
-    }
-
-    private func tabBarItem(icon: String, label: String, tag: Int) -> some View {
-        Button {
-            coordinator.selectedTab = tag
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 18))
-                    .frame(height: 22)
-                Text(label)
-                    .font(.system(size: 10))
-            }
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(coordinator.selectedTab == tag ? Color.accentColor : .secondary)
-        }
-        .buttonStyle(.plain)
     }
 
     private func selectSymbol(_ symbol: String) {
@@ -129,6 +115,7 @@ struct ContentView: View {
 struct ChartTabContent: View {
     @EnvironmentObject var service: AnalysisService
     @EnvironmentObject var favorites: FavoritesStore
+    @Binding var showHistory: Bool
     @State private var biasChanges: [String] = []
     @State private var activeSetups: [TrackedSetup] = []
     @State private var tradesExpanded = false
@@ -168,6 +155,14 @@ struct ChartTabContent: View {
             Section {
                 FavoritePillsView()
                     .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
+                // The answer, first. Everything below it is supporting evidence.
+                if let result = service.currentResult {
+                    VerdictCard(result: result, isStale: service.isAIStale) {
+                        Task { await service.runFullAnalysis(symbol: result.symbol) }
+                    }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                }
 
                 if NetworkMonitor.shared.isOffline {
                     offlineBanner
@@ -236,7 +231,7 @@ struct ChartTabContent: View {
             .foregroundStyle(.orange)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
-            .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .background(Theme.caution.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
         }
 
@@ -253,7 +248,7 @@ struct ChartTabContent: View {
             .padding(.vertical, 4)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            .background(Theme.caution.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
         }
 
@@ -314,7 +309,7 @@ struct ChartTabContent: View {
                                 Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
                                     .font(.caption)
                                 Text("PENDING")
-                                    .font(.system(size: 8, weight: .bold))
+                                    .font(Theme.micro.weight(.bold))
                                     .padding(.horizontal, 4)
                                     .padding(.vertical, 1)
                                     .foregroundStyle(.blue)
@@ -338,16 +333,16 @@ struct ChartTabContent: View {
                             let held = Int(Date().timeIntervalSince(active.outcome.entryHitTime ?? active.timestamp) / 3600)
 
                             HStack(spacing: 6) {
-                                Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
+                                Circle().fill(pnl >= 0 ? Theme.bullish : Theme.bearish).frame(width: 8)
                                 Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
                                     .font(.caption)
                                 if active.outcome.breakevenActivated {
                                     Text("BE")
-                                        .font(.system(size: 8, weight: .bold))
+                                        .font(Theme.micro.weight(.bold))
                                         .padding(.horizontal, 4)
                                         .padding(.vertical, 1)
                                         .foregroundStyle(.orange)
-                                        .background(Color.orange.opacity(0.2), in: Capsule())
+                                        .background(Theme.caution.opacity(0.2), in: Capsule())
                                 }
                                 Spacer()
                                 Text(String(format: "%+.1f%%", pnl))
@@ -393,7 +388,7 @@ struct ChartTabContent: View {
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 6)
-        .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+        .background(Theme.bearish.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
         .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
     }
 
@@ -409,7 +404,7 @@ struct ChartTabContent: View {
 
     private var emptyView: some View {
         VStack(spacing: 12) {
-            Image(systemName: "chart.bar.xaxis").font(.system(size: 44)).foregroundStyle(.tertiary)
+            Image(systemName: "chart.bar.xaxis").font(Theme.emptyGlyph).foregroundStyle(.tertiary)
             Text("Pull down to load data").font(.subheadline).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 60)
@@ -497,7 +492,7 @@ struct ChartScreenView: View {
                     // ⟲ reset (native — the chart page takes no touches): autoscale + newest bar.
                     Button { ChartWebViewStore.shared.reset() } label: {
                         Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 11, weight: .semibold))
+                            .font(Theme.micro)
                             .foregroundStyle(.secondary)
                             .frame(width: 26, height: 22)
                             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
@@ -505,7 +500,7 @@ struct ChartScreenView: View {
                     .buttonStyle(.plain)
                     Spacer()
                     Link("TradingView", destination: URL(string: "https://www.tradingview.com")!)
-                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                        .font(Theme.micro).foregroundStyle(.tertiary)
                 }
                 .padding(.horizontal, 12)
 
@@ -523,7 +518,7 @@ struct ChartScreenView: View {
                     ProgressView("Loading chart…").tint(.secondary)
                 } else {
                     VStack(spacing: 12) {
-                        Image(systemName: "chart.xyaxis.line").font(.system(size: 44)).foregroundStyle(.tertiary)
+                        Image(systemName: "chart.xyaxis.line").font(Theme.emptyGlyph).foregroundStyle(.tertiary)
                         Text("No chart data").font(.subheadline).foregroundStyle(.tertiary)
                         Button("Load") { Task { await service.refreshIndicators(symbol: selectedSymbol) } }
                             .buttonStyle(.bordered).controlSize(.small)
@@ -628,9 +623,9 @@ struct AITabContent: View {
     var body: some View {
         List {
             Section {
-                FavoritePillsView()
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-
+                // No FavoritePillsView here: this is now a screen PUSHED from the verdict card, so it
+                // inherits the symbol from Now. Rendering a switcher on a detail screen invited you
+                // to change the very thing the screen is about.
                 if let result = service.currentResult {
                     aiContent(result)
                 } else if service.aiLoadingPhase != .idle {
@@ -680,7 +675,7 @@ struct AITabContent: View {
                     .font(.caption.bold())
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(setup.direction == "LONG" ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
+                    .background(setup.direction == "LONG" ? Theme.bullish.opacity(0.2) : Theme.bearish.opacity(0.2))
                     .foregroundStyle(setup.direction == "LONG" ? .green : .red)
                     .clipShape(Capsule())
 

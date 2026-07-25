@@ -114,7 +114,7 @@ private struct WatchlistCard: View {
                     .fontWeight(.bold)
                 Spacer()
                 Text(cardShortBias)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(Theme.micro)
                     .foregroundStyle(cardBiasColor)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -127,16 +127,16 @@ private struct WatchlistCard: View {
                 let v = decisionVerdict(for: result)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 3) {
-                        Image(systemName: v.icon).font(.system(size: 8, weight: .bold))
-                        Text(v.label).font(.system(size: 9, weight: .heavy))
+                        Image(systemName: v.icon).font(Theme.micro.weight(.bold))
+                        Text(v.label).font(Theme.micro.weight(.heavy))
                     }
                     .foregroundStyle(v.color)
-                    Text(v.reason).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
+                    Text(v.reason).font(Theme.micro).foregroundStyle(.secondary).lineLimit(2)
                 }
 
                 // Price
                 Text(Formatters.formatPrice(result.daily.price))
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .font(.system(.title3, design: .rounded).weight(.bold))
                     .monospacedDigit()
 
                 // Sparkline

@@ -81,7 +81,7 @@ struct MacroContextView: View {
                     .monospacedDigit()
                 if let note {
                     Text(note)
-                        .font(.system(size: 9))
+                        .font(Theme.micro)
                         .foregroundStyle(color)
                 }
             }

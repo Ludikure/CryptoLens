@@ -76,7 +76,7 @@ struct TradeSetupChartView: View {
                             path.move(to: CGPoint(x: x, y: priceY(candle.high)))
                             path.addLine(to: CGPoint(x: x, y: priceY(candle.low)))
                         }
-                        .stroke(isUp ? Color.green.opacity(0.6) : Color.red.opacity(0.6), lineWidth: 0.8)
+                        .stroke(isUp ? Theme.bullish.opacity(0.6) : Theme.bearish.opacity(0.6), lineWidth: 0.8)
 
                         // Body
                         let bodyTop = priceY(max(candle.open, candle.close))
@@ -84,7 +84,7 @@ struct TradeSetupChartView: View {
                         let bodyH = max(1, bodyBot - bodyTop)
 
                         Rectangle()
-                            .fill(isUp ? Color.green.opacity(0.6) : Color.red.opacity(0.6))
+                            .fill(isUp ? Theme.bullish.opacity(0.6) : Theme.bearish.opacity(0.6))
                             .frame(width: candleWidth, height: bodyH)
                             .position(x: x, y: bodyTop + bodyH / 2)
                     }
@@ -108,7 +108,7 @@ struct TradeSetupChartView: View {
             let riskTop = min(entryY, slY)
             let riskBot = max(entryY, slY)
             Rectangle()
-                .fill(Color.red.opacity(0.06))
+                .fill(Theme.bearish.opacity(0.06))
                 .frame(width: width, height: max(0, riskBot - riskTop))
                 .position(x: width / 2, y: (riskTop + riskBot) / 2)
 
@@ -116,7 +116,7 @@ struct TradeSetupChartView: View {
             let rewardTop = min(entryY, tp1Y)
             let rewardBot = max(entryY, tp1Y)
             Rectangle()
-                .fill(Color.green.opacity(0.06))
+                .fill(Theme.bullish.opacity(0.06))
                 .frame(width: width, height: max(0, rewardBot - rewardTop))
                 .position(x: width / 2, y: (rewardTop + rewardBot) / 2)
         }
@@ -136,9 +136,12 @@ struct TradeSetupChartView: View {
             // Label + price on right
             HStack(spacing: 3) {
                 Text(label)
-                    .font(.system(size: 8, weight: .bold))
+                    // Fixed point size on purpose (floor raised from 7-8pt for legibility, 2026-07-25):
+                    // these labels are placed against fixed chart geometry, so Dynamic Type scaling
+                    // would push them outside the plot area at the larger accessibility sizes.
+                    .font(.system(size: 10, weight: .bold))
                 Text(Formatters.formatPrice(price))
-                    .font(.system(size: 8))
+                    .font(.system(size: 10))
             }
             .foregroundStyle(color)
             .padding(.horizontal, 3)
@@ -160,7 +163,7 @@ struct TradeSetupChartView: View {
             .stroke(Color.primary.opacity(0.4), style: StrokeStyle(lineWidth: 0.8, dash: [2, 2]))
 
             Text(Formatters.formatPrice(currentPrice))
-                .font(.system(size: 7, weight: .semibold))
+                .font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 3)
                 .padding(.vertical, 1)
