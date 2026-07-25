@@ -12,6 +12,11 @@ truenas-compose.yml
 # Local migration data (huge, regenerable)
 dump.sql
 *.sql
+# ...but migrations/ IS the schema of record and must be committed. The blanket `*.sql` above was
+# aimed at dump.sql and local scratch SQL, and it silently swallowed NEW migration files: git only
+# ignores untracked paths, so 001-006 kept working (already tracked) while 007_schema_drift.sql was
+# invisible to `git add` with no error. Caught 2026-07-24 — the migration had to be force-added.
+!migrations/*.sql
 marketscope.db
 marketscope.db-*
 *.db

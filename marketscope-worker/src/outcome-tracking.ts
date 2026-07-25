@@ -125,14 +125,8 @@ export async function ensureTrackedSetupsTable(env: Env): Promise<void> {
   )`).run();
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_tracked_open ON tracked_setups(terminal, symbol)').run();
   await env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_tracked_device ON tracked_setups(device_id, registered_at DESC)').run();
-  // The entry-zone glue rows INSERT into pending_setups; that table was historically lazy-created
-  // only by the POST /pending-setups handler, which post-cutover may never run on a fresh DB —
-  // ensure it here too (same schema as index.ts) so the registration batch can't fail on it.
-  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS pending_setups (
-    id TEXT PRIMARY KEY, device_id TEXT NOT NULL, symbol TEXT NOT NULL, direction TEXT NOT NULL,
-    entry REAL NOT NULL, atr REAL NOT NULL, ml_at_registration REAL,
-    expires_at INTEGER NOT NULL, registered_at INTEGER NOT NULL, notified INTEGER DEFAULT 0
-  )`).run();
+  // (The `pending_setups` glue table used to be ensured here too, for the entry-zone glue rows.
+  // Retired 2026-07-24 — the entry-zone notification reads these tracked_setups rows directly.)
   trackedTableReady = true;
 }
 
@@ -257,16 +251,10 @@ export async function registerTrackedSetups(env: Env, args: RegisterArgs): Promi
         archetype, setupType, isConditional ? 'pending' : 'active', null,
         isConditional ? now + PENDING_EXPIRY_MS : null, now, now,
       ));
-      // pending_setups glue: keeps the cron's entry-zone-touch APNs alive now that iOS no
-      // longer registers via WorkerPendingSetupService (crypto conditional only, atr>0 —
-      // parity with OutcomeTracker.swift:544). Follow-up: consolidate onto tracked_setups.
-      if (isConditional && args.isCrypto && atr != null && atr > 0) {
-        stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO pending_setups
-          (id, device_id, symbol, direction, entry, atr, ml_at_registration, expires_at, registered_at, notified)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).bind(
-          id, args.deviceId, args.symbol, s.direction, s.entry, atr, ml, now + PENDING_EXPIRY_MS, now,
-        ));
-      }
+      // (A duplicate row used to be written into a `pending_setups` glue table here, purely so the
+      // cron's entry-zone-touch APNs could find it. Retired 2026-07-24: that notification now reads
+      // these rows directly, matching on kind='setup' AND state='pending' AND is_crypto AND atr>0 —
+      // the same conditions the glue write applied, so the notification's scope is unchanged.)
     }
   }
   if (stmts.length) await env.DB.batch(stmts);
@@ -517,7 +505,6 @@ export async function resolveTrackedSetups(
   if (!rows.length) return;
 
   const updates: any[] = [];
-  const pendingDeletes: any[] = [];
   const countedInserts: TrackedRow[] = [];
   let stockMap: Record<string, Array<{ time: number; open: number; high: number; low: number; close: number }>> | null = null;
 
@@ -582,7 +569,6 @@ export async function resolveTrackedSetups(
 
     const maxPointTime = points.length ? Math.max(...points.map(p => p.time)) : null;
     for (const r of group) {
-      const wasPending = r.state === 'pending';
       const { row, changed } = stepSetup(r, points, stepOpts);
       // last_checked_at advances to the newest processed point (NOT `now` — a bar closing
       // between fetch and stamp would otherwise be skipped; overlap covers the rest).
@@ -604,16 +590,13 @@ export async function resolveTrackedSetups(
           row.resolvedAt, row.lastCheckedAt, row.id,
         ));
       }
-      if (wasPending && row.state !== 'pending') {
-        pendingDeletes.push(env.DB.prepare('DELETE FROM pending_setups WHERE id = ?').bind(row.id));
-      }
       if (row.terminal && row.outcome && COUNTED_OUTCOMES.has(row.outcome) && row.outcomeRowId == null) {
         countedInserts.push(row);
       }
     }
   });
 
-  if (updates.length || pendingDeletes.length) await env.DB.batch([...updates, ...pendingDeletes]);
+  if (updates.length) await env.DB.batch(updates);
 
   // Counted terminals → trade_outcomes (existing 16-col shape, index.ts:1902-1915) so the
   // prompt's outcome-history and GET /outcomes keep working unchanged. Individual .run()s to

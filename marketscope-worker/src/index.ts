@@ -823,80 +823,15 @@ export default {
       return json({ ok: true });
     }
 
-    // === Pending Setup Tracking (entry-touched APNs) ===
-    // iOS posts pending conditional setups here so the worker cron can monitor for
-    // entry-zone touches and send a push notification when conditions are still
-    // favorable. Closes the gap where a user-conditional entry sits silently waiting
-    // until the user manually opens the app.
-    if (path === '/pending-setups' && request.method === 'POST') {
-      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      try {
-        // Lazy migration: idempotent. CREATE TABLE IF NOT EXISTS is a no-op after first
-        // call. Schema kept here so the table can be recreated from source if needed.
-        await env.DB.prepare(`CREATE TABLE IF NOT EXISTS pending_setups (
-          id TEXT PRIMARY KEY,
-          device_id TEXT NOT NULL,
-          symbol TEXT NOT NULL,
-          direction TEXT NOT NULL,
-          entry REAL NOT NULL,
-          atr REAL NOT NULL,
-          ml_at_registration REAL,
-          expires_at INTEGER NOT NULL,
-          registered_at INTEGER NOT NULL,
-          notified INTEGER DEFAULT 0
-        )`).run();
-        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_pending_setups_symbol ON pending_setups(symbol)`).run();
-        await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_pending_setups_device ON pending_setups(device_id)`).run();
-
-        const body = await request.json() as {
-          id: string; symbol: string; direction: string;
-          entry: number; atr: number;
-          mlAtRegistration?: number; expiresAt: number;
-        };
-        if (!body.id || !body.symbol || !body.direction ||
-            typeof body.entry !== 'number' || typeof body.atr !== 'number' ||
-            typeof body.expiresAt !== 'number') {
-          return json({ error: 'Invalid request' }, 400);
-        }
-        const symbol = sanitizeSymbol(body.symbol);
-        if (!symbol) return json({ error: 'Invalid symbol' }, 400);
-        if (body.direction !== 'LONG' && body.direction !== 'SHORT') {
-          return json({ error: 'Invalid direction' }, 400);
-        }
-        await env.DB.prepare(`INSERT OR REPLACE INTO pending_setups
-          (id, device_id, symbol, direction, entry, atr, ml_at_registration, expires_at, registered_at, notified)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).bind(
-          body.id, deviceId, symbol, body.direction,
-          body.entry, body.atr,
-          body.mlAtRegistration ?? null,
-          body.expiresAt, Date.now()
-        ).run();
-        return json({ ok: true });
-      } catch (e) {
-        console.log(`[pending-setups POST] error: ${e}`);
-        return json({ error: 'Invalid request' }, 400);
-      }
-    }
-    if (path === '/pending-setups' && request.method === 'GET') {
-      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      try {
-        const rows = await env.DB.prepare(
-          'SELECT id, symbol, direction, entry, atr, ml_at_registration as mlAtRegistration, expires_at as expiresAt, registered_at as registeredAt, notified FROM pending_setups WHERE device_id = ?'
-        ).bind(deviceId).all();
-        return json(rows.results);
-      } catch {
-        return json([]);  // table may not exist yet
-      }
-    }
-    const pendingDeleteMatch = path.match(/^\/pending-setups\/(.+)$/);
-    if (pendingDeleteMatch && request.method === 'DELETE') {
-      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      const id = pendingDeleteMatch[1];
-      try {
-        await env.DB.prepare('DELETE FROM pending_setups WHERE id = ? AND device_id = ?').bind(id, deviceId).run();
-      } catch { /* table may not exist */ }
-      return json({ ok: true });
-    }
+    // === /pending-setups: REMOVED 2026-07-24 ===
+    // These three handlers (POST/GET/DELETE) were the legacy iOS registration path for conditional
+    // setups. iOS stopped calling them at the 2026-07-09 server-side cutover (WorkerPendingSetupService
+    // was deleted then), registration moved into registerTrackedSetups, and the entry-zone-touch
+    // notification now reads `tracked_setups` (state='pending') directly — so the `pending_setups`
+    // table was a pure duplicate of rows that already existed. Nothing in iOS or web/ references the
+    // endpoints (grep-verified). The deployed table and its rows are left in place, harmless and
+    // unread; drop it by hand once you're satisfied nothing regressed:
+    //     DROP TABLE pending_setups;
 
     // === AI Analysis Proxy ===
     if (path === '/analyze' && request.method === 'POST') {
@@ -2614,12 +2549,27 @@ async function checkDeviceAlerts(env: Env, deviceId: string) {
 // === APNs ===
 type APNsResult = 'sent' | 'unregistered' | 'failed';
 
+const APNS_SANDBOX = 'https://api.sandbox.push.apple.com';
+const APNS_PROD = 'https://api.push.apple.com';
+const APNS_ENV_TTL_SEC = 90 * 24 * 60 * 60;
+
 async function sendAPNs(env: Env, deviceToken: string, title: string, body: string): Promise<APNsResult> {
-  // Try sandbox first (development builds), fall back to production
-  const endpoints = [
-    'https://api.sandbox.push.apple.com',
-    'https://api.push.apple.com',
-  ];
+  // Endpoint order. Historically this was ALWAYS sandbox-then-production, so every push to a
+  // production token paid a guaranteed wasted round-trip to Apple before the real one — on the
+  // notification path that's pure added latency, and the cron sends these in series.
+  //
+  // A token belongs to exactly one environment and cannot migrate: the APNs device token is derived
+  // per aps-environment, so a debug→release rebuild yields a DIFFERENT token (and therefore a
+  // different cache key). That makes "remember which endpoint worked for this token" safe — a
+  // stale-wrong entry isn't reachable. We still keep the full fallback loop, so a cache miss, a KV
+  // eviction, or an unexpected rejection just costs the old behaviour.
+  //
+  // Uncached tokens keep the original sandbox-first order: the first send for a new token pays the
+  // double hop once, then every later send goes straight to the right endpoint.
+  const envKey = `apns_env:${deviceToken}`;
+  let cachedEnv: string | null = null;
+  try { cachedEnv = await env.ALERTS.get(envKey); } catch { /* best-effort */ }
+  const endpoints = cachedEnv === 'prod' ? [APNS_PROD, APNS_SANDBOX] : [APNS_SANDBOX, APNS_PROD];
 
   try {
     const jwt = await buildAPNsJWT(env);
@@ -2643,7 +2593,13 @@ async function sendAPNs(env: Env, deviceToken: string, title: string, body: stri
       });
 
       if (resp.ok) {
-        console.log(`APNs sent via ${endpoint.includes('sandbox') ? 'sandbox' : 'production'}`);
+        const which = endpoint === APNS_SANDBOX ? 'sandbox' : 'prod';
+        console.log(`APNs sent via ${which}${cachedEnv === which ? ' (cached route)' : ''}`);
+        // Remember the winning endpoint so the next push skips the dead hop. Only write on change,
+        // to avoid a KV put on every single push.
+        if (cachedEnv !== which) {
+          await env.ALERTS.put(envKey, which, { expirationTtl: APNS_ENV_TTL_SEC }).catch(() => {});
+        }
         return 'sent';
       }
       lastStatus = resp.status;
@@ -2651,23 +2607,25 @@ async function sendAPNs(env: Env, deviceToken: string, title: string, body: stri
       const env_ = endpoint.includes('sandbox') ? 'sandbox' : 'prod';
       console.error(`APNs ${env_} ${resp.status}: ${lastBody}`);
       // Only break on responses that conclusively describe the token itself — anything
-      // else (transient sandbox 5xx, rate-limit 429, generic network failure surfaced
-      // as 500) should still attempt production, since a production token rejected by
-      // sandbox for non-token reasons would otherwise be permanently stranded.
-      // Conclusive token-level errors: 400 BadDeviceToken doesn't apply (we want to
-      // fall through to prod), but 410 Unregistered, 403 InvalidProviderToken (key
-      // misconfig), and 413 PayloadTooLarge all describe the request/token, not the
-      // endpoint, so retrying production is pointless.
+      // else (transient 5xx, rate-limit 429, generic network failure surfaced as 500)
+      // should still attempt the OTHER endpoint, since a token rejected by the wrong
+      // environment for non-token reasons would otherwise be permanently stranded.
+      // Conclusive token-level errors: 400 BadDeviceToken doesn't apply (it's the signal
+      // that we're on the wrong environment — fall through), but 410 Unregistered, 403
+      // InvalidProviderToken (key misconfig), and 413 PayloadTooLarge all describe the
+      // request/token, not the endpoint, so retrying the other one is pointless.
       if (resp.status === 400 && lastBody.includes('BadDeviceToken')) continue;
       if (resp.status === 410 || resp.status === 403 || resp.status === 413) break;
-      // Transient: try production as a fallback. Worst case, prod also fails the same
-      // way and we surface the prod error to the caller.
+      // Transient: try the other endpoint as a fallback. Worst case it fails the same way
+      // and we surface that error to the caller.
       continue;
     }
-    // 410 from production = token unregistered (uninstall, device wipe). Sandbox 410 we
-    // distrust (token may still be valid via prod), so treat only the last-tried endpoint
-    // as authoritative. Since the sandbox→prod fallthrough only happens on 400 BadDeviceToken,
-    // any 410 we surface is from whichever endpoint was the actual route for this token.
+    // 410 = token unregistered (uninstall, device wipe) → the caller cascade-deletes the device.
+    // Only the last-tried endpoint is treated as authoritative: a 410 from the WRONG environment
+    // would be meaningless, and since the cross-environment fallthrough only happens on 400
+    // BadDeviceToken, any 410 we surface came from the endpoint that actually routes this token.
+    // With the cached route above we now usually try that endpoint FIRST, which makes this
+    // marginally more trustworthy than before, not less.
     return lastStatus === 410 ? 'unregistered' : 'failed';
   } catch (e) {
     console.error(`APNs send failed: ${e}`);
@@ -3109,9 +3067,17 @@ async function computeSymbolPredictions(
   try { const s = await env.ALERTS.get('notif_suppressed:all'); if (s) suppressedMap = JSON.parse(s); } catch { /* ignore */ }
   // Symbols with live pending setups — their entry-zone pushes are envelope-gated too, so the
   // precheck must run for them every tick (bounded: typically 0-3 symbols).
+  // (Reads tracked_setups since 2026-07-24 — same rows the entry-zone pass now uses; the
+  // `pending_setups` glue table was a duplicate and is retired. The `notified = 0` clause it used
+  // to carry has no equivalent here because the notified marker moved to KV; the set is only used
+  // to decide whether to RUN a precheck, so including an already-notified row costs one extra
+  // precheck for a symbol that is almost certainly being prechecked anyway.)
   let pendingSetupSymbols = new Set<string>();
   try {
-    const r = await env.DB.prepare('SELECT DISTINCT symbol FROM pending_setups WHERE notified = 0').all();
+    const r = await env.DB.prepare(
+      `SELECT DISTINCT symbol FROM tracked_setups
+        WHERE kind = 'setup' AND state = 'pending' AND terminal = 0 AND is_crypto = 1 AND atr > 0`
+    ).all();
     pendingSetupSymbols = new Set((r.results || []).map((x: any) => x.symbol as string));
   } catch { /* table may not exist yet */ }
   // Economic events for the precheck's macro_IMMINENT gate — fetched at most once per pass,
@@ -3139,6 +3105,23 @@ async function computeSymbolPredictions(
   const prevOIMap: Record<string, number> = prevOIBatchRaw ? JSON.parse(prevOIBatchRaw) : {};
   const derivArchiveBatchRaw = await env.ALERTS.get('deriv_archive:all');
   const derivArchiveMap: Record<string, number> = derivArchiveBatchRaw ? JSON.parse(derivArchiveBatchRaw) : {};
+  // The 3.5h archive gate used to live in that KV blob ALONE, which meant an eviction (or an
+  // overlapping cron reading a blob the other pass hadn't flushed yet) reset every symbol's
+  // last-archive time to "never" and re-archived the whole universe — the archive ran ~9×/day per
+  // symbol instead of the intended 6.85× (~700 surplus rows/day across 76 symbols). Fix: seed the
+  // gate from D1, which IS the thing being gated and therefore cannot disagree with itself. The KV
+  // blob stays as a fast path; we take the LATER of the two, so a fresh/evicted blob degrades to
+  // "ask D1" instead of "archive everything". One indexed GROUP BY per cron
+  // (idx_deriv_lookup covers it). NB: D1 stores `timestamp` in SECONDS, the KV blob in ms.
+  try {
+    const seed = await env.DB.prepare(
+      'SELECT symbol, MAX(timestamp) AS ts FROM derivatives_history GROUP BY symbol'
+    ).all();
+    mergeDerivArchiveGate(derivArchiveMap, (seed.results ?? []) as Array<{ symbol: string; ts: number }>);
+  } catch (e) {
+    // Best-effort: on failure we fall back to the KV-only behaviour (over-archives at worst).
+    console.log(`[deriv-archive] D1 gate seed failed, using KV only: ${e}`);
+  }
   // Live-derivatives cache: per-symbol raw fapi values + ts. Warm passes within the 5-min TTL
   // skip the VPN derivative batch (the cron's dominant cost). Per-symbol ts → staggered refresh.
   const derivLiveBatchRaw = await env.ALERTS.get('deriv_live:all');
@@ -3901,6 +3884,23 @@ async function computeSymbolPredictions(
 // Runs DETACHED (the caller does `void runAutoAnalysis(...)` — the box is a persistent Node process,
 // so this outlives the cron pass; a 30-90s LLM call must NEVER be awaited inside the minute cron).
 // Model is fixed to Sonnet 5 + extended thinking (the user's standing pick — auto-runs don't see the
+/** Folds D1's real per-symbol last-archive times (SECONDS) into the KV gate map (MILLISECONDS),
+ *  keeping whichever is LATER. Mutates and returns `kvMap`. Taking the max is what makes an evicted
+ *  or half-flushed KV blob harmless: the worst case becomes "trust D1" rather than "re-archive
+ *  everything". Exported for tests — the unit mismatch here is exactly the kind of thing that fails
+ *  silently (a seconds value compared against ms reads as 1970 and never gates anything). */
+export function mergeDerivArchiveGate(
+  kvMap: Record<string, number>,
+  rows: Array<{ symbol: string; ts: number }>,
+): Record<string, number> {
+  for (const r of rows) {
+    if (!r?.symbol) continue;
+    const d1Ms = Number(r.ts) * 1000;
+    if (Number.isFinite(d1Ms) && d1Ms > (kvMap[r.symbol] ?? 0)) kvMap[r.symbol] = d1Ms;
+  }
+  return kvMap;
+}
+
 /** Hands a consumed-but-unpushed ML cross BACK to the defer-not-drop machinery: releases the
  *  `notif_claims` claim the cross burned and re-arms suppression via a per-symbol key, so the symbol
  *  pass adopts it next tick and pages the moment a setup appears. Never throws — failed bookkeeping
@@ -4094,27 +4094,41 @@ async function processDeviceNotifications(
     await env.DB.batch(historyStmts);
   }
 
-  // === Entry-touched check for this device's pending setups ===
-  // For each pending setup, check if the latest 4H bar's high/low touched the entry
-  // zone (entry ± 0.3 ATR) AND ML still favorable AND not yet notified. Fire APNs once,
-  // mark notified=1 so we don't spam. Also expire old setups.
+  // === Entry-touched check for this device's live pending setups ===
+  // For each pending setup, check if the latest 4H bar's high/low touched the entry zone
+  // (entry ± 0.3 ATR) AND ML is still favorable AND we haven't already notified. Fire APNs once.
+  //
+  // Reads tracked_setups directly since 2026-07-24. This used to query a `pending_setups` glue
+  // table that held a DUPLICATE of these same rows, written by registerTrackedSetups for no reason
+  // other than keeping this one notification alive through the 2026-07-09 server-side cutover.
+  // The filters below mirror exactly what that glue write did — crypto only, atr > 0 — so retiring
+  // the table changes no behaviour. (Stock conditionals therefore stay excluded; widening the
+  // notification surface would be a product decision, not a cleanup.)
+  //
+  // Expiry no longer needs handling here: stepSetup terminalizes a pending row when the 12h window
+  // lapses (state='expired', terminal=1), so `state='pending' AND terminal=0` cannot return a stale
+  // row, and the old DELETE-on-expiry pass retires with the table.
+  //
+  // "Already notified" lives in KV (`entryzone:<rowId>`, 24h TTL — comfortably longer than the 12h
+  // pending window) instead of a new tracked_setups column, so no live schema change is required.
   if (pushToken) {
     try {
       const setupRows = await env.DB.prepare(
-        'SELECT id, symbol, direction, entry, atr, ml_at_registration, expires_at, notified FROM pending_setups WHERE device_id = ?'
+        `SELECT id, symbol, direction, entry, atr, pending_expires_at FROM tracked_setups
+          WHERE device_id = ? AND kind = 'setup' AND state = 'pending' AND terminal = 0
+            AND is_crypto = 1 AND atr > 0`
       ).bind(deviceId).all();
       const setups = setupRows.results as unknown as Array<{
         id: string; symbol: string; direction: string; entry: number; atr: number;
-        ml_at_registration: number | null; expires_at: number; notified: number;
+        pending_expires_at: number | null;
       }>;
       const now = Date.now();
       for (const setup of setups) {
-        // Cleanup expired
-        if (setup.expires_at < now) {
-          await env.DB.prepare('DELETE FROM pending_setups WHERE id = ?').bind(setup.id).run();
-          continue;
-        }
-        if (setup.notified === 1) continue;
+        // Belt-and-braces: the resolver normally terminalizes these, but it runs on its own ~5 min
+        // cadence, so a row can sit one pass past its window.
+        if (setup.pending_expires_at != null && setup.pending_expires_at < now) continue;
+        const notifiedKey = `entryzone:${setup.id}`;
+        if (await env.ALERTS.get(notifiedKey)) continue;
         const pred = predictions.get(setup.symbol);
         if (!pred || pred.atrPrice <= 0) continue;
         // ML must still be favorable. Use 0.55 as the entry-touched gate (slightly
@@ -4136,8 +4150,9 @@ async function processDeviceNotifications(
           : pred.last4HHigh >= zoneLow && pred.last4HHigh <= zoneHigh;
         if (!touched) continue;
         // Envelope-gated (2026-07-11): don't page "open the app to confirm + act" into an
-        // auto-FLAT analysis. Deliberately does NOT mark notified — the touch re-checks next
-        // tick and the push fires if the envelope clears while price is still in the zone.
+        // auto-FLAT analysis. Deliberately does NOT record the notified marker — the touch
+        // re-checks next tick and the push fires if the envelope clears while price is still
+        // in the zone.
         if (pred.envelopeFlat === true) continue;
         // Send the notification
         const name = setup.symbol.replace('USDT', '');
@@ -4151,10 +4166,10 @@ async function processDeviceNotifications(
           await deleteDevice(env, deviceId);
           return;
         }
-        await env.DB.prepare('UPDATE pending_setups SET notified = 1 WHERE id = ?').bind(setup.id).run();
+        await env.ALERTS.put(notifiedKey, '1', { expirationTtl: 24 * 3600 });
       }
     } catch (e) {
-      console.log(`[pending-setups] check failed for ${deviceId}: ${e}`);
+      console.log(`[entry-zone] check failed for ${deviceId}: ${e}`);
     }
   }
 

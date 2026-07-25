@@ -179,6 +179,11 @@ class AnalysisService: ObservableObject {
                     await refreshIndicators(symbol: symbol)
                 }
             }
+            // Publish the favorites snapshot for the home-screen widget. This is the only writer of
+            // the App Group container the widget reads — before it existed the widget was
+            // permanently blank. Placed after both passes so it ships real prices, and it no-ops
+            // when the payload is unchanged (WidgetKit rations timeline reloads).
+            WidgetDataWriter.write(favorites: symbols, results: resultsBySymbol)
         }
     }
 

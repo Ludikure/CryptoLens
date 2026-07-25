@@ -347,7 +347,7 @@ const INDICATORS = [
 describe('registration + resolution (D1 glue)', () => {
   beforeEach(() => _resetForTests());
 
-  it('registers setups with stamps; conditional gets pending state + a pending_setups glue row', async () => {
+  it('registers setups with stamps; conditional gets pending state, discoverable without a glue table', async () => {
     const env = makeEnv();
     await registerTrackedSetups(env, {
       deviceId: 'dev-1', symbol: 'BTCUSDT', isCrypto: true,
@@ -370,10 +370,53 @@ describe('registration + resolution (D1 glue)', () => {
     expect(market.priceAtSetup).toBeCloseTo(100, 5);
     expect(conditional.state).toBe('pending');
     expect(conditional.pendingExpiresAt).toBe(T0 + 12 * H);
-    // Glue row for the entry-zone APNs (crypto conditional only).
-    const glue = await env.DB.prepare('SELECT * FROM pending_setups').all();
-    expect(glue.results).toHaveLength(1);
-    expect(glue.results[0].id).toBe(conditional.id);
+
+    // 2026-07-24: registration used to ALSO write a duplicate row into a `pending_setups` glue
+    // table so the cron's entry-zone-touch push could find it. That table is retired — nothing
+    // creates it any more...
+    await expect(env.DB.prepare('SELECT * FROM pending_setups').all()).rejects.toThrow(/no such table/);
+
+    // ...because the notification's own query finds the very same row directly. This is verbatim the
+    // predicate processDeviceNotifications now uses, and it must match the OLD glue-write scope
+    // exactly: crypto conditional with atr > 0, and only that (the market setup must not appear, or
+    // every immediate-entry setup would start paging "entry zone reached").
+    const found = await env.DB.prepare(
+      `SELECT id, symbol, direction, entry, atr, pending_expires_at FROM tracked_setups
+        WHERE device_id = ? AND kind = 'setup' AND state = 'pending' AND terminal = 0
+          AND is_crypto = 1 AND atr > 0`
+    ).bind('dev-1').all();
+    expect(found.results).toHaveLength(1);
+    expect(found.results[0].id).toBe(conditional.id);
+    expect(found.results[0].entry).toBeCloseTo(104, 5);
+    expect(found.results[0].atr).toBeCloseTo(2, 5);
+    expect(found.results[0].pending_expires_at).toBe(T0 + 12 * H);
+  });
+
+  it('the entry-zone query excludes stock conditionals (unchanged scope) and terminal rows', async () => {
+    const env = makeEnv();
+    // A stock conditional: the retired glue write was crypto-only, so this must stay invisible to
+    // the entry-zone push. Registered inside market hours so registerTrackedSetups doesn't skip it.
+    await registerTrackedSetups(env, {
+      deviceId: 'dev-1', symbol: 'TSLA', isCrypto: false, marketOpen: true,
+      setups: [{ direction: 'SHORT', entry: 104, stopLoss: 108, tp1: 98, tp2: null, reasoning: 'wait for rejection' }],
+      analysisText: 'analysis', livePrice: 100, indicators: INDICATORS, nowMs: T0,
+    });
+    const zoneQuery = () => env.DB.prepare(
+      `SELECT id FROM tracked_setups WHERE kind = 'setup' AND state = 'pending' AND terminal = 0
+         AND is_crypto = 1 AND atr > 0`
+    ).all();
+    expect((await zoneQuery()).results).toHaveLength(0);
+
+    // And once a crypto pending row terminalizes, it drops out — which is what replaces the old
+    // DELETE-the-glue-row-on-expiry pass.
+    await registerTrackedSetups(env, {
+      deviceId: 'dev-1', symbol: 'BTCUSDT', isCrypto: true,
+      setups: [{ direction: 'SHORT', entry: 104, stopLoss: 108, tp1: 98, tp2: null, reasoning: 'wait for rejection' }],
+      analysisText: 'analysis', livePrice: 100, indicators: INDICATORS, nowMs: T0,
+    });
+    expect((await zoneQuery()).results).toHaveLength(1);
+    await env.DB.prepare(`UPDATE tracked_setups SET state = 'expired', terminal = 1 WHERE symbol = 'BTCUSDT'`).run();
+    expect((await zoneQuery()).results).toHaveLength(0);
   });
 
   it('zero setups + analysis text registers ONE flat row with the mapped reason', async () => {
@@ -433,7 +476,7 @@ describe('registration + resolution (D1 glue)', () => {
     expect(outcomes.results[0].closed_at).toBeTruthy();
   });
 
-  it('non-counted terminals (expired pending) do NOT insert into trade_outcomes; glue row deleted', async () => {
+  it('non-counted terminals (expired pending) do NOT insert into trade_outcomes', async () => {
     const env = makeEnv();
     await env.DB.prepare(TRADE_OUTCOMES_DDL).run();
     await registerTrackedSetups(env, {
@@ -441,8 +484,6 @@ describe('registration + resolution (D1 glue)', () => {
       setups: [{ direction: 'SHORT', entry: 104, stopLoss: 108, tp1: 98, tp2: null, reasoning: 'wait for rejection' }],
       analysisText: 'analysis', livePrice: 100, indicators: INDICATORS, nowMs: T0,
     });
-    expect((await env.DB.prepare('SELECT * FROM pending_setups').all()).results).toHaveLength(1);
-
     await resolveTrackedSetups(env, new Map([['BTCUSDT', { isCrypto: true, last4HClose: 100, mlProb: 0.7 }]]), {
       cryptoKlines: async () => [],
       livePrice: async () => 100,
@@ -453,7 +494,6 @@ describe('registration + resolution (D1 glue)', () => {
     expect(setups[0].state).toBe('expired');
     expect(setups[0].terminal).toBe(true);
     expect((await env.DB.prepare('SELECT * FROM trade_outcomes').all()).results).toHaveLength(0);
-    expect((await env.DB.prepare('SELECT * FROM pending_setups').all()).results).toHaveLength(0);
   });
 
   it('readActiveSetupsForPrompt returns only active+entry-hit rows in the ActiveSetup shape', async () => {

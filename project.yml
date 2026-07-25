@@ -63,6 +63,14 @@ targets:
       path: MarketScope.entitlements
       properties:
         aps-environment: development
+        # The widget target has always declared this group and reads `widget_data` from it, but the
+        # main app never declared it — so the app wrote to standard UserDefaults, the widget read an
+        # empty group container, and the widget was permanently blank. The group is already
+        # registered in the Developer portal and present in BOTH the dev and store provisioning
+        # profiles for com.ludikure.CryptoLens (verified), so declaring it here is a no-op for
+        # signing. See Utils/WidgetDataWriter.swift for the writer.
+        com.apple.security.application-groups:
+          - group.com.ludikure.CryptoLens
     dependencies:
       - target: MarketScopeWidget
     scheme:

@@ -562,19 +562,53 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 ## Known Remaining Issues (Low Severity)
 
-- `pending_setups` is now redundant with `tracked_setups` (2026-07-09): server registration writes a glue row into `pending_setups` for conditional crypto setups solely so the cron's entry-zone-touch APNs keep working. Follow-up: point that notification pass at `tracked_setups` (state='pending') and retire `pending_setups` + its endpoints.
-- No certificate pinning on network calls
-- Missing App Group entitlement on main app target (widget can't share data)
-- Worker: APNs tries sandbox first then production (doubles latency). Transient-error fallback was improved 2026-05-30 (only conclusive token-level errors like 410 Unregistered now break the loop; 429/5xx still attempt prod). JWT now cached for 50 min per cron (was rebuilt per send pre-2026-05-30).
-- Parity fixtures (BTC/ETH/TSLA at 2026-05-04) still in use under v14 — `expected.mlProbability` values were updated in-place via `marketscope-worker/scripts/update-fixture-ml.ts`. Feature-level parity assertions are still measured against the 2026-05-04 feature snapshots; capturing fresh fixtures at a current date is a low-priority follow-up.
-- Backtester: crypto regen ~7h at concurrency 8 (Binance rate-limit cascade); stocks regen ~3.5h across two passes (Yahoo TCP drops at concurrency 8). Section H/K of `/Volumes/External/Downloads/marketscope-postponed-work.md` documents the concurrency tuning + raw candle cache opportunity.
-- ~~72h persistence model not yet retrained on fresh data~~ — RESOLVED 2026-06-05: retrained crypto on leak-clean `csv_exports_v11_fixed` (stock was leak-spared, reproduced identically). See the 2026-06-05 decision entry.
-- Schema drift: `derivatives_history` table has 4 columns (`large_buy_vol`, `large_sell_vol`, `large_buy_count`, `large_sell_count`) added out-of-band; `trade_outcomes.prompt_version` similarly added without a migration file. A fresh D1 created from `migrations/*.sql` alone would fail INSERTs. Migration file consolidation is a low-priority follow-up.
-- Derivatives D1 archive runs ~9× per day per symbol vs the intended 6.85× (3.5h gate). The `deriv_archive:all` KV blob occasionally evicts across overlapping crons, resetting per-symbol last-archive times. Storage cost minor (~700 extra rows/day across 76 symbols); fix is to move the per-symbol gate state from KV to D1.
+Four of the eight items here were fixed 2026-07-24 (see the decision entry below): the redundant
+`pending_setups` table, the missing App Group entitlement, the APNs sandbox-first latency, and the
+derivatives archive over-writing. Schema drift is closed by `migrations/007_schema_drift.sql`. What
+remains:
+
+- **No certificate pinning on network calls — deliberate WON'T-DO, not a backlog item.** Verified
+  2026-07-24: `marketscope.ludikure.org` serves a **90-day Google Trust Services cert** (issuer
+  `GTS WE1`, CN=ludikure.org, e.g. Jun 5 → Sep 3 2026) via the cloudflared tunnel. Pinning the leaf
+  SPKI would brick every install at each auto-renewal (~quarterly, silently, with no server-side
+  signal); pinning the intermediate or root is weaker AND still breaks whenever Cloudflare rotates
+  CA (it issues from both GTS and Let's Encrypt and can switch without notice). The asset being
+  protected is a device auth token to a single-user hobby backend, already over TLS with a public CA
+  — so pinning trades a real, recurring self-inflicted-outage risk for a marginal reduction in an
+  already-remote CA-compromise threat. Revisit only if the backend moves to a cert whose rotation we
+  control.
+- Parity fixtures (BTC/ETH/TSLA at 2026-05-04) still in use under v14 — `expected.mlProbability`
+  values were updated in-place via `marketscope-worker/scripts/update-fixture-ml.ts`. Feature-level
+  parity assertions are still measured against the 2026-05-04 feature snapshots. **Low value, and
+  it needs you:** fixtures are captured by the DEBUG-only "Capture Parity Fixture" button in
+  BacktestView on a simulator, then hand-copied out of the sim container — it can't be automated
+  headlessly. And parity is computed from each fixture's OWN candle slices, so a stale capture date
+  doesn't weaken the 1e-7 assertion; it only means the fixtures don't cover recent market
+  conditions. Worth doing when you're next in the simulator anyway, not before.
+- Backtester: crypto regen ~7h at concurrency 8 (Binance rate-limit cascade); stocks regen ~3.5h
+  across two passes (Yahoo TCP drops at concurrency 8). Section H/K of
+  `/Volumes/External/Downloads/marketscope-postponed-work.md` documents the concurrency tuning +
+  raw candle cache opportunity. **Genuinely open**, but it's a multi-hour perf project whose only
+  honest validation is a full regen, so it wants a dedicated session.
+- ~~72h persistence model not yet retrained on fresh data~~ — RESOLVED 2026-06-05: retrained crypto
+  on leak-clean `csv_exports_v11_fixed` (stock was leak-spared, reproduced identically). See the
+  2026-06-05 decision entry.
 
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-07-24 — Known-Issues sweep: 5 of 8 closed (pending_setups retired, archive gate, APNs route, App Group/widget, schema drift); 3 assessed
+
+Worked the "Known Remaining Issues" list. Five fixed, three left with an explicit verdict (the list above now records the reasoning, including one deliberate WON'T-DO). 499/499 worker tests green (5 new), iOS build green with the new entitlement.
+
+- **`pending_setups` RETIRED.** It held a duplicate of `tracked_setups` rows, written by `registerTrackedSetups` for no reason but to keep the cron's entry-zone-touch push working after the 2026-07-09 cutover. That push now reads `tracked_setups` directly (`kind='setup' AND state='pending' AND terminal=0 AND is_crypto=1 AND atr>0` — the filters mirror the old glue write EXACTLY, so the notification's scope is unchanged and stock conditionals stay excluded; widening it would be a product decision, not a cleanup). Removed: the glue write, the two lazy `CREATE TABLE`s, the `DELETE`-glue-on-terminal pass in `resolveTrackedSetups`, and the three `/pending-setups` POST/GET/DELETE handlers (grep-verified that no iOS or web client calls them — `WorkerPendingSetupService` was deleted 2026-07-09). Expiry needs no handling now: `stepSetup` terminalizes a pending row at the 12h window, so the query can't return a stale one. The "already notified" flag moved from the table column to KV (`entryzone:<rowId>`, 24h TTL) so no live schema change was needed — and the 2026-07-11 envelope-defer semantics are preserved (an envelope-flat touch still doesn't set the marker, so it re-fires when the envelope clears in-zone). The deployed table and its rows are left in place, unread; `DROP TABLE pending_setups;` when you're satisfied. **Known one-time edge:** a setup already notified *and* still in-zone at deploy time can page once more, since its old `notified=1` doesn't carry into KV — 12h window, one duplicate push, judged not worth transitional code for a table being deleted.
+- **Derivatives archive over-writing FIXED.** The 3.5h gate lived solely in the `deriv_archive:all` KV blob, so an eviction (or an overlapping cron reading a blob the other pass hadn't flushed) reset every symbol to "never archived" — ~9 writes/day/symbol against an intended 6.85. New exported `mergeDerivArchiveGate()` seeds the gate from D1 (`SELECT symbol, MAX(timestamp) … GROUP BY symbol`), i.e. from the thing being gated, which can't disagree with itself; KV stays a fast path and we take the LATER of the two, so an evicted blob degrades to "ask D1" rather than "re-archive everything". Verified the query is a COVERING INDEX scan on `idx_deriv_lookup` (~10ms over 122k rows). NB the unit trap it guards: D1 stores `timestamp` in SECONDS, the KV blob in ms — 5 unit tests pin the conversion, since a raw seconds value compared against ms reads as 1970 and silently never gates.
+- **APNs double round-trip FIXED.** `sendAPNs` always tried sandbox then production, so every push to a prod token paid a guaranteed wasted hop before the real one (in series, on the notification path). Now the winning endpoint is cached per token (`apns_env:<token>`, 90d) and tried first. Safe because a token belongs to exactly one environment and can't migrate — the APNs token is derived per `aps-environment`, so a debug→release rebuild yields a different token and therefore a different cache key, making a stale-wrong entry unreachable. The full fallback loop is retained, so a cache miss/eviction just costs the old behaviour; the write only happens on change, not per push. Uncached tokens keep the original sandbox-first order.
+- **App Group / blank widget FIXED — and it was worse than the one-line issue implied.** The widget has always declared `group.com.ludikure.CryptoLens` and read `widget_data` from it (`MarketScopeWidget.swift:42`), but the main app neither declared the group **nor ever wrote that key** — grep-confirmed zero writers, so the widget was permanently blank and the entitlement alone would have fixed nothing. Added the group to the main target in `project.yml` **plus** the missing writer: `Utils/WidgetDataWriter.swift` publishes the favorites snapshot (symbol/ticker/price/bias/change24h/timestamp, mirroring the widget's private `SharedAsset` decoder), called at the end of `prefetchFavorites` after both passes so it ships real prices. Skips symbols with no cached result rather than writing zeroes, caps at 6, and no-ops on a byte-identical payload (WidgetKit rations timeline reloads). Signing risk checked BEFORE editing: the group is already registered in the portal and present in both the dev and store profiles for `com.ludikure.CryptoLens`, so the entitlement is a no-op for provisioning — confirmed by a green build.
+- **Schema drift CLOSED** — `migrations/007_schema_drift.sql` adds the four `derivatives_history.large_*` columns; the `trade_outcomes.prompt_version` ALTER went into **006** rather than 007 because migrations apply in filename order and 006 indexes that column — replaying the directory into an empty DB proved a fresh bootstrap failed at 006 with `no such column`. Verified end-to-end: all 7 files now apply cleanly to an empty database and every INSERT the worker performs (derivatives_history 16-col, trade_outcomes with prompt_version, pending_setups) succeeds. `pending_setups` is deliberately NOT created by 007 — it was retired in this same change. **There is no migration runner** (nothing in `server/` applies these; they're run by hand), so on an already-deployed DB the ALTERs fail with `duplicate column name`, which is expected and documented in both files' headers.
+
+**Assessed, not fixed** (full reasoning in the Known Remaining Issues list): **cert pinning** is now a documented WON'T-DO — the box serves a 90-day Google Trust Services cert via the cloudflared tunnel, so leaf pinning would brick installs at each silent auto-renewal and CA pinning still breaks when Cloudflare switches issuer; the protected asset is a device token to a single-user backend already on public-CA TLS. **Parity fixtures** need the DEBUG capture button on a simulator (not automatable) and a stale capture date doesn't weaken the 1e-7 assertion anyway, since parity is computed from each fixture's own slices. **Backtester regen speed** is genuinely open but wants a dedicated session — its only honest validation is a full multi-hour regen.
 
 ### 2026-07-24 — Code-review pass: a dropped ML cross (defer-not-drop, part 2), FLAT graded at the wrong horizon, and the auto-analysis cache wired up
 
