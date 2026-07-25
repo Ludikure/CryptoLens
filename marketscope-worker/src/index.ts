@@ -784,8 +784,18 @@ export default {
       // ml-predict + macro + per-favorite prefetch) blew the 60/min cap — and a rate-limited
       // POLL killed the analysis UI while the detached job was still running fine. The poll is
       // a single KV read, still auth-gated, with a per-job ownership check.
+      // 300/min since 2026-07-25 (was 60). 60 was a Cloudflare-era number, chosen when every
+      // request cost quota against the free Workers tier. The backend is now a Node process on the
+      // user's own hardware with no per-request cost and no upstream cap, serving ONE user — so the
+      // gate's only real job is to stop a runaway client loop, which 300 does just as well.
+      //
+      // 60 was actively harmful: stocks cost ~7 requests per refresh (see fetchStockEnrichment's
+      // note on the /finnhub/* fan-out that this release removes), so touching ~8 stocks inside a
+      // minute produced a 429 storm on the *stock* path only. Note the gate runs BEFORE endpoint
+      // routing, so a response served entirely from the worker's own 1-24h cache costs exactly as
+      // much budget as a cold one — the caching gave no protection against the limit it caused.
       if (path !== '/full-analysis/result') {
-        const globalLimited = await checkRateLimit(env, `global:${deviceId}`, 60, 60);
+        const globalLimited = await checkRateLimit(env, `global:${deviceId}`, 300, 60);
         if (globalLimited) return json({ error: 'Rate limited. Try again in a minute.' }, 429);
       }
     }

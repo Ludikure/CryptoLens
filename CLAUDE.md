@@ -598,6 +598,20 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-07-25 — Stock 429s fixed: the /finnhub/* fan-out collapsed into the existing /market call
+
+User: "on stocks I am often getting 429." Traced to the worker's own per-device gate, and stocks were hitting it ~2.5× faster than crypto **by construction**.
+
+**The arithmetic.** Each stock enrichment cycle fired **five concurrent `/finnhub/*` requests** (recommendation/metric/earnings/news/insider) from `AnalysisService`, so a stock refresh cost ~7 worker requests (+ `/indicators`, `/ml-predict`) against crypto's 3 — crypto having been consolidated onto one `/market` call by the 2026-06-13 Phase E work. Worse, there were **TWO** such fan-outs: one in `refreshIndicators` and a second in `runFullAnalysis`, so "tap a stock, analyse it" cost ~12 requests. Against `checkRateLimit(global:<deviceId>, 60, 60)` that meant ~8 stocks touched in a minute produced a 429 storm on the stock path only.
+
+**The aggravating detail:** the gate sits at `index.ts:787`, BEFORE endpoint routing. The worker caches those Finnhub responses for 1-24h, but a cache hit costs exactly the same budget as a miss — so the caching gave zero protection against the limit it was causing.
+
+**Fix.** `fetchStockEnrichment` (enrichment.ts) already assembled all of this server-side; stocks were left on the on-device path back in June only because `/market`'s `stockInfo` was then a strict subset (no analyst/insider/news). 2026-07-02 added insider + news; this closes the last gap by fetching `/stock/recommendation` server-side (one extra CACHED call, parallel with the others) and taking `marketCap` from the Yahoo `price` module already fetched — no extra call for it. `StockInfo` gained `finnhubStrongBuy` + `marketCap`; `WorkerMarketService` gained a `stockFinnhub` field decoding that subset; both iOS fan-outs were replaced with reads from the single bundle, merged conservatively (nil keeps whatever Yahoo or the previous cycle provided, so a partial response can never blank good data). `marketBundle` is now fetched for BOTH markets rather than crypto-only. **Stock refresh: 7 worker requests → 3.** Yahoo fundamentals deliberately stay on the on-device path — Yahoo isn't geoblocked or worker-gated, so routing it through the box would ADD a request, not remove one.
+
+**Also raised the global cap 60 → 300/min.** 60 was a Cloudflare-era number from when every request cost quota against the free Workers tier. The backend is a Node process on the user's own hardware, no per-request cost, no upstream cap, one user — the gate's only real job is stopping a runaway client loop, which 300 does equally well.
+
+499/499 worker tests green; iOS build green. **Needs a box redeploy AND an iOS rebuild** — shipping only one leaves the app calling `/finnhub/*` endpoints (fine, just unfixed) or reading `stockFinnhub` fields the old worker doesn't send (fine, they decode as nil and the previous value carries forward). Neither half breaks the other.
+
 ### 2026-07-25 — UI pass: verdict-first landing screen, native TabView, semantic theme, Dynamic Type
 
 The app's conclusion used to be three taps away. The screens were organised by DATA SOURCE (Overview / Chart / Market / Analysis / Alerts), so the landing screen opened with a symbol switcher and a data timestamp and never stated the answer — which is exactly how the "auto-FLAT for a week and it told me nothing" experience felt from the UI side. Reorganised around the question being asked, verified on a booted simulator (not just a green compile).

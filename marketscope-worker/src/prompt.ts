@@ -448,7 +448,8 @@ export interface StockInfo {
   epsEstimateCurrent?: number | null; epsEstimate90dAgo?: number | null; revisionDirection?: string | null; upRevisions30d?: number | null; downRevisions30d?: number | null;
   exDividendDate?: number | null; dividendRate?: number | null; exDividendWarning?: boolean | null;
   sectorETF?: string | null; relativeStrength1d?: number | null; outperformingSector?: boolean | null;
-  finnhubBuy?: number | null; finnhubHold?: number | null; finnhubSell?: number | null; beta?: number | null; newsHeadlines?: string[] | null;
+  finnhubBuy?: number | null; finnhubHold?: number | null; finnhubSell?: number | null; finnhubStrongBuy?: number | null;
+  marketCap?: number | null; beta?: number | null; newsHeadlines?: string[] | null;
 }
 export interface DerivativesData { fundingRatePercent: number; avgFundingRate: number; openInterestUSD: number; oiChange4h?: number | null; oiChange24h?: number | null; globalLongPercent: number; globalShortPercent: number; topTraderLongPercent: number; topTraderShortPercent: number; takerBuySellRatio: number; takerBuyVolume: number; }
 export interface PositioningSnapshot { fundingSentiment: string; oiTrend: string; crowding: string; crowdingCode: string; smartMoneyBias: string; takerPressure: string; squeezeRisk: { level: string; direction: string }; signals: Array<{ strength: string; message: string }>; }

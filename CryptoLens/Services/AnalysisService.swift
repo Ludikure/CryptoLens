@@ -287,11 +287,13 @@ class AnalysisService: ObservableObject {
 
             // Route the geoblocked crypto enrichment (derivatives/positioning/spot/sentiment/
             // fear&greed) through ONE worker /market call. Binance fapi is HTTP 451 from the phone.
-            // Stock fundamentals stay on Yahoo/Finnhub (richer + not geoblocked); macro stays on
-            // /macro. Only on enrichment cycles; carry forward otherwise.
+            // One /market call now serves BOTH markets on an enrichment cycle (2026-07-25). Crypto
+            // takes derivatives/positioning/spot/sentiment from it; stocks take the Finnhub-derived
+            // fields that used to cost five separate /finnhub/* requests. Yahoo fundamentals still
+            // come from the on-device path — Yahoo isn't geoblocked and isn't worker-gated, so
+            // routing it through the box would add a request rather than remove one.
             let marketBundle: WorkerMarketService.Bundle? =
-                (market == .crypto && needsEnrichment)
-                ? await WorkerMarketService.fetch(symbol: symbol) : nil
+                needsEnrichment ? await WorkerMarketService.fetch(symbol: symbol) : nil
             if let sp = marketBundle?.spotPressure { self.spotPressure = sp }
 
             // Sentiment — only on enrichment cycles
@@ -358,44 +360,37 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
-            // Finnhub enrichment — only on enrichment cycles
+            // Stock enrichment — one worker call, not five (2026-07-25).
+            //
+            // This block used to fire FIVE concurrent /finnhub/* requests per refresh
+            // (recommendation/metric/earnings/news/insider). Each counted against the worker's
+            // per-device budget, so a stock refresh cost ~7 worker requests against crypto's 3 and
+            // touching a handful of stocks in a minute produced 429s on the stock path only. Worse,
+            // the gate runs before endpoint routing, so those calls burned budget even when the
+            // worker answered them from its own 1-24h cache.
+            //
+            // The box already assembles all of it server-side in `fetchStockEnrichment`, so we take
+            // it from the same /market bundle crypto uses. Every field is merged conservatively —
+            // nil keeps whatever the Yahoo path or the previous cycle already provided, so a partial
+            // response can never blank out good data.
             if var si = stockInfo, market == .stock, needsEnrichment {
-                async let fhRec = finnhub.fetchRecommendations(symbol: symbol)
-                async let fhMetrics = finnhub.fetchMetrics(symbol: symbol)
-                async let fhEarnings = finnhub.fetchEarnings(symbol: symbol)
-                async let fhNews = finnhub.fetchNews(symbol: symbol)
-                async let fhInsider = finnhub.fetchInsiderTransactions(symbol: symbol)
-
-                if let rec = await fhRec {
-                    si.finnhubBuy = rec.buy + rec.strongBuy
-                    si.finnhubHold = rec.hold
-                    si.finnhubSell = rec.sell + rec.strongSell
-                    si.finnhubStrongBuy = rec.strongBuy
-                    let total = rec.buy + rec.hold + rec.sell + rec.strongBuy + rec.strongSell
+                if let f = marketBundle?.stockFinnhub {
+                    if let v = f.finnhubBuy { si.finnhubBuy = v }
+                    if let v = f.finnhubHold { si.finnhubHold = v }
+                    if let v = f.finnhubSell { si.finnhubSell = v }
+                    if let v = f.finnhubStrongBuy { si.finnhubStrongBuy = v }
+                    let total = (f.finnhubBuy ?? 0) + (f.finnhubHold ?? 0) + (f.finnhubSell ?? 0)
                     if total > 0 { si.analystCount = total }
-                }
-                if let met = await fhMetrics {
-                    if si.peRatio == nil { si.peRatio = met.peRatio }
-                    if si.eps == nil { si.eps = met.eps }
-                    if si.marketCap == nil, let mc = met.marketCap { si.marketCap = mc * 1_000_000 }
-                    if si.dividendYield == nil { si.dividendYield = met.dividendYield.map { $0 * 100 } }
-                    si.beta = met.beta
-                }
-                if let earn = await fhEarnings {
-                    if si.earningsDate == nil { si.earningsDate = earn.date }
-                }
-                let news = await fhNews
-                if !news.isEmpty { si.newsHeadlines = news }
-                let insider = await fhInsider
-                if !insider.isEmpty {
-                    si.insiderTransactions = insider.prefix(10).map {
-                        StockInfo.InsiderTx(name: $0.name, date: $0.date, shares: $0.shares, value: $0.value, isBuy: $0.isBuy)
+                    if si.marketCap == nil, let v = f.marketCap { si.marketCap = v }
+                    if let v = f.beta { si.beta = v }
+                    if si.earningsDate == nil, let v = f.earningsDate { si.earningsDate = v }
+                    if let v = f.newsHeadlines, !v.isEmpty { si.newsHeadlines = v }
+                    if let tx = f.insiderTransactions, !tx.isEmpty {
+                        si.insiderTransactions = Array(tx.prefix(10))
+                        si.insiderBuyCount6m = f.insiderBuyCount6m
+                        si.insiderSellCount6m = f.insiderSellCount6m
+                        si.insiderNetBuying = f.insiderNetBuying
                     }
-                    let buys = insider.filter(\.isBuy).count
-                    let sells = insider.filter { !$0.isBuy }.count
-                    si.insiderBuyCount6m = buys
-                    si.insiderSellCount6m = sells
-                    si.insiderNetBuying = buys > sells
                 }
                 stockInfo = si
             }
@@ -596,10 +591,10 @@ class AnalysisService: ObservableObject {
                 dataQuality.candleStaleness = Date().timeIntervalSince(latestCandle.time)
             }
 
-            // One worker /market call for the geoblocked crypto enrichment bundle
-            // (derivatives/positioning/spot/sentiment/fear&greed) — see refreshIndicators.
-            let marketBundle: WorkerMarketService.Bundle? = (market == .crypto)
-                ? await WorkerMarketService.fetch(symbol: symbol) : nil
+            // One worker /market call serves both markets: the geoblocked crypto enrichment bundle
+            // (derivatives/positioning/spot/sentiment/fear&greed) and the stock Finnhub fields that
+            // used to be five separate requests — see refreshIndicators.
+            let marketBundle: WorkerMarketService.Bundle? = await WorkerMarketService.fetch(symbol: symbol)
 
             let sentiment: CoinInfo?
             if market == .crypto {
@@ -633,44 +628,29 @@ class AnalysisService: ObservableObject {
                 stockInfo = si
             }
 
-            // Finnhub enrichment for full analysis
+            // Stock enrichment for full analysis — same single-call swap as refreshIndicators
+            // (2026-07-25). This was the SECOND /finnhub/* fan-out: five more worker requests, fired
+            // on the analysis path, on top of the five the refresh had just spent. Between them a
+            // "tap a stock, analyse it" sequence cost ~12 worker requests against the per-device
+            // budget where crypto cost 3.
             if var si = stockInfo, market == .stock {
-                async let fhRec = finnhub.fetchRecommendations(symbol: symbol)
-                async let fhMetrics = finnhub.fetchMetrics(symbol: symbol)
-                async let fhEarnings = finnhub.fetchEarnings(symbol: symbol)
-                async let fhNews = finnhub.fetchNews(symbol: symbol)
-                async let fhInsider = finnhub.fetchInsiderTransactions(symbol: symbol)
-
-                if let rec = await fhRec {
-                    si.finnhubBuy = rec.buy + rec.strongBuy
-                    si.finnhubHold = rec.hold
-                    si.finnhubSell = rec.sell + rec.strongSell
-                    si.finnhubStrongBuy = rec.strongBuy
-                    let total = rec.buy + rec.hold + rec.sell + rec.strongBuy + rec.strongSell
+                if let f = marketBundle?.stockFinnhub {
+                    if let v = f.finnhubBuy { si.finnhubBuy = v }
+                    if let v = f.finnhubHold { si.finnhubHold = v }
+                    if let v = f.finnhubSell { si.finnhubSell = v }
+                    if let v = f.finnhubStrongBuy { si.finnhubStrongBuy = v }
+                    let total = (f.finnhubBuy ?? 0) + (f.finnhubHold ?? 0) + (f.finnhubSell ?? 0)
                     if total > 0 { si.analystCount = total }
-                }
-                if let met = await fhMetrics {
-                    if si.peRatio == nil { si.peRatio = met.peRatio }
-                    if si.eps == nil { si.eps = met.eps }
-                    if si.marketCap == nil, let mc = met.marketCap { si.marketCap = mc * 1_000_000 }
-                    if si.dividendYield == nil { si.dividendYield = met.dividendYield.map { $0 * 100 } }
-                    si.beta = met.beta
-                }
-                if let earn = await fhEarnings {
-                    if si.earningsDate == nil { si.earningsDate = earn.date }
-                }
-                let news = await fhNews
-                if !news.isEmpty { si.newsHeadlines = news }
-                let insider = await fhInsider
-                if !insider.isEmpty {
-                    si.insiderTransactions = insider.prefix(10).map {
-                        StockInfo.InsiderTx(name: $0.name, date: $0.date, shares: $0.shares, value: $0.value, isBuy: $0.isBuy)
+                    if si.marketCap == nil, let v = f.marketCap { si.marketCap = v }
+                    if let v = f.beta { si.beta = v }
+                    if si.earningsDate == nil, let v = f.earningsDate { si.earningsDate = v }
+                    if let v = f.newsHeadlines, !v.isEmpty { si.newsHeadlines = v }
+                    if let tx = f.insiderTransactions, !tx.isEmpty {
+                        si.insiderTransactions = Array(tx.prefix(10))
+                        si.insiderBuyCount6m = f.insiderBuyCount6m
+                        si.insiderSellCount6m = f.insiderSellCount6m
+                        si.insiderNetBuying = f.insiderNetBuying
                     }
-                    let buys = insider.filter(\.isBuy).count
-                    let sells = insider.filter { !$0.isBuy }.count
-                    si.insiderBuyCount6m = buys
-                    si.insiderSellCount6m = sells
-                    si.insiderNetBuying = buys > sells
                 }
                 stockInfo = si
             }

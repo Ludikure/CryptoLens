@@ -25,6 +25,28 @@ enum WorkerMarketService {
         var positioning: PositioningSnapshot?
         var spotPressure: SpotPressure?
         var macro: MacroSnapshot?
+        /// Finnhub-derived stock fields (2026-07-25). Not a full `StockInfo` — only the fields the
+        /// app used to fetch itself with five separate /finnhub/* worker calls per refresh. The
+        /// Yahoo-sourced fundamentals still come from the on-device path, which isn't worker-gated.
+        var stockFinnhub: StockFinnhubFields?
+    }
+
+    /// The subset the /finnhub/* fan-out used to supply. Everything optional: the worker fills what
+    /// it can and the caller keeps its previous value for anything nil, so a partial response can
+    /// never blank out data the app already had.
+    struct StockFinnhubFields {
+        var finnhubBuy: Int?
+        var finnhubHold: Int?
+        var finnhubSell: Int?
+        var finnhubStrongBuy: Int?
+        var marketCap: Double?
+        var beta: Double?
+        var earningsDate: Date?
+        var newsHeadlines: [String]?
+        var insiderTransactions: [StockInfo.InsiderTx]?
+        var insiderBuyCount6m: Int?
+        var insiderSellCount6m: Int?
+        var insiderNetBuying: Bool?
     }
 
     /// Best-effort: returns nil on any failure (callers carry forward the previous enrichment).
@@ -59,7 +81,8 @@ enum WorkerMarketService {
             derivatives: body.derivatives?.toModel(),
             positioning: body.positioning?.toModel(),
             spotPressure: body.spotPressure?.toModel(),
-            macro: body.macro?.toModel()
+            macro: body.macro?.toModel(),
+            stockFinnhub: body.stockInfo?.toFields()
         )
     }
 
@@ -72,6 +95,48 @@ enum WorkerMarketService {
         let sentiment: SentimentDTO?
         let fearGreed: FearGreedDTO?
         let macro: MacroDTO?
+        let stockInfo: StockInfoDTO?
+    }
+
+    /// Mirrors the worker's `StockInfo` for the Finnhub-derived fields only. Unknown keys are
+    /// ignored by JSONDecoder, so the worker can keep adding fields without breaking older builds.
+    private struct StockInfoDTO: Decodable {
+        let finnhubBuy: Int?
+        let finnhubHold: Int?
+        let finnhubSell: Int?
+        let finnhubStrongBuy: Int?
+        let marketCap: Double?
+        let beta: Double?
+        let earningsDate: Double?          // ms epoch
+        let newsHeadlines: [String]?
+        let insiderTransactions: [InsiderDTO]?
+        let insiderBuyCount6m: Int?
+        let insiderSellCount6m: Int?
+        let insiderNetBuying: Bool?
+
+        func toFields() -> StockFinnhubFields {
+            StockFinnhubFields(
+                finnhubBuy: finnhubBuy,
+                finnhubHold: finnhubHold,
+                finnhubSell: finnhubSell,
+                finnhubStrongBuy: finnhubStrongBuy,
+                marketCap: marketCap,
+                beta: beta,
+                earningsDate: earningsDate.map { Date(timeIntervalSince1970: $0 / 1000) },
+                newsHeadlines: newsHeadlines,
+                insiderTransactions: insiderTransactions?.map {
+                    StockInfo.InsiderTx(name: $0.name ?? "", date: Date(timeIntervalSince1970: ($0.date ?? 0) / 1000),
+                                        shares: Int($0.shares ?? 0), value: $0.value ?? 0, isBuy: $0.isBuy ?? false)
+                },
+                insiderBuyCount6m: insiderBuyCount6m,
+                insiderSellCount6m: insiderSellCount6m,
+                insiderNetBuying: insiderNetBuying
+            )
+        }
+    }
+
+    private struct InsiderDTO: Decodable {
+        let name: String?; let date: Double?; let shares: Double?; let value: Double?; let isBuy: Bool?
     }
 
     /// Worker emits 11 of `DerivativesData`'s 18 fields; mark price / index / OI base / funding

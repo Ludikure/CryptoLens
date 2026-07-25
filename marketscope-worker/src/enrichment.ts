@@ -457,12 +457,26 @@ export async function fetchStockEnrichment(env: Env, symbol: string): Promise<{ 
   // populated them. All best-effort and parallel; any failure just leaves that field null.
   const sectorETF = sectorETFForSymbol(symbol);
   const symChangePct = rawNum(price.regularMarketChangePercent);
-  const [spyCloses, sectorCloses, insiderRaw, newsRaw] = await Promise.all([
+  // recommendationRaw added 2026-07-25: the analyst buy/hold/sell breakdown was the last field the
+  // iOS client still had to fetch itself, and it was doing so with FIVE separate /finnhub/* worker
+  // calls per stock (recommendation/metric/earnings/news/insider). Every one of those counted
+  // against the 60/min per-device budget — even when the worker served it from its own 1-24h cache,
+  // because the rate gate runs BEFORE endpoint routing. Serving the breakdown from here lets stocks
+  // use the single /market call crypto already uses: 7 worker requests per stock refresh down to 3.
+  const [spyCloses, sectorCloses, insiderRaw, newsRaw, recommendationRaw] = await Promise.all([
     fetchYahooDailyCloses('SPY'),
     sectorETF ? fetchYahooDailyCloses(sectorETF) : Promise.resolve([] as number[]),
     fetchFinnhubJSON(env, `/stock/insider-transactions?symbol=${symbol}`),
     fetchFinnhubJSON(env, `/company-news?symbol=${symbol}&from=${new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10)}&to=${new Date().toISOString().slice(0, 10)}`),
+    fetchFinnhubJSON(env, `/stock/recommendation?symbol=${symbol}`),
   ]);
+  // Finnhub returns newest-first; strongBuy/strongSell fold into buy/sell the way the iOS client
+  // did it, with strongBuy kept separately for the "N Strong Buy" line.
+  const recTop = Array.isArray(recommendationRaw) && recommendationRaw.length ? recommendationRaw[0] : null;
+  const finnhubStrongBuy = recTop ? (rawNum(recTop.strongBuy) ?? 0) : null;
+  const finnhubBuy = recTop ? (rawNum(recTop.buy) ?? 0) + (finnhubStrongBuy ?? 0) : null;
+  const finnhubHold = recTop ? rawNum(recTop.hold) : null;
+  const finnhubSell = recTop ? (rawNum(recTop.sell) ?? 0) + (rawNum(recTop.strongSell) ?? 0) : null;
   const spyPct = pct1d(spyCloses);
   const relativeStrength1d = (symChangePct != null && spyPct != null) ? symChangePct - spyPct : null;
   const sectorPct = pct1d(sectorCloses);
@@ -513,6 +527,10 @@ export async function fetchStockEnrichment(env: Env, symbol: string): Promise<{ 
     insiderTransactions, insiderBuyCount6m, insiderSellCount6m,
     insiderNetBuying: (insiderBuyCount6m != null && insiderSellCount6m != null) ? insiderBuyCount6m > insiderSellCount6m : null,
     newsHeadlines,
+    // 2026-07-25 — the last two fields that kept iOS on its own /finnhub/* fan-out. marketCap comes
+    // free from the Yahoo `price` module already fetched above; no extra call for it.
+    finnhubBuy, finnhubHold, finnhubSell, finnhubStrongBuy,
+    marketCap: rawNum(price.marketCap),
   };
 
   // VIX from the macro cache; 52w position + short interest from Yahoo.
