@@ -277,6 +277,35 @@ describe('stepSetup — FLAT grading (24h horizon)', () => {
     expect(row.falseFlat).toBe(false);
     expect(row.outcome).toBe('flat_true');
   });
+
+  // 2026-07-24 regression. This used to grade against points[points.length - 1], and
+  // resolveTrackedSetups always appends the live tick LAST (`time: now`) — so a resolution that ran
+  // late (box downtime, a Stop/Start deploy) graded against the CURRENT price instead of the +24h
+  // price. The horizon check is a lower bound only and the open-row query has no age filter, so
+  // every FLAT whose window elapsed during an outage was silently regraded, biasing the false-flat
+  // rate the dashboard and the prompt's outcome history read.
+  it('grades at the +24h horizon even when resolved days late (downtime backfill)', () => {
+    const points = [
+      pt(100.2, 100.4, 100.0, T0 + 12 * H),        // mid-window, before the horizon
+      pt(100.8, 100.9, 100.7, T0 + 24 * H),        // THE horizon bar: +0.8% → flat_true
+      pt(102.5, 102.6, 102.4, T0 + 48 * H),        // drift after the window
+      pt(104.0, 104.0, 104.0, T0 + 72 * H),        // live tick at resolve time: +4% → would be flat_false
+    ];
+    const { row } = stepSetup(flatRow(), points, { nowMs: T0 + 72 * H });
+    expect(row.terminal).toBe(true);
+    expect(row.priceAfter).toBeCloseTo(100.8, 5);  // the horizon bar, NOT the 104 live tick
+    expect(row.falseFlat).toBe(false);
+    expect(row.outcome).toBe('flat_true');
+  });
+
+  it('falls back to the newest point when the window starts after the horizon', () => {
+    // Short candle fetch: nothing at/after the horizon is missing, but nothing BEFORE it either —
+    // points[0] is then the closest available bar, which is what `find` returns.
+    const points = [pt(101.9, 102.0, 101.8, T0 + 30 * H), pt(105, 105, 105, T0 + 40 * H)];
+    const { row } = stepSetup(flatRow(), points, { nowMs: T0 + 40 * H });
+    expect(row.priceAfter).toBeCloseTo(101.9, 5);
+    expect(row.outcome).toBe('flat_false');        // 1.9% > 1.5% threshold
+  });
 });
 
 describe('outcomeString', () => {

@@ -3,7 +3,8 @@
 // these tests exercise the parse against genuine buildUserPrompt output (zero-drift by
 // construction) and the defer-not-drop suppression transition.
 import { describe, it, expect } from 'vitest';
-import { parseAutoFlatReasons, nextSuppressionState } from '../src/index';
+import { parseAutoFlatReasons, nextSuppressionState, deferAutoAnalysisCross } from '../src/index';
+import { D1Adapter } from '../server/d1-adapter';
 import { buildUserPrompt, type PromptIndicator } from '../src/prompt';
 import { computeFullIndicators } from '../src/indicators-full';
 import type { Candle } from '../src/scoring-full';
@@ -75,5 +76,64 @@ describe('nextSuppressionState (defer-not-drop)', () => {
       .toEqual({ effectiveCross: true, suppressed: false });
     expect(nextSuppressionState({ crossed: false, wasSuppressed: true, flat: null }))
       .toEqual({ effectiveCross: true, suppressed: false });
+  });
+});
+
+// 2026-07-24. The precheck defers correctly, but the LATER enrichment-aware gate inside
+// runAutoAnalysis (no setup / analysis failed / exception) used to just `return` — dropping a real
+// cross, because the caller had already consumed it: `crossed` is a single-tick rising edge and the
+// notif_claims claim is taken as a PRECONDITION of queueing the push. deferAutoAnalysisCross hands
+// the signal back so the symbol pass retries it.
+describe('deferAutoAnalysisCross (defer-not-drop, part 2)', () => {
+  function mkEnv() {
+    const db = new D1Adapter(':memory:');
+    db.prepare(`CREATE TABLE IF NOT EXISTS notif_claims (
+      push_token TEXT, symbol TEXT, expires_at INTEGER, PRIMARY KEY (push_token, symbol))`).run();
+    const kv: Record<string, string> = {};
+    return {
+      db, kv,
+      env: {
+        DB: db,
+        ALERTS: {
+          get: async (k: string) => kv[k] ?? null,
+          put: async (k: string, v: string) => { kv[k] = v; },
+          delete: async (k: string) => { delete kv[k]; },
+        },
+      } as any,
+    };
+  }
+
+  it('releases the burned claim and re-arms the cross', async () => {
+    const { db, kv, env } = mkEnv();
+    await db.prepare('INSERT INTO notif_claims (push_token, symbol, expires_at) VALUES (?, ?, ?)')
+      .bind('tok-1', 'BTCUSDT', Date.now() + 3.5 * 3600_000).run();
+    // An unrelated claim that must survive.
+    await db.prepare('INSERT INTO notif_claims (push_token, symbol, expires_at) VALUES (?, ?, ?)')
+      .bind('tok-1', 'ETHUSDT', Date.now() + 3.5 * 3600_000).run();
+
+    await deferAutoAnalysisCross(env, 'tok-1', 'BTCUSDT', 'no setup');
+
+    const btc = await db.prepare('SELECT COUNT(*) as n FROM notif_claims WHERE symbol = ?').bind('BTCUSDT').first();
+    expect(btc.n).toBe(0);                                  // claim released → next tick can re-claim
+    const eth = await db.prepare('SELECT COUNT(*) as n FROM notif_claims WHERE symbol = ?').bind('ETHUSDT').first();
+    expect(eth.n).toBe(1);                                  // scoped to (push_token, symbol)
+    expect(kv['notif_resuppress:BTCUSDT']).toBeDefined();    // re-armed for the symbol pass to adopt
+    expect(Number(kv['notif_resuppress:BTCUSDT'])).toBeGreaterThan(0);
+  });
+
+  it('never throws when there is no claim to release (idempotent retry)', async () => {
+    const { kv, env } = mkEnv();
+    await expect(deferAutoAnalysisCross(env, 'tok-missing', 'SOLUSDT', 'exception')).resolves.toBeUndefined();
+    expect(kv['notif_resuppress:SOLUSDT']).toBeDefined();
+  });
+
+  it('a re-armed cross reads back as suppressed → the deferred notification fires when clean', async () => {
+    const { kv, env } = mkEnv();
+    await deferAutoAnalysisCross(env, 'tok-1', 'BTCUSDT', 'no setup');
+    // What the symbol pass does with it: adopt the key as wasSuppressed, then transition.
+    const wasSuppressed = (await env.ALERTS.get('notif_resuppress:BTCUSDT')) !== null;
+    expect(wasSuppressed).toBe(true);
+    expect(nextSuppressionState({ crossed: false, wasSuppressed, flat: false }))
+      .toEqual({ effectiveCross: true, suppressed: false });   // retried, not lost
   });
 });

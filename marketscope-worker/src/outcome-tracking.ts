@@ -456,12 +456,24 @@ export function stepSetup(input: TrackedRow, points: Point[], opts: StepOpts): {
 // FLAT grading: at +24h, falseFlat = |move| > 1.5% (fixed horizon replaces "3 refreshes").
 function stepFlat(row: TrackedRow, points: Point[], opts: StepOpts): { row: TrackedRow; changed: boolean } {
   if (row.terminal) return { row, changed: false };
-  if (opts.nowMs < row.registeredAt + FLAT_HORIZON_MS) return { row, changed: false };
-  // Grade against the most recent price available (the live tick is appended last with
-  // open == high == low, so the midpoint IS the tick; for a plain candle it's a fair proxy).
-  const last = points.length ? points[points.length - 1] : null;
-  if (!last || row.priceAtSetup <= 0) return { row, changed: false };
-  const price = (last.high + last.low) / 2;
+  const horizonMs = row.registeredAt + FLAT_HORIZON_MS;
+  if (opts.nowMs < horizonMs) return { row, changed: false };
+  // Grade at the HORIZON, not at whatever "now" happens to be (2026-07-24 fix). This used to take
+  // points[points.length - 1] — and since resolveTrackedSetups always appends the live tick last
+  // (`time: now`), a LATE resolution graded against the current price instead of the +24h price.
+  // The horizon check above is a lower bound only and the open-row query has no age filter, so any
+  // downtime (a Stop/Start deploy, a box outage) silently regraded every FLAT whose window elapsed
+  // during it: a FLAT that was +0.8% at +24h (flat_true) but +4% two days later got recorded
+  // flat_false, biasing the false-flat rate the dashboard and the prompt's outcome history read.
+  // The right bar is normally present — the candle window spans `oldestChecked - 30min` → now, so
+  // it brackets the horizon after downtime. Points are chronological, so the FIRST point at/after
+  // the horizon is the horizon bar; if the window starts after it (short fetch), points[0] is the
+  // closest available; only with no points at all is there nothing to grade.
+  const atHorizon = points.find(p => p.time >= horizonMs) ?? (points.length ? points[points.length - 1] : null);
+  if (!atHorizon || row.priceAtSetup <= 0) return { row, changed: false };
+  // Midpoint: the live tick has open == high == low so this IS the tick; for a real candle it's a
+  // fair proxy for where price sat in that bar.
+  const price = (atHorizon.high + atHorizon.low) / 2;
   const movePct = Math.abs(price - row.priceAtSetup) / row.priceAtSetup * 100;
   row.priceAfter = price;
   row.falseFlat = movePct > FLAT_FALSE_THRESHOLD_PCT;

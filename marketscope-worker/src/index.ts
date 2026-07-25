@@ -1745,6 +1745,27 @@ export default {
       return json(job);
     }
 
+    // Serves the result of a server-side auto-analysis (`runAutoAnalysis` caches it under
+    // `autoanalysis:<symbol>`, 1h TTL) so tapping the push shows the analysis that PRODUCED the push
+    // instead of paying for a second identical LLM run. Added 2026-07-24: the cache had been written
+    // since 2026-07-14 with no endpoint and no reader, so it was pure waste — the app always re-ran.
+    // Shape matches /full-analysis exactly (analysis/setups/ml/bias) so the client reuses one
+    // decoder; `at` is added for the caller's own freshness check. Read-only — no claim/delete, so a
+    // failed client decode can't lose the result; the client tracks what it has consumed locally.
+    if (path === '/auto-analysis' && request.method === 'GET') {
+      const symbol = sanitizeSymbol(url.searchParams.get('symbol'));
+      if (!symbol) return json({ error: 'Missing symbol' }, 400);
+      const raw = await env.ALERTS.get(`autoanalysis:${symbol}`);
+      if (!raw) return json({ error: 'No cached auto-analysis' }, 404);
+      try {
+        const blob = JSON.parse(raw);
+        if (!blob?.result?.analysis) return json({ error: 'No cached auto-analysis' }, 404);
+        return json({ ...blob.result, at: blob.at ?? null });
+      } catch {
+        return json({ error: 'No cached auto-analysis' }, 404);
+      }
+    }
+
     if (path === '/ml-models/version') {
       try {
         const cryptoMeta = await env.MODELS.head('crypto/model-v3.json');
@@ -2766,6 +2787,10 @@ const ARCHIVE_CRYPTO = [
 
 const ML_THRESHOLD = 0.70;            // top-bucket only — [0.70, 0.85) had 73.1% actual win rate in WF validation
 const NOTIFY_COOLDOWN_SEC = 3.5 * 60 * 60;
+// How long a suppressed (deferred) cross stays armed before it's considered stale. Shared by the
+// `notif_suppressed:all` blob, its prune sweep, and the per-symbol `notif_resuppress:<sym>` key so
+// the three can't drift apart.
+const SUPPRESS_EXPIRY_SEC = 24 * 60 * 60;
 
 interface SymbolPrediction {
   symbol: string;
@@ -3730,7 +3755,22 @@ async function computeSymbolPredictions(
       // Evaluated for any symbol that could page this tick: an ML rising-edge (or a prior cross
       // sitting suppressed), a new HIGH risk-state transition, or a live pending setup whose
       // entry zone could be touched. ONE verdict gates all three push types in the device pass.
-      const wasSuppressed = suppressedMap[symbol] !== undefined;
+      let wasSuppressed = suppressedMap[symbol] !== undefined;
+      // A detached runAutoAnalysis may have re-armed this cross AFTER the symbol pass last wrote the
+      // shared blob (it decided not to push — no setup / failure — and handed the signal back). It
+      // writes a per-symbol key to avoid racing the blob, so fold that in here and adopt it into the
+      // map, which persists it and makes the rest of the machinery (cancel-on-fade, 24h prune)
+      // work unchanged. Guarded by the ML/direction preconditions so this costs one extra KV read
+      // only for the handful of symbols that could actually page.
+      if (!wasSuppressed && mlProb >= ML_THRESHOLD && metaDirection !== 0) {
+        try {
+          if (await env.ALERTS.get(`notif_resuppress:${symbol}`)) {
+            wasSuppressed = true;
+            suppressedMap[symbol] = Date.now();
+            console.log(`[notify] ${symbol} re-armed cross adopted from a deferred auto-analysis`);
+          }
+        } catch { /* best-effort — a missed re-arm degrades to the old drop, never to a false page */ }
+      }
       const crossCandidate = mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0;
       let envelopeFlat: boolean | null = null;
       if (crossCandidate || newHighStates.length > 0 || pendingSetupSymbols.has(symbol)) {
@@ -3743,17 +3783,23 @@ async function computeSymbolPredictions(
       // tick and fires the moment the envelope clears with ML still >= threshold; it cancels
       // silently if ML fades below threshold first, and expires after 24h.
       let effectiveCross = crossed;
+      // Clearing must drop BOTH stores, or a re-arm key left behind would resurrect the cross on the
+      // next tick (blob cleared → key adopted → suppressed again) and loop forever.
+      const clearSuppression = async () => {
+        delete suppressedMap[symbol];
+        try { await env.ALERTS.delete(`notif_resuppress:${symbol}`); } catch { /* best-effort */ }
+      };
       if (crossCandidate) {
         const next = nextSuppressionState({ crossed, wasSuppressed, flat: envelopeFlat });
         effectiveCross = next.effectiveCross;
         if (next.suppressed) {
           if (!wasSuppressed) suppressedMap[symbol] = Date.now();
         } else if (wasSuppressed) {
-          delete suppressedMap[symbol];
+          await clearSuppression();
           if (effectiveCross) console.log(`[notify] ${symbol} envelope cleared — deferred notification firing`);
         }
       } else if (wasSuppressed && mlProb < ML_THRESHOLD) {
-        delete suppressedMap[symbol];   // the signal faded while suppressed — cancel, don't page
+        await clearSuppression();          // the signal faded while suppressed — cancel, don't page
         console.log(`[notify] ${symbol} suppressed cross cancelled (ML faded to ${Math.round(mlProb * 100)}%)`);
       }
 
@@ -3819,9 +3865,9 @@ async function computeSymbolPredictions(
   // Save ML snapshots for next cron's rate-of-change deltas
   // Suppression map: prune stale entries (a >24h-old suppressed cross is no longer meaningful).
   for (const [sym, since] of Object.entries(suppressedMap)) {
-    if (Date.now() - (since as number) > 24 * 3600_000) delete suppressedMap[sym];
+    if (Date.now() - (since as number) > SUPPRESS_EXPIRY_SEC * 1000) delete suppressedMap[sym];
   }
-  await env.ALERTS.put('notif_suppressed:all', JSON.stringify(suppressedMap), { expirationTtl: 86400 });
+  await env.ALERTS.put('notif_suppressed:all', JSON.stringify(suppressedMap), { expirationTtl: SUPPRESS_EXPIRY_SEC });
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
 
   // Batched KV blobs written once per cron in place of 4-5 × 76 per-symbol writes.
@@ -3855,16 +3901,49 @@ async function computeSymbolPredictions(
 // Runs DETACHED (the caller does `void runAutoAnalysis(...)` — the box is a persistent Node process,
 // so this outlives the cron pass; a 30-90s LLM call must NEVER be awaited inside the minute cron).
 // Model is fixed to Sonnet 5 + extended thinking (the user's standing pick — auto-runs don't see the
+/** Hands a consumed-but-unpushed ML cross BACK to the defer-not-drop machinery: releases the
+ *  `notif_claims` claim the cross burned and re-arms suppression via a per-symbol key, so the symbol
+ *  pass adopts it next tick and pages the moment a setup appears. Never throws — failed bookkeeping
+ *  degrades to the old drop, never to a false page. Exported for tests. */
+export async function deferAutoAnalysisCross(env: Env, pushToken: string, symbol: string, why: string): Promise<void> {
+  try {
+    await env.DB.prepare('DELETE FROM notif_claims WHERE push_token = ? AND symbol = ?')
+      .bind(pushToken, symbol).run();
+    await env.ALERTS.put(`notif_resuppress:${symbol}`, String(Date.now()), { expirationTtl: SUPPRESS_EXPIRY_SEC });
+    console.log(`[autorun] ${symbol} no push (${why}) — claim released, cross re-armed for retry`);
+  } catch (e) {
+    console.log(`[autorun] ${symbol} defer bookkeeping failed: ${e}`);
+  }
+}
+
 // per-request model the app normally sends). Dedup-guarded per SYMBOL (`autorun:<sym>`, cooldown TTL)
-// so multi-device / cron re-entrancy can't double-spend. Best-effort throughout: on ANY failure it
-// falls back to the bare move-likelihood push so a real cross is never silently lost.
+// so multi-device / cron re-entrancy can't double-spend. When it decides NOT to push, the cross is
+// DEFERRED back to the suppression machinery rather than dropped — see `deferAutoAnalysisCross`.
 async function runAutoAnalysis(
   env: Env, symbol: string, isCrypto: boolean, deviceId: string, pushToken: string, mlProb: number,
 ): Promise<void> {
   const name = symbol.replace('USDT', '');
   const mlPct = Math.round(mlProb * 100);
+  // ── Defer-not-drop, part 2 (2026-07-24 fix) ──────────────────────────────────────────────────
+  // The caller consumed the cross before knowing whether we'd push: `crossed` is a single-tick
+  // rising edge (prevMl < 0.70 && mlProb >= 0.70) and the notif_claims claim is taken as a
+  // PRECONDITION of queueing. So every silent return below used to DROP a real signal — the exact
+  // failure the 2026-05-30 notify-window lesson and the 2026-07-11 precheck were built to prevent.
+  // The precheck defers correctly; this later, enrichment-aware gate did not (and it's the one that
+  // sees the auto-FLAT contributors the precheck structurally cannot — funding kills et al, which
+  // is why the precheck "can only UNDER-suppress").
+  //
+  // So: release the claim this cross consumed and re-arm suppression, letting the symbol pass
+  // re-check every tick and page the moment a setup appears with ML still >= threshold (cancelled
+  // for free if ML fades, expired after SUPPRESS_EXPIRY_SEC). A PER-SYMBOL key, not the shared
+  // `notif_suppressed:all` blob: this runs DETACHED, so read-modify-write on the shared blob would
+  // race the symbol pass that owns it and lose updates. The `autorun:<sym>` guard bounds the LLM
+  // cost to one real run per symbol per cooldown window; between runs the retry costs nothing.
+  const deferCross = (why: string) => deferAutoAnalysisCross(env, pushToken, symbol, why);
   try {
     // Per-symbol dedup: at most one auto-run per cooldown window across devices / overlapping crons.
+    // Deliberately does NOT defer — a concurrent (or recent) invocation owns this symbol's window
+    // and its own deferral state; releasing its claim here would fight it.
     const guardKey = `autorun:${symbol}`;
     if (await env.ALERTS.get(guardKey)) return;   // already handled this window — no duplicate work or push
     await env.ALERTS.put(guardKey, String(Date.now()), { expirationTtl: NOTIFY_COOLDOWN_SEC });
@@ -3873,7 +3952,7 @@ async function runAutoAnalysis(
     // SINCE-LAST-ANALYSIS baseline internally. Fixed to Sonnet 5 + extended thinking.
     const r = await runFullAnalysisCore(env, symbol, isCrypto,
       { provider: 'claude', model: 'claude-sonnet-5', thinkingBudget: 8000 }, deviceId);
-    if (!r.ok || !r.result?.analysis) { console.log(`[autorun] ${symbol} analysis failed — suppressed`); return; }
+    if (!r.ok || !r.result?.analysis) { await deferCross('analysis failed'); return; }
 
     // Cache the full result so the app can show it instantly on open (iOS pickup is the fast-follow),
     // regardless of whether we notify.
@@ -3886,7 +3965,9 @@ async function runAutoAnalysis(
     // that leads nowhere" the user asked to stop. The enrichment-free precheck can only under-suppress;
     // THIS is the ground-truth gate (the real analysis said trade-or-not). No setup → suppress silently.
     const setups = Array.isArray(r.result.setups) ? r.result.setups : [];
-    if (setups.length === 0) { console.log(`[autorun] ${symbol} produced no setup — notification suppressed`); return; }
+    // Deferred, not dropped: the envelope/level picture that produced no setup can clear within the
+    // 24h window, and then this same cross is worth paging on.
+    if (setups.length === 0) { await deferCross('no setup'); return; }
 
     const m = String(r.result.analysis).match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
     const bl = m ? m[1].replace(/\s+/g, ' ').trim() : '';
@@ -3897,7 +3978,8 @@ async function runAutoAnalysis(
     if (sent === 'unregistered') await deleteDevice(env, deviceId);
     console.log(`[autorun] ${symbol} setup push sent (${setups.length} setup(s))`);
   } catch (e) {
-    console.log(`[autorun] ${symbol} failed: ${e}`);   // suppress on error — never a false page
+    console.log(`[autorun] ${symbol} failed: ${e}`);   // never a false page — but never a lost cross either
+    await deferCross('exception');
   }
 }
 
@@ -4081,9 +4163,10 @@ async function processDeviceNotifications(
   // Automated analysis (2026-07-14): each survived cross now runs the FULL analysis and pushes its
   // Bottom Line — replacing the bare "ML 73%" ping — and auto-registers its setups into
   // tracked_setups. Fired per symbol WITHOUT await: the box is a persistent process, so these
-  // outlive the cron pass; a 30-90s LLM call must never block the minute cron. Each call self-sends
-  // its richer push (or a bare move-likelihood push on failure). Per-symbol instead of the old
-  // grouped push — every triggered symbol is now a real analyzed signal, not a batched ticker list.
+  // outlive the cron pass; a 30-90s LLM call must never block the minute cron. Each call either
+  // self-sends its richer push or DEFERS the cross back for retry (no setup / failure) — the bare
+  // move-likelihood fallback push was removed 2026-07-14, so a silent return is not a lost signal.
+  // Per-symbol instead of the old grouped push — every triggered symbol is a real analyzed signal.
   for (const t of triggered) {
     void runAutoAnalysis(env, t.symbol, t.symbol.endsWith('USDT'), deviceId, pushToken, t.mlProb);
   }

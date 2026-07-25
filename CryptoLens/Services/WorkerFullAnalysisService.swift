@@ -57,6 +57,10 @@ enum WorkerFullAnalysisService {
         if let existing = pendingJob(for: symbol) {
             jobId = existing
         } else {
+            // The box may have ALREADY run this exact analysis: an ML-cross auto-run caches its
+            // result server-side, so tapping the push can show the analysis the notification was
+            // about instead of paying for a second ~30-90s LLM call on the same bar.
+            if let cached = await cachedAutoAnalysis(for: symbol) { return cached }
             jobId = try await startAsyncJob(symbol: symbol, provider: provider, modelID: modelID)
             storePendingJob(jobId, symbol: symbol)
         }
@@ -180,6 +184,51 @@ enum WorkerFullAnalysisService {
             mlDirectionUp: body.ml?.directionUp,
             biasDaily: body.bias?.daily
         )
+    }
+
+    // MARK: - Server-side auto-analysis pickup
+
+    /// An auto-analysis older than this is stale relative to price, so we re-run instead of showing
+    /// it. Comfortably inside one 4H bar — it covers "the push arrived, I opened the app".
+    private static let autoAnalysisMaxAge: TimeInterval = 20 * 60
+
+    /// `GET /auto-analysis?symbol=` — the cached result of a server-side auto-run (the box runs the
+    /// full analysis itself on a surviving ML cross and pushes its Bottom Line). Returns nil unless
+    /// the cache exists, is fresh, and we haven't already shown it.
+    ///
+    /// Consumption is tracked LOCALLY rather than by deleting the blob server-side: a decode failure
+    /// then can't destroy the result, and a manual re-run after we've shown it once gets a genuinely
+    /// fresh analysis instead of the same cached text. Entirely best-effort — any failure falls
+    /// through to a normal job, which is just the previous behavior.
+    private static func cachedAutoAnalysis(for symbol: String) async -> Result? {
+        guard var components = URLComponents(string: "\(PushService.workerURL)/auto-analysis") else { return nil }
+        components.queryItems = [URLQueryItem(name: "symbol", value: symbol)]
+        guard let url = components.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        PushService.addAuthHeaders(&request)
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            // 404 = nothing cached (the common case); anything non-200 just means "run normally".
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+
+            struct Stamp: Decodable { let at: Double? }
+            guard let at = (try? JSONDecoder().decode(Stamp.self, from: data))?.at, at > 0 else { return nil }
+            let age = Date().timeIntervalSince1970 - at / 1000
+            guard age >= 0, age <= autoAnalysisMaxAge else { return nil }
+
+            let seenKey = "autoanalysis_seen_\(symbol)"
+            guard UserDefaults.standard.double(forKey: seenKey) < at else { return nil }   // already shown
+
+            let result = try parse(status: http.statusCode, data: data)
+            UserDefaults.standard.set(at, forKey: seenKey)
+            return result
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - Async job (fire-and-forget)
