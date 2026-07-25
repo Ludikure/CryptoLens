@@ -1248,9 +1248,33 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // Reframe the low-ML-in-a-trend case so the output isn't a demoralizing "nothing here":
         // ML_WIN measures a SHARP (>=1.5 ATR/24h) move; a slow trend grind is a low-ML_WIN state
         // BY DESIGN, and "no vol-edge entry" is NOT "no trend / stand down".
-        const onlyML = autoFlat.length === 1 && autoFlat[0].startsWith('ML_WIN_');
-        if (onlyML && (envRisk === 'ELEVATED' || envRisk === 'HIGH')) {
-          L(`  FRAMING: this FLAT is "no volatility-edge entry" (ML_WIN gauges a sharp >=1.5-ATR move, unlikely here), NOT "quiet / nothing happening" — Environment Risk is ${envRisk} and the ${trendDir}-trend is intact. Riding an existing trend is a separate decision this tool does not gate; say so plainly instead of a flat "stand aside". Do NOT imply the tape is safe.`);
+        //
+        // 2026-07-24 — the hatch fires when EVERY auto-FLAT reason is a QUALITY-gate reason
+        // (ML_WIN under the bar, or the ML-gated biases_MIXED block) rather than a real hazard.
+        // It previously required the reason set to be EXACTLY one `ML_WIN_*` entry, which made it
+        // unreachable in the single most common FLAT case — `biases_MIXED_and_ML_<70` — so a slow
+        // mixed-bias trend emitted a bare "NO SETUP" on every bar with none of the context below.
+        // Measured by replaying this builder over BTC 07-13→07-25 (73 4H bars, real candles): 71
+        // bars FLATted, 63 of them on biases_MIXED alone, Environment Risk ELEVATED on every
+        // single one, and NOT ONE emitted this line — a week of silence through a +7.5% 4H
+        // advance whose daily bias never confirmed. Hazard reasons (ANY_KILLED, macro_IMMINENT,
+        // divergence_escalated, chase_into_extended_aligned_trend) still suppress the hatch:
+        // those are genuine stand-down states where "the trend is intact, riding it is your call"
+        // would be actively dangerous. `biases_MIXED_(ML_unavailable)` is deliberately EXCLUDED —
+        // with no ML value we cannot characterise move likelihood at all.
+        const isQualityGateReason = (r: string) => r.startsWith('ML_WIN_') || r.startsWith('biases_MIXED_and_ML_');
+        const onlyQualityGate = autoFlat.every(isQualityGateReason);
+        const mixedGated = autoFlat.some(r => r.startsWith('biases_MIXED_and_ML_'));
+        if (onlyQualityGate && (envRisk === 'ELEVATED' || envRisk === 'HIGH')) {
+          if (mixedGated) {
+            // Mixed-bias variant: do NOT claim a >=1.5-ATR move is "unlikely" (ML is 50-70 here,
+            // a band the live calibration shows realizing 56-64%) — the honest read is that the
+            // ENTRY gate is unmet while the tape is still moving, and that a daily bias lagging a
+            // running 4H move is the normal early-trend state rather than a stalled market.
+            L(`  FRAMING: the ONLY thing blocking a setup here is the QUALITY gate — timeframes disagree and ML_WIN ${mlPct}% sits below the 70 window, so there is no risk-defined ENTRY edge. That is NOT "nothing happening": Environment Risk is ${envRisk} and the 4H trend (${fourH.bias ?? 'n/a'}) is intact. A daily bias that lags a running 4H move is the ordinary EARLY-trend state, not evidence of a stalled tape, and ML_WIN gauges a SHARP >=1.5-ATR/24h move — a slow multi-day grind is a low-ML state by design and can still carry price a long way. Riding an existing trend is a separate decision this tool does not gate; say that plainly instead of a bare "stand aside". Do NOT imply the tape is safe and do NOT present a setup.`);
+          } else {
+            L(`  FRAMING: this FLAT is "no volatility-edge entry" (ML_WIN gauges a sharp >=1.5-ATR move, unlikely here), NOT "quiet / nothing happening" — Environment Risk is ${envRisk} and the ${trendDir}-trend is intact. Riding an existing trend is a separate decision this tool does not gate; say so plainly instead of a flat "stand aside". Do NOT imply the tape is safe.`);
+          }
         }
       }
       else {

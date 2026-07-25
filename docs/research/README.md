@@ -41,6 +41,8 @@ for the graph/backlink view). Links use `[[note-name]]` wikilink syntax.
 - [[strategy-targets-bands]] — band defaults, crypto runner widening, target selection.
 - [[strategy-counter-trend]] — counter-trend reversal setups.
 - [[strategy-levels]] — S/R validation: levels are real (+4.3pp vs random), tags are noise.
+- [[strategy-mixed-gate]] — 🟡 OPEN: the `biases_MIXED` ML gate sits above the base rate of the
+  cell it unlocks (ML≥70 = 6.3% of bars). Pre-declared test, nothing shipped, nothing measured yet.
 
 ### The graveyard
 - [[rejected-hypotheses]] — everything tested and discarded, with the numbers that killed it.

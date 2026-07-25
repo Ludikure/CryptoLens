@@ -175,6 +175,55 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(blocked.prompt).not.toContain('MIXED_HIGH_ML_WINDOW');
   });
 
+  it('FRAMING hatch reaches the ML-gated biases_MIXED FLAT, but never a hazard FLAT', () => {
+    // 2026-07-24. The hatch used to require the reason set to be exactly one `ML_WIN_*` entry, so
+    // it could not fire on `biases_MIXED_and_ML_<70` — the most common FLAT reason by a wide
+    // margin. Replaying this builder over BTC 07-13→07-25 (73 real 4H bars): 71 FLATs, 63 from
+    // biases_MIXED alone, Environment Risk ELEVATED on every bar, zero FRAMING lines emitted.
+    // Same fixture as the test above (daily bullish vs mirrored-bearish 4H → MIXED, HIGH env risk).
+    const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
+    const mirror = (cs: Candle[]) => cs.map(c => ({
+      time: c.time, open: 200 - c.open, high: 200 - c.low, low: 200 - c.high, close: 200 - c.close, volume: c.volume,
+    }));
+    const daily = computeFullIndicators(synthCandles(230, NOW - 230 * DAY, DAY, 100), { timeframe: '1d', label: 'Daily (1D)', isCrypto: true }) as unknown as PromptIndicator;
+    const fourH = computeFullIndicators(mirror(synthCandles(230, NOW - 230 * H4, H4, 100)), { timeframe: '4h', label: '4H', isCrypto: true }) as unknown as PromptIndicator;
+    const oneH = computeFullIndicators(synthCandles(120, NOW - 120 * H1, H1, 100), { timeframe: '1h', label: '1H', isCrypto: true }) as unknown as PromptIndicator;
+    daily.mlWinProbability = 0.55;   // above the ML<50 FLAT, below the 70 window → quality gate only
+
+    const gated = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH] });
+    expect(gated.prompt).toContain('auto_FLAT_active: biases_MIXED_and_ML_55<70');
+    expect(gated.prompt).toMatch(/Environment Risk: (ELEVATED|HIGH)/);
+    expect(gated.prompt).toContain('FRAMING:');
+    expect(gated.prompt).toContain('ONLY thing blocking a setup here is the QUALITY gate');
+    expect(gated.prompt).toContain('EARLY-trend state');           // names the daily-lag mechanic
+    expect(gated.prompt).toContain('does not gate');               // riding a trend is the user's call
+    // Must NOT claim a big move is "unlikely" — ML 50-70 realizes 56-64% per the live calibration.
+    expect(gated.prompt).not.toContain('unlikely here');
+    // Still a hard FLAT: the hatch reframes, it never authorizes a setup.
+    expect(gated.prompt).toContain('→ Output NO SETUP regardless of any other reasoning');
+    expect(gated.prompt).toContain('do NOT present a setup');
+
+    // A genuine hazard in the FLAT set suppresses the hatch entirely — "the trend is intact, ride
+    // it if you like" would be actively dangerous 1h before a high-impact macro print.
+    const hazard = buildUserPrompt({
+      symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH],
+      economicEvents: [{ title: 'CPI', country: 'US', isHighImpact: true, isUpcoming: true, isRecentlyReleased: false, date: NOW + 3600_000 }],
+    });
+    expect(hazard.prompt).toContain('macro_IMMINENT');
+    expect(hazard.prompt).not.toContain('FRAMING:');
+  });
+
+  it('systemPrompt no longer discounts the retrained 72h persistence model', () => {
+    // The h72t25 head was retrained on clean data (2026-06-05) and again for v14 (2026-07-06,
+    // monotone reliability, crypto top bucket 75.5% / stock 78.1%), but both system prompts still
+    // told the LLM it was "not retrained on fresh data — treat as soft", discounting the ONE model
+    // whose 72h horizon matches a multi-day hold. ML_WIN's 24h window cannot see a slow grind.
+    for (const p of [systemPrompt(true), systemPrompt(false)]) {
+      expect(p).not.toContain('Not retrained on fresh data');
+      expect(p).toContain('horizon closest to a multi-day hold');
+    }
+  });
+
   it('buildUserPrompt runs end-to-end over real computeFullIndicators output (crypto)', () => {
     const NOW = 1748736000000; // fixed (2025-06-01T00:00:00Z) — scripts can't use Date.now()
     const DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
