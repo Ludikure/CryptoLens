@@ -598,6 +598,16 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-07-31 — Analyses stopped vanishing (Caches → Application Support) + history reachable without an analysis
+
+Two user reports, one cause each.
+
+**"The latest analysis doesn't show after some time."** Both the per-symbol analysis cache (`AnalysisService.cacheDir`) and the analysis archive (`AnalysisHistoryStore.historyDir`) lived in `.cachesDirectory` — which iOS purges under storage pressure, silently and with no opt-out. That is the correct home for re-downloadable data and the wrong one for these: an LLM analysis cost real money, describes a bar that has already passed, and can never be reproduced. Both now use **Application Support** via a new `PersistentStore` helper, which also MOVES anything still present in the old Caches location on first access (one-shot, flagged per directory in UserDefaults) so nothing that survived the last purge is lost. `OutcomeTracker`'s server snapshot stays in Caches deliberately — it genuinely is regenerable from `GET /tracked-setups`.
+
+**"To read historical analysis I have to rerun analysis to even enter the screen."** The "Analysis History" button sat inside `aiContent(result)` — i.e. inside the analysis screen — and the 2026-07-25 restructure made that screen reachable only through the verdict card's "Full read" link, which is gated on an analysis already existing. So with no analysis for the current bar there was no route to past analyses at all, and the only way in was to spend another LLM call. The archive is now a first-class action on `VerdictCard` itself, shown in every state including NOT ANALYSED — which is precisely when you want yesterday's read. The sheet is presented by the tab (via the existing `showHistory` binding) rather than by the card, because a sheet attached to a row inside a List can be dismissed by row recycling underneath it. Verified on the simulator in the no-analysis state.
+
+iOS-only — needs a rebuild+install.
+
 ### 2026-07-25 — Stock 429s fixed: the /finnhub/* fan-out collapsed into the existing /market call
 
 User: "on stocks I am often getting 429." Traced to the worker's own per-device gate, and stocks were hitting it ~2.5× faster than crypto **by construction**.

@@ -63,11 +63,10 @@ class AnalysisService: ObservableObject {
     @Published private(set) var resultsBySymbol: [String: AnalysisResult] = [:]
     var cachedResults: [String: AnalysisResult] { resultsBySymbol }
 
+    /// Application Support, not Caches — see `PersistentStore`. iOS evicts Caches under storage
+    /// pressure, which silently deleted analyses the user had already paid an LLM call for.
     private nonisolated static var cacheDir: URL {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("analyses", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        PersistentStore.directory(named: "analyses")
     }
 
     /// Weak hook so the AppDelegate (which doesn't hold the @StateObject) can reach the live

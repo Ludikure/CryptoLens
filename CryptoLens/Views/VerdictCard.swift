@@ -15,6 +15,10 @@ struct VerdictCard: View {
     let result: AnalysisResult
     let isStale: Bool
     let onRunAnalysis: () -> Void
+    /// Opens the per-symbol analysis archive. Passed in rather than owned so the sheet is presented
+    /// by the tab, above the List — a sheet attached to a row inside a List can be dismissed by the
+    /// row recycling underneath it.
+    var onShowHistory: (() -> Void)? = nil
 
     /// Three states, in the order a trader cares about.
     private enum Verdict {
@@ -123,12 +127,22 @@ struct VerdictCard: View {
             Divider().padding(.vertical, 2)
 
             // ── Actions: read the reasoning, or get a fresh one ──
-            HStack {
+            HStack(spacing: 14) {
                 if !result.claudeAnalysis.isEmpty {
                     NavigationLink {
                         AnalysisDetailScreen(result: result)
                     } label: {
                         Label("Full read", systemImage: "text.alignleft").font(Theme.micro)
+                    }
+                }
+                // ALWAYS available, including when there is no current analysis (2026-07-31). The
+                // archive button used to live inside the analysis screen, which is itself only
+                // reachable via "Full read" above — so with no analysis for the current bar there
+                // was no route to past analyses at all, and the only way in was to spend another
+                // LLM call. Past reads are exactly what you want when the current bar has none.
+                if let onShowHistory {
+                    Button(action: onShowHistory) {
+                        Label("History", systemImage: "clock.arrow.circlepath").font(Theme.micro)
                     }
                 }
                 Spacer()

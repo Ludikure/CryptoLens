@@ -158,9 +158,9 @@ struct ChartTabContent: View {
 
                 // The answer, first. Everything below it is supporting evidence.
                 if let result = service.currentResult {
-                    VerdictCard(result: result, isStale: service.isAIStale) {
-                        Task { await service.runFullAnalysis(symbol: result.symbol) }
-                    }
+                    VerdictCard(result: result, isStale: service.isAIStale,
+                                onRunAnalysis: { Task { await service.runFullAnalysis(symbol: result.symbol) } },
+                                onShowHistory: { showHistory = true })
                     .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
                 }
 
