@@ -10,7 +10,7 @@
 
 import {
   Candle, computeRSI, computeMACD, computeBollingerBands, computeVWAP, detectDivergence,
-  computeOBVTrend, computeADLineTrend, computeVolumeProfile, computeATR, emaArray, r2,
+  computeOBVTrend, computeADLineTrend, computeVolumeProfile, computeATR, emaArray, r2, rPrice,
 } from './scoring-full';
 import { scoreSnapshot, CRYPTO_PARAMS, STOCK_PARAMS, type ScoringSnapshot } from './scoring-ios';
 
@@ -95,8 +95,8 @@ function supportResistance(highs: number[], lows: number[], closes: number[], at
   for (let i = 2; i < Math.min(lookback, highs.length - 2); i++) {
     const idx = highs.length - 1 - i;
     if (idx < 2 || idx >= highs.length - 2) continue;
-    if (highs[idx] > highs[idx - 1] && highs[idx] > highs[idx - 2] && highs[idx] > highs[idx + 1] && highs[idx] >= highs[idx + 2]) resistances.push(r2(highs[idx]));
-    if (lows[idx] < lows[idx - 1] && lows[idx] < lows[idx - 2] && lows[idx] < lows[idx + 1] && lows[idx] <= lows[idx + 2]) supports.push(r2(lows[idx]));
+    if (highs[idx] > highs[idx - 1] && highs[idx] > highs[idx - 2] && highs[idx] > highs[idx + 1] && highs[idx] >= highs[idx + 2]) resistances.push(rPrice(highs[idx]));
+    if (lows[idx] < lows[idx - 1] && lows[idx] < lows[idx - 2] && lows[idx] < lows[idx + 1] && lows[idx] <= lows[idx + 2]) supports.push(rPrice(lows[idx]));
   }
   const current = last(closes) ?? 0;
   const tol = atr > 0 ? atr * 0.15 : (current || 1) * 0.003;
@@ -148,7 +148,7 @@ function marketStructure(candles: Candle[], lookback = 3, atr = 0) {
 // ── Fibonacci — port of Fibonacci.computeFromSwings / compute ──
 function fibLevels(hi: number, lo: number, up: boolean) {
   const d = hi - lo;
-  const r = (x: number) => r2(x);
+  const r = (x: number) => rPrice(x);
   return up
     ? [['0.0 (swing high)', hi], ['0.236', hi - 0.236 * d], ['0.382', hi - 0.382 * d], ['0.5', hi - 0.5 * d], ['0.618', hi - 0.618 * d], ['0.786', hi - 0.786 * d], ['1.0 (swing low)', lo]].map(([n, p]) => ({ name: n as string, price: r(p as number) }))
     : [['0.0 (swing low)', lo], ['0.236', lo + 0.236 * d], ['0.382', lo + 0.382 * d], ['0.5', lo + 0.5 * d], ['0.618', lo + 0.618 * d], ['0.786', lo + 0.786 * d], ['1.0 (swing high)', hi]].map(([n, p]) => ({ name: n as string, price: r(p as number) }));
@@ -159,7 +159,7 @@ function fibFromSwings(swingHighs: number[], swingLows: number[], closes: number
   const trend = structureLabel.includes('bullish') ? 'uptrend' : structureLabel.includes('bearish') ? 'downtrend' : (current > (hi + lo) / 2 ? 'uptrend' : 'downtrend');
   const levels = fibLevels(hi, lo, trend === 'uptrend');
   const nearest = levels.reduce((a, b) => (Math.abs(b.price - current) < Math.abs(a.price - current) ? b : a));
-  return { trend, swingHigh: r2(hi), swingLow: r2(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
+  return { trend, swingHigh: rPrice(hi), swingLow: rPrice(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
 }
 function fibAbsolute(highs: number[], lows: number[], closes: number[], lookback = 50) {
   if (closes.length < lookback) return null;
@@ -169,7 +169,7 @@ function fibAbsolute(highs: number[], lows: number[], closes: number[], lookback
   const up = rl.indexOf(lo) < rh.indexOf(hi);
   const levels = fibLevels(hi, lo, up);
   const nearest = levels.reduce((a, b) => (Math.abs(b.price - current) < Math.abs(a.price - current) ? b : a));
-  return { trend: up ? 'uptrend' : 'downtrend', swingHigh: r2(hi), swingLow: r2(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
+  return { trend: up ? 'uptrend' : 'downtrend', swingHigh: rPrice(hi), swingLow: rPrice(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
 }
 
 // ── Candle patterns — port of CandlePatterns.detect + trend-context gates (2026-07-02) ──
@@ -234,7 +234,7 @@ function bollingerBandsFull(closes: number[], period = 20, k = 2) {
   const mid = w.reduce((a, b) => a + b, 0) / period;
   const variance = w.reduce((a, b) => a + (b - mid) ** 2, 0) / period;
   const sd = Math.sqrt(variance);
-  return { ...scalar, upper: r2(mid + k * sd), middle: r2(mid), lower: r2(mid - k * sd) };
+  return { ...scalar, upper: rPrice(mid + k * sd), middle: rPrice(mid), lower: rPrice(mid - k * sd) };
 }
 
 export interface FullIndicatorOpts {
@@ -271,7 +271,7 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
   const patterns = candlePatterns(opens, highs, lows, closes);
 
   const ema20A = emaArray(closes, 20), ema50A = emaArray(closes, 50), ema200A = emaArray(closes, 200);
-  const ema20 = ema20A.length ? r2(last(ema20A)!) : null, ema50 = ema50A.length ? r2(last(ema50A)!) : null, ema200 = ema200A.length ? r2(last(ema200A)!) : null;
+  const ema20 = ema20A.length ? rPrice(last(ema20A)!) : null, ema50 = ema50A.length ? rPrice(last(ema50A)!) : null, ema200 = ema200A.length ? rPrice(last(ema200A)!) : null;
   const volRatio = volumes.length >= 20 ? r2((last(volumes) ?? 0) / (volumes.slice(-20).reduce((a, b) => a + b, 0) / 20)) : null;
 
   // EMA regime + position
@@ -335,9 +335,9 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
   return {
     timeframe: opts.timeframe, label: opts.label, price: current,
     atrPercentile, atrPercentileLabel,
-    rsi, stochRSI: stoch.result, macd: { histogram: r2(macdHist), crossover: crossStr(macd.crossover) },
+    rsi, stochRSI: stoch.result, macd: { histogram: rPrice(macdHist), crossover: crossStr(macd.crossover) },
     adx: adx?.result ?? null, bollingerBands: bb,
-    atr: { atr: r2(atrVal), atrPercent: r2(atrVal / current * 100) },
+    atr: { atr: rPrice(atrVal), atrPercent: r2(atrVal / current * 100) },
     ema20, ema50, ema200, vwap, fibonacci: fib, supportResistance: sr, candlePatterns: patterns,
     volumeRatio: volRatio, divergence, bias, bullPercent, biasScore: score,
     marketStructure: ms, volScalar, volumeProfile: vp,

@@ -57,7 +57,15 @@ enum WatchLevels {
     /// closer than 0.2×ATR (keeping the higher-priority role), and caps the count to avoid clutter.
     static func build(result: AnalysisResult, maxLevels: Int = 8) -> [WatchLevel] {
         let price = result.daily.price
-        let atr = result.tf2.atr?.atr ?? result.daily.atr?.atr ?? (price * 0.01)
+        // Belt-and-braces on the ATR fallback (2026-07-31). `??` only catches a NIL atr, never a
+        // ZERO one — and the worker used to round every price-shaped value to 2dp, so on any
+        // sub-dollar coin (ADA at $0.167 has an ATR near $0.003) it arrived as a hard 0.0. The guard
+        // below then returned [], and the chart drew NO levels at all — not even the setup's own
+        // entry/stop/targets, since this runs before they're added. The rounding is fixed worker-side
+        // (`rPrice`), but treating 0 as "missing" here means a future upstream zero degrades to a
+        // 1%-of-price estimate instead of silently emptying the chart.
+        let reportedATR = result.tf2.atr?.atr ?? result.daily.atr?.atr ?? 0
+        let atr = reportedATR > 0 ? reportedATR : (price * 0.01)
         guard price > 0, atr > 0 else { return [] }
 
         var raw: [(price: Double, role: WatchLevelRole, label: String)] = []

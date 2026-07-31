@@ -170,6 +170,32 @@ function smaArray(values: number[], period: number): number[] {
 export function r2(x: number): number {
     return Math.round(x * 100) / 100;
 }
+
+/**
+ * Rounding for PRICE-shaped values, where a fixed 2dp grid is only correct above ~$1.
+ *
+ * `r2` quantises everything to whole cents. On BTC that is invisible; on ADA at $0.1675 it snaps
+ * support/resistance onto a 6%-wide grid and rounds ATR (~$0.004) to **0** — and a zero ATR makes
+ * the iOS `WatchLevels.build` guard bail out, so the chart draws NO levels at all, not even the
+ * setup's own entry/stop/targets. EMA20 and EMA200 both land on 0.17, collapsing the trend
+ * structure the prompt reads. Roughly a third of the crypto archive trades under $1.
+ *
+ * At or above $1 this is byte-identical to `r2`, so BTC/ETH/stock output — and the prompt fixtures
+ * asserted against it — are unchanged. Below $1 the grid follows the magnitude, holding ~6
+ * significant digits however cheap the asset is.
+ *
+ * Deliberately NOT applied to scale-free quantities: RSI, ADX, Stoch, volumeRatio and atrPercent
+ * are percentages or ratios where 2dp is already right.
+ */
+export function rPrice(x: number): number {
+    if (!Number.isFinite(x)) return x;
+    const a = Math.abs(x);
+    if (a === 0) return 0;
+    if (a >= 1) return Math.round(x * 100) / 100;
+    const digits = Math.min(12, Math.max(4, 6 - Math.floor(Math.log10(a))));
+    const f = Math.pow(10, digits);
+    return Math.round(x * f) / f;
+}
 function r4(x: number): number {
     return Math.round(x * 10000) / 10000;
 }

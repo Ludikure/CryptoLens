@@ -598,6 +598,20 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-07-31 — Sub-dollar coins had no chart levels: 2dp rounding zeroed their ATR
+
+User: "on ADA I still don't see any support or resistance levels — do I need to run analysis first?" No, and running one wouldn't have helped.
+
+**Root cause.** `r2()` rounds every price-shaped value to 2 decimal places. Invisible on BTC, fatal below $1. Measured on real ADA candles (721 bars, price $0.1675): **ATR rounded to 0** (true value ~$0.0033), S/R snapped onto a 1-cent grid (~6% wide at that price), and EMA20 and EMA200 both landed on 0.17 — collapsing the trend structure entirely. A controlled test (real BTC candles rescaled, identical shape) shows the cliff: 5 supports / 3 resistances at $64k and at $64, down to 2/2 at $0.64, and at PEPE scale a single "support" at literally **$0**.
+
+The zero ATR is what empties the chart: `WatchLevels.build` opens with `guard price > 0, atr > 0 else { return [] }`, which returns before setup levels are added — so an analysed sub-dollar coin showed no entry/stop/target lines either. Roughly a third of ARCHIVE_CRYPTO trades under $1 (ADA, DOGE, XLM, VET, HBAR, ZIL, RSR, IOST, SKL, GALA, SAND, GMT, JUP, PEPE…).
+
+**Fix (the safe half).** New `rPrice()` in scoring-full.ts: at/above $1 it is byte-identical to `r2` (BTC/ETH/stock output and the prompt fixtures unchanged — verified), below $1 the grid follows the magnitude, holding ~6 significant digits. Applied in **indicators-full.ts only** — the display/prompt path, which is NOT covered by the 1e-7 ML parity suite (that tests `computeAllFeatures` in scoring-full.ts) — to S/R, Fibonacci, Bollinger, EMA20/50/200, MACD histogram and ATR. Explicitly NOT applied to scale-free values (RSI, ADX, Stoch, volumeRatio, atrPercent) where 2dp is already correct. ADA after: ATR 0 → 0.003258, 5 real supports, EMA20 ≠ EMA200. iOS `WatchLevels.build` also hardened — `??` only catches a nil ATR, never a zero one, so a zero now degrades to 1%-of-price instead of emptying the chart.
+
+**Known limitation, deliberately not fixed here.** `scoring-full.ts` still rounds ATR/EMA/VWAP with `r2` on the **ML feature** path, so `dEmaCross`, `dStackBull/Bear`, `dAboveVwap` and VP bucket sizing remain degenerate for sub-dollar symbols. Training and serving round identically (that is what the parity suite guarantees), so there is no train/serve skew — those features simply carry no information for cheap coins. Changing it would shift the distribution v14 was trained on and needs a coordinated Swift change + fixture refresh + retrain: a v15 conversation. **Labels are safe** — `fwdMaxFavR` divides by `atrFor4H = (atrPercent / 100) * price`, and `atrPercent` is computed from the RAW ATR at 4dp and is scale-invariant.
+
+499/499 worker tests green; iOS build green. Needs a box redeploy + iOS rebuild.
+
 ### 2026-07-31 — Analyses stopped vanishing (Caches → Application Support) + history reachable without an analysis
 
 Two user reports, one cause each.
