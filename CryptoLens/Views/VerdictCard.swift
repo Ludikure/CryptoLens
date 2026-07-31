@@ -111,11 +111,22 @@ struct VerdictCard: View {
             }
 
             // ── The model's one-liner ──
+            // The TEXT itself opens the full read, not just the small button below it. It's the
+            // largest target on the card and the thing you're already looking at, so tapping what
+            // you're reading to read more is the obvious gesture — the button stays for
+            // discoverability. `.plain` keeps it looking like prose rather than a link, and
+            // contentShape makes the whole wrapped block tappable, not just the glyphs.
             if let line = bottomLine {
-                Text(line)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Button { showFullRead = true } label: {
+                    Text(line)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityHint("Opens the full analysis")
             } else if case .notRun = verdict {
                 Text("No analysis for this bar yet.")
                     .font(.footnote)
