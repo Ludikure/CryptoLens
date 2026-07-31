@@ -20,6 +20,11 @@ struct VerdictCard: View {
     /// row recycling underneath it.
     var onShowHistory: (() -> Void)? = nil
 
+    /// Drives the push explicitly instead of embedding a NavigationLink in the row. Inside a List, a
+    /// NavigationLink in the row's content turns the WHOLE ROW into the link, which then competes
+    /// with the sibling buttons for every touch — the other half of "the buttons aren't responsive".
+    @State private var showFullRead = false
+
     /// Three states, in the order a trader cares about.
     private enum Verdict {
         case setup(TradeSetup)      // a risk-defined setup survived every gate
@@ -118,21 +123,26 @@ struct VerdictCard: View {
             }
 
             // ── Staleness, stated plainly rather than hidden ──
+            // Triangle, not a clock: the History button below uses the clock glyph, and two clock
+            // icons a few points apart read as one control overlapping another.
             if isStale, !result.claudeAnalysis.isEmpty {
-                Label("Price has moved since this read", systemImage: "clock.arrow.circlepath")
+                Label("Price has moved since this read", systemImage: "exclamationmark.triangle")
                     .font(Theme.micro)
                     .foregroundStyle(Theme.caution)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider().padding(.vertical, 2)
 
             // ── Actions: read the reasoning, or get a fresh one ──
-            HStack(spacing: 14) {
+            // Each label is fixed-size and single-line so the row can never squeeze them into one
+            // another — with three actions present (Full read / History / Re-run) the previous
+            // free-sizing HStack let them collide at larger Dynamic Type sizes.
+            HStack(spacing: 16) {
                 if !result.claudeAnalysis.isEmpty {
-                    NavigationLink {
-                        AnalysisDetailScreen(result: result)
-                    } label: {
-                        Label("Full read", systemImage: "text.alignleft").font(Theme.micro)
+                    Button { showFullRead = true } label: {
+                        Label("Full read", systemImage: "text.alignleft")
+                            .font(Theme.micro).lineLimit(1).fixedSize()
                     }
                 }
                 // ALWAYS available, including when there is no current analysis (2026-07-31). The
@@ -142,21 +152,29 @@ struct VerdictCard: View {
                 // LLM call. Past reads are exactly what you want when the current bar has none.
                 if let onShowHistory {
                     Button(action: onShowHistory) {
-                        Label("History", systemImage: "clock.arrow.circlepath").font(Theme.micro)
+                        Label("History", systemImage: "clock.arrow.circlepath")
+                            .font(Theme.micro).lineLimit(1).fixedSize()
                     }
                 }
-                Spacer()
+                Spacer(minLength: 8)
                 Button {
                     HapticManager.impact(.medium)
                     onRunAnalysis()
                 } label: {
-                    Label(result.claudeAnalysis.isEmpty ? "Analyse" : "Re-run",
-                          systemImage: "sparkles").font(Theme.micro)
+                    Label(result.claudeAnalysis.isEmpty ? "Analyse" : "Re-run", systemImage: "sparkles")
+                        .font(Theme.micro).lineLimit(1).fixedSize()
                 }
             }
             .buttonStyle(.borderless)
         }
         .themedCard(accent: verdict.accent)
+        // Measure the card by its real content height. Without this a List row containing wrapping
+        // text can under-measure once the Bottom Line appears, letting the row below (the data /
+        // analysis timestamp bar) draw over the action row.
+        .fixedSize(horizontal: false, vertical: true)
+        .navigationDestination(isPresented: $showFullRead) {
+            AnalysisDetailScreen(result: result)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Verdict: \(verdict.headline)")
     }

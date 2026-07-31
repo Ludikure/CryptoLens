@@ -94,12 +94,19 @@ struct ThemedCard: ViewModifier {
                         .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
                         .padding(.vertical, 6)
                         .padding(.leading, 1)
+                        .allowsHitTesting(false)
                 }
             }
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5)
+                    .allowsHitTesting(false)
             )
+            // BOTH overlays are pure decoration and must never take a touch. An `.overlay` sits
+            // ABOVE its content in z-order and hit-tests across its whole frame — so the border
+            // (which spans the entire card) was swallowing every tap aimed at the buttons
+            // underneath it. This is why the verdict card's actions felt dead.
+            .compositingGroup()
     }
 }
 
