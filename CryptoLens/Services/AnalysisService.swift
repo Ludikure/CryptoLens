@@ -195,10 +195,16 @@ class AnalysisService: ObservableObject {
         do {
             let tf1 = try await WorkerIndicatorsService.fetch(symbol: symbol).daily
 
+            // Salvage the last analysis from disk even when it's older than loadCache's 1h data
+            // guard — otherwise this placeholder wipes it from memory and refreshIndicators then
+            // carries the wipe forward forever. The analysis keeps its own timestamp, so the
+            // staleness banner still tells the truth about its age.
+            let salvage = loadCacheAnyAge(symbol: symbol)
             let result = AnalysisResult(
                 symbol: symbol, market: market, timestamp: Date(),
+                analysisTimestamp: salvage?.analysisTimestamp,
                 tf1: tf1, tf2: tf1, tf3: tf1,  // Same data for all 3 — placeholder until full refresh
-                claudeAnalysis: "", tradeSetups: []
+                claudeAnalysis: salvage?.claudeAnalysis ?? "", tradeSetups: salvage?.tradeSetups ?? []
             )
             resultsBySymbol[symbol] = result
         } catch {
@@ -423,7 +429,14 @@ class AnalysisService: ObservableObject {
             tf1ML.mlMetaDirection = workerML?.metaDirection
             tf1ML.mlDirectionUp = workerML?.pUp
 
-            let prevResult = resultsBySymbol[symbol]
+            var prevResult = resultsBySymbol[symbol]
+            // Memory can hold an analysis-less placeholder (quickFetch after a cold start) while a
+            // real analysis sits on disk past the 1h data guard. Prefer whichever source actually
+            // HAS an analysis — the newest one wins by analysisTimestamp.
+            if prevResult?.claudeAnalysis.isEmpty ?? true, let salvaged = loadCacheAnyAge(symbol: symbol),
+               !salvaged.claudeAnalysis.isEmpty {
+                prevResult = salvaged
+            }
             let result = AnalysisResult(
                 symbol: symbol,
                 market: market,
@@ -907,6 +920,21 @@ class AnalysisService: ObservableObject {
             if Date().timeIntervalSince(result.timestamp) < 3600 { return result }
         } catch {}
         return nil
+    }
+
+    /// The disk cache with NO freshness guard — for salvaging the ANALYSIS, not the indicators.
+    ///
+    /// The 1h guard in `loadCache` is right for market data (hour-old candles must not render as
+    /// current) but it was discarding the LLM analysis along with them: return to a symbol after
+    /// >1h and `loadCache` returned nil, `quickFetch` stored a placeholder with an empty
+    /// `claudeAnalysis`, and every later refresh faithfully carried that emptiness forward. The
+    /// user-visible symptom: "the latest analysis disappears after some time." An analysis is not
+    /// market data — it stays valid-to-display (with its timestamp and the staleness flag) until a
+    /// NEWER one replaces it.
+    private nonisolated func loadCacheAnyAge(symbol: String) -> AnalysisResult? {
+        let url = Self.cacheDir.appendingPathComponent("\(symbol).json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(AnalysisResult.self, from: data)
     }
 
     private func autoConfigureKey() {

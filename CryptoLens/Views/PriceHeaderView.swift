@@ -16,10 +16,11 @@ struct PriceHeaderView: View {
 
             HStack(spacing: 8) {
                 if let change = change24h {
+                    // A pill, not bare text — same visual grammar as the regime badge beside it, so
+                    // the two states (move, regime) read as siblings instead of mismatched species.
                     Text(Formatters.formatPercent(change))
-                        .font(.subheadline)
                         .fontWeight(.semibold)
-                        .foregroundStyle(Theme.forChange(change))
+                        .themedPill(Theme.forChange(change))
                 }
                 regimeBadge
             }
@@ -53,7 +54,9 @@ struct PriceHeaderView: View {
                     }
                 }
         )
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+        // Shared card chrome (2026-07-31) — this was the one card on the Now tab still drawing its
+        // own ad-hoc 12pt-radius background, visibly different from the themed cards around it.
+        .themedCard()
         .task {
             outcomeStats = OutcomeTracker.stats()
         }

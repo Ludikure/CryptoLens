@@ -598,6 +598,14 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-07-31 — Analysis pinned until replaced (the 1h cache guard was discarding it) + Now-tab visual pass
+
+**"The latest analysis disappears; keep the latest one showing until a new one is run."** The Caches→Application Support move (earlier today) fixed eviction, but a second path was still wiping analyses: `loadCache` honors the disk cache only when `result.timestamp` — the DATA timestamp — is **under 1 hour old**. Return to a symbol after >1h and the cache read returns nil, `quickFetch` stores a placeholder with `claudeAnalysis: ""`, and `refreshIndicators` then faithfully carries that emptiness forward on every cycle. The analysis was safe on disk; the freshness guard just refused to read it. That guard is RIGHT for indicator data (hour-old candles must not render as current) and WRONG for the analysis, which stays valid-to-display until a newer one replaces it. Fix: new `loadCacheAnyAge` salvages `claudeAnalysis`/`tradeSetups`/`analysisTimestamp` regardless of data age; `quickFetch` merges them into its placeholder, and `refreshIndicators` falls back to the disk copy whenever memory holds an analysis-less placeholder. The staleness banner still tells the truth — the analysis keeps its own timestamp.
+
+**Visual pass (verified by simulator screenshot):** `PriceHeaderView` now uses the shared `themedCard()` chrome (it was the last card on Now drawing its own ad-hoc 12pt background) and renders the 24h change as a `themedPill` so it reads as a sibling of the regime badge; `FavoritePillsView`'s ML numbers route through Theme (the raw `.green` was one of the last off-palette colours on the landing screen); and the **`LevelsChartView` now renders on the Now tab** under the indicators — filling the documented dead-space rough edge from the 2026-07-25 entry with the most useful thing available pre-analysis: where price sits vs S/R/VWAP/POC (no analysis needed; setup levels join automatically once one exists). Known cosmetic artifact, pre-existing: immediately after a cold start the Indicators chips can read "Daily Daily Daily" — that's the quickFetch placeholder (tf1 copied into all three slots) until the full refresh lands seconds later.
+
+iOS-only — needs a rebuild+install.
+
 ### 2026-07-31 — Sub-dollar coins had no chart levels: 2dp rounding zeroed their ATR
 
 User: "on ADA I still don't see any support or resistance levels — do I need to run analysis first?" No, and running one wouldn't have helped.

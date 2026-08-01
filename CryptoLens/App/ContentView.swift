@@ -377,6 +377,20 @@ struct ChartTabContent: View {
         )
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
+        // Where price sits relative to the levels that matter (2026-07-31). Fills what used to be
+        // dead space below the fold on an un-analysed symbol — the mini chart moved to the Chart
+        // tab in July and the indicator grid defaults collapsed, so this tab could end after two
+        // cards. WatchLevels needs no analysis (S/R, VWAP, POC come from /indicators); when an
+        // analysis exists its entry/stop/targets join automatically. Duplicated deliberately on the
+        // analysis screen — there it supports the prose; here it answers "am I near anything?"
+        let nowLevels = WatchLevels.build(result: result)
+        let nowCandles: [Candle] = result.tf2.candles.isEmpty ? result.daily.candles : result.tf2.candles
+        if !nowLevels.isEmpty, !nowCandles.isEmpty {
+            LevelsChartView(candles: nowCandles, currentPrice: result.daily.price,
+                            levels: nowLevels, timeframeLabel: result.tf2.candles.isEmpty ? result.daily.label : result.tf2.label)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
+
         Spacer().frame(height: 20).listRowInsets(EdgeInsets())
     }
 

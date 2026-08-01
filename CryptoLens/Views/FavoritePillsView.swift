@@ -65,11 +65,13 @@ struct FavoritePillsView: View {
     }
 
     private func mlProbColor(_ prob: Double, isSelected: Bool) -> Color {
-        if prob >= 0.70 { return .green }
+        // Theme-routed (2026-07-31): the raw .green here was the stock light-mode green, one of the
+        // last two off-palette colours on the landing screen.
+        if prob >= 0.70 { return isSelected ? .white : Theme.bullish }
         // The selected pill's background is .accentColor (blue); gray text on blue is
         // unreadable, so swap to a softened white for the low-probability case there
-        // and keep gray only for the unselected case where it sits on systemGray5.
-        if prob < 0.50 { return isSelected ? Color.white.opacity(0.75) : .gray }
+        // and keep the muted tone only for the unselected case where it sits on systemGray5.
+        if prob < 0.50 { return isSelected ? Color.white.opacity(0.75) : Theme.neutral }
         return isSelected ? .white : .primary
     }
 }
