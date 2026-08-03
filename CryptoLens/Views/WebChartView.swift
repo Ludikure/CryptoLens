@@ -227,20 +227,36 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loaded = true
+        assertGestureConfig()
+        if let json = pendingJSON { pendingJSON = nil; evaluate(json) }
+    }
+
+    /// (Re-)asserts the exact recognizer state chart gestures depend on. IDEMPOTENT, and called
+    /// from TWO places: page load (didFinish) and every window ATTACH (ChartHostView).
+    ///
+    /// Why both: this used to run only at page load, but WebKit re-installs / re-arms its internal
+    /// recognizers when the WKContentView moves to a new window — which under the native TabView
+    /// (2026-07-25) happens on EVERY tab switch, since UITabBarController detaches non-selected
+    /// tabs from the window. The resulting failure is the documented device-only fingerprint from
+    /// the 2026-07-08 gesture arc: one-finger pan dead, two-finger pinch fine, and the simulator
+    /// (where the whole ChartGesturesUITests suite still passes) shows nothing wrong.
+    func assertGestureConfig() {
         // WKWebView keeps built-in double-tap recognizers (zoom heuristics) even with zooming
         // disabled; they sit in the touch pipeline and delay/misclassify fast drags. Disable
         // them so Lightweight Charts' own touch handlers get clean, immediate events.
         disableInterferingRecognizers(in: webView)
         // Keep the PAN recognizer ENABLED — WebKit delivers single-finger touchmove to the DOM
         // through it, so disabling it kills LWC's one-finger pan on device (see the
-        // scrollView.isScrollEnabled comment in init). But DISABLE the PINCH recognizer: LWC does
+        // scrollView.isScrollEnabled comment in init). Asserted POSITIVELY here because a
+        // re-parent can leave it disabled or detached. But DISABLE the PINCH recognizer: LWC does
         // its own two-finger zoom, and leaving the scroll view's pinch armed makes it compete on
         // every pinch → sluggish two-finger zoom on device. Disabling it does NOT block two-finger
         // touch delivery to LWC (confirmed on device). touch-action:none + a viewport-sized
         // #container keep the page from ever scrolling; delaysContentTouches=false = no hold latency.
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.panGestureRecognizer.isEnabled = true
         webView.scrollView.pinchGestureRecognizer?.isEnabled = false
         webView.scrollView.delaysContentTouches = false
-        if let json = pendingJSON { pendingJSON = nil; evaluate(json) }
     }
 
     private func disableInterferingRecognizers(in view: UIView) {
@@ -294,9 +310,32 @@ final class ChartWebViewStore: NSObject, WKNavigationDelegate {
 struct WebChartView: UIViewRepresentable {
     let payload: ChartPayload
 
-    func makeUIView(context: Context) -> WKWebView { ChartWebViewStore.shared.webView }
+    func makeUIView(context: Context) -> ChartHostView { ChartHostView() }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {
+    func updateUIView(_ uiView: ChartHostView, context: Context) {
+        uiView.attachSharedWebViewIfNeeded()
         ChartWebViewStore.shared.push(payload)
+    }
+}
+
+/// Hosts the shared chart WKWebView and re-asserts its gesture configuration on every window
+/// attach. The representable can't observe window membership itself — this container can.
+final class ChartHostView: UIView {
+    func attachSharedWebViewIfNeeded() {
+        let web = ChartWebViewStore.shared.webView
+        if web.superview !== self {
+            web.frame = bounds
+            web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            addSubview(web)   // re-parents from any previous host automatically
+        }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        attachSharedWebViewIfNeeded()
+        // WebKit may have rebuilt its internal recognizer set during the re-parent; re-assert on
+        // the next runloop turn so it runs AFTER WebKit finishes its own attach work.
+        DispatchQueue.main.async { ChartWebViewStore.shared.assertGestureConfig() }
     }
 }
