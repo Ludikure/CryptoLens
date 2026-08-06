@@ -3690,7 +3690,25 @@ async function computeSymbolPredictions(
       }
 
       const prevMl = ps?.mlProb;
-      const crossed = prevMl !== undefined && prevMl < ML_THRESHOLD && mlProb >= ML_THRESHOLD;
+      // EDGE vs LEVEL (2026-08-06). This used to be a pure rising edge —
+      //   prevMl !== undefined && prevMl < ML_THRESHOLD && mlProb >= ML_THRESHOLD
+      // — which made the proactive analysis fire at most ONCE per excursion above the threshold.
+      // ML only moves on a 4H close, so if it crossed 70 and then sat there for a day, there was
+      // exactly one eligible tick; a setup that materialised six hours later (envelope clearing, a
+      // level coming into play) got no analysis and no push, ever. That is the reported "app
+      // generates setups but I'm not notified in time, or at all": the trigger answered "did
+      // volatility just jump?" while the user needs "does a setup exist now?".
+      //
+      // Now it is a LEVEL: every tick with ML at or above the threshold is eligible. Nothing here
+      // spams, because the two existing cost guards do the bounding and they are unchanged — the
+      // 3.5h `notif_claims` claim per (push_token, symbol), and the 3.5h `autorun:<symbol>` KV guard
+      // inside runAutoAnalysis. Worst case is still ~one LLM run per symbol per 3.5h. And since
+      // 2026-07-14 the push itself only fires when the analysis actually yields a SETUP, so the
+      // setup gate — not the ML threshold — is what keeps notifications quiet. Widening the trigger
+      // buys coverage, not noise.
+      const risingEdge = prevMl !== undefined && prevMl < ML_THRESHOLD && mlProb >= ML_THRESHOLD;
+      const crossed = mlProb >= ML_THRESHOLD;
+      if (risingEdge) console.log(`[notify] ${symbol} ML crossed up through ${Math.round(ML_THRESHOLD * 100)}% (${Math.round(mlProb * 100)}%)`);
 
       // Last 4H bar for pending-setup entry-touch detection. Defensive fallback to 0
       // if candles disappeared — the device-pass code handles 0 by skipping the check.

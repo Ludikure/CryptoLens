@@ -598,6 +598,16 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-06 — Setup notifications: trigger widened from a rising EDGE to a LEVEL (+ the deferral fix below)
+
+Follow-up to the same report, after the user clarified: **the app does generate setups — the notification is late, or never arrives.** That rules out the gates being wrong and points at the trigger's *shape*.
+
+`crossed` was a pure rising edge: `prevMl < 0.70 && mlProb >= 0.70`. Since `mlProb` only moves on a 4H close, an excursion above the threshold produced exactly **one** eligible tick. If ML crossed 70 and then sat there for a day, a setup that materialised six hours later — envelope clearing, a level coming into play — got no analysis and no push at all. Meanwhile the user could produce that same setup by hand any time, which is exactly the reported asymmetry. The trigger answered *"did volatility just jump?"*; the user needs *"does a setup exist now?"*.
+
+Now `crossed = mlProb >= ML_THRESHOLD` — a level. Every tick at or above threshold is eligible; the rising edge is kept only for logging. **No new spam risk and no new cost ceiling**, because the two existing guards are untouched and already do the bounding: the 3.5h `notif_claims` claim per (push_token, symbol) and the 3.5h `autorun:<symbol>` KV guard inside `runAutoAnalysis`. Worst case remains ~one LLM run per symbol per 3.5h (~6.8/day/symbol). Crucially, since the 2026-07-14 setup gate the push only fires when the analysis actually yields a SETUP — so the setup gate, not the ML threshold, is what keeps notifications quiet. Widening the trigger buys coverage, not noise.
+
+**Residual latency, stated honestly:** a setup appearing just after a run waits up to 3.5h for the next one. Tightening that is a pure cost dial (`NOTIFY_COOLDOWN_SEC` / the autorun guard). Separately, the analysis threshold could be decoupled from the notify threshold — analyse from ML ≥ 60 while still only pushing on a setup — which would widen coverage into the 60-70 band the v14 calibration says realises 64%. Both deferred as explicit cost decisions for the user.
+
 ### 2026-08-06 — "Not getting setup notifications": the auto-analysis deferral was destroyed one tick after it was armed
 
 The 2026-07-24 defer-not-drop fix did not work. Traced tick by tick:
