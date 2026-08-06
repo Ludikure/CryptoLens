@@ -3776,9 +3776,22 @@ async function computeSymbolPredictions(
       // tick and fires the moment the envelope clears with ML still >= threshold; it cancels
       // silently if ML fades below threshold first, and expires after 24h.
       let effectiveCross = crossed;
-      // Clearing must drop BOTH stores, or a re-arm key left behind would resurrect the cross on the
-      // next tick (blob cleared → key adopted → suppressed again) and loop forever.
-      const clearSuppression = async () => {
+      // TWO deferral stores, cleared on DIFFERENT conditions — conflating them was a real bug
+      // (2026-08-06). `suppressedMap` (blob) holds an ENVELOPE-precheck deferral: the envelope
+      // clearing resolves it, because the push fires on that very tick. `notif_resuppress:<sym>`
+      // (key) holds an AUTO-ANALYSIS deferral: the enriched analysis ran and produced no setup, and
+      // only a LATER analysis producing one can resolve that — the envelope clearing says nothing
+      // about it.
+      //
+      // Clearing both on envelope-clear meant the auto-analysis deferral lived exactly one tick,
+      // and that tick was guaranteed to be swallowed by runAutoAnalysis's own 3.5h `autorun:<sym>`
+      // guard (set when the first attempt ran) — so it returned silently, and by the next tick the
+      // deferral was already gone. Net effect: the cross was still dropped, one tick later than
+      // before the "fix". The key now persists until a push actually happens (runAutoAnalysis
+      // deletes it), ML fades, or its 24h TTL expires — so when the claim and the autorun guard
+      // both lapse at ~3.5h, the analysis genuinely re-runs and can page.
+      const clearBlobDeferral = () => { delete suppressedMap[symbol]; };
+      const clearAllDeferrals = async () => {
         delete suppressedMap[symbol];
         try { await env.ALERTS.delete(`notif_resuppress:${symbol}`); } catch { /* best-effort */ }
       };
@@ -3788,11 +3801,11 @@ async function computeSymbolPredictions(
         if (next.suppressed) {
           if (!wasSuppressed) suppressedMap[symbol] = Date.now();
         } else if (wasSuppressed) {
-          await clearSuppression();
+          clearBlobDeferral();   // NOT the key — see above
           if (effectiveCross) console.log(`[notify] ${symbol} envelope cleared — deferred notification firing`);
         }
       } else if (wasSuppressed && mlProb < ML_THRESHOLD) {
-        await clearSuppression();          // the signal faded while suppressed — cancel, don't page
+        await clearAllDeferrals();   // the signal faded while suppressed — cancel, don't page
         console.log(`[notify] ${symbol} suppressed cross cancelled (ML faded to ${Math.round(mlProb * 100)}%)`);
       }
 
@@ -3986,6 +3999,9 @@ async function runAutoAnalysis(
     const body = bl.length ? bl.slice(0, 178) : `A risk-defined ${dir || ''} setup is on the table — open to act.`;
     const sent = await sendAPNs(env, pushToken, title, body);
     if (sent === 'unregistered') await deleteDevice(env, deviceId);
+    // The cross is finally resolved — retire any auto-analysis deferral so the next tick doesn't
+    // treat this symbol as still-pending. This is the ONLY place that key is cleared on success.
+    try { await env.ALERTS.delete(`notif_resuppress:${symbol}`); } catch { /* best-effort */ }
     console.log(`[autorun] ${symbol} setup push sent (${setups.length} setup(s))`);
   } catch (e) {
     console.log(`[autorun] ${symbol} failed: ${e}`);   // never a false page — but never a lost cross either

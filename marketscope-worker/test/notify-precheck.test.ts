@@ -127,6 +127,26 @@ describe('deferAutoAnalysisCross (defer-not-drop, part 2)', () => {
     expect(kv['notif_resuppress:SOLUSDT']).toBeDefined();
   });
 
+  // 2026-08-06 regression. The auto-analysis deferral used to be cleared the moment the envelope
+  // read clean — but that tick is ALWAYS swallowed by runAutoAnalysis's 3.5h autorun guard (set
+  // when the first attempt ran), so it returned silently and the deferral was gone by the next
+  // tick. The cross was still dropped, one tick later than before the fix. The key must outlive an
+  // envelope-clear and survive until a push actually happens, ML fades, or the 24h TTL expires.
+  it('the auto-analysis deferral OUTLIVES an envelope-clear tick (survives the autorun guard)', async () => {
+    const { kv, env } = mkEnv();
+    await deferAutoAnalysisCross(env, 'tok-1', 'BTCUSDT', 'no setup');
+    expect(kv['notif_resuppress:BTCUSDT']).toBeDefined();
+
+    // Envelope-clear tick: the blob deferral resolves, the KEY must NOT.
+    const next = nextSuppressionState({ crossed: false, wasSuppressed: true, flat: false });
+    expect(next).toEqual({ effectiveCross: true, suppressed: false });
+    expect(kv['notif_resuppress:BTCUSDT']).toBeDefined();   // still pending a real retry
+
+    // Only an actual push retires it (runAutoAnalysis deletes the key after sendAPNs).
+    await env.ALERTS.delete('notif_resuppress:BTCUSDT');
+    expect(kv['notif_resuppress:BTCUSDT']).toBeUndefined();
+  });
+
   it('a re-armed cross reads back as suppressed → the deferred notification fires when clean', async () => {
     const { kv, env } = mkEnv();
     await deferAutoAnalysisCross(env, 'tok-1', 'BTCUSDT', 'no setup');

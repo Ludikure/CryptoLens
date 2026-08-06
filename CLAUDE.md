@@ -598,6 +598,21 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-06 — "Not getting setup notifications": the auto-analysis deferral was destroyed one tick after it was armed
+
+The 2026-07-24 defer-not-drop fix did not work. Traced tick by tick:
+1. **Tick N** — ML cross, `notif_claims` claim taken, `runAutoAnalysis` runs, analysis yields no setup → `deferAutoAnalysisCross` releases the claim and sets `notif_resuppress:<sym>`.
+2. **Tick N+1** — `wasSuppressed` true, envelope clear → `nextSuppressionState` returns `effectiveCross: true`, and the `else if (wasSuppressed)` branch called `clearSuppression()`, wiping **both** stores. The claim is re-taken, `runAutoAnalysis` is invoked — and hits its own 3.5h `autorun:<sym>` guard, set back at tick N. Silent early return: no push, and (by design) no re-defer.
+3. **Tick N+2** — deferral gone, `crossed` false → nothing.
+
+So the deferral lived exactly one tick, and that tick was *guaranteed* to be swallowed by the autorun guard. Net effect identical to before the fix — the cross dropped, one tick later — which is why setup notifications still went missing.
+
+**Root cause: two different deferrals were sharing one clear condition.** The blob (`suppressedMap`) holds an ENVELOPE-precheck deferral, which the envelope clearing genuinely resolves because the push fires on that same tick. The key (`notif_resuppress:<sym>`) holds an AUTO-ANALYSIS deferral — "the enriched analysis produced no setup" — which only a *later* analysis producing one can resolve. The envelope clearing says nothing about it.
+
+**Fix:** split the clear conditions. `clearBlobDeferral()` on envelope-clear (unchanged precheck semantics); `clearAllDeferrals()` only when ML fades below threshold; and `runAutoAnalysis` deletes the key after a push actually sends. The key otherwise persists on its 24h TTL. Now when the claim and the autorun guard both lapse at ~3.5h, the analysis genuinely re-runs and can page — the retry-every-3.5h-for-24h behaviour the original fix intended. Regression test added (12 in notify-precheck); 499/499 green.
+
+**Caveat:** this is a verified logic defect, not a confirmed diagnosis of the user's silence — setup pushes are gated on ML≥70 crossing (~6.3% of bars) AND a decisive direction AND the envelope AND the analysis yielding a setup, so genuine quiet is also possible. `GET /notifications` and `GET /scores?symbol=` distinguish them.
+
 ### 2026-07-31 — Analysis pinned until replaced (the 1h cache guard was discarding it) + Now-tab visual pass
 
 **"The latest analysis disappears; keep the latest one showing until a new one is run."** The Caches→Application Support move (earlier today) fixed eviction, but a second path was still wiping analyses: `loadCache` honors the disk cache only when `result.timestamp` — the DATA timestamp — is **under 1 hour old**. Return to a symbol after >1h and the cache read returns nil, `quickFetch` stores a placeholder with `claudeAnalysis: ""`, and `refreshIndicators` then faithfully carries that emptiness forward on every cycle. The analysis was safe on disk; the freshness guard just refused to read it. That guard is RIGHT for indicator data (hour-old candles must not render as current) and WRONG for the analysis, which stays valid-to-display until a newer one replaces it. Fix: new `loadCacheAnyAge` salvages `claudeAnalysis`/`tradeSetups`/`analysisTimestamp` regardless of data age; `quickFetch` merges them into its placeholder, and `refreshIndicators` falls back to the disk copy whenever memory holds an analysis-less placeholder. The staleness banner still tells the truth — the analysis keeps its own timestamp.
