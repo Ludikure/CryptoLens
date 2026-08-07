@@ -474,6 +474,30 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     console.log(`[tracked] register failed ${symbol}: ${e}`);
   }
 
+  // ── Notify on SETUP CREATION, from the one place every analysis passes through (2026-08-06) ──
+  //
+  // User requirement, verbatim: "I want notification sent whenever the app creates a setup."
+  //
+  // Until now the only push came from `runAutoAnalysis`, i.e. the far end of a ten-link chain:
+  // push token → symbol in the synced watchlist → ML ≥ 70 → decisive direction primitive →
+  // envelope not flat → notif_claims won → autorun guard free → analysis succeeds → setup produced
+  // → APNs delivers. Any one link breaking meant silence, and several of them (ML ≥ 70 in
+  // particular, ~6.3% of bars) are unrelated to whether a setup actually exists. A setup produced
+  // by a manual analysis never notified at all, because that path isn't the cron's.
+  //
+  // This is the choke point instead: `runFullAnalysisCore` is what `/full-analysis`,
+  // `/full-analysis/async` AND `runAutoAnalysis` all call, and `parseSetups` above has already
+  // applied the geometry gate. So "a setup exists" is now the whole trigger — the condition the
+  // user actually cares about — and everything upstream only affects HOW OFTEN we look.
+  //
+  // Deduped on the setup's own identity (symbol + direction + rounded entry/stop) rather than on
+  // time, so re-running an analysis that yields the same setup stays silent while a genuinely
+  // different setup always pages. 6h TTL comfortably outlives the 12h pending window's useful life
+  // without letting a same-day repeat through twice.
+  if (setups.length > 0) {
+    void notifySetupCreated(env, deviceId, symbol, setups, llm.text);
+  }
+
   // #6 — the LLM run succeeded: NOW advance the SINCE LAST ANALYSIS baseline (fresh ML + timestamp
   // from newState) and persist the fresh Bottom Line. Unconditional on llm.ok — even if the Bottom
   // Line regex misses, the ML/timestamp baseline must still advance.
@@ -3942,6 +3966,38 @@ export function mergeDerivArchiveGate(
   return kvMap;
 }
 
+/** Pushes when an analysis CREATES a setup — the user-facing trigger, independent of the ML-cross
+ *  machinery. Detached (`void`) by the caller so a slow APNs round-trip never delays the analysis
+ *  response. Never throws. */
+async function notifySetupCreated(
+  env: Env, deviceId: string, symbol: string, setups: any[], analysisText: string,
+): Promise<void> {
+  try {
+    const pushToken = await getPushToken(env, deviceId);
+    if (!pushToken) { console.log(`[setup-notify] ${symbol} no push token for ${deviceId}`); return; }
+    const s = setups[0] || {};
+    const dir = String(s.direction ?? '').toUpperCase();
+    // Identity, not time: the same setup re-analysed stays quiet, a different one always pages.
+    const sig = `${symbol}:${dir}:${Number(s.entry ?? 0).toPrecision(6)}:${Number(s.stopLoss ?? 0).toPrecision(6)}`;
+    const dedupeKey = `setupnotif:${pushToken}:${sig}`;
+    if (await env.ALERTS.get(dedupeKey)) { console.log(`[setup-notify] ${symbol} duplicate setup — suppressed`); return; }
+
+    const name = symbol.replace('USDT', '');
+    const m = analysisText.match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
+    const bl = m ? m[1].replace(/\*\*/g, '').replace(/\s+/g, ' ').trim() : '';
+    const entryStr = Number(s.entry) < 10 ? Number(s.entry).toFixed(4) : Number(s.entry).toFixed(2);
+    const title = `${name} ${dir} setup · entry ${entryStr}`;
+    const body = bl.length ? bl.slice(0, 178)
+                           : `A risk-defined ${dir} setup is on the table — open to act.`;
+    const sent = await sendAPNs(env, pushToken, title, body);
+    if (sent === 'unregistered') { await deleteDevice(env, deviceId); return; }
+    await env.ALERTS.put(dedupeKey, '1', { expirationTtl: 6 * 60 * 60 }).catch(() => {});
+    console.log(`[setup-notify] ${symbol} ${dir} setup push sent (${sent})`);
+  } catch (e) {
+    console.log(`[setup-notify] ${symbol} failed: ${e}`);
+  }
+}
+
 /** Hands a consumed-but-unpushed ML cross BACK to the defer-not-drop machinery: releases the
  *  `notif_claims` claim the cross burned and re-arms suppression via a per-symbol key, so the symbol
  *  pass adopts it next tick and pages the moment a setup appears. Never throws — failed bookkeeping
@@ -3963,7 +4019,6 @@ export async function deferAutoAnalysisCross(env: Env, pushToken: string, symbol
 async function runAutoAnalysis(
   env: Env, symbol: string, isCrypto: boolean, deviceId: string, pushToken: string, mlProb: number,
 ): Promise<void> {
-  const name = symbol.replace('USDT', '');
   const mlPct = Math.round(mlProb * 100);
   // ── Defer-not-drop, part 2 (2026-07-24 fix) ──────────────────────────────────────────────────
   // The caller consumed the cross before knowing whether we'd push: `crossed` is a single-tick
@@ -4010,17 +4065,14 @@ async function runAutoAnalysis(
     // 24h window, and then this same cross is worth paging on.
     if (setups.length === 0) { await deferCross('no setup'); return; }
 
-    const m = String(r.result.analysis).match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
-    const bl = m ? m[1].replace(/\s+/g, ' ').trim() : '';
-    const dir = String(setups[0]?.direction ?? '').toUpperCase();
-    const title = `${name}${dir ? ' ' + dir : ''} setup · ML ${mlPct}%`;
-    const body = bl.length ? bl.slice(0, 178) : `A risk-defined ${dir || ''} setup is on the table — open to act.`;
-    const sent = await sendAPNs(env, pushToken, title, body);
-    if (sent === 'unregistered') await deleteDevice(env, deviceId);
+    // The push itself is NOT sent here any more (2026-08-06). runFullAnalysisCore now notifies at
+    // the moment a setup is REGISTERED — the one place every analysis path passes through — so
+    // pushing again here would double-page for exactly the cron-triggered setups. What remains is
+    // this path's own bookkeeping.
     // The cross is finally resolved — retire any auto-analysis deferral so the next tick doesn't
     // treat this symbol as still-pending. This is the ONLY place that key is cleared on success.
     try { await env.ALERTS.delete(`notif_resuppress:${symbol}`); } catch { /* best-effort */ }
-    console.log(`[autorun] ${symbol} setup push sent (${setups.length} setup(s))`);
+    console.log(`[autorun] ${symbol} produced ${setups.length} setup(s) — push sent by the registration path (ML ${mlPct}%)`);
   } catch (e) {
     console.log(`[autorun] ${symbol} failed: ${e}`);   // never a false page — but never a lost cross either
     await deferCross('exception');

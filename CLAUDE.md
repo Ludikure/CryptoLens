@@ -598,6 +598,20 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-07 — Setup notifications now fire on SETUP CREATION, not on the ML-cross chain
+
+User, after the box was confirmed running `dcc3fab` with the cron healthy and still receiving nothing: **"I want notification sent whenever the app creates a setup."** Taken literally, and it is the right design.
+
+**The problem was the trigger's location.** The only setup push came from `runAutoAnalysis`, at the far end of a ten-link chain: push token → symbol in the synced watchlist → ML ≥ 70 → decisive direction primitive → envelope not flat → `notif_claims` won → `autorun:<sym>` guard free → analysis succeeds → setup produced → APNs delivers. Any single link breaking meant silence, and most of those links have nothing to do with whether a setup exists — ML ≥ 70 alone is ~6.3% of bars. A setup from a MANUAL analysis never notified at all, because that path isn't the cron's.
+
+**Fix: notify from the choke point.** `runFullAnalysisCore` is what `/full-analysis`, `/full-analysis/async` and `runAutoAnalysis` all call, and `parseSetups` has already applied the geometry gate by then. New `notifySetupCreated` fires there whenever `setups.length > 0`, detached (`void`) so a slow APNs round-trip can't delay the analysis response. "A setup exists" is now the entire trigger; everything upstream only controls HOW OFTEN the server looks. The old `runAutoAnalysis` push was removed so cron-triggered setups don't double-page — that function keeps only its deferral bookkeeping.
+
+**Dedupe is on setup IDENTITY, not time:** `symbol:direction:entry:stopLoss` (6 significant digits), 6h TTL. Re-running an analysis that yields the same setup stays silent; a genuinely different setup always pages. Title leads with direction and entry (`BTC LONG setup · entry 64230.00`), body is the Bottom Line.
+
+Push inventory after this change — five sites, all distinct: async-job ready/failed (suppressed when the app claims the result), price alerts, **setup created (new)**, risk-state transition, entry-zone reached. 500/500 green. Worker-only, needs a box redeploy.
+
+**Still unexplained:** which of the ten links was actually breaking before. The new trigger bypasses seven of them, so the answer is now mostly moot — but if pushes still don't arrive, the remaining suspects are narrow and checkable: no `push_token` on the device row, or APNs delivery itself. `[setup-notify]` log lines on the box name which one.
+
 ### 2026-08-06 — Setup notifications: trigger widened from a rising EDGE to a LEVEL (+ the deferral fix below)
 
 Follow-up to the same report, after the user clarified: **the app does generate setups — the notification is late, or never arrives.** That rules out the gates being wrong and points at the trigger's *shape*.
