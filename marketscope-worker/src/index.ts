@@ -2812,6 +2812,10 @@ interface SymbolPrediction {
   // any intra-bar touch of the entry level; close is for staleness gating.
   last4HHigh: number;
   last4HLow: number;
+  /// Live tick, fetched ONLY for symbols with a live pending setup (typically 0-3). Null otherwise.
+  /// Everything else in this struct is deliberately closed-bar (training parity); this is the one
+  /// value that must be current, because whether an entry is reachable is a live-price question.
+  livePrice: number | null;
   last4HClose: number;
   // ATR in price units (atrPercent × close / 100), used to define the entry-zone width
   // (default 0.3 × ATR around the entry price).
@@ -3739,6 +3743,17 @@ async function computeSymbolPredictions(
       const last4H = fourHCandles[fourHCandles.length - 1];
       const last4HHigh = last4H?.high ?? 0;
       const last4HLow = last4H?.low ?? 0;
+      // Live tick for entry-zone detection (2026-08-08). The rest of the pipeline is closed-bar on
+      // purpose — ML features must match how the model was trained — but that made "has price
+      // reached my entry?" answerable only at a 4H CLOSE. A setup does not become actionable on the
+      // candle boundary: price can enter the zone at 10:15 and the old check would not see it until
+      // 12:00, up to ~4h late (and would miss it entirely if price left the zone before the close).
+      // Fetched ONLY for symbols that actually have a live pending setup — `pendingSetupSymbols` is
+      // typically 0-3 — so this is a handful of ticks per cron, not one per archive symbol.
+      let livePrice: number | null = null;
+      if (pendingSetupSymbols.has(symbol)) {
+        try { livePrice = await fetchLivePrice(symbol, isCrypto); } catch { /* best-effort */ }
+      }
       const last4HClose = last4H?.close ?? 0;
       const atrPrice = (features.atrPercent / 100) * last4HClose;
 
@@ -3862,6 +3877,7 @@ async function computeSymbolPredictions(
         biasAlignment,
         last4HHigh,
         last4HLow,
+        livePrice,
         last4HClose,
         atrPrice,
         pUp,
@@ -4241,10 +4257,17 @@ async function processDeviceNotifications(
         // extra `±zoneWidth` "grace" term that doubled the effective window to 0.9 ATR,
         // firing on bars that had already gapped well past the documented ±0.3 ATR zone.
         const isLong = setup.direction === 'LONG';
-        const touched = isLong
+        // TWO ways to be in the zone, because a setup does not become actionable only on a candle
+        // boundary (2026-08-08):
+        //   (a) live price is in the zone RIGHT NOW — detected within one cron tick (~1 min)
+        //       instead of waiting up to 4h for the bar to close;
+        //   (b) the last CLOSED bar's extreme reached the zone — retained so a touch that happened
+        //       and reversed inside that bar is still caught.
+        const liveInZone = pred.livePrice != null && pred.livePrice >= zoneLow && pred.livePrice <= zoneHigh;
+        const closedBarTouched = isLong
           ? pred.last4HLow <= zoneHigh && pred.last4HLow >= zoneLow
           : pred.last4HHigh >= zoneLow && pred.last4HHigh <= zoneHigh;
-        if (!touched) continue;
+        if (!liveInZone && !closedBarTouched) continue;
         // Envelope-gated (2026-07-11): don't page "open the app to confirm + act" into an
         // auto-FLAT analysis. Deliberately does NOT record the notified marker — the touch
         // re-checks next tick and the push fires if the envelope clears while price is still
@@ -4256,7 +4279,13 @@ async function processDeviceNotifications(
         const dirStr = setup.direction;
         const mlPct = Math.round(pred.mlProb * 100);
         const entryStr = setup.entry < 10 ? setup.entry.toFixed(4) : setup.entry.toFixed(2);
-        const body = `${dirStr} setup at $${entryStr} is in range. ML ${mlPct}% — open the app to confirm + act.`;
+        // Quote the LIVE price when that's what triggered it — "is in range" is far more actionable
+        // when you can see where price actually is versus your entry.
+        const nowStr = pred.livePrice != null
+          ? (pred.livePrice < 10 ? pred.livePrice.toFixed(4) : pred.livePrice.toFixed(2)) : null;
+        const body = nowStr
+          ? `${dirStr} entry $${entryStr} — price is $${nowStr} now. ML ${mlPct}% — open to confirm + act.`
+          : `${dirStr} setup at $${entryStr} is in range. ML ${mlPct}% — open the app to confirm + act.`;
         const result = await sendAPNs(env, pushToken, title, body);
         if (result === 'unregistered') {
           await deleteDevice(env, deviceId);

@@ -598,6 +598,20 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-08 — Entry-zone detection moved to LIVE price (a setup doesn't become actionable on a candle boundary)
+
+User framing, which named the design flaw exactly: *"the app used to give notifications all the time, then we decided to do it every 4 hours if there is a valid setup — but a valid setup does not necessarily happen only at 4h close."*
+
+**The flaw was real and measurable in the code.** The whole pipeline is closed-bar on purpose (ML features must match how the model was trained), and the entry-touch test inherited that: `fourHCandles` has the in-progress bar dropped, so `last4HHigh`/`last4HLow` describe the last CLOSED 4H bar. The symbol pass fetched no live price at all (zero `fetchLivePrice` calls in `computeSymbolPredictions`). Consequence: price entering your entry zone at 10:15 was invisible until the 12:00 close — up to ~4h late — and **entirely missed** if price left the zone before that close. "Is my entry reachable?" is a live-price question that was being answered with 4-hour-old data.
+
+**Fix.** The symbol pass now fetches a live tick, but ONLY for symbols in `pendingSetupSymbols` (typically 0-3), so it costs a handful of ticks per cron rather than one per archive symbol. The touch test becomes a union: live price in the zone RIGHT NOW (detected within one cron tick, ~1 min) **OR** the last closed bar's extreme reached it (retained, so a touch that happened and reversed inside that bar is still caught). The push now quotes live price against the entry — `"LONG entry $64230.00 — price is $64251.10 now"` — since "is in range" is much more actionable when you can see where price actually sits.
+
+`livePrice` is the ONE deliberately-current value on `SymbolPrediction`; everything else stays closed-bar for parity, and the comment at the field says so.
+
+500/500 green. Worker-only, needs a box redeploy.
+
+**Note on the two notification classes, which answer different questions:** *setup created* (2026-08-07) fires when an analysis produces a setup — necessarily on the analysis cadence, since a setup can't exist before one runs. *Entry zone reached* is the timely one, and is now live-driven. The analysis cadence itself is still bounded by the 3.5h autorun guard; tightening it is a pure cost dial.
+
 ### 2026-08-07 — Setup notifications now fire on SETUP CREATION, not on the ML-cross chain
 
 User, after the box was confirmed running `dcc3fab` with the cron healthy and still receiving nothing: **"I want notification sent whenever the app creates a setup."** Taken literally, and it is the right design.
