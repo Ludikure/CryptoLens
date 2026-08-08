@@ -78,6 +78,7 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 | `/notifications` | GET | required | Per-device push notification log |
 | `/performance` | GET | required | Per-symbol win/loss aggregate stats |
 | `/ml-predict?symbol=…` | GET | required | Read ML prediction from `ml_preds:all` KV (5-min TTL, written by cron). Returns `{symbol, probability, probabilityH72, features, timestamp, isCrypto}` |
+| `/notify-debug` `?symbol=…` | GET | required | Why no notification fired. Serves the cron's OWN recorded gate decisions (`notify_debug:all` KV, 15-min TTL) plus per-device gates (push token, watchlist, `notif_claims`, `autorun` guard). `blockedBy` names the FIRST closed gate; null = all open |
 | `/auto-analysis?symbol=…` | GET | required | Cached result of a server-side auto-run (`autoanalysis:<symbol>` KV, 1h TTL, written by `runAutoAnalysis`). Same shape as `/full-analysis` + `at`; 404 when nothing cached. Read-only (no claim/delete) — iOS tracks consumption locally in `autoanalysis_seen_<SYM>` |
 | `/ml-models/version` | GET | required | Model JSON metadata (version, features, trees, uploaded date) |
 | `/history` | GET/POST | required (POST: 5/5min rate-limit) | D1 candle archive read / upload from app backtest |
@@ -597,6 +598,18 @@ remains:
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-08-08b — Notify trigger confirmed as ML≥70 AND unambiguous AND envelope-clean; added /notify-debug to end the guessing
+
+User requirement, refined: *"notification when there are favorable conditions, but not only 70% — also no ambiguity, like the conditions the AI would use to create a setup"*, then clarified: *"we need ML 70 plus other factors."* So a CONJUNCTION, with ML≥70 necessary but not sufficient.
+
+**That is already what the trigger does**, verified in code: `crossCandidate = mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0`, then the envelope precheck gates it. And `metaDirection` is literally `notificationDirection(biasAlignment, dStochCross)` — the same union primitive the device pass uses, so the two direction gates agree (checked; they could have drifted). "No ambiguity" is covered twice over: the direction primitive returns 0 when bias and Stoch conflict, and the envelope's `auto_FLAT_active` list carries the rest (`biases_MIXED_and_ML_<70`, `ANY_KILLED`, `chase_into_extended_aligned_trend`, `macro_IMMINENT`, `ML_WIN_<50`) — the AI's own preconditions, by construction, since the precheck builds the REAL prompt.
+
+**So the requirement was not the gap.** Something in the conjunction fails at runtime, and silence looks identical whichever of the five conditions is false — which is exactly why this took several rounds of hypothesis (deferral bug, edge-vs-level, notification location, live-price entry detection) without converging.
+
+**Fix the observability, not another guess.** The symbol pass now records what each gate ACTUALLY decided per symbol per tick (`notify_debug:all` KV, 15-min TTL, one batched write per cron — same discipline as the other per-cron blobs), and new `GET /notify-debug?symbol=…` serves it joined with the per-device gates the symbol pass cannot see: push-token presence, the synced watchlist (the trigger loop iterates exactly this — an empty row means zero notifications regardless of signal quality), the `notif_claims` claim, and the `autorun:<sym>` guard. Each symbol gets **`blockedBy`** — the FIRST closed gate in evaluation order — or null when every gate is open. Recorded decisions, not a re-derivation, so it cannot disagree with what the cron did.
+
+500/500 green. Worker-only, needs a box redeploy.
 
 ### 2026-08-08 — Entry-zone detection moved to LIVE price (a setup doesn't become actionable on a candle boundary)
 

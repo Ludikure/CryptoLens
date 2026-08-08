@@ -1735,6 +1735,64 @@ export default {
       }
     }
 
+    // Why am I not getting notified? Answers it with the cron's OWN recorded decisions rather than
+    // a re-derivation, and adds the per-device gates the symbol pass can't see (push token, claim,
+    // autorun guard). Every remaining hypothesis becomes an observation.
+    if (path === '/notify-debug' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const pushToken = await getPushToken(env, deviceId);
+      let symbolGates: Record<string, any> = {};
+      try { const raw = await env.ALERTS.get('notify_debug:all'); if (raw) symbolGates = JSON.parse(raw); } catch { /* none yet */ }
+
+      // The device's synced watchlist — the trigger loop iterates exactly this, so an empty list
+      // means zero notifications regardless of how good the signals are.
+      let watchlist: string[] = [];
+      try {
+        const rows = await env.DB.prepare('SELECT symbol FROM watchlist WHERE device_id = ?').bind(deviceId).all();
+        watchlist = (rows.results || []).map((r: any) => r.symbol);
+      } catch { /* table may be empty */ }
+
+      const filter = sanitizeSymbol(url.searchParams.get('symbol'));
+      const symbols = filter ? [filter] : (watchlist.length ? watchlist : Object.keys(symbolGates));
+      const perSymbol = await Promise.all(symbols.map(async (sym) => {
+        const g = symbolGates[sym] ?? null;
+        let claimExpiresAt: number | null = null;
+        if (pushToken) {
+          try {
+            const row = await env.DB.prepare('SELECT expires_at FROM notif_claims WHERE push_token = ? AND symbol = ?')
+              .bind(pushToken, sym).first() as any;
+            claimExpiresAt = row?.expires_at ?? null;
+          } catch { /* ignore */ }
+        }
+        const autorunHeld = !!(await env.ALERTS.get(`autorun:${sym}`).catch(() => null));
+        const now = Date.now();
+        const claimHeld = claimExpiresAt != null && claimExpiresAt > now;
+        // The FIRST failing gate, in evaluation order — the actionable answer.
+        let blockedBy: string | null = null;
+        if (!pushToken) blockedBy = 'no_push_token';
+        else if (!watchlist.length) blockedBy = 'empty_watchlist';
+        else if (!g) blockedBy = 'symbol_not_processed_by_cron';
+        else if (!g.mlPasses) blockedBy = `ml_below_threshold (${g.ml}% < ${g.mlThreshold}%)`;
+        else if (!g.directionPasses) blockedBy = 'direction_ambiguous (bias vs Stoch conflict)';
+        else if (g.envelopeFlat === true) blockedBy = `envelope_auto_flat (${(g.envelopeReasons || []).join(', ')})`;
+        else if (claimHeld) blockedBy = 'notify_cooldown_held';
+        else if (autorunHeld) blockedBy = 'autorun_guard_held';
+        return {
+          symbol: sym, ...(g ?? {}),
+          claimHeld, claimExpiresInSec: claimHeld ? Math.round((claimExpiresAt! - now) / 1000) : 0,
+          autorunHeld,
+          blockedBy,   // null = every gate open; a push fires if the analysis yields a setup
+        };
+      }));
+
+      return json({
+        deviceId, hasPushToken: !!pushToken, watchlist,
+        mlThresholdPct: ML_THRESHOLD * 100,
+        note: 'blockedBy = the FIRST gate that would stop a notification. null means all gates open.',
+        symbols: perSymbol,
+      });
+    }
+
     if (path === '/ml-models/version') {
       try {
         const cryptoMeta = await env.MODELS.head('crypto/model-v3.json');
@@ -3110,6 +3168,7 @@ async function computeSymbolPredictions(
   // to carry has no equivalent here because the notified marker moved to KV; the set is only used
   // to decide whether to RUN a precheck, so including an already-notified row costs one extra
   // precheck for a symbol that is almost certainly being prechecked anyway.)
+  const notifyDebug: Record<string, any> = {};
   let pendingSetupSymbols = new Set<string>();
   try {
     const r = await env.DB.prepare(
@@ -3823,8 +3882,10 @@ async function computeSymbolPredictions(
       }
       const crossCandidate = mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0;
       let envelopeFlat: boolean | null = null;
+      let envelopeReasons: string[] | null = null;
       if (crossCandidate || newHighStates.length > 0 || pendingSetupSymbols.has(symbol)) {
         const reasons = await envelopePrecheck(env, symbol, isCrypto, mlProb, candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[], await econEvents());
+        envelopeReasons = reasons;
         envelopeFlat = reasons === null ? null : reasons.length > 0;
         if (envelopeFlat) console.log(`[notify] ${symbol} envelope would auto-FLAT (${(reasons ?? []).join(', ')}) — proactive pushes gated`);
       }
@@ -3865,6 +3926,27 @@ async function computeSymbolPredictions(
         await clearAllDeferrals();   // the signal faded while suppressed — cancel, don't page
         console.log(`[notify] ${symbol} suppressed cross cancelled (ML faded to ${Math.round(mlProb * 100)}%)`);
       }
+
+      // Gate telemetry (2026-08-08). The notify chain is a conjunction of five conditions and
+      // silence looks identical whichever one is false — which is why "I get no notifications" took
+      // several rounds of hypothesis to chase. Record what each gate ACTUALLY decided this tick
+      // (not a re-derivation after the fact) and serve it from GET /notify-debug. One small blob per
+      // cron, same batched-write discipline as the other per-cron KV writes.
+      notifyDebug[symbol] = {
+        at: Date.now(),
+        ml: Math.round(mlProb * 1000) / 10,
+        mlThreshold: ML_THRESHOLD * 100,
+        mlPasses: mlProb >= ML_THRESHOLD,
+        biasAlignment,
+        dStochCross: features.dStochCross || 0,
+        direction: metaDirection,                       // 0 = bias/Stoch conflict → blocked
+        directionPasses: metaDirection !== 0,
+        envelopeChecked: envelopeReasons !== null || envelopeFlat !== null,
+        envelopeFlat,                                   // null = precheck errored (fails OPEN)
+        envelopeReasons,                                // the AI's own auto-FLAT list
+        deferred: wasSuppressed,
+        eligible: crossCandidate && envelopeFlat !== true,
+      };
 
       predictions.set(symbol, {
         symbol,
@@ -3932,6 +4014,7 @@ async function computeSymbolPredictions(
     if (Date.now() - (since as number) > SUPPRESS_EXPIRY_SEC * 1000) delete suppressedMap[sym];
   }
   await env.ALERTS.put('notif_suppressed:all', JSON.stringify(suppressedMap), { expirationTtl: SUPPRESS_EXPIRY_SEC });
+  await env.ALERTS.put('notify_debug:all', JSON.stringify(notifyDebug), { expirationTtl: 900 }).catch(() => {});
   await env.ALERTS.put('ml_snapshots', JSON.stringify(newSnapshots), { expirationTtl: 86400 });
 
   // Batched KV blobs written once per cron in place of 4-5 × 76 per-symbol writes.
