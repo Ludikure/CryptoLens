@@ -4103,10 +4103,20 @@ async function notifySetupCreated(
  *  degrades to the old drop, never to a false page. Exported for tests. */
 export async function deferAutoAnalysisCross(env: Env, pushToken: string, symbol: string, why: string): Promise<void> {
   try {
-    await env.DB.prepare('DELETE FROM notif_claims WHERE push_token = ? AND symbol = ?')
-      .bind(pushToken, symbol).run();
+    // Deliberately does NOT release the notif_claims claim (2026-08-08). Releasing it caused a
+    // DOUBLE TRIGGER: the analysis takes 30-90s, deferring dropped the claim, and the very next
+    // cron tick re-claimed and logged a second trigger ~1 minute after the first — visible as
+    // paired rows in `notifications` (ADA 18:00:42 + 18:02:08, SOL 18:00:16 + 18:01:09). It always
+    // stopped at two because the second attempt hit the 3.5h `autorun:<sym>` guard and returned
+    // without deferring. Harmless while a no-setup analysis sent nothing, but it would double-page
+    // the moment favourable-conditions pushes exist.
+    //
+    // Leaving the claim in place gives exactly the retry cadence we want for free: it and the
+    // autorun guard are both 3.5h, so they lapse together and the next tick does a REAL retry. The
+    // resuppress key below is what keeps `wasSuppressed` true meanwhile, so the retry doesn't need
+    // a fresh ML cross to become eligible again.
     await env.ALERTS.put(`notif_resuppress:${symbol}`, String(Date.now()), { expirationTtl: SUPPRESS_EXPIRY_SEC });
-    console.log(`[autorun] ${symbol} no push (${why}) — claim released, cross re-armed for retry`);
+    console.log(`[autorun] ${symbol} no push (${why}) — cross re-armed, retry when the 3.5h claim + guard lapse`);
   } catch (e) {
     console.log(`[autorun] ${symbol} defer bookkeeping failed: ${e}`);
   }
@@ -4160,9 +4170,35 @@ async function runAutoAnalysis(
     // that leads nowhere" the user asked to stop. The enrichment-free precheck can only under-suppress;
     // THIS is the ground-truth gate (the real analysis said trade-or-not). No setup → suppress silently.
     const setups = Array.isArray(r.result.setups) ? r.result.setups : [];
-    // Deferred, not dropped: the envelope/level picture that produced no setup can clear within the
-    // 24h window, and then this same cross is worth paging on.
-    if (setups.length === 0) { await deferCross('no setup'); return; }
+    // ── FAVOURABLE CONDITIONS, no setup (2026-08-08) ──────────────────────────────────────────
+    // Every precondition the AI uses passed — ML >= 70, bias and Stoch agree, and the envelope
+    // precheck was clean — but the enriched analysis still declined. That is worth telling the
+    // user, and it is what they asked for: notify on favourable conditions, not only on a completed
+    // setup. Measured on this box, the cron produced ~11 FLATs to 0 setups over three days, so
+    // gating purely on a setup meant the proactive path essentially never fired.
+    //
+    // This DOES reverse the 2026-07-14 "no setup → suppress silently" decision, deliberately and
+    // with the thing that made those pushes useless fixed: the old ones said "ML 73%" and led
+    // nowhere, so the user learned to distrust them. This one carries the model's own Bottom Line —
+    // the REASON it declined — which is actionable ("chase into extended trend", "waiting for a
+    // retest") rather than noise. Volume is bounded by the same 3.5h claim + autorun guard, so it
+    // is at most one per symbol per 3.5h.
+    if (setups.length === 0) {
+      await deferCross('no setup');
+      try {
+        const m = String(r.result.analysis).match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
+        const why = m ? m[1].replace(/\*\*/g, '').replace(/\s+/g, ' ').trim() : '';
+        const name = symbol.replace('USDT', '');
+        await sendAPNs(env, pushToken,
+          `${name} conditions favorable · no setup`,
+          why.length ? why.slice(0, 178)
+                     : `ML ${mlPct}% with agreeing signals, but the analysis found no risk-defined entry.`);
+        console.log(`[autorun] ${symbol} favourable-conditions push sent (no setup)`);
+      } catch (e) {
+        console.log(`[autorun] ${symbol} favourable-conditions push failed: ${e}`);
+      }
+      return;
+    }
 
     // The push itself is NOT sent here any more (2026-08-06). runFullAnalysisCore now notifies at
     // the moment a setup is REGISTERED — the one place every analysis path passes through — so

@@ -599,6 +599,19 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-08c — Diagnosed from the box's own data: notify on FAVOURABLE CONDITIONS + fix a self-inflicted double trigger
+
+Ended the guessing with SQL against `/mnt/WDRED/marketscope/marketscope.db`. What it showed:
+- **Push token present, watchlist 11 symbols** on the active device — both prime suspects dead.
+- **`notifications` has rows** (ADA/XRP/SOL `ml_crossing`, ~9 over 3 days, all to the ACTIVE device + live token). So the whole conjunction — ML≥70, decisive direction, clean envelope precheck, claim won — **was firing correctly all along**.
+- **`tracked_setups` explains the silence:** eleven `flat / NO_SETUP` rows against four `setup` rows, and the BTC setups have no matching trigger row in the same window — so they came from MANUAL analyses, which had no push path at all before 88dad17. The cron's own enriched analyses produced essentially zero setups. Trigger fires → LLM declines → setup gate suppresses → silence. Working as designed; the design was the problem.
+
+**Fix 1 — a self-inflicted double trigger (mine).** `deferAutoAnalysisCross` DELETED the `notif_claims` claim. The analysis takes 30-90s, the defer dropped the claim, and the next cron tick re-claimed and logged a SECOND trigger ~1 min after the first — visible as paired rows (ADA 18:00:42 + 18:02:08, SOL 18:00:16 + 18:01:09, ADA 21:32:34 + 21:33:24). It always stopped at two because the second attempt hit the 3.5h `autorun:<sym>` guard and returned without deferring. Harmless while no-setup analyses sent nothing — but it would have double-paged the moment fix 2 shipped. The claim is now HELD: it and the autorun guard are both 3.5h, so they lapse together and the next tick does a real retry, with the resuppress key keeping `wasSuppressed` true meanwhile so no fresh ML cross is needed. (Verified separately that the claim SQL itself is sound — `changes` correctly returns 0 on a held claim under better-sqlite3.)
+
+**Fix 2 — notify on favourable conditions, carrying the reason.** When every precondition passes but the enriched analysis declines, the user is now told: `"BTC conditions favorable · no setup"` + the model's own Bottom Line. This DELIBERATELY reverses the 2026-07-14 "no setup → suppress silently" decision, with the thing that made those pushes useless fixed: the old ones said "ML 73%" and led nowhere, so they trained the user to ignore them; this one carries the REASON ("chase into extended trend", "waiting for a retest"), which is actionable. Two things also differ from July: the gate is far stricter now (ML≥70 AND unambiguous direction AND clean envelope, vs a bare ML crossing), and volume is bounded by the same 3.5h claim + guard — at most one per symbol per 3.5h. Without this the proactive path essentially never fires, since the cron produced ~0 setups in 3 days.
+
+500/500 green. Worker-only — **needs a box redeploy** (still on `dcc3fab`, now 5 commits behind).
+
 ### 2026-08-08b — Notify trigger confirmed as ML≥70 AND unambiguous AND envelope-clean; added /notify-debug to end the guessing
 
 User requirement, refined: *"notification when there are favorable conditions, but not only 70% — also no ambiguity, like the conditions the AI would use to create a setup"*, then clarified: *"we need ML 70 plus other factors."* So a CONJUNCTION, with ML≥70 necessary but not sufficient.

@@ -103,21 +103,23 @@ describe('deferAutoAnalysisCross (defer-not-drop, part 2)', () => {
     };
   }
 
-  it('releases the burned claim and re-arms the cross', async () => {
+  // 2026-08-08: deferring must NOT release the claim. Releasing it double-triggered — the analysis
+  // takes 30-90s, the claim dropped, and the very next cron tick re-claimed and logged a second
+  // trigger ~1 min after the first (paired rows in `notifications`, e.g. ADA 18:00:42 + 18:02:08).
+  // It always stopped at two because the second attempt hit the 3.5h autorun guard. Holding the
+  // claim gives the intended retry cadence for free: claim and guard are both 3.5h, so they lapse
+  // together and the next tick does a REAL retry.
+  it('re-arms the cross but HOLDS the claim (no double trigger a tick later)', async () => {
     const { db, kv, env } = mkEnv();
+    const exp = Date.now() + 3.5 * 3600_000;
     await db.prepare('INSERT INTO notif_claims (push_token, symbol, expires_at) VALUES (?, ?, ?)')
-      .bind('tok-1', 'BTCUSDT', Date.now() + 3.5 * 3600_000).run();
-    // An unrelated claim that must survive.
-    await db.prepare('INSERT INTO notif_claims (push_token, symbol, expires_at) VALUES (?, ?, ?)')
-      .bind('tok-1', 'ETHUSDT', Date.now() + 3.5 * 3600_000).run();
+      .bind('tok-1', 'BTCUSDT', exp).run();
 
     await deferAutoAnalysisCross(env, 'tok-1', 'BTCUSDT', 'no setup');
 
     const btc = await db.prepare('SELECT COUNT(*) as n FROM notif_claims WHERE symbol = ?').bind('BTCUSDT').first();
-    expect(btc.n).toBe(0);                                  // claim released → next tick can re-claim
-    const eth = await db.prepare('SELECT COUNT(*) as n FROM notif_claims WHERE symbol = ?').bind('ETHUSDT').first();
-    expect(eth.n).toBe(1);                                  // scoped to (push_token, symbol)
-    expect(kv['notif_resuppress:BTCUSDT']).toBeDefined();    // re-armed for the symbol pass to adopt
+    expect(btc.n).toBe(1);                                   // held → next tick cannot re-trigger
+    expect(kv['notif_resuppress:BTCUSDT']).toBeDefined();     // but the cross stays armed for the retry
     expect(Number(kv['notif_resuppress:BTCUSDT'])).toBeGreaterThan(0);
   });
 
