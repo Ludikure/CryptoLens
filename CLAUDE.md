@@ -599,6 +599,29 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-14 — "Should we retrain?" — No: the notify gate was on RAW ML while the envelope used CALIBRATED (+ a July measurement error corrected)
+
+User: *"we are routinely missing moves of a few thousand dollars for BTC — should we retrain?"* Measured before answering (120 days of BTC 4H, Kraken; ATR(14) Wilder on 4H, matching how the label's `atrFor4H` is derived):
+
+| | |
+|---|---|
+| mean ATR(4H) | $757 |
+| goodR24 base rate (≥1.5 ATR/24h) | **59.0%** |
+| mean 24h excursion | $1,486 (2.02 ATR) |
+| ≥$3,000 within 72h | 27.2% of bars — **77% of them had a goodR24 event** |
+| ≥$2,000 within 72h | 62.8% of bars — 66% had one |
+| h72t25 target (≥2.5 ATR/72h) | captures **97%** of ≥$3k/72h moves |
+
+**So the target is NOT blind to these moves** — the "wrong horizon" hypothesis is dead. The moves are visible; the *gate* wasn't opening.
+
+**⚠️ Correction to the 2026-07-24 entry.** That entry claimed realized goodR over the BTC window was **0/67, mean 0.66 ATR**, and concluded "the envelope was factually right — a low ML_WIN was accurate." That measurement used the **DAILY** ATR, while the label's `fwdMaxFavR` divides by `atrFor4H` (derived from `atrPercent`, which is the 4H ATR). Daily ATR runs ~3x the 4H ATR, so the threshold was ~3x too strict and the goodR count collapsed to zero. On the correct 4H basis the base rate is 59%, not 0%. **The part of that entry about the FRAMING hatch being unreachable stands** (that was a code-reachability finding, independent of this); the "ML was correct to read low" conclusion does not.
+
+**Root cause found, and it is not the model.** `runFullAnalysisCore` and the envelope precheck have keyed on `calibratedMlWin` since 2026-07-02 — but the NOTIFY threshold was left on the raw `mlProb`. One quantity, two decisions, two different values. With the live curve compressed (the 30-50 bucket realising ~65%), raw systematically under-reads, so the envelope would judge a bar tradeable while the notification never fired. That is precisely "routinely missing moves". Fixed: the notify gate now applies the same 35/65 blend. The curve is fetched ONCE per cron (5 buckets, universe-wide) rather than per symbol, and `/notify-debug` now reports `ml` and `mlCalibrated` side by side so the correction is visible.
+
+**Retrain verdict: not yet, and in this order.** (1) Ship this — it is a consistency bug, free, and directly targets the symptom. (2) Read the live curve via `/ml-calibration`; if it is compressed but still MONOTONIC the model ranks correctly and only its scale has drifted → **recalibrate** (isotonic refit on `ml_calibration`, hours not days, no feature work). (3) Only if the curve is non-monotonic — higher predictions realising *lower* rates — has the model genuinely decayed and earned a full retrain. Note the current 59% base rate versus v14's 50.5% training base rate is itself evidence of a regime shift that a recalibration absorbs cheaply.
+
+500/500 green. Worker-only, needs a box redeploy.
+
 ### 2026-08-08c — Diagnosed from the box's own data: notify on FAVOURABLE CONDITIONS + fix a self-inflicted double trigger
 
 Ended the guessing with SQL against `/mnt/WDRED/marketscope/marketscope.db`. What it showed:

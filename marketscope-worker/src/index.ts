@@ -3169,6 +3169,28 @@ async function computeSymbolPredictions(
   // to decide whether to RUN a precheck, so including an already-notified row costs one extra
   // precheck for a symbol that is almost certainly being prechecked anyway.)
   const notifyDebug: Record<string, any> = {};
+  // Calibration curve, fetched ONCE per cron (5 buckets, universe-wide — not per symbol, so this is
+  // 5 queries per pass rather than 5 x 76). See `calibratedNotifyProb` below for why the notify gate
+  // needs it: the envelope has keyed on calibrated ML since 2026-07-02 while the NOTIFY threshold
+  // was left on the raw number, so the same quantity gated two decisions differently.
+  const calCurve: Record<string, { n: number; realizedPct: number }> = {};
+  try {
+    const bounds: Array<[number, number, string]> = [[0, 0.3, '<30%'], [0.3, 0.5, '30-50%'], [0.5, 0.6, '50-60%'], [0.6, 0.7, '60-70%'], [0.7, 1.01, '70%+']];
+    for (const [lo, hi, label] of bounds) {
+      const row = await env.DB.prepare(
+        `SELECT COUNT(*) as n, AVG(good_r) * 100 as realized FROM ml_calibration
+         WHERE resolved = 1 AND is_crypto = 1 AND logged_at > ? AND predicted_prob >= ? AND predicted_prob < ?`
+      ).bind(Date.now() - 90 * 86400_000, lo, hi).first() as any;
+      if (row?.n > 0 && row?.realized != null) calCurve[label] = { n: row.n, realizedPct: row.realized };
+    }
+  } catch { /* best-effort — falls back to raw */ }
+  /** Same 35/65 blend the envelope uses, so one number gates both decisions. Raw when n < 100. */
+  const calibratedNotifyProb = (raw: number): number => {
+    const label = raw < 0.3 ? '<30%' : raw < 0.5 ? '30-50%' : raw < 0.6 ? '50-60%' : raw < 0.7 ? '60-70%' : '70%+';
+    const c = calCurve[label];
+    if (!c || c.n < 100) return raw;
+    return 0.35 * raw + 0.65 * (c.realizedPct / 100);
+  };
   let pendingSetupSymbols = new Set<string>();
   try {
     const r = await env.DB.prepare(
@@ -3794,7 +3816,13 @@ async function computeSymbolPredictions(
       // setup gate — not the ML threshold — is what keeps notifications quiet. Widening the trigger
       // buys coverage, not noise.
       const risingEdge = prevMl !== undefined && prevMl < ML_THRESHOLD && mlProb >= ML_THRESHOLD;
-      const crossed = mlProb >= ML_THRESHOLD;
+      // Gate on the CALIBRATED probability (2026-08-14), matching what the Conviction Envelope has
+      // used since 2026-07-02. Leaving the notify threshold on raw meant the two disagreed: the
+      // envelope would judge a bar tradeable on a corrected number while the notification never
+      // fired because the raw one sat below 70. With the live curve compressed (the 30-50 bucket
+      // realising ~65%), raw systematically under-reads — which is exactly "we routinely miss moves".
+      const notifyProb = calibratedNotifyProb(mlProb);
+      const crossed = notifyProb >= ML_THRESHOLD;
       if (risingEdge) console.log(`[notify] ${symbol} ML crossed up through ${Math.round(ML_THRESHOLD * 100)}% (${Math.round(mlProb * 100)}%)`);
 
       // Last 4H bar for pending-setup entry-touch detection. Defensive fallback to 0
@@ -3871,7 +3899,7 @@ async function computeSymbolPredictions(
       // map, which persists it and makes the rest of the machinery (cancel-on-fade, 24h prune)
       // work unchanged. Guarded by the ML/direction preconditions so this costs one extra KV read
       // only for the handful of symbols that could actually page.
-      if (!wasSuppressed && mlProb >= ML_THRESHOLD && metaDirection !== 0) {
+      if (!wasSuppressed && notifyProb >= ML_THRESHOLD && metaDirection !== 0) {
         try {
           if (await env.ALERTS.get(`notif_resuppress:${symbol}`)) {
             wasSuppressed = true;
@@ -3880,7 +3908,7 @@ async function computeSymbolPredictions(
           }
         } catch { /* best-effort — a missed re-arm degrades to the old drop, never to a false page */ }
       }
-      const crossCandidate = mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0;
+      const crossCandidate = notifyProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0;
       let envelopeFlat: boolean | null = null;
       let envelopeReasons: string[] | null = null;
       if (crossCandidate || newHighStates.length > 0 || pendingSetupSymbols.has(symbol)) {
@@ -3922,7 +3950,7 @@ async function computeSymbolPredictions(
           clearBlobDeferral();   // NOT the key — see above
           if (effectiveCross) console.log(`[notify] ${symbol} envelope cleared — deferred notification firing`);
         }
-      } else if (wasSuppressed && mlProb < ML_THRESHOLD) {
+      } else if (wasSuppressed && notifyProb < ML_THRESHOLD) {
         await clearAllDeferrals();   // the signal faded while suppressed — cancel, don't page
         console.log(`[notify] ${symbol} suppressed cross cancelled (ML faded to ${Math.round(mlProb * 100)}%)`);
       }
@@ -3935,8 +3963,9 @@ async function computeSymbolPredictions(
       notifyDebug[symbol] = {
         at: Date.now(),
         ml: Math.round(mlProb * 1000) / 10,
+        mlCalibrated: Math.round(notifyProb * 1000) / 10,
         mlThreshold: ML_THRESHOLD * 100,
-        mlPasses: mlProb >= ML_THRESHOLD,
+        mlPasses: notifyProb >= ML_THRESHOLD,
         biasAlignment,
         dStochCross: features.dStochCross || 0,
         direction: metaDirection,                       // 0 = bias/Stoch conflict → blocked
