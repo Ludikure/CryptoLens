@@ -417,7 +417,7 @@ Per-cron flow (every minute via `scheduled()` handler):
 |---|---|---|
 | Timing | **Real-time** (fires the cron tick a 4H close crosses up) | **Real-time** |
 | Days | Every day | Every day (no weekday gate — market-closed bars just don't cross) |
-| Threshold | ML rising-edge >= 70% | ML rising-edge >= 70% |
+| Threshold | calibrated ML level >= 65% (2026-08-21; level not edge since 2026-08-06) | calibrated ML level >= 65% |
 | Direction primitive | bias-aligned OR dStochCross (union, skip conflicts) | bias-aligned OR dStochCross (union, skip conflicts) |
 | Cooldown | 3.5 hours per (push_token, symbol) | 3.5 hours per (push_token, symbol) |
 
@@ -598,6 +598,14 @@ remains:
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-08-21b — Must-offer-entry rule: at high conviction, declining to construct a setup is no longer an allowed output (+ notify threshold 70→65)
+
+Follow-up to the same incident after the user sharpened it: *"the ML was showing 80 but the app was saying stay put"* / *"that is not really protecting me"*. Replayed the REAL prompt builder over the rally with ML pinned at 80 (same method as 2026-07-24; enrichment-free, so a lower bound): **34/34 4H bars Aug 16→21 were envelope-CLEAN** — no chase guard, no mixed-bias FLAT, nothing mechanical said stay put. So at ML 80 the blocker was the LAST layer: the LLM's own discretionary read ("extended, wait for the retest" → NO SETUP), exactly the pattern the 2026-08-08c box-data investigation found (trigger fires → analysis declines → silence). The defensive philosophy held at every layer; when all gates opened, nothing REQUIRED the system to hand the user a trade.
+
+- **`HIGH_CONVICTION_WINDOW` (prompt.ts, envelope else-branch):** when biases are ALIGNED, calibrated ML_WIN ≥ 70, and NO auto-FLAT reason is active, the prompt now emits a directive making a concrete setup MANDATORY — immediate entry at a valid level, otherwise a CONDITIONAL entry at a named pullback level/breakout trigger. "Extended" is required to become the entry CONDITION, not a reason to decline. The **`MIXED_HIGH_ML_WINDOW`** line (2026-07-06) gains the same mandate tail (structure-led, still capped MODERATE). `prompt-system.json` (both markets) reinforces: NO SETUP is not an acceptable output inside either window.
+- **Notify threshold `ML_THRESHOLD` 0.70 → 0.65** — on the CALIBRATED scale the honest PAV map only exceeds 70 at raw ≥ ~79 (a few bars a month), while the live 60-70 band realizes ~66%. 65 looks at the band the forward data says is worth looking at; push volume + LLM cost stay bounded by the setup gate, the 3.5h `notif_claims` claim and the `autorun` guard. Note the auto-analyses triggered in the 65-69 band can still legitimately decline (the mandate starts at 70) — those send the "conditions favorable · no setup" push with the model's reason (2026-08-08c), which is the designed outcome.
+- Fixture extended with the 1H leg; `test/high-conviction-window.test.ts` pins on the REAL tape: envelope CLEAN + `HIGH_CONVICTION_WINDOW` + "LONG setup is MANDATORY" at ML 80, absent at 55. 517/517 green. Worker-only — **needs a box redeploy**.
 
 ### 2026-08-21 — Missed 62k→80k rally diagnosed: TWO gates were closed — live calibration refit (PAV) + direction gate moved off the simplified scorer
 

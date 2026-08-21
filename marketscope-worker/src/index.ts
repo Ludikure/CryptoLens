@@ -2866,7 +2866,11 @@ const ARCHIVE_CRYPTO = [
   'ARBUSDT', 'SUIUSDT', 'PENDLEUSDT', 'SEIUSDT', 'TIAUSDT', 'JUPUSDT', 'PEPEUSDT',
 ];
 
-const ML_THRESHOLD = 0.70;            // top-bucket only — [0.70, 0.85) had 73.1% actual win rate in WF validation
+const ML_THRESHOLD = 0.65;            // on the CALIBRATED scale (2026-08-21, was 0.70): the live curve's
+                                      // 60-70 band realizes ~66% and the honest PAV map only exceeds 70 at
+                                      // raw >= ~79, which made 0.70 pass only a few bars a month. 0.65 looks
+                                      // at the band the forward data says is worth looking at; the setup
+                                      // gate + 3.5h claim/autorun guards still bound pushes and LLM cost.
 const NOTIFY_COOLDOWN_SEC = 3.5 * 60 * 60;
 // How long a suppressed (deferred) cross stays armed before it's considered stale. Shared by the
 // `notif_suppressed:all` blob, its prune sweep, and the per-symbol `notif_resuppress:<sym>` key so

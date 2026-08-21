@@ -1282,8 +1282,18 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         if (highBlocks.length) L(`  HIGH_blocked_because: ${highBlocks.join(', ')}`);
         if (moderateBlocks.length) L(`  MODERATE_blocked_because: ${moderateBlocks.join(', ')}`);
         if (downgrade.length) L(`  downgrade_one_tier_if_LLM_decides: ${downgrade.join(', ')}`);
+        // Must-offer-entry rule (2026-08-21). During the Aug-2026 62k→80k BTC run, every
+        // quantitative gate was open (replayed: 34/34 bars envelope-CLEAN at ML 80) yet the
+        // analyses still declined to construct a setup — "extended, wait for the retest" prose
+        // rendered as NO ENTRY EDGE through a +25% move. When the system's own stack says its
+        // strongest tradeable state is active, declining is no longer an allowed output: the
+        // honest form of caution is a CONDITIONAL entry at a named level, not silence.
+        if ((envAlignment === 'ALIGNED_BULLISH' || envAlignment === 'ALIGNED_BEARISH') && mlPct != null && mlPct >= 70) {
+          const wDir = envAlignment === 'ALIGNED_BULLISH' ? 'LONG' : 'SHORT';
+          L(`  HIGH_CONVICTION_WINDOW: biases aligned ${wDir}, ML_WIN ${mlPct}% >= 70, and NO auto-FLAT reason is active — the system's strongest tradeable state. A concrete ${wDir} setup is MANDATORY: immediate entry if price sits at a valid level, otherwise a CONDITIONAL entry at the nearest validated pullback level or breakout trigger (name the exact price). Outputting NO SETUP or "wait and see" without an Entry/Stop/TP table is NOT an acceptable response in this window — if you judge price extended, that judgment belongs in the CONDITION of the entry, not in declining to provide one.`);
+        }
         if (envAlignment === 'MIXED' && mlPct != null && mlPct >= 70) {
-          L(`  MIXED_HIGH_ML_WINDOW: timeframes disagree but ML_WIN ${mlPct}% >= 70 — statistically the BEST big-move cell (non-aligned bars carry ~2x the >=1.5-ATR move rate of aligned trends; measured on 1.37M clean bars). Direction is NOT implied: trade only a structure-led setup (4H reversal or range-edge level with tight invalidation), counter-trend bands apply, cap MODERATE. Do not frame this as trend-following and do not cite "wait for alignment" — by the time TFs align, the move is statistically spent.`);
+          L(`  MIXED_HIGH_ML_WINDOW: timeframes disagree but ML_WIN ${mlPct}% >= 70 — statistically the BEST big-move cell (non-aligned bars carry ~2x the >=1.5-ATR move rate of aligned trends; measured on 1.37M clean bars). Direction is NOT implied: trade only a structure-led setup (4H reversal or range-edge level with tight invalidation), counter-trend bands apply, cap MODERATE. Do not frame this as trend-following and do not cite "wait for alignment" — by the time TFs align, the move is statistically spent. A concrete structure-led setup is MANDATORY in this window (CONDITIONAL at the nearest valid level if none is IN_PLAY) — do NOT output NO SETUP.`);
         }
         L('  LLM_judgment_required: failure_mode_specific_not_generic, thesis_intact_check');
         L('  → Pick conviction within max_allowed. You may NOT output a tier above max_allowed.');
