@@ -1,7 +1,8 @@
 // MarketScope Worker — Secure proxy with per-device isolation
 // All API keys stay server-side. Device auth via signed tokens.
 
-import { computeScore, type Candle as ScoreCandle, type ScoreResult } from './scoring';
+import { type Candle as ScoreCandle } from './scoring';
+import { fitCalibrationCurve, applyCalibration, type CalBucket, type CalPoint } from './calibration';
 import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket, tailRiskInfo, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
@@ -213,30 +214,49 @@ export async function fetchLiquidationSummary(env: Env, symbol: string):
   } catch { return null; }   // table not created yet (collector never ran) — fine
 }
 
-// Live ML calibration lookup + the calibration-corrected ML_WIN used by the auto-FLAT/quality
-// GATE (2026-07-02). The static isotonic calibration drifts: live data showed the 30-50% bucket
-// realizing ~65%, so the raw number over-triggers "no trade". Blend raw 35/65 toward the measured
-// bucket rate (n>=100) — a symmetric RE-calibration (also LOWERS an over-confident top bucket).
-// Shared by runFullAnalysisCore and the notification envelope precheck.
+// Live ML calibration (2026-08-21 refit — replaces the 2026-07-02 35/65 bucket blend).
+// The static isotonic calibration in the model JSONs drifts; the live forward-graded curve
+// (ml_calibration D1) is the truth. The interim blend corrected per coarse bucket but kept
+// 35% of the stale raw scale, which held a raw 39% at ~52% while the live realized rate was
+// ~60% — one of the two causes of the missed Aug-2026 62k→80k BTC run. Now: fine (5pp)
+// prediction buckets per market → weighted PAV monotone fit → piecewise-linear apply
+// (calibration.ts). Self-updating from D1 on every use, so regime shifts are absorbed
+// without touching the model. Shared by runFullAnalysisCore, the notification envelope
+// precheck, and the symbol pass's notify threshold — one mapping gates every decision.
+const CAL_WINDOW_DAYS = 90;
+
+async function fetchLiveCalBuckets(env: Env, isCrypto: boolean): Promise<CalBucket[]> {
+  try {
+    const res = await env.DB.prepare(
+      `SELECT CAST(predicted_prob * 20 AS INTEGER) AS b, COUNT(*) AS n,
+              AVG(predicted_prob) AS pm, AVG(good_r) AS realized
+         FROM ml_calibration
+        WHERE resolved = 1 AND is_crypto = ? AND logged_at > ?
+        GROUP BY b ORDER BY b`
+    ).bind(isCrypto ? 1 : 0, Date.now() - CAL_WINDOW_DAYS * 86400_000).all();
+    return ((res.results || []) as any[])
+      .filter(r => r.pm != null && r.realized != null)
+      .map(r => ({ predMean: r.pm as number, realized: r.realized as number, n: r.n as number }));
+  } catch { return []; }   // calibration best-effort — callers fall back to raw
+}
+
 async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boolean):
   Promise<{ mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null; calibratedMlWin: number | null }> {
+  if (curWin == null) return { mlCalibration: null, calibratedMlWin: null };
+  const buckets = await fetchLiveCalBuckets(env, isCrypto);
+  // Display metadata for the prompt's "ML Calibration (live, audited)" line: the raw realized
+  // rate of the coarse bucket containing this prediction (pre-PAV — the audit, not the fit).
   let mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null = null;
-  if (curWin != null) {
-    try {
-      const bounds: Array<[number, number, string]> = [[0, 0.3, '<30%'], [0.3, 0.5, '30-50%'], [0.5, 0.6, '50-60%'], [0.6, 0.7, '60-70%'], [0.7, 1.01, '70%+']];
-      const [lo, hi, label] = bounds.find(([l, h]) => curWin >= l && curWin < h) ?? bounds[bounds.length - 1];
-      const row = await env.DB.prepare(
-        `SELECT COUNT(*) as n, AVG(good_r) * 100 as realized FROM ml_calibration
-         WHERE resolved = 1 AND is_crypto = ? AND logged_at > ? AND predicted_prob >= ? AND predicted_prob < ?`
-      ).bind(isCrypto ? 1 : 0, Date.now() - 90 * 86400_000, lo, hi).first();
-      const n = (row?.n as number) ?? 0;
-      if (n > 0 && row?.realized != null) mlCalibration = { n, realizedPct: row.realized as number, windowDays: 90, bucketLabel: label };
-    } catch { /* calibration best-effort */ }
+  const bounds: Array<[number, number, string]> = [[0, 0.3, '<30%'], [0.3, 0.5, '30-50%'], [0.5, 0.6, '50-60%'], [0.6, 0.7, '60-70%'], [0.7, 1.01, '70%+']];
+  const [lo, hi, label] = bounds.find(([l, h]) => curWin >= l && curWin < h) ?? bounds[bounds.length - 1];
+  const inBucket = buckets.filter(b => b.predMean >= lo && b.predMean < hi);
+  const n = inBucket.reduce((s, b) => s + b.n, 0);
+  if (n > 0) {
+    const realized = inBucket.reduce((s, b) => s + b.realized * b.n, 0) / n;
+    mlCalibration = { n, realizedPct: realized * 100, windowDays: CAL_WINDOW_DAYS, bucketLabel: label };
   }
-  let calibratedMlWin: number | null = null;
-  if (mlCalibration && mlCalibration.n >= 100 && curWin != null) {
-    calibratedMlWin = 0.35 * curWin + 0.65 * (mlCalibration.realizedPct / 100);
-  }
+  const curve = fitCalibrationCurve(buckets);
+  const calibratedMlWin = curve ? applyCalibration(curve, curWin) : null;
   return { mlCalibration, calibratedMlWin };
 }
 
@@ -2371,6 +2391,12 @@ export default {
     // gaps = drift. Universe-wide, forward, out-of-sample. See ml_calibration logging/grading.
     if (path === '/ml-calibration' && request.method === 'GET') {
       try {
+        // ?market=crypto|stock filters to one model's forward record AND returns `curve` —
+        // the fitted live mapping (2026-08-21 PAV refit) the gates actually apply, in percent
+        // units. No market param = legacy mixed-market buckets (iOS dashboard), no curve
+        // (a mixed-market fit is meaningless — the gates always fit per market).
+        const market = url.searchParams.get('market');
+        const marketFilter = market === 'crypto' ? 'AND is_crypto = 1' : market === 'stock' ? 'AND is_crypto = 0' : '';
         const buckets = await env.DB.prepare(`
           SELECT
             CASE
@@ -2382,13 +2408,18 @@ export default {
             COUNT(*) as n,
             AVG(predicted_prob) * 100 as predicted,
             AVG(good_r) * 100 as realized
-          FROM ml_calibration WHERE resolved = 1
+          FROM ml_calibration WHERE resolved = 1 ${marketFilter}
           GROUP BY bucket ORDER BY bucket`).all();
         const overall = await env.DB.prepare(
-          'SELECT COUNT(*) as resolved, SUM(CASE WHEN resolved=0 THEN 1 ELSE 0 END) as pending FROM ml_calibration'
+          `SELECT COUNT(*) as resolved, SUM(CASE WHEN resolved=0 THEN 1 ELSE 0 END) as pending FROM ml_calibration`
         ).first();
-        const pend = await env.DB.prepare('SELECT COUNT(*) as n FROM ml_calibration WHERE resolved = 0').first();
-        return json({ buckets: buckets.results ?? [], resolved: (overall?.resolved as number) ?? 0, pending: (pend?.n as number) ?? 0 });
+        const pend = await env.DB.prepare(`SELECT COUNT(*) as n FROM ml_calibration WHERE resolved = 0 ${marketFilter}`).first();
+        let curve: Array<{ x: number; y: number; n: number }> | null = null;
+        if (market === 'crypto' || market === 'stock') {
+          const fit = fitCalibrationCurve(await fetchLiveCalBuckets(env, market === 'crypto'));
+          if (fit) curve = fit.map(p => ({ x: Math.round(p.x * 1000) / 10, y: Math.round(p.y * 1000) / 10, n: p.n }));
+        }
+        return json({ buckets: buckets.results ?? [], resolved: (overall?.resolved as number) ?? 0, pending: (pend?.n as number) ?? 0, ...(curve ? { curve } : {}) });
       } catch (e) {
         return json({ buckets: [], resolved: 0, pending: 0 });
       }
@@ -2902,6 +2933,23 @@ function biasAlignmentFromLabels(dailyBias: string, fourHBias: string): string {
   return 'neutral';
 }
 
+/// Direction-gate bias alignment from the FAITHFUL iOS-port scorer (2026-08-21). The simplified
+/// scoring.ts computeScore previously used here penalizes RSI>70 by 3 points against crypto's +1
+/// price-position weight, so the harder a rally ran the more bearish it leaned: it scored the
+/// Aug-2026 62k→80k BTC breakout as daily-BEARISH on the +7% breakout day (RSI 74) and Neutral
+/// at RSI 84 — holding the notification direction gate closed for the entire move while
+/// /indicators showed the user Bullish / Strong Bullish. Bias here now comes from the same
+/// computeFullIndicators the app displays, so the gate and the screen agree by construction.
+/// (crossAsset/derivatives inputs default 0, exactly like the /indicators endpoint.)
+/// Exported for the fixture regression test on the real Aug-2026 tape.
+export function notificationBiasAlignment(daily: FullCandle[], fourH: FullCandle[], isCrypto: boolean): string {
+  try {
+    const d = computeFullIndicators(daily as any, { timeframe: '1d', label: 'Daily', isCrypto });
+    const h = fourH.length ? computeFullIndicators(fourH as any, { timeframe: '4h', label: '4H', isCrypto }) : null;
+    return biasAlignmentFromLabels(d.bias ?? 'Neutral', h?.bias ?? 'Neutral');
+  } catch { return 'neutral'; }   // gate input — fail to 'neutral' (the dStochCross leg still works)
+}
+
 /// Notification direction primitive: union of bias-aligned OR dStochCross.
 /// Returns +1 for LONG, -1 for SHORT, 0 to skip the notification.
 /// Skips on conflicts (bias and Stoch disagree). See direction_primitive_sweep.py
@@ -3169,27 +3217,20 @@ async function computeSymbolPredictions(
   // to decide whether to RUN a precheck, so including an already-notified row costs one extra
   // precheck for a symbol that is almost certainly being prechecked anyway.)
   const notifyDebug: Record<string, any> = {};
-  // Calibration curve, fetched ONCE per cron (5 buckets, universe-wide — not per symbol, so this is
-  // 5 queries per pass rather than 5 x 76). See `calibratedNotifyProb` below for why the notify gate
-  // needs it: the envelope has keyed on calibrated ML since 2026-07-02 while the NOTIFY threshold
-  // was left on the raw number, so the same quantity gated two decisions differently.
-  const calCurve: Record<string, { n: number; realizedPct: number }> = {};
-  try {
-    const bounds: Array<[number, number, string]> = [[0, 0.3, '<30%'], [0.3, 0.5, '30-50%'], [0.5, 0.6, '50-60%'], [0.6, 0.7, '60-70%'], [0.7, 1.01, '70%+']];
-    for (const [lo, hi, label] of bounds) {
-      const row = await env.DB.prepare(
-        `SELECT COUNT(*) as n, AVG(good_r) * 100 as realized FROM ml_calibration
-         WHERE resolved = 1 AND is_crypto = 1 AND logged_at > ? AND predicted_prob >= ? AND predicted_prob < ?`
-      ).bind(Date.now() - 90 * 86400_000, lo, hi).first() as any;
-      if (row?.n > 0 && row?.realized != null) calCurve[label] = { n: row.n, realizedPct: row.realized };
-    }
-  } catch { /* best-effort — falls back to raw */ }
-  /** Same 35/65 blend the envelope uses, so one number gates both decisions. Raw when n < 100. */
-  const calibratedNotifyProb = (raw: number): number => {
-    const label = raw < 0.3 ? '<30%' : raw < 0.5 ? '30-50%' : raw < 0.6 ? '50-60%' : raw < 0.7 ? '60-70%' : '70%+';
-    const c = calCurve[label];
-    if (!c || c.n < 100) return raw;
-    return 0.35 * raw + 0.65 * (c.realizedPct / 100);
+  // Live calibration curves, fitted ONCE per cron (one fine-bucket D1 query per market — not
+  // per symbol). See `calibratedNotifyProb` below for why the notify gate needs this: the
+  // envelope has keyed on calibrated ML since 2026-07-02 while the NOTIFY threshold was left
+  // on the raw number, so the same quantity gated two decisions differently. Since 2026-08-21
+  // both apply the SAME honest PAV refit (calibration.ts) instead of the 35/65 blend — and the
+  // curve is now per-market (the old code applied the crypto curve to stock symbols too).
+  let cryptoCalCurve: CalPoint[] | null = null;
+  let stockCalCurve: CalPoint[] | null = null;
+  try { cryptoCalCurve = fitCalibrationCurve(await fetchLiveCalBuckets(env, true)); } catch { /* best-effort */ }
+  try { stockCalCurve = fitCalibrationCurve(await fetchLiveCalBuckets(env, false)); } catch { /* best-effort */ }
+  /** Same live-curve mapping the envelope uses, so one number gates both decisions. Raw when the curve is too thin. */
+  const calibratedNotifyProb = (raw: number, forCrypto: boolean): number => {
+    const curve = forCrypto ? cryptoCalCurve : stockCalCurve;
+    return curve ? applyCalibration(curve, raw) : raw;
   };
   let pendingSetupSymbols = new Set<string>();
   try {
@@ -3821,7 +3862,7 @@ async function computeSymbolPredictions(
       // envelope would judge a bar tradeable on a corrected number while the notification never
       // fired because the raw one sat below 70. With the live curve compressed (the 30-50 bucket
       // realising ~65%), raw systematically under-reads — which is exactly "we routinely miss moves".
-      const notifyProb = calibratedNotifyProb(mlProb);
+      const notifyProb = calibratedNotifyProb(mlProb, isCrypto);
       const crossed = notifyProb >= ML_THRESHOLD;
       if (risingEdge) console.log(`[notify] ${symbol} ML crossed up through ${Math.round(ML_THRESHOLD * 100)}% (${Math.round(mlProb * 100)}%)`);
 
@@ -3844,13 +3885,11 @@ async function computeSymbolPredictions(
       const last4HClose = last4H?.close ?? 0;
       const atrPrice = (features.atrPercent / 100) * last4HClose;
 
-      // Per-timeframe bias labels for the notification direction primitive. The
-      // worker's simplified scorer (~80% accurate vs Swift ScoringFunction) is fine
-      // for direction gating — the actual setup direction in the app comes from the
-      // iOS ComputeAll which sees the user the same labels.
-      const dailyScoreRes = computeScore(candles as ScoreCandle[], isCrypto);
-      const fourHScoreRes = computeScore(fourHCandles as ScoreCandle[], isCrypto);
-      const biasAlignment = biasAlignmentFromLabels(dailyScoreRes.bias, fourHScoreRes.bias);
+      // Per-timeframe bias labels for the notification direction primitive — from the
+      // faithful iOS-port scorer, so the gate reads the same labels the app displays.
+      // (Until 2026-08-21 this used the simplified computeScore, whose RSI-overbought
+      // penalty read the strongest rallies as Neutral/Bearish — see notificationBiasAlignment.)
+      const biasAlignment = notificationBiasAlignment(candles as FullCandle[], fourHCandles as FullCandle[], isCrypto);
 
       // Phase 1/2 heads (crypto-only): direction-conditioned triple-barrier meta prob,
       // adaptive-TP2 q75, and the conformal `confident` gate. Additive — served by
