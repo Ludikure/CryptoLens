@@ -7,7 +7,7 @@ import { D1Adapter } from '../server/d1-adapter';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { computeFullIndicators } from '../src/indicators-full';
-import { buildUserPrompt } from '../src/prompt';
+import { buildUserPrompt, systemPrompt } from '../src/prompt';
 
 const PRIMARY: NewsFeed = { id: 'fed', name: 'Federal Reserve', url: 'x', primary: true, scope: 'macro' };
 const OUTLET: NewsFeed = { id: 'ct', name: 'Cointelegraph', url: 'x', primary: false, scope: 'crypto' };
@@ -306,5 +306,20 @@ describe('relevance rule v3 — measured against real crypto-outlet headlines', 
 
   it('word-boundary matching: "bill" must not match "billion"', () => {
     expect(matchedTerms(outlet('Fund raises $2 billion for token launch')).includes('bill')).toBe(false);
+  });
+});
+
+describe('system prompt must tell the model what to DO with headlines', () => {
+  it('both markets: news is placed in The Tape, and is explanation not evidence', () => {
+    // Regression for the gap the user hit: headlines reached the prompt but the OUTPUT format had
+    // no place for them and no instruction to use them, so analyses silently ignored the block —
+    // the same class of miss as the JSON-contract gap in the mandate work.
+    for (const s of [systemPrompt(true), systemPrompt(false)]) {
+      expect(s).toContain('POLICY / MACRO HEADLINES (when the block is present)');
+      expect(s).toContain('`## The Tape`');
+      expect(s).toContain('It is explanation, not evidence.');
+      expect(s).toContain('say NOTHING about news');          // no post-hoc narrative invention
+      expect(s).toContain('fresh PRIMARY-source headline');    // a live catalyst is not a SHORT-mode day
+    }
   });
 });

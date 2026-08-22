@@ -601,6 +601,14 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22g — The analyses ignored the headlines: an input with no output contract
+
+User ran an analysis and got nothing about the news. Diagnosed immediately and it is my error, of the SAME CLASS as the mandate's JSON-contract gap: I added POLICY / MACRO HEADLINES to the USER prompt (`prompt.ts`) and never touched the SYSTEM prompt, which is what defines the output sections and how to use each input. So the model received the block, had no section to put it in, no instruction to use it, and correctly said nothing. The five output sections (Bottom Line / The Tape / Risk Map / If You Take a Position / What to Watch) have no news slot, and SHORT mode emits only two of them.
+
+**Lesson worth generalising: adding an input is half a change.** An input the output contract doesn't mention is a silent no-op — and this is now twice in one week (the mandate could be satisfied in prose while the JSON block emitted `[]`; the headlines arrived with nowhere to go). Any future prompt input needs a matching output instruction in `prompt-system.json`, plus a test asserting it.
+
+Both market prompts now carry: (a) name a headline in ONE clause inside `## The Tape` when it plausibly explains the current tape — deliberately NOT a sixth section, which would undo the 2026-06-29 skeleton collapse; (b) lead the Bottom Line with a fresh, material PRIMARY-source item; (c) **say NOTHING about news when nothing in the block explains this tape** — never reach for a headline, never write "X rose because Y" when the causal link is the model's own inference. The guidance cites the measured null (`news-catalyst-test.md`, 986 Fed releases) so the model is told explicitly that a headline is never grounds to raise conviction, take a side, or override a pre-computed flag: **explanation, not evidence**. A fresh primary headline also now counts as a material change for the FULL-vs-SHORT mode switch — a live catalyst is not a quiet day. 557/557 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-22f — Liquidation collector had captured NOTHING for six weeks: the socket opens, Binance serves no data, nothing detects it
 
 Status check on derivatives capture turned up the worst kind of failure. **REST capture is healthy** — BTC's live derivatives features are all populated (funding 0.01, oiChangePct +0.11, takerRatio 1.025, longPct 49.8, basisPct 0.033), confirming the v14 coverage fix holds. **The websocket liquidation collector has zero rows across BTC/ETH/SOL over 90 days** — nothing since it shipped 2026-07-10.
