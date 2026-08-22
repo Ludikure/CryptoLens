@@ -601,6 +601,25 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22h — Liquidation probe verdict: the box egresses from the US and undici's WebSocket ignores the proxy
+
+`GET /health?probe=liquidations` settled it in one run. **The fix is infrastructure, not code.**
+
+| path | egress | REST | WebSocket |
+|---|---|---|---|
+| direct | **US / Virginia** | 200 | opens, 0 messages |
+| via proxy | **CH / Zurich** | 200 | opens, 0 messages |
+
+Two conclusions. (1) `fetch` honors the `ProxyAgent` dispatcher — the CH egress proves it, and it is why REST derivatives capture has always worked. (2) **`WebSocket` does NOT**: both paths behave identically, which cannot happen if one were really dialing from Zurich and the other from Virginia. So every websocket attempt has been leaving from the box's US IP, and **Binance accepts a websocket from a US address and then serves no data** — reproduced independently from a US dev machine, where a `btcusdt@aggTrade` control stream (many events/sec) also opened and delivered nothing.
+
+**The fix: put the container on gluetun's network** (`network_mode: service:gluetun`) and drop `BINANCE_PROXY_URL`. That makes the container's own IP the Swiss one, so the websocket needs no proxy support at all — removing the dependency on undici's WS-dispatcher behaviour entirely, and simplifying the REST path as a side effect. No code change can substitute: undici cannot be made to proxy a websocket it does not proxy.
+
+**Two more bugs the probe exposed:**
+- **The collector was WEDGED, not merely failing.** Live status showed `state: 'starting'`, `attempts: 0`, `lastError: "non-101 status code"` — the boot-time `error` fired, **no `close` followed**, so `scheduleReconnect` never ran and nothing retried, ever. The handler's comment asserting "close always follows error" is false for this failure. Worse, yesterday's watchdog only acted on `state === 'open'`, so it could not rescue this either. The watchdog now covers NON-open states: stuck >2 min with no connection forces a fresh `connect()`.
+- **A measurement bug in my own probe:** `openedAfterMs` was computed at resolution rather than at the `open` event, so every path reported ~the 10s timeout — hiding exactly the latency difference that reveals whether the proxy is in the path. Now captured at the event.
+
+557/557 green. Worker-only — needs a redeploy, but **the redeploy alone will not fix capture**; the compose change is what matters.
+
 ### 2026-08-22g — The analyses ignored the headlines: an input with no output contract
 
 User ran an analysis and got nothing about the news. Diagnosed immediately and it is my error, of the SAME CLASS as the mandate's JSON-contract gap: I added POLICY / MACRO HEADLINES to the USER prompt (`prompt.ts`) and never touched the SYSTEM prompt, which is what defines the output sections and how to use each input. So the model received the block, had no section to put it in, no instruction to use it, and correctly said nothing. The five output sections (Bottom Line / The Tape / Risk Map / If You Take a Position / What to Watch) have no news slot, and SHORT mode emits only two of them.

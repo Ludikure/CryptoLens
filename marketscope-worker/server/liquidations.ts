@@ -43,6 +43,8 @@ const BACKOFF_CAP_MS = 60_000;
 // socket is dead regardless of what its readyState claims.
 const SILENT_TIMEOUT_MS = 5 * 60_000;
 const WATCHDOG_INTERVAL_MS = 30_000;
+/** How long the collector may sit in a non-open state before the watchdog forces a fresh attempt. */
+const STUCK_TIMEOUT_MS = 2 * 60_000;
 
 export interface LiquidationRow {
   symbol: string;
@@ -118,6 +120,8 @@ export interface LiqStatus {
   attempts: number;
   silentResets: number;
   lastError: string | null;
+  /** Last time the collector made ANY progress (connect attempt or message) — drives the stuck check. */
+  lastProgressAt?: number | null;
 }
 const status: LiqStatus = {
   state: 'starting', connectedAt: null, lastMessageAt: null,
@@ -174,16 +178,20 @@ export async function probeLiquidationPath(): Promise<any> {
   const ws = (useProxy: boolean) => new Promise<any>((resolve) => {
     const t0 = Date.now();
     let opened = false, messages = 0, err: string | null = null, settled = false;
+    let openedAt: number | null = null;   // captured AT the open event; computing it at resolution
+                                          // made every path report ~the 10s timeout, hiding the
+                                          // latency difference that reveals whether the proxy is
+                                          // actually in the path.
     let sock: WebSocket | null = null;
     const done = (verdict: string) => {
       if (settled) return; settled = true;
       try { sock?.close(); } catch { /* ignore */ }
-      resolve({ verdict, opened, messages, openedAfterMs: opened ? Date.now() - t0 : null, error: err });
+      resolve({ verdict, opened, messages, openedAfterMs: openedAt != null ? openedAt - t0 : null, error: err });
     };
     try {
       sock = new WebSocket(wsUrl, (useProxy && dispatcher ? { dispatcher } : {}) as any);
     } catch (e) { err = String(e).slice(0, 140); return done('constructor-threw'); }
-    sock.addEventListener('open', () => { opened = true; });
+    sock.addEventListener('open', () => { opened = true; openedAt = Date.now(); });
     sock.addEventListener('message', () => { messages++; if (messages === 1) done('DELIVERING'); });
     sock.addEventListener('error', (ev: any) => { err = String(ev?.message ?? ev?.error ?? 'unknown').slice(0, 140); });
     sock.addEventListener('close', (ev: any) => {
@@ -219,6 +227,7 @@ export function startLiquidationCollector(env: Env): void {
   let attempts = 0;
   let dropped = 0;
   let current: WebSocket | null = null;
+  const startedAt = Date.now();
 
   // Flusher runs independently of connection state (drains whatever arrived before a drop).
   setInterval(() => {
@@ -243,6 +252,7 @@ export function startLiquidationCollector(env: Env): void {
       attempts = 0;
       status.state = 'open';
       status.connectedAt = Date.now();
+      status.lastProgressAt = Date.now();
       // Deliberately NOT reset on open: the point is to detect a socket that opens and stays mute,
       // so the watchdog clock runs from the connection, not from the last message.
       console.log(`[liq] connected (${proxyUrl ? 'via gluetun proxy' : 'direct'}) — awaiting first event`);
@@ -276,6 +286,7 @@ export function startLiquidationCollector(env: Env): void {
     attempts++;
     status.state = 'reconnecting';
     status.attempts = attempts;
+    status.lastProgressAt = Date.now();
     const delay = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** Math.min(attempts, 6));
     if (attempts === 1 || attempts % 10 === 0) {
       console.log(`[liq] ${why} — reconnect #${attempts} in ${Math.round(delay / 1000)}s`
@@ -292,7 +303,20 @@ export function startLiquidationCollector(env: Env): void {
 
   // Watchdog: a socket that is open but mute is the failure this collector could not see.
   setInterval(() => {
-    if (status.state !== 'open' || !status.connectedAt) return;
+    // A wedged NON-open collector is just as dead as a mute open one, and was not covered before:
+    // observed live with state='starting', attempts=0 and lastError set — the boot-time 'error'
+    // fired but no 'close' followed, so scheduleReconnect never ran and nothing ever retried. The
+    // handler comment claiming "close always follows error" is simply not true for this failure.
+    if (status.state !== 'open') {
+      const stuckFor = Date.now() - (status.lastProgressAt ?? startedAt);
+      if (stuckFor > STUCK_TIMEOUT_MS) {
+        console.log(`[liq] stuck in '${status.state}' for ${Math.round(stuckFor / 1000)}s with no connection — forcing a retry (last error: ${status.lastError ?? 'none'})`);
+        status.lastProgressAt = Date.now();
+        connect();
+      }
+      return;
+    }
+    if (!status.connectedAt) return;
     const quietSince = status.lastMessageAt ?? status.connectedAt;
     const quietMs = Date.now() - quietSince;
     if (quietMs < SILENT_TIMEOUT_MS) return;
