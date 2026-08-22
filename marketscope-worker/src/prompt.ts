@@ -476,6 +476,9 @@ export interface BuildPromptInput {
   sentiment?: CoinInfo | null; stockInfo?: StockInfo | null; derivatives?: DerivativesData | null;
   positioning?: PositioningSnapshot | null; stockSentiment?: StockSentimentData | null;
   economicEvents?: EconomicEvent[]; macro?: MacroSnapshot | null; weeklyContext?: string | null; spyContext?: string | null;
+  // Policy/macro catalyst headlines (src/news.ts). Context only — never an ML feature, never a
+  // direction input; `catalystActive` marks a PRIMARY-source release inside the last ~12h.
+  news?: { headlines: string[]; catalystActive: boolean; latestPrimaryAgeH: number | null } | null;
   spotPressure?: SpotPressure | null; dataQuality?: DataQuality | null; crossAsset?: CrossAssetContext | null;
   outcomeHistory?: OutcomeHistoryItem[];
   archetypeRecord?: { wins: number; losses: number; total: number } | null;   // E7 (from D1 trade_outcomes)
@@ -1281,6 +1284,18 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
             L(`  FRAMING: this FLAT is "no volatility-edge entry" (ML_WIN gauges a sharp >=1.5-ATR move, unlikely here), NOT "quiet / nothing happening" — Environment Risk is ${envRisk} and the ${trendDir}-trend is intact. Riding an existing trend is a separate decision this tool does not gate; say so plainly instead of a flat "stand aside". Do NOT imply the tape is safe.`);
           }
         }
+        // Catalyst framing on a CHASE flat (2026-08-22). The chase guard fires on extended +
+        // exhaustion, and its evidence is real (trend_direction_test.py: a mature aligned trend
+        // carries ~0% forward EV). But its implicit model is a move that ran out of buyers, and a
+        // policy repricing is a different animal — the whole range resets rather than mean-reverts.
+        // This does NOT open the gate: the FLAT stands, because "a catalyst exists" is a heuristic
+        // with no walk-forward evidence behind it and loosening a validated guard on narrative
+        // would be exactly the mistake this project's graveyard is full of. What it fixes is the
+        // MESSAGE — a chase FLAT otherwise suppresses the framing hatch entirely and emits a bare
+        // NO SETUP, which reads as "nothing here" on the one day the tape is repricing hardest.
+        if (input.news?.catalystActive && autoFlat.includes('chase_into_extended_aligned_trend')) {
+          L(`  FRAMING (catalyst): a PRIMARY-source policy release landed ~${input.news.latestPrimaryAgeH}h ago (see POLICY / MACRO HEADLINES). An extended move WITH a fresh policy catalyst behind it is a repricing, not the buyer-exhaustion this FLAT is designed to catch — so say plainly that the FLAT is about ENTRY TIMING (chasing an already-run move risks a violent retrace), NOT a claim that the move is over or that the trend should be faded. If the user already holds a position in the trend direction, this is explicitly NOT an exit signal. Still output NO SETUP — but name the catalyst and give the level a pullback entry would need.`);
+        }
       }
       else {
         if (highBlocks.length) L(`  HIGH_blocked_because: ${highBlocks.join(', ')}`);
@@ -1708,6 +1723,19 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     L(`Taker Buy Ratio (24h): ${f(sp.takerBuyRatio, 2)} (${sp.takerBuyLabel})`);
     L(`CVD 24h: ${f(sp.cvd24h, 1)} (${sp.cvdTrend})`);
     if (sp.bookRatio != null && sp.bookLabel) L(`Order Book: ${f(sp.bookRatio, 2)} (${sp.bookLabel})`);
+  }
+
+  // Policy / macro catalyst headlines (2026-08-22). Context, NOT a signal — see src/news.ts.
+  // Placed before the economic calendar because the calendar covers SCHEDULED releases while
+  // these are the unscheduled catalysts (a regulator ruling, a Treasury action, legislation)
+  // that repriced the tape without ever appearing on a calendar.
+  if (input.news?.headlines?.length) {
+    L(); L('=== POLICY / MACRO HEADLINES (context, not a trade signal) ===');
+    for (const h of input.news.headlines) L(`  ${h}`);
+    L('  Interpretation: use these ONLY to explain WHY the tape is behaving as it is and to size event risk.');
+    L('  They are NOT direction: headlines are priced in seconds by machines, long before this analysis runs,');
+    L('  and no headline here has been shown to predict the next move. Never raise conviction on a headline alone,');
+    L('  and never contradict the pre-computed flags because of one.');
   }
 
   // Economic events

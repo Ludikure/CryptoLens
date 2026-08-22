@@ -13,6 +13,7 @@ import { forecastVol, bandMultipliers } from './vol';
 import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
 import { correlationReport } from './correlation';
+import { pollNewsFeeds, fetchRecentNews } from './news';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -427,7 +428,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
 
   // Enrichment (additive, best-effort, parallel).
   const nowMs = Date.now();
-  const [deriv, macro, spotPressure, sentiment, crossAsset, economicEvents, stock] = await Promise.all([
+  const [deriv, macro, spotPressure, sentiment, crossAsset, economicEvents, stock, news] = await Promise.all([
     isCrypto ? fetchDerivativesEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
     fetchMacroEnrichment(env).catch(() => null),
     isCrypto ? fetchSpotPressureEnrichment(symbol).catch(() => null) : Promise.resolve(null),
@@ -435,6 +436,9 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     isCrypto ? fetchCrossAssetEnrichment().catch(() => null) : Promise.resolve(null),
     fetchEconomicEvents(nowMs).catch(() => []),
     !isCrypto ? fetchStockEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
+    // Policy/macro catalyst headlines (2026-08-22) — a D1 read of what the cron already polled,
+    // so it costs no upstream request. Crypto sees macro + crypto scope; stocks see macro only.
+    fetchRecentNews(env, { isCrypto, nowMs }).catch(() => null),
   ]);
 
   // Observed liquidation flow (crypto) — best-effort, from the box collector's archive.
@@ -467,7 +471,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, livePrice, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing, liquidations,
+    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing, liquidations, news,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });
@@ -2416,6 +2420,26 @@ export default {
     // Live calibration of the ML quality model: realized goodR rate by predicted-probability
     // bucket. If predicted-70% bars hit ~70% in the wild, the model is still honest; large
     // gaps = drift. Universe-wide, forward, out-of-sample. See ml_calibration logging/grading.
+    // Headline feed state: what the prompt is actually seeing, plus per-feed health from the last
+    // poll. `?force=1` runs a poll inline — the way to check egress from the BOX (gluetun) rather
+    // than from a dev machine, which is the one thing that could make the whole feed a non-starter.
+    if (path === '/news' && request.method === 'GET') {
+      try {
+        const nowMs = Date.now();
+        if (url.searchParams.get('force') === '1') {
+          const { inserted, health } = await pollNewsFeeds(env as any, nowMs);
+          await env.ALERTS.put('news:health', JSON.stringify({ at: nowMs, inserted, health }), { expirationTtl: 86400 }).catch(() => {});
+          return json({ forced: true, inserted, health });
+        }
+        const cached = await env.ALERTS.get('news:health').catch(() => null);
+        const isCrypto = (url.searchParams.get('market') ?? 'crypto') === 'crypto';
+        const prompt = await fetchRecentNews(env as any, { isCrypto, nowMs });
+        return json({ lastPoll: cached ? JSON.parse(cached) : null, promptView: prompt });
+      } catch (e) {
+        return json({ error: String(e) }, 500);
+      }
+    }
+
     if (path === '/ml-calibration' && request.method === 'GET') {
       try {
         // ?market=crypto|stock filters to one model's forward record AND returns `curve` —
@@ -2461,6 +2485,7 @@ export default {
     ctx.waitUntil(checkAllDeviceScores(env));
     ctx.waitUntil(archiveShortInterest(env));
     ctx.waitUntil(cleanupStaleDevices(env));
+    ctx.waitUntil(pollNewsIfDue(env));
   },
 };
 
@@ -4654,6 +4679,28 @@ async function getPushToken(env: Env, deviceId: string): Promise<string | null> 
     return device.pushToken || device.token || null;
   } catch {
     return null;
+  }
+}
+
+// Policy/macro headline poll (2026-08-22). Every ~15 min, not every minute: these feeds update on
+// the order of hours, publishers' fair-access norms deserve respect, and the analysis reads from
+// D1 rather than from the fetch — so a faster poll would buy nothing. KV-gated the same way the
+// other periodic jobs are; fully fault-isolated (a poll failure must never touch the cron pass).
+// Per-feed health is cached for `GET /news`, which is how a gluetun-blocked publisher becomes
+// visible instead of just quietly missing.
+const NEWS_POLL_INTERVAL_MS = 15 * 60_000;
+async function pollNewsIfDue(env: Env): Promise<void> {
+  try {
+    const last = Number(await env.ALERTS.get('news:last_poll').catch(() => null)) || 0;
+    const now = Date.now();
+    if (now - last < NEWS_POLL_INTERVAL_MS) return;
+    await env.ALERTS.put('news:last_poll', String(now), { expirationTtl: 86400 });
+    const { inserted, health } = await pollNewsFeeds(env as any, now);
+    await env.ALERTS.put('news:health', JSON.stringify({ at: now, inserted, health }), { expirationTtl: 86400 }).catch(() => {});
+    const bad = health.filter(h => !h.ok);
+    console.log(`[news] polled ${health.length} feeds, ${inserted} new item(s)${bad.length ? ` — FAILED: ${bad.map(b => `${b.id}(${b.error})`).join(', ')}` : ''}`);
+  } catch (e) {
+    console.log(`[news] poll failed: ${e}`);
   }
 }
 
