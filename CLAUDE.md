@@ -601,6 +601,20 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22e — Crypto-outlet gate tuned against the live feeds (~50% → ~90% precision)
+
+With the regulator noise gone, outlets fill most of the 6 slots most days (Fed `monetary` is only ~15 releases/year), so outlet quality IS the feature's quality. Measured the gate against the live CoinDesk + Cointelegraph feeds and tuned it — every rule below is a response to a real headline, not a guess.
+
+**The confirmation that mattered:** the actual catalyst behind the missed rally is in the feed and passes — *"How a Treasury buyback tweak helped bitcoin surge 25% to nearly $80,000 in days"* and *"Treasury's latest measure isn't QE or YCC. Still, bitcoin is skyrocketing."*
+
+Four fixes, kept set went 13/25 → 10/25 (CoinDesk) and 13/30 → 10/30 (Cointelegraph) while RECOVERING real stories:
+- **`treasury` is ambiguous in crypto media** — it usually means a company holding BTC, not the department. It was admitting *"crypto stocks soaring as miners, treasury companies jump"* and *"Strategy Bitcoin treasury hits breakeven"* on a word that exists to catch bond policy. New `VOID_CONTEXT` voids that sense on narrow phrasings (`treasury compan`, `bitcoin treasury`, `treasury holding`…) while both genuine Treasury-policy articles still match.
+- **Recap veto, judged on the TITLE alone.** `RECAP_PATTERNS` (live updates / moving average / analysts split / bears get…) drop an item unless its title also names a POLICY action. Title-scoping was essential: *"Bitcoin breaks above 200-day moving average"* and *"Here's what happened in crypto today"* escaped the veto on a stray "treasury" in their **summaries**. Summaries are teasers and digests; the title is what a story is about. (That headline is also something the app computes itself, from candles, more accurately.)
+- **Missing legal/legislative vocabulary added** — the gate had been DROPPING real news: *"South Korean lawmakers seek expanded FIU powers"*, *"Pass the Clarity Act"*, *"Capital.com … after affiliate wins licence"*. Added lawmaker/parliament/congress/senate/court/sued/tax/licence/clarity act/executive order, plus `approval` — voided against the Fed's bank-merger boilerplate (`approval of application`) so it recovers *"Japan's first crypto approval in four years"* without re-admitting National Westminster.
+- **Word-boundary matching** replaces substring matching, retiring the `'sec '` / `'ban '` trailing-space hacks (which failed at end-of-title) and the `bill`/`billion` collision.
+
+Regression tests pin every one of these against the real headlines. 556/556 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-22d — First live output killed the "primaries pass on provenance" rule
 
 Box redeployed; `GET /news?force=1` confirmed **egress works — all feeds reachable through gluetun** (the one risk that could have made the whole feature a non-starter). But the first real prompt view was bad, and in an instructive way. Top three slots, ranked ABOVE everything else because primaries sort first:

@@ -75,28 +75,66 @@ export const NEWS_FEEDS: NewsFeed[] = [
 //
 // For a crypto outlet the question is the opposite: EVERY headline says "bitcoin", so asset words
 // answer nothing. The question there is "is this an event, or a recap of the price move the tape
-// already shows me?" — which only event words answer. Using one shared vocabulary made the outlet
-// gate WEAKER (it re-admitted "Bitcoin surges past $80K"), which the tests caught before deploy.
+// already shows me?" — which only event words answer.
+//
+// Matching is WORD-BOUNDARY, not substring (2026-08-22b). Substring matching forced hacks like
+// 'sec ' and 'ban ' with trailing spaces, silently failed at end-of-title, and would have matched
+// "bill" inside "billion". A \b…\b regex handles all of it correctly.
 const ASSET_TERMS = [
   'bitcoin', 'btc', 'ethereum', 'crypto', 'digital asset', 'blockchain', 'token',
   'defi', 'web3', 'stablecoin', 'coinbase', 'binance',
 ];
-const EVENT_TERMS = [
-  // macro policy
+// POLICY = the subset that denotes an actual policy/legal action. Doubles as the ESCAPE from the
+// recap veto below: a price-recap headline that ALSO names a policy action is real news.
+const POLICY_TERMS = [
+  // macro
   'fomc', 'monetary policy', 'interest rate', 'rate cut', 'rate hike', 'basis point',
-  'inflation', 'cpi', 'jobs report', 'unemployment', 'yield', 'treasury', 'quantitative',
-  'debt ceiling', 'refunding', 'tariff', 'recession', 'sanction', 'liquidity',
-  // rulemaking / legal / regulator (agency names count as SUBJECT for an outlet; SELF_TERMS
-  // removes them for the agency's own feed, where they are only metadata)
-  'legislation', 'regulation', 'regulator', 'mica', 'etf', 'ban ', 'banned', 'lawsuit',
-  'settlement', 'indict', 'custody rule', 'federal reserve', 'fed ', 'sec ', 'cftc',
-  // security events that genuinely reprice a token
-  'exploit', 'hack', 'seizure',
+  'inflation', 'cpi', 'jobs report', 'unemployment', 'yield', 'quantitative', 'debt ceiling',
+  'refunding', 'tariff', 'recession', 'sanction', 'sanctions', 'treasury',
+  // legal / legislative / regulator. Added 2026-08-22b after the live gate DROPPED real stories:
+  // "South Korean lawmakers seek expanded FIU powers over unregistered crypto firms" and
+  // "Pass the Clarity Act" both failed for want of this vocabulary.
+  'legislation', 'legislative', 'regulation', 'regulations', 'regulator', 'regulatory', 'mica',
+  'ban', 'banned', 'lawsuit', 'sued', 'sues', 'court', 'judge', 'settlement', 'indict', 'indicted',
+  'subpoena', 'tax', 'taxes', 'license', 'licence', 'lawmaker', 'lawmakers', 'parliament',
+  'congress', 'senate', 'clarity act', 'executive order', 'federal reserve', 'fed', 'sec', 'cftc',
+  'approval', 'approves',
 ];
+// Event-but-not-policy: real happenings that reprice a token without being a policy action.
+const OTHER_EVENT_TERMS = ['etf', 'exploit', 'hack', 'hacked', 'seizure', 'custody rule'];
+const EVENT_TERMS = [...POLICY_TERMS, ...OTHER_EVENT_TERMS];
 const CATALYST_TERMS = [...ASSET_TERMS, ...EVENT_TERMS];
+
+/**
+ * Terms whose match is VOIDED by a nearby phrase, because the same word means something else in
+ * this corpus. "Treasury" is the big one: in crypto media it usually means a COMPANY holding
+ * bitcoin, not the US department — observed live admitting "crypto stocks soaring as miners,
+ * treasury companies jump" and "Strategy Bitcoin treasury hits breakeven" on a word that exists
+ * here to catch bond policy. The voiding phrases are deliberately narrow so the genuine articles
+ * ("How a Treasury buyback tweak helped bitcoin surge...", "Treasury's latest measure isn't QE")
+ * still match.
+ */
+const VOID_CONTEXT: Record<string, string[]> = {
+  // "approval" recovers real licensing news ("Japan's first crypto exchange approval in four
+  // years") but is also the Fed's standard bank-merger boilerplate — void it on that phrasing.
+  approval: ['approval of application', 'bank holding compan', 'merger application'],
+  treasury: ['treasury compan', 'bitcoin treasury', 'crypto treasury', 'treasury holding',
+             'digital asset treasury', 'treasury firm', 'treasury strategy', 'treasury reserve'],
+};
+
+/**
+ * Price-recap shapes. These VETO an item unless it also names a POLICY action — the tape reports
+ * price far better than a headline can, and "Bitcoin breaks above its 200-day moving average" is
+ * something this app computes itself, from the actual candles, more accurately.
+ */
+const RECAP_PATTERNS = [
+  'live updates', 'what happened in crypto', 'moving average', 'analysts split', 'price prediction',
+  'year-end call', 'bears get', 'bulls take', 'altcoin season', 'best week', 'buzz',
+];
+
 /** Terms that are merely the publisher's own name in its own feed — never subject matter there. */
 const SELF_TERMS: Record<string, string[]> = {
-  fed: ['federal reserve', 'fed '], sec: ['sec '], cftc: ['cftc'],
+  fed: ['federal reserve', 'fed'], sec: ['sec'], cftc: ['cftc'],
 };
 
 export interface NewsItem {
@@ -205,11 +243,21 @@ export function parseFeed(xml: string, feed: NewsFeed): NewsItem[] {
   return out;
 }
 
-/** Which catalyst terms a headline matches, ignoring the publisher's own name in its own feed. */
+const escapeRe = (t: string) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** Word-boundary matchers, built once at module load rather than per item. */
+const TERM_RE: Record<string, RegExp> = Object.fromEntries(
+  CATALYST_TERMS.map(t => [t, new RegExp(`\\b${escapeRe(t)}\\b`, 'i')]));
+
+/** Which catalyst terms a headline matches, ignoring self-names and context-voided senses. */
 export function matchedTerms(item: { title: string; summary: string; source?: string }): string[] {
   const hay = `${item.title} ${item.summary}`.toLowerCase();
   const self = SELF_TERMS[item.source ?? ''] ?? [];
-  return CATALYST_TERMS.filter(t => !self.includes(t) && hay.includes(t));
+  return CATALYST_TERMS.filter(t => {
+    if (self.includes(t)) return false;
+    if (!TERM_RE[t].test(hay)) return false;
+    const voids = VOID_CONTEXT[t];
+    return !(voids && voids.some(v => hay.includes(v)));
+  });
 }
 
 /**
@@ -221,15 +269,25 @@ export function matchedTerms(item: { title: string; summary: string; source?: st
  *  - Other PRIMARY releases need an asset or event subject. This replaced a blanket provenance
  *    pass on 2026-08-22, after the deployed version put a bank-merger approval and an
  *    advisory-committee "ICYMI" in the model's top-ranked slots.
- *  - OUTLET stories need an EVENT subject specifically. An asset name is not enough there: every
- *    crypto headline contains one, so accepting them re-admits exactly the price recaps this gate
- *    exists to exclude — and the tape already reports price far better than a headline can.
+ *  - OUTLET stories need an EVENT subject specifically. An asset name is not enough: every crypto
+ *    headline has one, so accepting them re-admits the price recaps this gate exists to exclude.
+ *  - A recap-shaped headline is vetoed unless it names a POLICY action — which is what keeps
+ *    "Treasury buyback tweak helped bitcoin surge 25%" while dropping "Bitcoin breaks above its
+ *    200-day moving average".
  */
 export function isRelevant(item: NewsItem): boolean {
   if (item.source === 'fed' && item.category === 'monetary') return true;
   const terms = matchedTerms(item);
   if (!terms.length) return false;
-  return item.primary || terms.some(t => EVENT_TERMS.includes(t));
+  // The recap veto and its policy escape are judged on the TITLE ALONE. Summaries are teasers and
+  // digests — matching them let "Bitcoin breaks above 200-day moving average" and "Here's what
+  // happened in crypto today" escape the veto on a stray "treasury" in the blurb. The title is what
+  // the story is ABOUT; the summary is kept for display, not for deciding.
+  const titleOnly = { title: item.title, summary: '', source: item.source };
+  const titleTerms = matchedTerms(titleOnly);
+  const t = item.title.toLowerCase();
+  if (RECAP_PATTERNS.some(r => t.includes(r)) && !titleTerms.some(x => POLICY_TERMS.includes(x))) return false;
+  return item.primary || terms.some(x => EVENT_TERMS.includes(x));
 }
 
 export async function ensureNewsTable(env: { DB: any }): Promise<void> {

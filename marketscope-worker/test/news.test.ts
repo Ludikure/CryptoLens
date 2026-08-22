@@ -126,15 +126,15 @@ describe('pollNewsFeeds + fetchRecentNews (in-memory D1)', () => {
     });
 
     const first = await pollNewsFeeds(env, NOW, feeds);
-    // fed feed: the monetary release auto-passes on its slug; the Bitcoin item passes as a primary
-    // naming an asset. outlet feed: the Fed-worded item passes (an outlet writing ABOUT the Fed is
-    // subject matter, and SELF_TERMS only suppresses that inside the Fed's own feed), while the
-    // price recap is asset-only and drops. That asymmetry is the whole design.
-    expect(first.inserted).toBe(3);
+    // fed feed: the monetary release auto-passes on its slug; the "bulls take control" item is a
+    // price recap with no policy word in its title, so the recap veto drops it even from a primary
+    // feed. outlet feed: the Fed-worded item passes (an outlet writing ABOUT the Fed is subject
+    // matter, and SELF_TERMS only suppresses that inside the Fed's own feed).
+    expect(first.inserted).toBe(2);
     const blocked = first.health.find(h => h.id === 'dead')!;
     expect(blocked.ok).toBe(false);
     expect(blocked.error).toContain('ECONNREFUSED');
-    expect(first.health.find(h => h.id === 'fed')!.kept).toBe(2);
+    expect(first.health.find(h => h.id === 'fed')!.kept).toBe(1);
     expect(first.health.find(h => h.id === 'ct')!.kept).toBe(1);   // the Fed story, not the price recap
 
     // Re-poll: same GUIDs, nothing new.
@@ -143,7 +143,7 @@ describe('pollNewsFeeds + fetchRecentNews (in-memory D1)', () => {
 
     // Prompt view: primaries first, formatted with age, catalyst flagged.
     const view = (await fetchRecentNews(env, { isCrypto: true, nowMs: NOW }))!;
-    expect(view.headlines.length).toBe(3);
+    expect(view.headlines.length).toBe(2);
     expect(view.headlines[0]).toContain(', official');
     expect(view.headlines[0]).toMatch(/\[Federal Reserve, official, \d+h ago\]/);
     expect(view.catalystActive).toBe(true);          // Fed release 1.5h ago
@@ -257,5 +257,54 @@ describe('pruneIrrelevant — a rule change must clean up after itself', () => {
     expect(view.headlines).toHaveLength(1);
     expect(view.headlines[0]).toContain('Minutes of the Federal Open Market Committee');
     db.close?.();
+  });
+});
+
+// Vocabulary v3 (2026-08-22b), tuned against the LIVE feeds. Every headline below is real, taken
+// from CoinDesk/Cointelegraph output on the day the gate was measured at ~50% precision.
+describe('relevance rule v3 — measured against real crypto-outlet headlines', () => {
+  const outlet = (title: string, summary = '') => ({
+    id: 'x', source: 'coindesk', sourceName: 'CoinDesk', title, summary, url: '',
+    publishedAt: 0, primary: false, scope: 'crypto' as const, category: null,
+  });
+
+  it('keeps the catalyst behind the Aug-2026 rally — the reason this feature exists', () => {
+    expect(isRelevant(outlet('How a Treasury buyback tweak helped bitcoin surge 25% to nearly $80,000 in days'))).toBe(true);
+    expect(isRelevant(outlet("Treasury's latest measure isn't QE or YCC. Still, bitcoin is skyrocketing. Here's why."))).toBe(true);
+  });
+
+  it('"treasury" in crypto media usually means a company holding BTC — that sense is voided', () => {
+    expect(isRelevant(outlet('Bitcoin rally sends crypto stocks soaring as miners, treasury companies jump'))).toBe(false);
+    expect(isRelevant(outlet('Strategy Bitcoin treasury hits breakeven point as BTC price passes $77K'))).toBe(false);
+  });
+
+  it('vetoes price recaps — including when a policy word appears only in the summary', () => {
+    // This one shipped: it escaped the veto on a stray "treasury" in its blurb. The veto and its
+    // escape are judged on the TITLE alone precisely because of it.
+    expect(isRelevant(outlet('Bitcoin breaks above 200-day moving average for first time since November',
+                             'Bitcoin treasury firms cheered the move'))).toBe(false);
+    expect(isRelevant(outlet('Here’s what happened in crypto today', 'regulation, treasury, lawsuit'))).toBe(false);
+    expect(isRelevant(outlet('Analysts split on whether Bitcoin\'s surge past key levels signals a new bull run'))).toBe(false);
+  });
+
+  it('recovers real regulatory stories the earlier vocabulary dropped', () => {
+    expect(isRelevant(outlet('South Korean lawmakers seek expanded FIU powers over unregistered crypto firms'))).toBe(true);
+    expect(isRelevant(outlet('Pass the Clarity Act'))).toBe(true);
+    expect(isRelevant(outlet("Nomura-backed Laser Digital wins Japan's first crypto approval in four years"))).toBe(true);
+    expect(isRelevant(outlet('Capital.com plans UAE spot crypto services after affiliate wins licence'))).toBe(true);
+  });
+
+  it("'approval' still does not re-admit the Fed's bank-merger boilerplate", () => {
+    const fedOrder = {
+      id: 'y', source: 'fed', sourceName: 'Federal Reserve', summary: '',
+      title: 'Federal Reserve Board announces approval of application by National Westminster Bank Plc',
+      url: 'https://www.federalreserve.gov/newsevents/pressreleases/orders20260820a.htm',
+      publishedAt: 0, primary: true, scope: 'macro' as const, category: 'orders',
+    };
+    expect(isRelevant(fedOrder)).toBe(false);
+  });
+
+  it('word-boundary matching: "bill" must not match "billion"', () => {
+    expect(matchedTerms(outlet('Fund raises $2 billion for token launch')).includes('bill')).toBe(false);
   });
 });
