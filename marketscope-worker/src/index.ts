@@ -711,6 +711,13 @@ export default {
       // missing-secret misconfig (e.g. the app's Finnhub badge going red) is diagnosable remotely
       // without auth. A red badge + finnhub:false here = the key wasn't carried to the box env.
       const providers = { finnhub: !!env.FINNHUB_API_KEY };
+      // Liquidation collector state. Surfaced here because that series CANNOT be backfilled, so a
+      // dead collector must be visible without reading container logs — `/liquidations` returning
+      // an empty array is indistinguishable from a quiet market, which is how six weeks of loss
+      // went unnoticed (2026-08-22). `healthy` is judged on DATA FLOW, not connection state: the
+      // actual failure was a socket that opened and then delivered nothing, forever.
+      let liquidations: any = null;
+      try { liquidations = (globalThis as any).__marketscopeLiqStatus?.() ?? null; } catch { /* never fail /health */ }
       // `/health?probe=finnhub` does ONE live market-status ping and returns the upstream HTTP
       // status (cached 60s) — so "key present but badge still red" is diagnosable in one curl:
       //   403 = market-status is a premium endpoint (free-tier key) · 401 = bad key · 429 = rate limit.
@@ -744,7 +751,7 @@ export default {
         }
         return json({ status: 'ok', build, finnhub: probe });
       }
-      return json({ status: 'ok', build, providers });
+      return json({ status: 'ok', build, providers, ...(liquidations ? { liquidations } : {}) });
     }
 
     // Dead-man's-switch for the cron pipeline. Public (no auth) so an external uptime

@@ -30,6 +30,19 @@ const FLUSH_INTERVAL_MS = 5_000;
 const BUFFER_CAP = 5_000;                 // safety valve for a market-wide cascade burst
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 60_000;
+// Silent-connection watchdog (2026-08-22). THE failure mode that cost six weeks of this
+// non-backfillable series: Binance ACCEPTS the websocket and then serves no data. Verified by
+// experiment — from a geoblocked IP, `!forceOrder@arr` AND a `btcusdt@aggTrade` control both
+// reported open=true with zero messages in 20s, when aggTrade alone should deliver many per
+// second. No 'error' fires and no 'close' fires, so the reconnect path — which only triggers on
+// those two events — never runs. The collector logs `[liq] connected` once and then sits mute
+// forever, and the logs look HEALTHY the entire time.
+//
+// So liveness must be judged on DATA, not on connection state. Across all USDⓈ-M symbols a
+// forced liquidation lands far more often than this; several minutes of total silence means the
+// socket is dead regardless of what its readyState claims.
+const SILENT_TIMEOUT_MS = 5 * 60_000;
+const WATCHDOG_INTERVAL_MS = 30_000;
 
 export interface LiquidationRow {
   symbol: string;
@@ -92,6 +105,31 @@ export async function flushLiquidations(env: Env, rows: LiquidationRow[]): Promi
  *  flush every 5s, reconnect with exponential backoff on any close/error. Binance also drops
  *  every connection at the 24h mark — the same reconnect path covers it. Runs for the process
  *  lifetime; never throws out of this function. */
+/**
+ * Live collector state, readable over HTTP. This series CANNOT be backfilled, so a dead collector
+ * has to be as visible as the cron dead-man's-switch — `/liquidations` returning an empty array
+ * looks identical to a quiet market, which is exactly how six weeks went unnoticed.
+ */
+export interface LiqStatus {
+  state: 'starting' | 'open' | 'reconnecting' | 'table-init-failed';
+  connectedAt: number | null;
+  lastMessageAt: number | null;
+  messages: number;
+  attempts: number;
+  silentResets: number;
+  lastError: string | null;
+}
+const status: LiqStatus = {
+  state: 'starting', connectedAt: null, lastMessageAt: null,
+  messages: 0, attempts: 0, silentResets: 0, lastError: null,
+};
+/** Snapshot for /health. `healthy` is judged on DATA FLOW, never on connection state. */
+export function liquidationStatus(): LiqStatus & { healthy: boolean; quietSec: number | null } {
+  const since = status.lastMessageAt ?? status.connectedAt;
+  const quietSec = since ? Math.round((Date.now() - since) / 1000) : null;
+  return { ...status, quietSec, healthy: status.state === 'open' && status.messages > 0 && (quietSec ?? 1e9) < SILENT_TIMEOUT_MS / 1000 };
+}
+
 export function startLiquidationCollector(env: Env): void {
   const wsUrl = process.env.LIQ_WS_URL || WS_URL_DEFAULT;
   const proxyUrl = process.env.BINANCE_PROXY_URL;
@@ -100,6 +138,7 @@ export function startLiquidationCollector(env: Env): void {
   let buffer: LiquidationRow[] = [];
   let attempts = 0;
   let dropped = 0;
+  let current: WebSocket | null = null;
 
   // Flusher runs independently of connection state (drains whatever arrived before a drop).
   setInterval(() => {
@@ -119,9 +158,14 @@ export function startLiquidationCollector(env: Env): void {
       return;
     }
 
+    current = ws;
     ws.addEventListener('open', () => {
       attempts = 0;
-      console.log(`[liq] connected (${proxyUrl ? 'via gluetun proxy' : 'direct'})`);
+      status.state = 'open';
+      status.connectedAt = Date.now();
+      // Deliberately NOT reset on open: the point is to detect a socket that opens and stays mute,
+      // so the watchdog clock runs from the connection, not from the last message.
+      console.log(`[liq] connected (${proxyUrl ? 'via gluetun proxy' : 'direct'}) — awaiting first event`);
     });
 
     ws.addEventListener('message', (ev: any) => {
@@ -130,11 +174,15 @@ export function startLiquidationCollector(env: Env): void {
         if (!row) return;
         if (buffer.length >= BUFFER_CAP) { dropped++; return; }   // cascade-burst safety valve
         buffer.push(row);
+        if (status.messages === 0) console.log('[liq] first event received — stream is delivering');
+        status.messages++;
+        status.lastMessageAt = Date.now();
       } catch { /* malformed frame — ignore */ }
     });
 
     ws.addEventListener('error', (ev: any) => {
-      console.log(`[liq] socket error: ${ev?.message ?? ev?.error ?? 'unknown'}`);
+      status.lastError = String(ev?.message ?? ev?.error ?? 'unknown').slice(0, 200);
+      console.log(`[liq] socket error: ${status.lastError}`);
       // 'close' always follows 'error' — reconnect happens there.
     });
 
@@ -146,6 +194,8 @@ export function startLiquidationCollector(env: Env): void {
 
   const scheduleReconnect = (why: string) => {
     attempts++;
+    status.state = 'reconnecting';
+    status.attempts = attempts;
     const delay = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** Math.min(attempts, 6));
     if (attempts === 1 || attempts % 10 === 0) {
       console.log(`[liq] ${why} — reconnect #${attempts} in ${Math.round(delay / 1000)}s`
@@ -154,7 +204,31 @@ export function startLiquidationCollector(env: Env): void {
     setTimeout(connect, delay).unref?.();
   };
 
+  // Publish the status getter for the /health handler. A global rather than an import because
+  // src/index.ts is the portable worker code and must not pull in Node-only modules; the handler
+  // reads it defensively, so /health still works when the collector isn't running at all.
+  (globalThis as any).__marketscopeLiqStatus = liquidationStatus;
+
+  // Watchdog: a socket that is open but mute is the failure this collector could not see.
+  setInterval(() => {
+    if (status.state !== 'open' || !status.connectedAt) return;
+    const quietSince = status.lastMessageAt ?? status.connectedAt;
+    const quietMs = Date.now() - quietSince;
+    if (quietMs < SILENT_TIMEOUT_MS) return;
+    console.log(`[liq] SILENT for ${Math.round(quietMs / 1000)}s while "connected" — treating as dead`
+      + ` (total events since start: ${status.messages}). If this repeats, the gluetun exit is`
+      + ` probably in a Binance-geoblocked region: the socket opens and Binance serves no data.`);
+    status.silentResets++;
+    try { current?.close(); } catch { /* the close handler drives the reconnect */ }
+    // If close() does not fire (a wedged socket), force the reconnect path ourselves.
+    if (status.state === 'open') scheduleReconnect('watchdog: silent connection');
+  }, WATCHDOG_INTERVAL_MS).unref?.();
+
   ensureLiquidationsTable(env)
     .then(connect)
-    .catch(e => console.log(`[liq] table init failed — collector NOT started: ${e}`));
+    .catch(e => {
+      status.state = 'table-init-failed';
+      status.lastError = String(e).slice(0, 200);
+      console.log(`[liq] table init failed — collector NOT started: ${e}`);
+    });
 }

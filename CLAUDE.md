@@ -601,6 +601,21 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22f — Liquidation collector had captured NOTHING for six weeks: the socket opens, Binance serves no data, nothing detects it
+
+Status check on derivatives capture turned up the worst kind of failure. **REST capture is healthy** — BTC's live derivatives features are all populated (funding 0.01, oiChangePct +0.11, takerRatio 1.025, longPct 49.8, basisPct 0.033), confirming the v14 coverage fix holds. **The websocket liquidation collector has zero rows across BTC/ETH/SOL over 90 days** — nothing since it shipped 2026-07-10.
+
+**Root cause, found by experiment rather than by reading logs.** The code is correct: `startLiquidationCollector` is wired at `server.ts:53`, the table is created before connecting, undici 6.26 genuinely honors `options.dispatcher` (verified in `node_modules`). So I ran the real path against Binance: `!forceOrder@arr` reported **open=true, 0 messages in 20s** — and so did a `btcusdt@aggTrade` CONTROL stream, which alone should deliver many events per second. **Binance accepts the websocket from a geoblocked IP and then serves nothing.**
+
+That is invisible to this collector by construction: no `error` fires and no `close` fires, and the reconnect path only triggers on those two events. So it logs `[liq] connected` exactly once and sits mute forever — **the container logs look healthy the entire time**, which is why `grep '[liq]'` would not have found it either.
+
+- **Liveness is now judged on DATA, not connection state.** A watchdog (`SILENT_TIMEOUT_MS` 5 min, checked every 30s) force-closes and reconnects any socket that is "open" but has delivered nothing — the clock deliberately runs from CONNECT, not from last message, since the whole failure is a socket that never delivers a first event. Across all USDⓈ-M symbols, five minutes of total silence cannot be a quiet market.
+- **`/health` now reports collector state** (`state`, `messages`, `quietSec`, `silentResets`, `lastError`, and a `healthy` flag computed from data flow). Exposed via a `globalThis` hook set by `server/liquidations.ts` so the portable `src/` worker code keeps no Node-only import. Rationale: for a NON-BACKFILLABLE series, a dead collector must be visible without shell access — `/liquidations` returning `[]` is indistinguishable from a quiet market, and that ambiguity is precisely what cost six weeks.
+
+**What was lost is unrecoverable** (Binance removed the REST endpoint years ago; the stream is the only source) — ~6 weeks including the 62k→80k run, when cascade data is most informative. Bounded, though: this series never fed the model or gated a trade. It was accumulating toward the homemade liquidation heatmap (`oi_snapshots` = where positions opened, `liquidations` = where they died, `depth_snapshots` = the resting walls) and a future cascade-asymmetry WF test — both of which need many months regardless, so the clock restarts rather than ends.
+
+**Still open:** whether the box's gluetun exit is itself in a Binance-geoblocked region. The watchdog converts a permanent silent failure into a visible retrying one, but if the exit region is the problem, retrying will not fix it — `/health.liquidations.silentResets` climbing with `messages: 0` after the redeploy is the tell, and the fix would be a gluetun exit-country change. Also unverified: `oi_snapshots` and `depth_snapshots` have no endpoint. They are cron-driven over the working REST path so are probably fine — but "probably" is exactly what was assumed about liquidations, and they deserve the same health surface. 556/556 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-22e — Crypto-outlet gate tuned against the live feeds (~50% → ~90% precision)
 
 With the regulator noise gone, outlets fill most of the 6 slots most days (Fed `monetary` is only ~15 releases/year), so outlet quality IS the feature's quality. Measured the gate against the live CoinDesk + Cointelegraph feeds and tuned it — every rule below is a response to a real headline, not a guess.
