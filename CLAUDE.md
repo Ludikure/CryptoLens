@@ -374,6 +374,8 @@ v14 stocks (252,215 bars, 57.0% baseline goodR; calibration floor 0.3193 — no 
 | `ml-training/calibrate_v9.py` | Legacy combined crypto+stock script — name is stale (was used to bootstrap v10 crypto model) |
 | `ml-training/model_comparison.py` | Hyperparameter comparison (XGBoost d3-5 × t100-200 + LightGBM) |
 | `ml-training/finra_dark_pool.py` | Downloads FINRA RegSHO daily files, computes short volume Z-scores |
+| `ml-training/news_backfill.py` | Reconstructs a historical policy-event list from the Fed yearly press-release archives (dates are encoded in the release URLs; listing pages only, no article bodies) |
+| `ml-training/news_catalyst_test.py` | Tests whether policy-catalyst proximity predicts `goodR` — REJECTED (clean null; the apparent −10.8pp was a day-of-week artifact). See `docs/research/news-catalyst-test.md` |
 | `ml-training/level_rejection_direction.py` | Tests whether a confirmed rejection at a major S/R level predicts 3-4 bar direction — REJECTED (coin flip, gross EV below Binance fees, 0-2/6 folds). Reuses `level_validation.py` detection. See graveyard |
 | `ml-training/earnings_backfill.py` | Downloads historical earnings via yfinance |
 
@@ -598,6 +600,18 @@ remains:
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-08-22c — Tested it: policy catalysts do NOT predict volatility (and the scary negative was my own artifact)
+
+User asked whether similar news historically predated moves — the right question to ask about a feature that shipped explicitly unvalidated. Design pre-declared in `docs/research/news-catalyst-test.md` BEFORE any number was computed; result filed in `rejected-hypotheses.md`.
+
+**Backfill is feasible and cheap:** the Fed publishes yearly press-release archives with the date encoded in every URL (`monetary20241203a.htm`), so `ml-training/news_backfill.py` reconstructs the event list from ~20 listing-page requests — no article bodies, no HTML date parsing. Got **986 Fed releases 2020-2026, 177 of them `monetary`**. Labels came from `csv_exports_v14` (leak-audited, so the test inherits audited definitions rather than recomputing them).
+
+**Result: clean null.** Pre-declared bar was +3.0pp goodR lift at 0-24h on FED_MONETARY with ≥5/7 positive years; actual **−0.8pp, 4/7 → NOT SUPPORTED**. Catalyst proximity is NOT a v15 feature candidate. Forward up/down excursions were symmetric (+2.71% vs +2.50%), consistent with direction being a coin flip everywhere else.
+
+**The part worth remembering is the trap.** The naive comparison said Fed releases SUPPRESS volatility — FED_ALL 0-24h **−10.8pp at z=−10.4**, which is exactly the kind of number that gets written up as a discovery. It is entirely a day-of-week artifact: BTC goodR runs Mon 57.9 / Fri 34.8 / Sat 24.6 / Sun 59.1 (a 34pp swing, consistent with `dayOfWeek` being crypto's top permutation feature). Releases are dated on weekdays; the conservative end-of-day timestamp pushes the measurement window onto the FOLLOWING day, which for most releases is Friday or Saturday — the two worst days; meanwhile a ">72h from any event" baseline systematically excludes weekends (83% weekday vs a calendar-neutral 71%). Day-of-week-stratified, the effect vanishes: **−0.57pp** (FED_MONETARY), **−1.68pp** (FED_ALL), **+1.20pp** (0-48h). **Methodology rule now recorded: any event study on crypto must stratify by day-of-week before believing an effect** — every economic, regulatory and corporate calendar clusters on weekdays, so this artifact is available in all of them.
+
+**What it changes:** nothing about the shipped news feature, which was labelled context/narrative and never an edge — this confirms that label rather than contradicting it. The catalyst framing on chase-FLAT bars remains a message-quality change with no predictive evidence behind it, which is how it is worded and gated (it does not open the FLAT). H3 (do chase-FLATs age badly on catalyst days) was NOT run: pre-declared underpowered at ~50 FOMC events, and with H2 null its prior is lower still — running it would only have produced a number the design already committed to calling anecdote.
 
 ### 2026-08-22b — Policy/macro catalyst headlines (own RSS ingestion, no paid feed)
 

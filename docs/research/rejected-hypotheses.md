@@ -166,3 +166,29 @@ buy-share) sit at/below 0.5 univariate — whales don't predict direction either
 residual: minutes-scale whale prints for entry timing (different labels; execution-layer
 question). Keep: the fixed collector + backfill script (data useful for display/whale-trap
 context); do NOT add whale columns to the feature set.
+
+## Policy-catalyst proximity → volatility — REJECTED (2026-08-22)
+
+`ml-training/news_catalyst_test.py` + `news_backfill.py`, design pre-declared in
+[[news-catalyst-test]]. 986 Fed press releases 2020-2026 (177 `monetary`) vs BTCUSDT 4H bars from
+`csv_exports_v14`. Question: does being within 24h of a policy release raise `goodR`?
+
+**Clean null.** Pre-declared bar was +3.0pp in 0-24h on FED_MONETARY with positivity in ≥5/7 years;
+actual **-0.8pp, 4/7**. Day-of-week-stratified (the honest comparison, see below): **-0.57pp**
+FED_MONETARY, **-1.68pp** FED_ALL, **+1.20pp** at 0-48h. Nothing near the bar in either direction.
+Forward up/down excursions symmetric (+2.71% vs +2.50%), consistent with direction being a coin flip.
+Do NOT add catalyst proximity to the feature set.
+
+**The trap this one exposed, which is the reusable part:** the naive numbers looked like a large
+NEGATIVE effect (FED_ALL 0-24h **-10.8pp**, z=-10.4) — entirely a day-of-week artifact. BTC goodR
+runs Mon 57.9 / Fri 34.8 / Sat 24.6 / Sun 59.1, a 34pp swing. Releases are dated on weekdays, and a
+conservative end-of-day timestamp pushes the measurement window onto the following day (Fri/Sat for
+most releases — the two worst days), while a ">72h from any event" baseline systematically excludes
+weekends (83% weekday vs a calendar-neutral 71%). Event window and baseline end up on opposite ends
+of a strong seasonal gradient. **Any event study on crypto must stratify by day-of-week before
+believing an effect** — every economic, regulatory and corporate calendar clusters on weekdays, so
+this artifact is available to manufacture a double-digit "finding" in any of them.
+
+**Kept regardless:** the news collector itself (`src/news.ts`) — it was shipped as narrative context
+and explicitly not as an edge, and this result confirms that label rather than contradicting it.
+Not tested: H3 (chase-guard FLATs on catalyst days), pre-declared underpowered at ~50 FOMC events.
