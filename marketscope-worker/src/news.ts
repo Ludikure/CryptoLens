@@ -43,25 +43,61 @@ export interface NewsFeed {
 // earns its slot by publishing catalysts that reprice a whole market, not company news.
 export const NEWS_FEEDS: NewsFeed[] = [
   { id: 'fed',      name: 'Federal Reserve',  url: 'https://www.federalreserve.gov/feeds/press_all.xml', primary: true,  scope: 'macro' },
-  { id: 'treasury', name: 'US Treasury',      url: 'https://home.treasury.gov/system/files/126/press-releases.xml', primary: true, scope: 'macro' },
   { id: 'sec',      name: 'SEC',              url: 'https://www.sec.gov/news/pressreleases.rss', primary: true,  scope: 'macro' },
   { id: 'cftc',     name: 'CFTC',             url: 'https://www.cftc.gov/RSS/RSSGP/rssgp.xml',   primary: true,  scope: 'macro' },
   { id: 'coindesk', name: 'CoinDesk',         url: 'https://www.coindesk.com/arc/outboundfeeds/rss/', primary: false, scope: 'crypto' },
   { id: 'ctelegraph', name: 'Cointelegraph',  url: 'https://cointelegraph.com/rss',              primary: false, scope: 'crypto' },
 ];
+// US Treasury was dropped 2026-08-22: no public RSS responds at any of the documented paths
+// (/rss/press.xml, /news/press-releases/feed, /system/files/126/press-releases.xml all 302 to an
+// empty body or fail outright). A permanently-red feed is worse than an absent one — it trains you
+// to ignore the health output. Fed `monetary` covers the rate channel; revisit if Treasury ever
+// publishes a working feed.
 
-// Catalyst vocabulary — what makes a NON-primary headline worth the prompt space. Tuned for
-// "would this reprice the asset class", not "is this about crypto". Deliberately excludes
-// price-move language ("surges", "plunges", "rally", "all-time high"): the tape already tells
-// the model that, far more precisely than a headline can, and those words dominate the feeds.
-const CATALYST_TERMS = [
-  'federal reserve', 'fed ', 'fomc', 'rate cut', 'rate hike', 'interest rate', 'basis point',
-  'treasury', 'bond', 'yield', 'quantitative', 'liquidity', 'debt ceiling', 'refunding',
-  'sec ', 'cftc', 'regulator', 'regulation', 'legislation', 'bill', 'congress', 'senate',
-  'white house', 'executive order', 'lawsuit', 'settlement', 'approval', 'approves', 'reject',
-  'ban', 'legal', 'legalize', 'custody', 'stablecoin', 'etf', 'spot bitcoin', 'tariff',
-  'inflation', 'cpi', 'jobs report', 'recession', 'sanction', 'seizure', 'hack', 'exploit',
+// Catalyst vocabulary, REWRITTEN 2026-08-22 after seeing what the first cut actually surfaced.
+//
+// The original rule — "primary sources pass on provenance alone, a Fed release is a catalyst by
+// definition" — was WRONG, and the live output proved it within a minute of deploy: the top three
+// slots went to "approval of application by National Westminster Bank Plc", an "ICYMI" advisory-
+// committee photo-op, and a SEF order-book comment request. The backfill had already said as much
+// and I did not act on it: across 2020-2026 the Fed published 301 bcreg + 214 enforcement + 180
+// other + 114 orders items against only 177 monetary. Provenance says an item is AUTHORITATIVE, not
+// that it moves a market.
+//
+// The rule now: an item must be ABOUT something that reprices an asset class. Two vocabularies,
+// deliberately narrow, and no weak modifiers ("approval", "lawsuit", "regulation" on their own
+// matched bank-merger approvals). Agency self-names are excluded per-feed — "CFTC" in a CFTC
+// headline is metadata, not subject matter, though "Fed signals rate cut" from an OUTLET is real.
+// TWO vocabularies, because the two source classes need DIFFERENT questions asked of them.
+//
+// For a regulator, the question is "is this about markets at all?" — most of what the Fed and CFTC
+// publish is bank supervision and committee administration. Asset words answer that well.
+//
+// For a crypto outlet the question is the opposite: EVERY headline says "bitcoin", so asset words
+// answer nothing. The question there is "is this an event, or a recap of the price move the tape
+// already shows me?" — which only event words answer. Using one shared vocabulary made the outlet
+// gate WEAKER (it re-admitted "Bitcoin surges past $80K"), which the tests caught before deploy.
+const ASSET_TERMS = [
+  'bitcoin', 'btc', 'ethereum', 'crypto', 'digital asset', 'blockchain', 'token',
+  'defi', 'web3', 'stablecoin', 'coinbase', 'binance',
 ];
+const EVENT_TERMS = [
+  // macro policy
+  'fomc', 'monetary policy', 'interest rate', 'rate cut', 'rate hike', 'basis point',
+  'inflation', 'cpi', 'jobs report', 'unemployment', 'yield', 'treasury', 'quantitative',
+  'debt ceiling', 'refunding', 'tariff', 'recession', 'sanction', 'liquidity',
+  // rulemaking / legal / regulator (agency names count as SUBJECT for an outlet; SELF_TERMS
+  // removes them for the agency's own feed, where they are only metadata)
+  'legislation', 'regulation', 'regulator', 'mica', 'etf', 'ban ', 'banned', 'lawsuit',
+  'settlement', 'indict', 'custody rule', 'federal reserve', 'fed ', 'sec ', 'cftc',
+  // security events that genuinely reprice a token
+  'exploit', 'hack', 'seizure',
+];
+const CATALYST_TERMS = [...ASSET_TERMS, ...EVENT_TERMS];
+/** Terms that are merely the publisher's own name in its own feed — never subject matter there. */
+const SELF_TERMS: Record<string, string[]> = {
+  fed: ['federal reserve', 'fed '], sec: ['sec '], cftc: ['cftc'],
+};
 
 export interface NewsItem {
   id: string;              // stable hash of guid/link — the dedupe key
@@ -73,6 +109,8 @@ export interface NewsItem {
   publishedAt: number;     // ms epoch
   primary: boolean;
   scope: 'macro' | 'crypto';
+  /** Fed release category from the URL slug (monetary | orders | bcreg | enforcement | other). */
+  category?: string | null;
 }
 
 /**
@@ -152,29 +190,46 @@ export function parseFeed(xml: string, feed: NewsFeed): NewsItem[] {
     // itself as a live catalyst, which is worse than the item being absent.
     if (!Number.isFinite(parsed)) continue;
     const guid = tagText(b, 'guid', 'id') || url || title;
+    // Fed release URLs encode the category (`.../pressreleases/monetary20241203a.htm`). That slug
+    // is the authoritative separator between the rate channel and bank supervision — far better
+    // than any keyword guess, and it is free.
+    const catM = url.match(/\/pressreleases\/([a-z]+)\d{8}[a-z]?\.htm/i);
     out.push({
       id: hashId(`${feed.id}:${guid}`),
       source: feed.id, sourceName: feed.name,
       title: title.slice(0, 300), summary, url: url.slice(0, 500),
       publishedAt: parsed, primary: feed.primary, scope: feed.scope,
+      category: catM ? catM[1].toLowerCase() : null,
     });
   }
   return out;
 }
 
-/** Which catalyst terms a headline matches (empty = none). */
-export function matchedTerms(item: { title: string; summary: string }): string[] {
+/** Which catalyst terms a headline matches, ignoring the publisher's own name in its own feed. */
+export function matchedTerms(item: { title: string; summary: string; source?: string }): string[] {
   const hay = `${item.title} ${item.summary}`.toLowerCase();
-  return CATALYST_TERMS.filter(t => hay.includes(t));
+  const self = SELF_TERMS[item.source ?? ''] ?? [];
+  return CATALYST_TERMS.filter(t => !self.includes(t) && hay.includes(t));
 }
 
 /**
- * Relevance gate. Primary sources pass on provenance — a Fed or SEC press release is a catalyst
- * by definition and its headline is already plain. Outlets must name a catalyst, which is what
- * keeps "Bitcoin surges past $80K" (a recap of what the tape already shows) out of the prompt.
+ * Relevance gate. An item must be ABOUT something that reprices an asset class:
+ *
+ *  - Fed `monetary` releases auto-pass — that slug IS the rate channel (FOMC statements,
+ *    implementation notes, minutes), and its wording is deliberately understated, so a keyword
+ *    gate would drop exactly the releases that matter most.
+ *  - Other PRIMARY releases need an asset or event subject. This replaced a blanket provenance
+ *    pass on 2026-08-22, after the deployed version put a bank-merger approval and an
+ *    advisory-committee "ICYMI" in the model's top-ranked slots.
+ *  - OUTLET stories need an EVENT subject specifically. An asset name is not enough there: every
+ *    crypto headline contains one, so accepting them re-admits exactly the price recaps this gate
+ *    exists to exclude — and the tape already reports price far better than a headline can.
  */
 export function isRelevant(item: NewsItem): boolean {
-  return item.primary || matchedTerms(item).length > 0;
+  if (item.source === 'fed' && item.category === 'monetary') return true;
+  const terms = matchedTerms(item);
+  if (!terms.length) return false;
+  return item.primary || terms.some(t => EVENT_TERMS.includes(t));
 }
 
 export async function ensureNewsTable(env: { DB: any }): Promise<void> {
@@ -207,7 +262,9 @@ export async function pollNewsFeeds(
   await ensureNewsTable(env);
   const health: FeedHealth[] = [];
   let inserted = 0;
-  const maxAge = 3 * 86400_000;   // ignore backfill on first run; only recent items are catalysts
+  const maxAge = 14 * 86400_000;  // storage window. SEC publishes every few days, so a 3-day cap
+                                // silently discarded EVERY SEC release (observed live: 25 parsed, 0 kept).
+                                // What the PROMPT shows is bounded separately in fetchRecentNews.
 
   for (const feed of feeds) {
     try {
@@ -256,21 +313,27 @@ export interface PromptNews { headlines: string[]; catalystActive: boolean; late
  * different animal from the exhaustion the chase guard is built to catch.
  */
 export async function fetchRecentNews(
-  env: { DB: any }, opts: { isCrypto: boolean; nowMs: number; lookbackH?: number; limit?: number; catalystWindowH?: number },
+  env: { DB: any }, opts: { isCrypto: boolean; nowMs: number; lookbackH?: number; primaryLookbackH?: number; limit?: number; catalystWindowH?: number },
 ): Promise<PromptNews | null> {
   const lookback = (opts.lookbackH ?? 48) * 3600_000;
+  const primaryLookback = (opts.primaryLookbackH ?? 24 * 7) * 3600_000;
   const limit = opts.limit ?? 6;
   const catalystWindow = (opts.catalystWindowH ?? 12) * 3600_000;
   try {
     await ensureNewsTable(env);
     const scopeClause = opts.isCrypto ? '' : " AND scope = 'macro'";
+    // Split recency: primaries get a longer window than outlets. A regulator publishes every few
+    // days and a major ruling is still the reason a tape is behaving three days later, whereas
+    // outlet copy goes stale fast and is the noisier half. One shared 48h window meant every SEC
+    // release aged out before it could ever be shown.
     // Primaries first, then most recent — the cap should never be spent on outlet chatter while
     // a regulator release goes unshown.
     const res = await env.DB.prepare(
       `SELECT source_name, title, published_at, primary_source FROM news_items
-        WHERE published_at > ?${scopeClause}
+        WHERE ((primary_source = 1 AND published_at > ?) OR (primary_source = 0 AND published_at > ?))
+              ${scopeClause}
         ORDER BY primary_source DESC, published_at DESC LIMIT ?`
-    ).bind(opts.nowMs - lookback, limit).all();
+    ).bind(opts.nowMs - primaryLookback, opts.nowMs - lookback, limit).all();
     const rows = (res.results || []) as any[];
     if (!rows.length) return null;
     const headlines = rows.map(r => {

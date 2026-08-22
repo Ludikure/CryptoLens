@@ -601,6 +601,21 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22d — First live output killed the "primaries pass on provenance" rule
+
+Box redeployed; `GET /news?force=1` confirmed **egress works — all feeds reachable through gluetun** (the one risk that could have made the whole feature a non-starter). But the first real prompt view was bad, and in an instructive way. Top three slots, ranked ABOVE everything else because primaries sort first:
+
+> `[Federal Reserve, official] approval of application by National Westminster Bank Plc`
+> `[CFTC, official] ICYMI: Members of the Innovation Advisory Committee Join Chairman Selig...`
+> `[CFTC, official] Seeks Public Comments on Proposed Elimination of SEF Order Book Requirement`
+
+Bank M&A, a photo-op, and rulemaking minutiae — on every BTC analysis. **My "a Fed release is a catalyst by definition" assumption was wrong, and the backfill had already said so**: 2020-2026 the Fed published 301 bcreg + 214 enforcement + 180 other + 114 orders against just 177 monetary. Provenance means AUTHORITATIVE, not market-moving.
+
+- **Fed items now gate on the URL category slug** (`.../pressreleases/monetary20241203a.htm`) — authoritative, free, and better than any keyword guess. `monetary` auto-passes (FOMC copy is deliberately understated, so a keyword gate would drop the most important releases); `orders`/`bcreg`/`enforcement` must earn their slot.
+- **Two vocabularies, because the source classes need different questions.** For a regulator: "is this about markets at all?" → asset words answer it. For a crypto outlet: every headline says "bitcoin", so asset words answer nothing → only EVENT words do. A single shared vocabulary made the outlet gate WEAKER (it re-admitted "Bitcoin surges past $80K") — caught by tests before deploy, not after. Agency names count as subject matter for an outlet but are suppressed inside that agency's own feed (`SELF_TERMS`).
+- **Two live bugs found by the deploy:** SEC kept **0 of 25** items — it publishes every few days and the 3-day storage cap discarded every release; storage is now 14d with a split prompt window (primaries 7d, outlets 48h), since a major ruling still explains a tape three days later while outlet copy goes stale fast. And **US Treasury was dropped**: no public RSS responds at any documented path (all 302 to an empty body or fail). A permanently-red feed is worse than an absent one.
+- Regression tests pin the exact noise headlines that shipped, so the rule cannot quietly revert. 549/549 green. Worker-only — **needs another box redeploy**.
+
 ### 2026-08-22c — Tested it: policy catalysts do NOT predict volatility (and the scary negative was my own artifact)
 
 User asked whether similar news historically predated moves — the right question to ask about a feature that shipped explicitly unvalidated. Design pre-declared in `docs/research/news-catalyst-test.md` BEFORE any number was computed; result filed in `rejected-hypotheses.md`.

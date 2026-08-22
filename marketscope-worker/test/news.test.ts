@@ -16,7 +16,7 @@ const RSS = `<?xml version="1.0"?><rss version="2.0"><channel>
   <title>Feed</title>
   <item>
     <title>Federal Reserve Board announces &amp;quot;interim final rule&amp;quot; on reserve balances</title>
-    <link>https://example.gov/a</link>
+    <link>https://www.federalreserve.gov/newsevents/pressreleases/monetary20260821a.htm</link>
     <description><![CDATA[<p>The Board today announced a rule affecting <b>interest</b> on reserves.</p>]]></description>
     <pubDate>Fri, 21 Aug 2026 14:30:00 GMT</pubDate>
     <guid>https://example.gov/a</guid>
@@ -76,22 +76,23 @@ describe('parseFeed', () => {
 });
 
 describe('relevance gate — the noise floor', () => {
-  it('keeps a primary-source release on provenance alone', () => {
+  it('keeps a Fed monetary release via its URL slug', () => {
     const [fedItem] = parseFeed(RSS, PRIMARY);
+    expect(fedItem.category).toBe('monetary');
     expect(isRelevant(fedItem)).toBe(true);
   });
 
-  it('drops an outlet price recap — the tape already says this, more precisely', () => {
+  it('drops an outlet price recap even though it names bitcoin — asset words are not events', () => {
     const recap = parseFeed(RSS, OUTLET)[1];
     expect(recap.title).toContain('surges past');
-    expect(matchedTerms(recap)).toEqual([]);
-    expect(isRelevant(recap)).toBe(false);
+    expect(matchedTerms(recap)).toContain('bitcoin');   // it DOES match an asset term...
+    expect(isRelevant(recap)).toBe(false);              // ...which is deliberately not enough
   });
 
   it('keeps an outlet story that names a real catalyst', () => {
     const [item] = parseFeed(ATOM, OUTLET);
     expect(isRelevant(item)).toBe(true);
-    expect(matchedTerms(item)).toContain('approves');
+    expect(matchedTerms(item)).toContain('etf');   // 'approves' was dropped: it matched bank-merger approvals
   });
 });
 
@@ -125,13 +126,16 @@ describe('pollNewsFeeds + fetchRecentNews (in-memory D1)', () => {
     });
 
     const first = await pollNewsFeeds(env, NOW, feeds);
-    // fed: both items kept (primary passes on provenance). outlet: only the Fed-worded one.
+    // fed feed: the monetary release auto-passes on its slug; the Bitcoin item passes as a primary
+    // naming an asset. outlet feed: the Fed-worded item passes (an outlet writing ABOUT the Fed is
+    // subject matter, and SELF_TERMS only suppresses that inside the Fed's own feed), while the
+    // price recap is asset-only and drops. That asymmetry is the whole design.
     expect(first.inserted).toBe(3);
     const blocked = first.health.find(h => h.id === 'dead')!;
     expect(blocked.ok).toBe(false);
     expect(blocked.error).toContain('ECONNREFUSED');
     expect(first.health.find(h => h.id === 'fed')!.kept).toBe(2);
-    expect(first.health.find(h => h.id === 'ct')!.kept).toBe(1);
+    expect(first.health.find(h => h.id === 'ct')!.kept).toBe(1);   // the Fed story, not the price recap
 
     // Re-poll: same GUIDs, nothing new.
     const second = await pollNewsFeeds(env, NOW, feeds);
@@ -148,6 +152,10 @@ describe('pollNewsFeeds + fetchRecentNews (in-memory D1)', () => {
     // Stocks see macro scope only — crypto-outlet items are off-topic there.
     const stockView = (await fetchRecentNews(env, { isCrypto: false, nowMs: NOW }))!;
     expect(stockView.headlines.every(h => !h.includes('Cointelegraph'))).toBe(true);
+    // Primaries get a 7-day window, so a release older than the 48h outlet window still shows.
+    const d5 = (await fetchRecentNews(env, { isCrypto: true, nowMs: NOW + 5 * 24 * 3600_000 }))!;
+    expect(d5.headlines.length).toBeGreaterThan(0);
+    expect(d5.catalystActive).toBe(false);
 
     // A stale primary must not read as a live catalyst.
     const later = (await fetchRecentNews(env, { isCrypto: true, nowMs: NOW + 30 * 3600_000 }))!;
@@ -188,5 +196,39 @@ describe('prompt rendering — context, never a signal', () => {
 
   it('omits the section entirely when there is no news', () => {
     expect(build(null)).not.toContain('POLICY / MACRO HEADLINES');
+  });
+});
+
+// Rewritten relevance rule (2026-08-22, after the first deploy). The original "primaries pass on
+// provenance alone" put a bank-merger approval and an advisory-committee ICYMI into the model's
+// top-ranked slots. These are the REAL headlines that shipped — pinned so the rule can't regress.
+describe('relevance rule v2 — observed noise must not pass', () => {
+  const item = (title: string, source: string, category: string | null = null) => ({
+    id: 'x', source, sourceName: source, title, summary: '', url: '',
+    publishedAt: 0, primary: ['fed', 'sec', 'cftc'].includes(source),
+    scope: 'macro' as const, category,
+  });
+
+  it('drops the exact administrative noise the first deploy surfaced', () => {
+    expect(isRelevant(item('Federal Reserve Board announces approval of application by National Westminster Bank Plc', 'fed', 'orders'))).toBe(false);
+    expect(isRelevant(item('ICYMI: Members of the CFTC’s Innovation Advisory Committee Join Chairman Selig in Washington at Inaugural Meeting', 'cftc'))).toBe(false);
+    expect(isRelevant(item('CFTC Seeks Public Comments on Proposed Elimination of SEF Order Book Requirement for Permitted Transactions', 'cftc'))).toBe(false);
+  });
+
+  it('keeps a Fed monetary release on its URL slug, whatever the wording', () => {
+    // FOMC copy is deliberately understated; a keyword gate would drop the most important releases.
+    expect(isRelevant(item('Federal Reserve issues FOMC statement', 'fed', 'monetary'))).toBe(true);
+    expect(isRelevant(item('Statement regarding repurchase operations', 'fed', 'monetary'))).toBe(true);
+  });
+
+  it('keeps genuine crypto and macro subjects', () => {
+    expect(isRelevant(item('SEC approves spot bitcoin ETF listing standards', 'sec'))).toBe(true);
+    expect(isRelevant(item('MiCA is coming for DeFi vaults, but regulation will be difficult', 'ctelegraph'))).toBe(true);
+    expect(isRelevant(item('Fed signals a rate cut is on the table', 'coindesk'))).toBe(true);
+  });
+
+  it("ignores the publisher's own name as a match term in its own feed", () => {
+    // "CFTC" in a CFTC headline is metadata; from an outlet it is subject matter.
+    expect(matchedTerms(item('CFTC announces staff appointments', 'cftc'))).toEqual([]);
   });
 });
