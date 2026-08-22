@@ -601,6 +601,18 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22j — Proved the news reaches the model, then split "what it was TOLD" from "what it CONCLUDED" (iOS)
+
+User: *"I ran ai analysis, it gave no info about the news"* — again, after the system-prompt fix. This time it was NOT a bug.
+
+**`promptOnly` already existed** (`runFullAnalysisCore`, `body.promptOnly === true`) — a dry-run returning the REAL built prompt with no LLM call. I nearly built a duplicate debug endpoint before finding it. It answers this class of question in ~5s for free, and is the tool to reach for whenever "is this input actually reaching the model?" comes up. Result on BTCUSDT: **`POLICY / MACRO HEADLINES` present, all six items**, including the Treasury-buyback story. The news IS sent.
+
+The model stayed silent because the guidance shipped hours earlier tells it to: *"if nothing in the block plausibly explains this tape, say NOTHING about news."* That run's tape was "largely unchanged since the last check (47m ago), ML flat at 49%", coiled at the POC — and the freshest primary item was 77h old. Nothing explained it, so nothing was said. **Correct behaviour**, and the guard against exactly the post-hoc "X rose because Y" narration the measured null (`news-catalyst-test.md`) says carries no information.
+
+**But the product was still wrong**, and this is the generalisable bit: *"the model may cite news when it explains the move"* and *"show me what's happening in the world"* are DIFFERENT features, and only the first was built. On a quiet day the second is invisible, and the user cannot distinguish working-as-designed from broken — which is why this question came up twice and cost a paid analysis to answer.
+
+Fix (iOS): `WorkerNewsService` + `NewsCard` on the Now tab, reading the same `/news` rows the prompt gets from the same `fetchRecentNews`. Always visible when items exist, whether or not the analysis cited any. Primaries ranked first and marked "official"; a `LIVE CATALYST` pill when `catalystActive`; top-3 collapsed with expand; and the card says **"Background for the read — not a trade signal. Measured: policy timing doesn't predict the next move."** on its face, so the split is legible: what the model was TOLD is here, what it CONCLUDED is the analysis. Best-effort — any failure hides the card rather than surfacing an error. Re-fetches on symbol change since scope differs (crypto = macro + crypto sources; stocks = macro primaries only). iOS build green — **needs a rebuild+install**; no worker change.
+
 ### 2026-08-22i — Collector switched to `ws` + HttpsProxyAgent (code fix, NOT the compose change)
 
 The probe's verdict pointed at `network_mode: service:gluetun`, but reading the real `truenas-compose.yml` changed the call. That compose has a deliberate design — `PROXIED_HOSTS` routes ONLY the exchange hosts through the VPN while Claude/APNs/Yahoo/Finnhub go direct — and `network_mode` discards it, forcing all egress through Switzerland AND putting the whole backend behind gluetun's killswitch. That converts a VPN drop from "one dataset degrades" into "the app and its ingress are down". It also requires moving the 8787 publish to gluetun plus `FIREWALL_INPUT_PORTS`.

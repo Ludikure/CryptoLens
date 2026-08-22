@@ -150,6 +150,13 @@ struct ChartTabContent: View {
         }
     }
 
+    @State private var newsFeed: WorkerNewsService.Feed?
+
+    /// Best-effort and non-blocking: headlines are context, so a failure just hides the card.
+    private func loadNews(for symbol: String) async {
+        newsFeed = await WorkerNewsService.fetch(isCrypto: symbol.hasSuffix("USDT"))
+    }
+
     var body: some View {
         List {
             Section {
@@ -166,6 +173,15 @@ struct ChartTabContent: View {
 
                 if NetworkMonitor.shared.isOffline {
                     offlineBanner
+                }
+
+                // What the model was TOLD, shown whether or not it cited any of it. The analysis
+                // only names a headline that explains the current tape (and is forbidden from
+                // reaching for one otherwise), so on a quiet day it correctly stays silent — which
+                // is indistinguishable from "the feature is broken" without this card.
+                if let feed = newsFeed {
+                    NewsCard(feed: feed)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
                 }
 
                 if let result = service.currentResult {
@@ -210,6 +226,7 @@ struct ChartTabContent: View {
             }
             recomputeBiasChanges()
             activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
+            await loadNews(for: selectedSymbol)
         }
         .onChange(of: service.currentResult?.timestamp) {
             recomputeBiasChanges()
@@ -217,6 +234,9 @@ struct ChartTabContent: View {
         }
         .onChange(of: service.currentSymbol) {
             activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
+            // Crypto sees macro + crypto sources; stocks see macro primaries only, so the feed
+            // has to be re-fetched when the market changes, not just the symbol.
+            Task { await loadNews(for: selectedSymbol) }
         }
     }
 
