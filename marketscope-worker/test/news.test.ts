@@ -2,7 +2,7 @@
 // NOISE GATE — crypto media is mostly price recaps and op-eds, and letting those into the prompt
 // next to validated pre-computed flags is how this becomes a graveyard entry rather than context.
 import { describe, it, expect, afterAll } from 'vitest';
-import { parseFeed, isRelevant, matchedTerms, hashId, pollNewsFeeds, fetchRecentNews, type NewsFeed } from '../src/news';
+import { parseFeed, isRelevant, matchedTerms, hashId, pollNewsFeeds, fetchRecentNews, pruneIrrelevant, ensureNewsTable, type NewsFeed } from '../src/news';
 import { D1Adapter } from '../server/d1-adapter';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -230,5 +230,32 @@ describe('relevance rule v2 — observed noise must not pass', () => {
   it("ignores the publisher's own name as a match term in its own feed", () => {
     // "CFTC" in a CFTC headline is metadata; from an outlet it is subject matter.
     expect(matchedTerms(item('CFTC announces staff appointments', 'cftc'))).toEqual([]);
+  });
+});
+
+describe('pruneIrrelevant — a rule change must clean up after itself', () => {
+  const NOW2 = Date.parse('2026-08-21T16:00:00Z');
+  it('deletes stored rows that the CURRENT gate rejects', async () => {
+    const db = new D1Adapter(':memory:');
+    const env = { DB: db } as any;
+    await ensureNewsTable(env);
+    // Simulate rows an older, looser rule admitted (the exact headlines that shipped).
+    const rows = [
+      ['a', 'fed', 'Federal Reserve', 'Federal Reserve Board announces approval of application by National Westminster Bank Plc',
+       'https://www.federalreserve.gov/newsevents/pressreleases/orders20260820a.htm', 1],
+      ['b', 'cftc', 'CFTC', 'ICYMI: Members of the CFTC Innovation Advisory Committee Join Chairman Selig', 'https://cftc.gov/x', 1],
+      ['c', 'fed', 'Federal Reserve', 'Minutes of the Federal Open Market Committee, July 28-29, 2026',
+       'https://www.federalreserve.gov/newsevents/pressreleases/monetary20260820a.htm', 1],
+    ];
+    for (const [id, src, name, title, url, prim] of rows) {
+      await env.DB.prepare(`INSERT INTO news_items (id, source, source_name, title, summary, url, published_at, primary_source, scope, terms, fetched_at)
+        VALUES (?, ?, ?, ?, '', ?, ?, ?, 'macro', NULL, ?)`).bind(id, src, name, title, url, NOW2 - 3600_000, prim, NOW2).run();
+    }
+    const pruned = await pruneIrrelevant(env, NOW2);
+    expect(pruned).toBe(2);                       // the bank approval + the ICYMI
+    const view = (await fetchRecentNews(env, { isCrypto: true, nowMs: NOW2 }))!;
+    expect(view.headlines).toHaveLength(1);
+    expect(view.headlines[0]).toContain('Minutes of the Federal Open Market Committee');
+    db.close?.();
   });
 });

@@ -258,7 +258,7 @@ export interface FeedHealth { id: string; ok: boolean; items: number; kept: numb
  */
 export async function pollNewsFeeds(
   env: { DB: any }, nowMs: number, feeds: NewsFeed[] = NEWS_FEEDS,
-): Promise<{ inserted: number; health: FeedHealth[] }> {
+): Promise<{ inserted: number; pruned: number; health: FeedHealth[] }> {
   await ensureNewsTable(env);
   const health: FeedHealth[] = [];
   let inserted = 0;
@@ -299,7 +299,47 @@ export async function pollNewsFeeds(
   }
   // Retention: catalysts age out fast and this table is only ever read over a short window.
   try { await env.DB.prepare('DELETE FROM news_items WHERE published_at < ?').bind(nowMs - 14 * 86400_000).run(); } catch { /* best-effort */ }
-  return { inserted, health };
+  const pruned = await pruneIrrelevant(env, nowMs);
+  return { inserted, pruned, health };
+}
+
+/**
+ * Re-apply the CURRENT relevance gate to everything already stored, deleting what no longer
+ * qualifies.
+ *
+ * Why this exists: the gate used to run at INGESTION only, so tightening it did nothing to rows an
+ * older, looser rule had already admitted — they sat in the table for the full 14-day retention and
+ * kept appearing in the prompt. Observed exactly that on 2026-08-22: the ingestion counts dropped to
+ * 1-of-20 immediately after deploy while the prompt still showed the same bank-merger and ICYMI
+ * headlines from the previous rule. A write-time-only filter silently makes every future rule change
+ * take two weeks to take effect.
+ *
+ * The Fed category isn't a stored column, but the release URL is — and the slug lives in the URL, so
+ * the full gate is reconstructible from what we keep. Self-healing: any later vocabulary edit takes
+ * effect on the next poll rather than on the next retention cycle.
+ */
+export async function pruneIrrelevant(env: { DB: any }, nowMs: number): Promise<number> {
+  try {
+    const res = await env.DB.prepare(
+      'SELECT id, source, source_name, title, summary, url, published_at, primary_source, scope FROM news_items'
+    ).all();
+    const rows = (res.results || []) as any[];
+    const doomed: string[] = [];
+    for (const r of rows) {
+      const catM = String(r.url || '').match(/\/pressreleases\/([a-z]+)\d{8}[a-z]?\.htm/i);
+      const item: NewsItem = {
+        id: r.id, source: r.source, sourceName: r.source_name, title: r.title || '',
+        summary: r.summary || '', url: r.url || '', publishedAt: r.published_at,
+        primary: !!r.primary_source, scope: (r.scope === 'crypto' ? 'crypto' : 'macro'),
+        category: catM ? catM[1].toLowerCase() : null,
+      };
+      if (!isRelevant(item)) doomed.push(r.id);
+    }
+    for (const id of doomed) {
+      try { await env.DB.prepare('DELETE FROM news_items WHERE id = ?').bind(id).run(); } catch { /* skip */ }
+    }
+    return doomed.length;
+  } catch { return 0; }
 }
 
 export interface PromptNews { headlines: string[]; catalystActive: boolean; latestPrimaryAgeH: number | null }

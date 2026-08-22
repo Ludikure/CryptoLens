@@ -2427,9 +2427,9 @@ export default {
       try {
         const nowMs = Date.now();
         if (url.searchParams.get('force') === '1') {
-          const { inserted, health } = await pollNewsFeeds(env as any, nowMs);
-          await env.ALERTS.put('news:health', JSON.stringify({ at: nowMs, inserted, health }), { expirationTtl: 86400 }).catch(() => {});
-          return json({ forced: true, inserted, health });
+          const { inserted, pruned, health } = await pollNewsFeeds(env as any, nowMs);
+          await env.ALERTS.put('news:health', JSON.stringify({ at: nowMs, inserted, pruned, health }), { expirationTtl: 86400 }).catch(() => {});
+          return json({ forced: true, inserted, pruned, health });
         }
         const cached = await env.ALERTS.get('news:health').catch(() => null);
         const isCrypto = (url.searchParams.get('market') ?? 'crypto') === 'crypto';
@@ -4695,10 +4695,10 @@ async function pollNewsIfDue(env: Env): Promise<void> {
     const now = Date.now();
     if (now - last < NEWS_POLL_INTERVAL_MS) return;
     await env.ALERTS.put('news:last_poll', String(now), { expirationTtl: 86400 });
-    const { inserted, health } = await pollNewsFeeds(env as any, now);
-    await env.ALERTS.put('news:health', JSON.stringify({ at: now, inserted, health }), { expirationTtl: 86400 }).catch(() => {});
+    const { inserted, pruned, health } = await pollNewsFeeds(env as any, now);
+    await env.ALERTS.put('news:health', JSON.stringify({ at: now, inserted, pruned, health }), { expirationTtl: 86400 }).catch(() => {});
     const bad = health.filter(h => !h.ok);
-    console.log(`[news] polled ${health.length} feeds, ${inserted} new item(s)${bad.length ? ` — FAILED: ${bad.map(b => `${b.id}(${b.error})`).join(', ')}` : ''}`);
+    console.log(`[news] polled ${health.length} feeds, ${inserted} new, ${pruned} pruned${bad.length ? ` — FAILED: ${bad.map(b => `${b.id}(${b.error})`).join(', ')}` : ''}`);
   } catch (e) {
     console.log(`[news] poll failed: ${e}`);
   }
