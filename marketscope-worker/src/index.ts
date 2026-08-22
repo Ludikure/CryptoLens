@@ -259,7 +259,8 @@ async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boo
   const calibratedMlWin = curve ? applyCalibration(curve, curWin) : null;
   // Top of the fitted curve — applyCalibration clamps here, so this is the highest calibrated
   // value ANY bar can reach. The prompt floors the mandate windows' 70 gate at it (see
-  // BuildPromptInput.calibrationCeiling) so a compressed curve can't silently kill them.
+  // the notify gate itself unreachable — surfaced by the cron guard log rather than used by the
+  // prompt (the mandate tier reads the RAW scale, so it cannot be killed by curve compression).
   const calibrationCeiling = curve ? curve[curve.length - 1].y : null;
   return { mlCalibration, calibratedMlWin, calibrationCeiling };
 }
@@ -297,7 +298,7 @@ export function nextSuppressionState(args: { crossed: boolean; wasSuppressed: bo
  *  the SINCE-LAST-ANALYSIS baseline and kill-duration state only advance on real analyses. */
 async function envelopePrecheck(env: Env, symbol: string, isCrypto: boolean, mlProb: number,
   daily: ScoreCandle[], fourH: FullCandle[], oneH: FullCandle[],
-  economicEvents: any[], cal?: { calibratedMlWin: number | null; calibrationCeiling: number | null }): Promise<string[] | null> {
+  economicEvents: any[], cal?: { calibratedMlWin: number | null }): Promise<string[] | null> {
   try {
     const indicators: PromptIndicator[] = [computeFullIndicators(daily as unknown as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
     if (fourH.length) indicators.push(computeFullIndicators(fourH, { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
@@ -307,10 +308,10 @@ async function envelopePrecheck(env: Env, symbol: string, isCrypto: boolean, mlP
     // re-running the 90-day ml_calibration GROUP BY per symbol per minute (that aggregate is a
     // SYNCHRONOUS better-sqlite3 call on the box, so it blocks the event loop serving
     // /full-analysis). Falls back to its own fetch when called without one.
-    const { calibratedMlWin, calibrationCeiling } = cal ?? await fetchMlCalibration(env, mlProb, isCrypto);
+    const { calibratedMlWin } = cal ?? await fetchMlCalibration(env, mlProb, isCrypto);
     let prevState: PromptState = {};
     try { const s = await env.ALERTS.get(`prompt:${symbol}`); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh */ }
-    const { prompt } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin, calibrationCeiling });
+    const { prompt } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin });
     return parseAutoFlatReasons(prompt);
   } catch (e) {
     console.log(`[notify] envelope precheck failed ${symbol}: ${e}`);
@@ -375,7 +376,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   // (b) ML_WIN trajectory — the last-24h path from this device's score_history (cron writes a row
   //     per minute for watchlisted symbols), downsampled to ~6 points.
   const curWin = indicators[0].mlWinProbability;
-  const { mlCalibration, calibratedMlWin, calibrationCeiling } = await fetchMlCalibration(env, curWin ?? null, isCrypto);
+  const { mlCalibration, calibratedMlWin } = await fetchMlCalibration(env, curWin ?? null, isCrypto);
   let mlTrajectory: { points: number[]; hours: number } | null = null;
   try {
     const res = await env.DB.prepare(
@@ -466,7 +467,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, livePrice, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-    mlCalibration, calibratedMlWin, calibrationCeiling, mlTrajectory, btcContext, volPricing, liquidations,
+    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing, liquidations,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });
@@ -3005,12 +3006,20 @@ function biasAlignmentFromLabels(dailyBias: string, fourHBias: string): string {
 /// computeFullIndicators the app displays, so the gate and the screen agree by construction.
 /// (crossAsset/derivatives inputs default 0, exactly like the /indicators endpoint.)
 /// Exported for the fixture regression test on the real Aug-2026 tape.
-export function notificationBiasAlignment(daily: FullCandle[], fourH: FullCandle[], isCrypto: boolean): string {
+export function notificationBiasAlignment(daily: FullCandle[], fourH: FullCandle[], isCrypto: boolean, symbol = '?'): string {
   try {
     const d = computeFullIndicators(daily as any, { timeframe: '1d', label: 'Daily', isCrypto });
     const h = fourH.length ? computeFullIndicators(fourH as any, { timeframe: '4h', label: '4H', isCrypto }) : null;
     return biasAlignmentFromLabels(d.bias ?? 'Neutral', h?.bias ?? 'Neutral');
-  } catch { return 'neutral'; }   // gate input — fail to 'neutral' (the dStochCross leg still works)
+  } catch (e) {
+    // Fail to 'neutral' so the dStochCross leg still works — but LOG it. This value is what
+    // /notify-debug reports as biasAlignment, and a silent catch made a computation failure
+    // indistinguishable from a genuine Neutral/Neutral read: the symbol would keep notifying off
+    // one weaker primitive forever with the endpoint showing a perfectly ordinary-looking row.
+    // That endpoint exists precisely because "silence looks identical whichever gate is closed".
+    console.log(`[score] ${symbol} bias alignment failed, degrading to neutral: ${e}`);
+    return 'neutral';
+  }
 }
 
 /// Notification direction primitive: union of bias-aligned OR dStochCross.
@@ -3290,6 +3299,16 @@ async function computeSymbolPredictions(
   let stockCalCurve: CalPoint[] | null = null;
   try { cryptoCalCurve = fitCalibrationCurve(await fetchLiveCalBuckets(env, true)); } catch { /* best-effort */ }
   try { stockCalCurve = fitCalibrationCurve(await fetchLiveCalBuckets(env, false)); } catch { /* best-effort */ }
+  // Unreachable-gate guard. applyCalibration clamps at the curve's top, so if that top ever falls
+  // below ML_THRESHOLD the notify gate can NEVER open for that market — total, silent notification
+  // failure with every other component looking healthy. Log it loudly; this is the one failure mode
+  // the whole calibrated-gate design can produce on its own.
+  for (const [mkt, c] of [['crypto', cryptoCalCurve], ['stock', stockCalCurve]] as const) {
+    const ceiling = c ? c[c.length - 1].y : null;
+    if (ceiling != null && ceiling < ML_THRESHOLD) {
+      console.log(`[calibration] WARNING ${mkt} curve tops out at ${(ceiling * 100).toFixed(1)}% — below the ${Math.round(ML_THRESHOLD * 100)}% notify threshold, so NO ${mkt} symbol can page until the curve recovers or the threshold moves`);
+    }
+  }
   /** Same live-curve mapping the envelope uses, so one number gates both decisions. Raw when the curve is too thin. */
   const calibratedNotifyProb = (raw: number, forCrypto: boolean): number => {
     const curve = forCrypto ? cryptoCalCurve : stockCalCurve;
@@ -3299,7 +3318,7 @@ async function computeSymbolPredictions(
   const calForPrecheck = (raw: number, forCrypto: boolean) => {
     const curve = forCrypto ? cryptoCalCurve : stockCalCurve;
     return { calibratedMlWin: curve ? applyCalibration(curve, raw) : null,
-             calibrationCeiling: curve ? curve[curve.length - 1].y : null };
+           };
   };
   let pendingSetupSymbols = new Set<string>();
   try {
@@ -3963,7 +3982,7 @@ async function computeSymbolPredictions(
       // faithful iOS-port scorer, so the gate reads the same labels the app displays.
       // (Until 2026-08-21 this used the simplified computeScore, whose RSI-overbought
       // penalty read the strongest rallies as Neutral/Bearish — see notificationBiasAlignment.)
-      const biasAlignment = notificationBiasAlignment(candles as FullCandle[], fourHCandles as FullCandle[], isCrypto);
+      const biasAlignment = notificationBiasAlignment(candles as FullCandle[], fourHCandles as FullCandle[], isCrypto, symbol);
 
       // Phase 1/2 heads (crypto-only): direction-conditioned triple-barrier meta prob,
       // adaptive-TP2 q75, and the conformal `confident` gate. Additive — served by
@@ -4031,7 +4050,12 @@ async function computeSymbolPredictions(
           reasons = precheckMemo.get(memoKey)!;
         } else {
           reasons = await envelopePrecheck(env, symbol, isCrypto, mlProb, candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[], await econEvents(), calForPrecheck(mlProb, isCrypto));
-          precheckMemoSet(memoKey, reasons);
+          // Cache VERDICTS only. `null` is the failure sentinel and is fail-OPEN downstream, so
+          // memoizing it would freeze one transient KV/compute hiccup as "envelope clear" for the
+          // rest of the bar — paging the user and burning a Sonnet-5 auto-analysis on a bar that
+          // genuinely auto-FLATs. Before the memo this self-healed on the next 60s tick; retrying
+          // on failure keeps that property while still collapsing the 1,440 -> ~24 successful runs.
+          if (reasons !== null) precheckMemoSet(memoKey, reasons);
         }
         envelopeReasons = reasons;
         envelopeFlat = reasons === null ? null : reasons.length > 0;

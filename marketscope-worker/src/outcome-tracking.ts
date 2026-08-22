@@ -318,9 +318,18 @@ export function outcomeString(row: TrackedRow): string {
  * direction-only, which mattered little while conditional setups were rare and matters a lot now
  * that the conviction-window mandate produces them routinely).
  */
-export function entryReached(p: { high: number; low: number }, entry: number, priceAtSetup: number, isLong: boolean): boolean {
+export function entryReached(
+  p: { high: number; low: number }, entry: number, priceAtSetup: number, isLong: boolean,
+  opts: { allowMarketShortcut?: boolean } = {},
+): boolean {
   if (!(priceAtSetup > 0)) return isLong ? p.low <= entry : p.high >= entry;         // legacy rows: no anchor to compare against
-  if (Math.abs(entry - priceAtSetup) / priceAtSetup < 0.001) return true;            // market entry — already there
+  // "Already at the entry" shortcut — correct for a MARKET setup, wrong for a PENDING one. The
+  // mandate tells the model to phrase entries as "on a 4H close above Y", and classifySetupType
+  // routes any such wording to conditional/pending REGARDLESS of distance — so a near-price
+  // breakout trigger (entry 64,250 vs price 64,230 = 0.03%) would take this branch and return
+  // true for the first bar replayed, flipping the row active at pre-breakout prices and booking
+  // a phantom loss when price drifts to the stop. The caller says whether the shortcut applies.
+  if (opts.allowMarketShortcut && Math.abs(entry - priceAtSetup) / priceAtSetup < 0.001) return true;
   return entry < priceAtSetup ? p.low <= entry : p.high >= entry;                    // price must fall to it / rise to it
 }
 
@@ -346,20 +355,32 @@ export function stepSetup(input: TrackedRow, points: Point[], opts: StepOpts): {
 
   // ── PENDING ──
   if (row.state === 'pending') {
-    if (row.pendingExpiresAt != null && now > row.pendingExpiresAt) {
-      row.state = 'expired';
-      row.invalidReason = 'Pending window expired (12h)';
-      finalize('expired');
-      return { row, changed };
-    }
-    // Proactive re-validation for aging pendings (≥1h old).
-    if (now - row.registeredAt >= 3600_000) {
-      const ev = reEvalPending(row, opts);
-      if (!ev.validated) {
-        row.state = 'invalidated';
-        row.invalidReason = ev.reason;
-        finalize('invalidated');
+    // Candle evidence is evaluated BEFORE the wall-clock rules (2026-08-21c). These two rules key
+    // on opts.nowMs while the touch test walks historical `points`, and resolveTrackedSetups sizes
+    // its kline limit to backfill ~10 days of downtime — so after a deploy or an outage the
+    // expiry/re-eval fired first and threw away bars that PROVE the entry triggered inside the
+    // window. A setup that genuinely triggered and ran to TP1 was recorded as never triggered.
+    // Same class as the 2026-07-24 stepFlat horizon fix, which corrected it for FLATs only.
+    // Only touches at/inside the pending window count — a bar after expiry is not a trigger.
+    const windowEnd = row.pendingExpiresAt ?? Infinity;
+    const touchInWindow = points.find(p =>
+      p.time >= row.registeredAt && p.time <= windowEnd && entryReached(p, entry, row.priceAtSetup, isLong));
+    if (!touchInWindow) {
+      if (row.pendingExpiresAt != null && now > row.pendingExpiresAt) {
+        row.state = 'expired';
+        row.invalidReason = 'Pending window expired (12h)';
+        finalize('expired');
         return { row, changed };
+      }
+      // Proactive re-validation for aging pendings (≥1h old).
+      if (now - row.registeredAt >= 3600_000) {
+        const ev = reEvalPending(row, opts);
+        if (!ev.validated) {
+          row.state = 'invalidated';
+          row.invalidReason = ev.reason;
+          finalize('invalidated');
+          return { row, changed };
+        }
       }
     }
     // Entry touch — APPROACH-aware (2026-08-21), via the SAME helper the active path uses.
@@ -372,7 +393,7 @@ export function stepSetup(input: TrackedRow, points: Point[], opts: StepOpts): {
     // trade_outcomes: the same stats poisoning voidInvalidGeometrySetups purges, but geometrically
     // valid and so uncaught. The ACTIVE path had this right all along; sharing one helper is what
     // stops the two from disagreeing again.
-    const touch = points.find(p => p.time >= row.registeredAt && entryReached(p, entry, row.priceAtSetup, isLong));
+    const touch = touchInWindow;
     if (touch) {
       const ev = reEvalPending(row, opts);
       if (ev.validated) {
@@ -398,7 +419,7 @@ export function stepSetup(input: TrackedRow, points: Point[], opts: StepOpts): {
 
     // Entry-hit for market setups that weren't auto-entered (approach-aware vs priceAtSetup).
     if (!row.entryHit) {
-      const hit = entryReached(point, entry, priceAtSetup, isLong);
+      const hit = entryReached(point, entry, priceAtSetup, isLong, { allowMarketShortcut: true });
       if (hit) { row.entryHit = true; row.entryHitAt = point.time; changed = true; }
       continue;
     }

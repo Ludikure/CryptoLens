@@ -29,10 +29,16 @@ describe('fitCalibrationCurve', () => {
   });
 
   it('drops buckets below CAL_MIN_BUCKET_N before fitting', () => {
+    const clean = fitCalibrationCurve(LIVE_AUG_2026)!;
     const withNoise: CalBucket[] = [...LIVE_AUG_2026, { predMean: 0.9, realized: 0.1, n: CAL_MIN_BUCKET_N - 1 }];
     const curve = fitCalibrationCurve(withNoise)!;
-    // The absurd thin bucket (90% predicted realizing 10%) must not drag the top down.
-    expect(applyCalibration(curve, 0.9)).toBeGreaterThan(0.6);
+    // Pinned EXACTLY, not "> 0.6": PAV would pool an unfiltered thin bucket into the top block and
+    // return 0.6304 instead of 0.6859 — a loose bound passes both ways, making this a non-test of
+    // the filter it names. The top y is load-bearing (it is the curve's ceiling, which the
+    // unreachable-gate guard alarms on), so it gets an equality assertion.
+    expect(curve).toEqual(clean);
+    expect(applyCalibration(curve, 0.9)).toBeCloseTo(clean[clean.length - 1].y, 10);
+    expect(curve[curve.length - 1].n).toBe(382);   // top block is the real 70-85 bucket, unpolluted
   });
 
   it('returns null on insufficient total samples (fallback to raw)', () => {
