@@ -601,6 +601,16 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22i — Collector switched to `ws` + HttpsProxyAgent (code fix, NOT the compose change)
+
+The probe's verdict pointed at `network_mode: service:gluetun`, but reading the real `truenas-compose.yml` changed the call. That compose has a deliberate design — `PROXIED_HOSTS` routes ONLY the exchange hosts through the VPN while Claude/APNs/Yahoo/Finnhub go direct — and `network_mode` discards it, forcing all egress through Switzerland AND putting the whole backend behind gluetun's killswitch. That converts a VPN drop from "one dataset degrades" into "the app and its ingress are down". It also requires moving the 8787 publish to gluetun plus `FIREWALL_INPUT_PORTS`.
+
+**The defect is narrow, so the fix should be too:** undici's `WebSocket` ignores `options.dispatcher`. The `ws` package honors `agent`, and `https-proxy-agent` performs a real CONNECT tunnel through gluetun's `:8888`. The collector now uses `new WsClient(wsUrl, { agent: new HttpsProxyAgent(proxyUrl) })`. Two runtime deps added (`ws`, `https-proxy-agent`) to a near-zero-dep project — the one genuine argument for the compose route instead; `ws` is externalized in the esbuild bundle and survives `npm prune --omit=dev` as a runtime dependency.
+
+**The probe now runs BOTH clients** (`undiciViaProxy` vs `wsViaProxy` vs `direct`) so the next deploy proves the diagnosis rather than assuming it, and its `hint` names the fix for each outcome: `wsViaProxy DELIVERING` = fixed; `OPEN-BUT-SILENT` on both = the tunnel is fine but Switzerland is geoblocked, rotate `SERVER_COUNTRIES`; `REJECTED-AT-UPGRADE` = gluetun refuses CONNECT for wss, fall back to the compose change. Verified locally that `ws`'s `addEventListener` surface matches what the collector uses (`.data`, `.code`, `.message`). 557/557 green.
+
+**Note:** `truenas-compose.yml` holds live credentials and is correctly gitignored (`marketscope-worker/.gitignore:5`) — never committed, not on GitHub. Checked, because the file's own header warns against exactly that.
+
 ### 2026-08-22h — Liquidation probe verdict: the box egresses from the US and undici's WebSocket ignores the proxy
 
 `GET /health?probe=liquidations` settled it in one run. **The fix is infrastructure, not code.**

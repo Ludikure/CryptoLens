@@ -14,14 +14,26 @@
 // totals (Coinglass included) share this cap. Fine for bursts/asymmetry/timing; never treat
 // the sums as exact volumes.
 //
-// EGRESS: the box's residential IP is Binance-geoblocked; REST rides gluetun's HTTP proxy
-// (BINANCE_PROXY_URL) via undici ProxyAgent. Gluetun's proxy supports CONNECT, so the
-// websocket takes the same route (undici WebSocket accepts a custom dispatcher). The
-// fetch-proxy monkey-patch does NOT cover websockets — the dispatcher here is explicit.
+// EGRESS (rewritten 2026-08-22 after this silently captured nothing for six weeks):
+// the box's own IP is US and Binance serves NO websocket data to it — the socket opens and
+// then stays mute forever, with no error and no close.
+//
+// REST rides gluetun's HTTP proxy (BINANCE_PROXY_URL) through undici's ProxyAgent and works.
+// undici's WebSocket, however, IGNORES the dispatcher: `/health?probe=liquidations` measured
+// proxied vs direct egress as CH/Zurich vs US/Virginia for fetch, while BOTH websocket paths
+// behaved identically — impossible if one were really dialing from Zurich. So every socket
+// attempt was leaving from the US address.
+//
+// Hence the `ws` client with an explicit HttpsProxyAgent, which tunnels wss through gluetun's
+// CONNECT proxy for real. Chosen over `network_mode: service:gluetun` deliberately: that would
+// force ALL egress (Claude, APNs, Yahoo) through the VPN and put the whole backend behind
+// gluetun's killswitch, turning a VPN drop from "one dataset degrades" into "the app is down".
 //
 // D1 constraint (server/d1-adapter.ts): positional `?` placeholders only.
 
-import { WebSocket, ProxyAgent, type Dispatcher } from 'undici';
+import { ProxyAgent, type Dispatcher } from 'undici';
+import WsClient from 'ws';
+import { HttpsProxyAgent } from 'https-proxy-agent';
 
 interface Env { DB: any }
 
@@ -175,21 +187,26 @@ export async function probeLiquidationPath(): Promise<any> {
   };
 
   // Distinguishes "rejected at upgrade" from "opens then stays mute" — the whole point of the probe.
-  const ws = (useProxy: boolean) => new Promise<any>((resolve) => {
+  const ws = (useProxy: boolean, client: 'undici' | 'ws') => new Promise<any>((resolve) => {
     const t0 = Date.now();
     let opened = false, messages = 0, err: string | null = null, settled = false;
     let openedAt: number | null = null;   // captured AT the open event; computing it at resolution
                                           // made every path report ~the 10s timeout, hiding the
                                           // latency difference that reveals whether the proxy is
                                           // actually in the path.
-    let sock: WebSocket | null = null;
+    let sock: any = null;
     const done = (verdict: string) => {
       if (settled) return; settled = true;
       try { sock?.close(); } catch { /* ignore */ }
       resolve({ verdict, opened, messages, openedAfterMs: openedAt != null ? openedAt - t0 : null, error: err });
     };
     try {
-      sock = new WebSocket(wsUrl, (useProxy && dispatcher ? { dispatcher } : {}) as any);
+      // `client` selects the implementation so the probe can PROVE which one honors the proxy:
+      // undici's WebSocket ignored its dispatcher (both egress paths behaved identically), while
+      // `ws` + HttpsProxyAgent tunnels through gluetun's CONNECT for real.
+      sock = client === 'ws'
+        ? (new WsClient(wsUrl, useProxy && proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}) as any)
+        : (new WebSocket(wsUrl, (useProxy && dispatcher ? { dispatcher } : {}) as any) as any);
     } catch (e) { err = String(e).slice(0, 140); return done('constructor-threw'); }
     sock.addEventListener('open', () => { opened = true; openedAt = Date.now(); });
     sock.addEventListener('message', () => { messages++; if (messages === 1) done('DELIVERING'); });
@@ -203,26 +220,31 @@ export async function probeLiquidationPath(): Promise<any> {
   const [restProxy, restDirect, egProxy, egDirect] = await Promise.all([
     rest(true), rest(false), egress(true), egress(false),
   ]);
-  const wsProxy = await ws(true);
-  const wsDirect = await ws(false);
+  const wsUndiciProxy = await ws(true, 'undici');
+  const wsWsProxy = await ws(true, 'ws');
+  const wsDirect = await ws(false, 'ws');
   return {
     proxyConfigured: !!proxyUrl,
     wsUrl,
     rest: { viaProxy: restProxy, direct: restDirect },
     egress: { viaProxy: egProxy, direct: egDirect },
-    websocket: { viaProxy: wsProxy, direct: wsDirect },
+    websocket: {
+      undiciViaProxy: wsUndiciProxy,   // the old client — expected to behave like `direct`
+      wsViaProxy: wsWsProxy,           // the new client — should DELIVER if the tunnel is real
+      direct: wsDirect,
+    },
     collector: liquidationStatus(),
-    hint: 'ws REJECTED-AT-UPGRADE + rest ok => proxy cannot carry the Upgrade; put the container on '
-        + "gluetun's network (network_mode: service:gluetun) and unset BINANCE_PROXY_URL. "
-        + 'ws OPEN-BUT-SILENT => that exit country is Binance-geoblocked; change gluetun exit region.',
+    hint: 'wsViaProxy DELIVERING => fixed; the collector uses this client. '
+        + 'wsViaProxy OPEN-BUT-SILENT while undiciViaProxy is too => the tunnel is fine but that exit '
+        + 'country is Binance-geoblocked: change gluetun SERVER_COUNTRIES (Singapore/Japan/Netherlands). '
+        + 'wsViaProxy REJECTED-AT-UPGRADE => gluetun refuses CONNECT for wss; fall back to '
+        + 'network_mode: service:gluetun (and move the 8787 port + FIREWALL_INPUT_PORTS to gluetun).',
   };
 }
 
 export function startLiquidationCollector(env: Env): void {
   const wsUrl = process.env.LIQ_WS_URL || WS_URL_DEFAULT;
   const proxyUrl = process.env.BINANCE_PROXY_URL;
-  const dispatcher: Dispatcher | undefined = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
-
   let buffer: LiquidationRow[] = [];
   let attempts = 0;
   let dropped = 0;
@@ -238,10 +260,11 @@ export function startLiquidationCollector(env: Env): void {
   }, FLUSH_INTERVAL_MS).unref?.();
 
   const connect = () => {
-    let ws: WebSocket;
+    let ws: WsClient;
     try {
-      // undici extension: options.dispatcher routes the CONNECT tunnel through gluetun.
-      ws = new WebSocket(wsUrl, { dispatcher } as any);
+      // `ws` honors `agent`, so the CONNECT tunnel through gluetun is real (undici's WebSocket
+      // silently ignored its dispatcher, which is what cost six weeks of this series).
+      ws = new WsClient(wsUrl, proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {});
     } catch (e) {
       scheduleReconnect(`constructor threw: ${e}`);
       return;
