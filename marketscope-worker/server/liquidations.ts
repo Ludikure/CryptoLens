@@ -130,6 +130,86 @@ export function liquidationStatus(): LiqStatus & { healthy: boolean; quietSec: n
   return { ...status, quietSec, healthy: status.state === 'open' && status.messages > 0 && (quietSec ?? 1e9) < SILENT_TIMEOUT_MS / 1000 };
 }
 
+/**
+ * One-shot diagnostic for the collector's network path, served by `/health?probe=liquidations`.
+ *
+ * Exists because the failure modes are indistinguishable from outside and each implies a DIFFERENT
+ * fix: a websocket rejected at the HTTP upgrade points at the proxy's handling of `Upgrade:` (fix =
+ * put the container on gluetun's network so no proxy is involved); a websocket that OPENS and then
+ * delivers nothing means the exit region is Binance-geoblocked (fix = change gluetun's exit
+ * country). Six weeks were lost to guessing between them, so this measures both directly, plus the
+ * REST controls that prove whether the route itself is sound.
+ *
+ * The egress IP is MASKED to two octets — enough to tell two exits apart, not enough to publish the
+ * user's VPN endpoint on a public route.
+ */
+export async function probeLiquidationPath(): Promise<any> {
+  const proxyUrl = process.env.BINANCE_PROXY_URL;
+  const wsUrl = process.env.LIQ_WS_URL || WS_URL_DEFAULT;
+  const dispatcher: Dispatcher | undefined = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+  const mask = (ip: string) => ip.split('.').slice(0, 2).join('.') + '.x.x';
+
+  const rest = async (useProxy: boolean) => {
+    try {
+      const r = await fetch('https://fapi.binance.com/fapi/v1/time', {
+        ...(useProxy && dispatcher ? { dispatcher } as any : {}),
+        signal: AbortSignal.timeout(6000),
+      });
+      return { status: r.status, ok: r.ok };
+    } catch (e) { return { status: 0, ok: false, error: String(e).slice(0, 140) }; }
+  };
+
+  const egress = async (useProxy: boolean) => {
+    try {
+      const r = await fetch('https://ipinfo.io/json', {
+        ...(useProxy && dispatcher ? { dispatcher } as any : {}),
+        signal: AbortSignal.timeout(6000),
+      });
+      const j: any = await r.json();
+      return { country: j?.country ?? null, region: j?.region ?? null, ip: j?.ip ? mask(String(j.ip)) : null };
+    } catch (e) { return { error: String(e).slice(0, 140) }; }
+  };
+
+  // Distinguishes "rejected at upgrade" from "opens then stays mute" — the whole point of the probe.
+  const ws = (useProxy: boolean) => new Promise<any>((resolve) => {
+    const t0 = Date.now();
+    let opened = false, messages = 0, err: string | null = null, settled = false;
+    let sock: WebSocket | null = null;
+    const done = (verdict: string) => {
+      if (settled) return; settled = true;
+      try { sock?.close(); } catch { /* ignore */ }
+      resolve({ verdict, opened, messages, openedAfterMs: opened ? Date.now() - t0 : null, error: err });
+    };
+    try {
+      sock = new WebSocket(wsUrl, (useProxy && dispatcher ? { dispatcher } : {}) as any);
+    } catch (e) { err = String(e).slice(0, 140); return done('constructor-threw'); }
+    sock.addEventListener('open', () => { opened = true; });
+    sock.addEventListener('message', () => { messages++; if (messages === 1) done('DELIVERING'); });
+    sock.addEventListener('error', (ev: any) => { err = String(ev?.message ?? ev?.error ?? 'unknown').slice(0, 140); });
+    sock.addEventListener('close', (ev: any) => {
+      if (!opened) { err = err ?? `closed code ${ev?.code ?? '?'}`; done('REJECTED-AT-UPGRADE'); }
+    });
+    setTimeout(() => done(opened ? 'OPEN-BUT-SILENT (exit region likely geoblocked)' : 'NO-CONNECTION'), 10_000);
+  });
+
+  const [restProxy, restDirect, egProxy, egDirect] = await Promise.all([
+    rest(true), rest(false), egress(true), egress(false),
+  ]);
+  const wsProxy = await ws(true);
+  const wsDirect = await ws(false);
+  return {
+    proxyConfigured: !!proxyUrl,
+    wsUrl,
+    rest: { viaProxy: restProxy, direct: restDirect },
+    egress: { viaProxy: egProxy, direct: egDirect },
+    websocket: { viaProxy: wsProxy, direct: wsDirect },
+    collector: liquidationStatus(),
+    hint: 'ws REJECTED-AT-UPGRADE + rest ok => proxy cannot carry the Upgrade; put the container on '
+        + "gluetun's network (network_mode: service:gluetun) and unset BINANCE_PROXY_URL. "
+        + 'ws OPEN-BUT-SILENT => that exit country is Binance-geoblocked; change gluetun exit region.',
+  };
+}
+
 export function startLiquidationCollector(env: Env): void {
   const wsUrl = process.env.LIQ_WS_URL || WS_URL_DEFAULT;
   const proxyUrl = process.env.BINANCE_PROXY_URL;
@@ -208,6 +288,7 @@ export function startLiquidationCollector(env: Env): void {
   // src/index.ts is the portable worker code and must not pull in Node-only modules; the handler
   // reads it defensively, so /health still works when the collector isn't running at all.
   (globalThis as any).__marketscopeLiqStatus = liquidationStatus;
+  (globalThis as any).__marketscopeLiqProbe = probeLiquidationPath;
 
   // Watchdog: a socket that is open but mute is the failure this collector could not see.
   setInterval(() => {

@@ -710,6 +710,16 @@ export default {
       // Report which optional provider keys are present (booleans only — never the values) so a
       // missing-secret misconfig (e.g. the app's Finnhub badge going red) is diagnosable remotely
       // without auth. A red badge + finnhub:false here = the key wasn't carried to the box env.
+      // `/health?probe=liquidations` runs the collector's network diagnostic ON THE BOX: REST and
+      // websocket, each with and without the proxy, plus the egress country. It distinguishes
+      // "rejected at upgrade" (proxy can't carry Upgrade: -> use gluetun's network directly) from
+      // "opens then stays mute" (exit region geoblocked -> change exit country). Guessing between
+      // those two cost six weeks of a non-backfillable series.
+      if (url.searchParams.get('probe') === 'liquidations') {
+        const probe = (globalThis as any).__marketscopeLiqProbe;
+        if (!probe) return json({ error: 'collector not running in this runtime' }, 503);
+        try { return json(await probe()); } catch (e) { return json({ error: String(e) }, 500); }
+      }
       const providers = { finnhub: !!env.FINNHUB_API_KEY };
       // Liquidation collector state. Surfaced here because that series CANNOT be backfilled, so a
       // dead collector must be visible without reading container logs — `/liquidations` returning
