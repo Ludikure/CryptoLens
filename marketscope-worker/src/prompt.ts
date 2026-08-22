@@ -485,6 +485,11 @@ export interface BuildPromptInput {
   // Insight enrichments (2026-07-02) — all derived from data the system already stores:
   mlCalibration?: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null;  // live realized goodR for the CURRENT prediction's bucket (ml_calibration D1)
   calibratedMlWin?: number | null;   // raw ML_WIN corrected by the live forward calibration — used by the auto-FLAT/quality gate so drift can't over-suppress
+  // Top of the live calibration curve, 0-1 (applyCalibration CLAMPS here, so no bar can exceed it).
+  // The mandate windows floor their 70 gate at this value: when the live curve's best bucket
+  // realizes e.g. 69%, a hard 70 would be unreachable universe-wide and the windows would go
+  // silently dead — the exact failure the mandate exists to prevent. Null = no fitted curve.
+  calibrationCeiling?: number | null;
   mlTrajectory?: { points: number[]; hours: number } | null;                   // sampled ML_WIN path over the last N hours, oldest→newest (score_history D1)
   btcContext?: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null; // BTC regime read for alt analyses (ml_preds:all KV)
   volPricing?: { dvol: number; impliedMovePct: number; forecastMovePct: number } | null;  // options-implied vs model-forecast move (BTC/ETH, Deribit DVOL)
@@ -1202,7 +1207,11 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (envChaseLevel === 'HIGH' && envAlignment !== 'MIXED' && envAlignment !== 'UNKNOWN') autoFlat.push('chase_into_extended_aligned_trend');
       if (envMacroRisk === 'IMMINENT') autoFlat.push('macro_IMMINENT');
       if (isTreatment) {
-        if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'FAIL') autoFlat.push('treatment_long_confirm_FAIL');
+        // Scoped to a genuinely aligned LONG (2026-08-21). `alignedDirection` derives from the
+        // DAILY bias alone, so in MIXED it reads 'LONG' off a bullish daily even though the
+        // MIXED playbook says direction is NOT implied — a LONG-only relative-strength check was
+        // therefore auto-FLATting the best big-move cell on bars where no LONG was proposed.
+        if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'FAIL' && envAlignment !== 'MIXED') autoFlat.push('treatment_long_confirm_FAIL');
         const isStock = !!stockInfo;
         if (isStock && alignedDirection === 'SHORT' && envAlignment === 'ALIGNED_BEARISH') {
           const mlOk = (mlPct ?? 0) >= 70, stochOk = treatmentStochCross4H === 'bearish', regimeOk = regime === 'TRENDING';
@@ -1288,12 +1297,50 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // rendered as NO ENTRY EDGE through a +25% move. When the system's own stack says its
         // strongest tradeable state is active, declining is no longer an allowed output: the
         // honest form of caution is a CONDITIONAL entry at a named level, not silence.
-        if ((envAlignment === 'ALIGNED_BULLISH' || envAlignment === 'ALIGNED_BEARISH') && mlPct != null && mlPct >= 70) {
-          const wDir = envAlignment === 'ALIGNED_BULLISH' ? 'LONG' : 'SHORT';
-          L(`  HIGH_CONVICTION_WINDOW: biases aligned ${wDir}, ML_WIN ${mlPct}% >= 70, and NO auto-FLAT reason is active — the system's strongest tradeable state. A concrete ${wDir} setup is MANDATORY: immediate entry if price sits at a valid level, otherwise a CONDITIONAL entry at the nearest validated pullback level or breakout trigger (name the exact price). Outputting NO SETUP or "wait and see" without an Entry/Stop/TP table is NOT an acceptable response in this window — if you judge price extended, that judgment belongs in the CONDITION of the entry, not in declining to provide one.`);
+        // The mandate's ML gate is FLOORED at the live calibration ceiling. applyCalibration
+        // clamps at the top fitted bucket's realized rate, so a hard 70 goes universe-wide
+        // unreachable whenever that bucket drifts below 70 (the Aug curve sat at ~69) — the
+        // windows would die silently while the 65 notify threshold kept launching analyses
+        // free to decline. Floor never rises above 70 and never drops below 65 (the notify
+        // threshold — below that nothing triggers anyway, so a lower floor buys nothing).
+        const ceilPct = input.calibrationCeiling != null ? iTrunc(input.calibrationCeiling * 100) : null;
+        const mandateFloor = ceilPct != null ? Math.max(65, Math.min(70, ceilPct)) : 70;
+        // Exclusions — states where forcing a setup would be actively wrong. These are NOT
+        // auto-FLATs (the tape may still be tradeable by the user's own judgment); they only
+        // suspend the MANDATE, leaving the LLM its normal discretion.
+        const mandateBlocks: string[] = [];
+        if (staleCount >= 2) mandateBlocks.push(`data_stale_${staleCount}_sources`);   // the missing feeds are exactly the ones that would close this window
+        if (stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs && Math.floor((stockInfo.earningsDate - nowMs) / 86400000) <= 2) mandateBlocks.push('earnings_within_2d');
+        const mandateOK = mandateBlocks.length === 0;
+        // Precedence: the mandate compels an ENTRY, never a conviction tier or a direction, and
+        // never overrides a hazard flag. Appended to both windows so a co-emitted counter-order
+        // (BB_EXTREME "DO NOT short", news conflict, bear-regime LONG cap, a LOW max_allowed)
+        // has a stated resolution instead of two absolutes the model resolves arbitrarily.
+        const precedence = ` PRECEDENCE: this compels an ENTRY, not a tier and not a side — obey every other flag on top of it (max_allowed caps conviction; a "DO NOT short"/news-conflict/regime-cap line means satisfy this with the OTHER side, a tighter conditional trigger, or reduced size — never by ignoring that flag). If a flag genuinely forbids every entry in this direction, say so explicitly in one line and give the conditional entry for the case that resolves it.`;
+        const alignedWindow = envAlignment.startsWith('ALIGNED_BULLISH') || envAlignment.startsWith('ALIGNED_BEARISH');
+        if (alignedWindow && mlPct != null && mlPct >= mandateFloor) {
+          const wDir = envAlignment.startsWith('ALIGNED_BULLISH') ? 'LONG' : 'SHORT';
+          // HIGHER_TF_ONLY = daily+4H agree, 1H opposing/neutral — i.e. an active pullback. That
+          // is the entry bar this remedy names, so it is IN the window, not excluded from it.
+          const pullbackNote = envAlignment.endsWith('_HIGHER_TF_ONLY') ? ' The 1H is counter to the higher timeframes — that IS the pullback, so anchor the entry to it rather than treating it as a reason to wait.' : '';
+          if (mandateOK) {
+            L(`  HIGH_CONVICTION_WINDOW: biases aligned ${wDir}, ML_WIN ${mlPct}% >= ${mandateFloor}, and NO auto-FLAT reason is active — the system's strongest tradeable state. A concrete ${wDir} setup is MANDATORY: immediate entry if price sits at a valid level, otherwise a CONDITIONAL entry at the nearest validated pullback level or breakout trigger (name the exact price). Outputting NO SETUP or "wait and see" without an Entry/Stop/TP table is NOT an acceptable response in this window — if you judge price extended, that judgment belongs in the CONDITION of the entry, not in declining to provide one.${pullbackNote}${precedence}`);
+          } else {
+            L(`  HIGH_CONVICTION_WINDOW_SUSPENDED: aligned ${wDir} at ML_WIN ${mlPct}% would mandate a setup, but ${mandateBlocks.join(' + ')} — the inputs that would normally CLOSE this window are missing or a gap event is imminent, so a forced entry would be a blind one. Normal discretion applies; say plainly why you are standing aside rather than implying the tape is quiet.`);
+          }
         }
-        if (envAlignment === 'MIXED' && mlPct != null && mlPct >= 70) {
-          L(`  MIXED_HIGH_ML_WINDOW: timeframes disagree but ML_WIN ${mlPct}% >= 70 — statistically the BEST big-move cell (non-aligned bars carry ~2x the >=1.5-ATR move rate of aligned trends; measured on 1.37M clean bars). Direction is NOT implied: trade only a structure-led setup (4H reversal or range-edge level with tight invalidation), counter-trend bands apply, cap MODERATE. Do not frame this as trend-following and do not cite "wait for alignment" — by the time TFs align, the move is statistically spent. A concrete structure-led setup is MANDATORY in this window (CONDITIONAL at the nearest valid level if none is IN_PLAY) — do NOT output NO SETUP.`);
+        if (envAlignment === 'MIXED' && mlPct != null && mlPct >= mandateFloor) {
+          // The MIXED window bypasses gates scoped to full alignment (the stock-SHORT gate and
+          // the chase auto-FLAT both require a non-MIXED alignment). Harmless while declining was
+          // allowed; load-bearing once a tail forbids NO SETUP — so the MANDATE tail is withheld
+          // in exactly those states while the informational window still prints.
+          const chaseUnguarded = envChaseLevel === 'HIGH';
+          const stockShortUnguarded = !!stockInfo && has(daily.bias, 'Bearish');
+          const mixedMandate = mandateOK && !chaseUnguarded && !stockShortUnguarded;
+          const tail = mixedMandate
+            ? ` A concrete structure-led setup is MANDATORY in this window (CONDITIONAL at the nearest valid level if none is IN_PLAY) — do NOT output NO SETUP.${precedence}`
+            : ` (Setup NOT mandated here: ${[...mandateBlocks, ...(chaseUnguarded ? ['chase_risk_HIGH'] : []), ...(stockShortUnguarded ? ['stock_short_gate_does_not_apply_in_MIXED'] : [])].join(' + ')} — normal discretion, and a NO SETUP is acceptable if you say why.)`;
+          L(`  MIXED_HIGH_ML_WINDOW: timeframes disagree but ML_WIN ${mlPct}% >= ${mandateFloor} — statistically the BEST big-move cell (non-aligned bars carry ~2x the >=1.5-ATR move rate of aligned trends; measured on 1.37M clean bars). Direction is NOT implied: trade only a structure-led setup (4H reversal or range-edge level with tight invalidation), counter-trend bands apply, cap MODERATE. Do not frame this as trend-following and do not cite "wait for alignment" — by the time TFs align, the move is statistically spent.${tail}`);
         }
         L('  LLM_judgment_required: failure_mode_specific_not_generic, thesis_intact_check');
         L('  → Pick conviction within max_allowed. You may NOT output a tier above max_allowed.');

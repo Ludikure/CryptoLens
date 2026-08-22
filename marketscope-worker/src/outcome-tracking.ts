@@ -307,6 +307,23 @@ export function outcomeString(row: TrackedRow): string {
 
 // ─── The pure state machine (port of trackSetupOutcomes, OutcomeTracker.swift:118-335) ──────
 
+/**
+ * Did this bar reach the entry? Decided by which SIDE the entry sat on when the setup was made,
+ * not by the trade's direction — a LONG can be a pullback (entry below, price must fall to it) or
+ * a breakout (entry above, price must RISE to it), and the mirror holds for SHORTs. Getting this
+ * from direction alone marks breakout rows entered on the first bar, since any price below a
+ * LONG's entry satisfies `low <= entry`.
+ *
+ * Shared by the PENDING and ACTIVE paths (they disagreed until 2026-08-21 — the pending path was
+ * direction-only, which mattered little while conditional setups were rare and matters a lot now
+ * that the conviction-window mandate produces them routinely).
+ */
+export function entryReached(p: { high: number; low: number }, entry: number, priceAtSetup: number, isLong: boolean): boolean {
+  if (!(priceAtSetup > 0)) return isLong ? p.low <= entry : p.high >= entry;         // legacy rows: no anchor to compare against
+  if (Math.abs(entry - priceAtSetup) / priceAtSetup < 0.001) return true;            // market entry — already there
+  return entry < priceAtSetup ? p.low <= entry : p.high >= entry;                    // price must fall to it / rise to it
+}
+
 export function stepSetup(input: TrackedRow, points: Point[], opts: StepOpts): { row: TrackedRow; changed: boolean } {
   const row: TrackedRow = { ...input };
   let changed = false;
@@ -345,8 +362,17 @@ export function stepSetup(input: TrackedRow, points: Point[], opts: StepOpts): {
         return { row, changed };
       }
     }
-    // Entry touch (direction-only, iOS :180-182).
-    const touch = points.find(p => p.time >= row.registeredAt && (isLong ? p.low <= entry : p.high >= entry));
+    // Entry touch — APPROACH-aware (2026-08-21), via the SAME helper the active path uses.
+    // This was direction-only (`isLong ? p.low <= entry : p.high >= entry`), which assumes a
+    // conditional LONG entry sits BELOW price (a pullback). The other sanctioned conditional form
+    // is a BREAKOUT trigger — LONG entry ABOVE price ("on a 4H close above Y") — and for those the
+    // pullback test is satisfied by literally any bar, since every price below entry has
+    // `low <= entry`. Such a row was marked entry_hit on the first resolver pass at pre-breakout
+    // prices and then usually stopped out on ordinary drift, inserting a phantom LOSS into
+    // trade_outcomes: the same stats poisoning voidInvalidGeometrySetups purges, but geometrically
+    // valid and so uncaught. The ACTIVE path had this right all along; sharing one helper is what
+    // stops the two from disagreeing again.
+    const touch = points.find(p => p.time >= row.registeredAt && entryReached(p, entry, row.priceAtSetup, isLong));
     if (touch) {
       const ev = reEvalPending(row, opts);
       if (ev.validated) {
@@ -370,16 +396,9 @@ export function stepSetup(input: TrackedRow, points: Point[], opts: StepOpts): {
   for (const point of points) {
     if (point.time < row.registeredAt) continue;
 
-    // Entry-hit for market setups that weren't auto-entered (direction-aware vs priceAtSetup).
+    // Entry-hit for market setups that weren't auto-entered (approach-aware vs priceAtSetup).
     if (!row.entryHit) {
-      let hit: boolean;
-      if (priceAtSetup > 0) {
-        if (Math.abs(entry - priceAtSetup) / priceAtSetup < 0.001) hit = true;          // market entry
-        else if (entry < priceAtSetup) hit = point.low <= entry;                        // price must fall
-        else hit = point.high >= entry;                                                 // price must rise
-      } else {
-        hit = isLong ? point.low <= entry : point.high >= entry;                        // legacy fallback
-      }
+      const hit = entryReached(point, entry, priceAtSetup, isLong);
       if (hit) { row.entryHit = true; row.entryHitAt = point.time; changed = true; }
       continue;
     }

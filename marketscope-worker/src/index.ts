@@ -257,7 +257,11 @@ async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boo
   }
   const curve = fitCalibrationCurve(buckets);
   const calibratedMlWin = curve ? applyCalibration(curve, curWin) : null;
-  return { mlCalibration, calibratedMlWin };
+  // Top of the fitted curve — applyCalibration clamps here, so this is the highest calibrated
+  // value ANY bar can reach. The prompt floors the mandate windows' 70 gate at it (see
+  // BuildPromptInput.calibrationCeiling) so a compressed curve can't silently kill them.
+  const calibrationCeiling = curve ? curve[curve.length - 1].y : null;
+  return { mlCalibration, calibratedMlWin, calibrationCeiling };
 }
 
 // ── Notification envelope precheck (2026-07-11) ────────────────────────────────────────────
@@ -293,16 +297,20 @@ export function nextSuppressionState(args: { crossed: boolean; wasSuppressed: bo
  *  the SINCE-LAST-ANALYSIS baseline and kill-duration state only advance on real analyses. */
 async function envelopePrecheck(env: Env, symbol: string, isCrypto: boolean, mlProb: number,
   daily: ScoreCandle[], fourH: FullCandle[], oneH: FullCandle[],
-  economicEvents: any[]): Promise<string[] | null> {
+  economicEvents: any[], cal?: { calibratedMlWin: number | null; calibrationCeiling: number | null }): Promise<string[] | null> {
   try {
     const indicators: PromptIndicator[] = [computeFullIndicators(daily as unknown as FullCandle[], { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator];
     if (fourH.length) indicators.push(computeFullIndicators(fourH, { timeframe: '4h', label: '4H', isCrypto }) as unknown as PromptIndicator);
     if (fourH.length && oneH.length) indicators.push(computeFullIndicators(oneH, { timeframe: '1h', label: '1H', isCrypto }) as unknown as PromptIndicator);
     (indicators[0] as any).mlWinProbability = mlProb;
-    const { calibratedMlWin } = await fetchMlCalibration(env, mlProb, isCrypto);
+    // The symbol pass already fitted the curve once for this cron — reuse it rather than
+    // re-running the 90-day ml_calibration GROUP BY per symbol per minute (that aggregate is a
+    // SYNCHRONOUS better-sqlite3 call on the box, so it blocks the event loop serving
+    // /full-analysis). Falls back to its own fetch when called without one.
+    const { calibratedMlWin, calibrationCeiling } = cal ?? await fetchMlCalibration(env, mlProb, isCrypto);
     let prevState: PromptState = {};
     try { const s = await env.ALERTS.get(`prompt:${symbol}`); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh */ }
-    const { prompt } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin });
+    const { prompt } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin, calibrationCeiling });
     return parseAutoFlatReasons(prompt);
   } catch (e) {
     console.log(`[notify] envelope precheck failed ${symbol}: ${e}`);
@@ -367,7 +375,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   // (b) ML_WIN trajectory — the last-24h path from this device's score_history (cron writes a row
   //     per minute for watchlisted symbols), downsampled to ~6 points.
   const curWin = indicators[0].mlWinProbability;
-  const { mlCalibration, calibratedMlWin } = await fetchMlCalibration(env, curWin ?? null, isCrypto);
+  const { mlCalibration, calibratedMlWin, calibrationCeiling } = await fetchMlCalibration(env, curWin ?? null, isCrypto);
   let mlTrajectory: { points: number[]; hours: number } | null = null;
   try {
     const res = await env.DB.prepare(
@@ -458,7 +466,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, livePrice, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing, liquidations,
+    mlCalibration, calibratedMlWin, calibrationCeiling, mlTrajectory, btcContext, volPricing, liquidations,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });
@@ -484,6 +492,22 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   const llm = await callLLM(env, { provider, model: body.model, system, prompt, thinkingBudget });
   if (!llm.ok) return { ok: false, status: llm.status, error: llm.error };
   const setups = parseSetups(llm.text);
+
+  // Mandate observability (2026-08-21). The prompt tells the model a setup is MANDATORY inside a
+  // conviction window; nothing downstream could tell whether that was honoured, so a recurrence of
+  // the "stay put through a rally" failure would again need a hand-written replay script to
+  // diagnose. This is the one place holding both the envelope input and the parsed outcome, so it
+  // is where the two are compared. Distinguishes the two indistinguishable-downstream causes as far
+  // as it can: a prose Entry table with an empty JSON array means the model obeyed the directive
+  // but the machine-readable contract dropped it.
+  if (prompt.includes('HIGH_CONVICTION_WINDOW:') || prompt.includes('MIXED_HIGH_ML_WINDOW:')) {
+    if (setups.length === 0) {
+      const prosaicTable = /\bstop\s*loss\b|\bTP1\b|\bentry\b/i.test(llm.text) && /\|/.test(llm.text);
+      console.log(`[mandate-violation] ${symbol} conviction window active but 0 setups parsed — ${prosaicTable ? 'prose table present, JSON block empty (contract drop)' : 'model declined outright'}`);
+    } else {
+      console.log(`[mandate-ok] ${symbol} conviction window active, ${setups.length} setup(s) parsed`);
+    }
+  }
 
   // Server-side outcome tracking (2026-07-09 thin-client cutover): register this analysis's
   // setups (or its FLAT decision) in tracked_setups — the cron resolves them from here on,
@@ -1792,7 +1816,9 @@ export default {
         if (!pushToken) blockedBy = 'no_push_token';
         else if (!watchlist.length) blockedBy = 'empty_watchlist';
         else if (!g) blockedBy = 'symbol_not_processed_by_cron';
-        else if (!g.mlPasses) blockedBy = `ml_below_threshold (${g.ml}% < ${g.mlThreshold}%)`;
+        // Print the CALIBRATED number — mlPasses is calibrated-based, so quoting raw here produced
+        // arithmetic impossibilities like "ml_below_threshold (72% < 65%)".
+        else if (!g.mlPasses) blockedBy = `ml_below_threshold (calibrated ${g.mlCalibrated}% < ${g.mlThreshold}%, raw ${g.ml}%)`;
         else if (!g.directionPasses) blockedBy = 'direction_ambiguous (bias vs Stoch conflict)';
         else if (g.envelopeFlat === true) blockedBy = `envelope_auto_flat (${(g.envelopeReasons || []).join(', ')})`;
         else if (claimHeld) blockedBy = 'notify_cooldown_held';
@@ -2869,9 +2895,36 @@ const ARCHIVE_CRYPTO = [
 const ML_THRESHOLD = 0.65;            // on the CALIBRATED scale (2026-08-21, was 0.70): the live curve's
                                       // 60-70 band realizes ~66% and the honest PAV map only exceeds 70 at
                                       // raw >= ~79, which made 0.70 pass only a few bars a month. 0.65 looks
-                                      // at the band the forward data says is worth looking at; the setup
-                                      // gate + 3.5h claim/autorun guards still bound pushes and LLM cost.
+                                      // at the band the forward data says is worth looking at.
+// COST/NOISE, stated accurately (the earlier "the setup gate bounds pushes" note was stale on
+// arrival — 2026-08-08c made a DECLINED analysis send its own push, so the setup gate stopped
+// bounding volume). What bounds it now: the 3.5h `notif_claims` claim and the 3.5h `autorun:<sym>`
+// guard cap work at ~one LLM run per symbol per 3.5h (~6.8/day/symbol worst case), and a decline
+// BELOW the mandate band is deferred silently rather than pushed — so the widened 65-69 band adds
+// analysis coverage without adding "nothing to do" notifications.
+const MANDATE_ML_PCT = 70;            // calibrated %, matches the prompt's mandate window floor
+
 const NOTIFY_COOLDOWN_SEC = 3.5 * 60 * 60;
+// Calibrated-ML floor for the entry-zone-reached push: one notch below ML_THRESHOLD, so a setup
+// already approved at the gate isn't re-litigated at its entry touch — only a genuine collapse
+// in quality since registration suppresses the push.
+const ENTRY_ZONE_ML_FLOOR = ML_THRESHOLD - 0.10;
+// Envelope-precheck memo (2026-08-21). `crossCandidate` is a LEVEL, so an eligible symbol re-ran
+// computeFullIndicators x3 + a full buildUserPrompt EVERY minute — ~1,440/day per symbol for at
+// most ~24 distinct input states, since the inputs only move on a bar close. MODULE-scoped so it
+// spans cron passes (the box is a long-lived Node process; a pass-scoped map would never hit,
+// each symbol being visited once per pass). Keyed on everything that can change the verdict:
+// symbol + last 4H bar time + ML to 0.1%. A new bar or a moved ML mints a new key, so a stale
+// verdict is unreachable by construction; the size cap just bounds memory on a long uptime.
+const PRECHECK_MEMO_MAX = 512;
+const precheckMemo = new Map<string, string[] | null>();
+function precheckMemoSet(key: string, val: string[] | null) {
+  if (precheckMemo.size >= PRECHECK_MEMO_MAX) {
+    // Map preserves insertion order — drop the oldest half in one sweep (cheap, amortized).
+    let i = 0; for (const k of precheckMemo.keys()) { precheckMemo.delete(k); if (++i >= PRECHECK_MEMO_MAX / 2) break; }
+  }
+  precheckMemo.set(key, val);
+}
 // How long a suppressed (deferred) cross stays armed before it's considered stale. Shared by the
 // `notif_suppressed:all` blob, its prune sweep, and the per-symbol `notif_resuppress:<sym>` key so
 // the three can't drift apart.
@@ -2881,6 +2934,12 @@ interface SymbolPrediction {
   symbol: string;
   isCrypto: boolean;
   mlProb: number;
+  // mlProb mapped through the live calibration curve — the scale EVERY gate keys on since
+  // 2026-08-21 (notify threshold, envelope, entry-zone push). Carried on the prediction so
+  // downstream consumers can't accidentally compare a raw number against a calibrated
+  // threshold, which is the "one quantity, two decisions, two values" bug class that caused
+  // the missed Aug rally. Equals mlProb when the live curve is too thin to fit.
+  notifyProb: number;
   dailyScore: number;
   // True iff the previous cron's mlProb was below ML_THRESHOLD and current is at/above.
   // The notification gate fires only on this rising edge, not on continued elevation —
@@ -3235,6 +3294,12 @@ async function computeSymbolPredictions(
   const calibratedNotifyProb = (raw: number, forCrypto: boolean): number => {
     const curve = forCrypto ? cryptoCalCurve : stockCalCurve;
     return curve ? applyCalibration(curve, raw) : raw;
+  };
+  /** Pass-level calibration handed to envelopePrecheck so it doesn't re-run the 90d D1 aggregate per symbol per minute. */
+  const calForPrecheck = (raw: number, forCrypto: boolean) => {
+    const curve = forCrypto ? cryptoCalCurve : stockCalCurve;
+    return { calibratedMlWin: curve ? applyCalibration(curve, raw) : null,
+             calibrationCeiling: curve ? curve[curve.length - 1].y : null };
   };
   let pendingSetupSymbols = new Set<string>();
   try {
@@ -3860,7 +3925,11 @@ async function computeSymbolPredictions(
       // 2026-07-14 the push itself only fires when the analysis actually yields a SETUP, so the
       // setup gate — not the ML threshold — is what keeps notifications quiet. Widening the trigger
       // buys coverage, not noise.
-      const risingEdge = prevMl !== undefined && prevMl < ML_THRESHOLD && mlProb >= ML_THRESHOLD;
+      // Log-only rising edge, on the SAME calibrated scale as the gate (2026-08-21). Comparing
+      // raw prevMl/mlProb against a now-calibrated ML_THRESHOLD meant the "crossed up" line fired
+      // on ticks unrelated to when the gate actually opened — so an operator grepping the box logs
+      // for the deciding tick found nothing.
+      const prevNotifyProb = prevMl !== undefined ? calibratedNotifyProb(prevMl, isCrypto) : undefined;
       // Gate on the CALIBRATED probability (2026-08-14), matching what the Conviction Envelope has
       // used since 2026-07-02. Leaving the notify threshold on raw meant the two disagreed: the
       // envelope would judge a bar tradeable on a corrected number while the notification never
@@ -3868,7 +3937,8 @@ async function computeSymbolPredictions(
       // realising ~65%), raw systematically under-reads — which is exactly "we routinely miss moves".
       const notifyProb = calibratedNotifyProb(mlProb, isCrypto);
       const crossed = notifyProb >= ML_THRESHOLD;
-      if (risingEdge) console.log(`[notify] ${symbol} ML crossed up through ${Math.round(ML_THRESHOLD * 100)}% (${Math.round(mlProb * 100)}%)`);
+      const risingEdge = prevNotifyProb !== undefined && prevNotifyProb < ML_THRESHOLD && notifyProb >= ML_THRESHOLD;
+      if (risingEdge) console.log(`[notify] ${symbol} calibrated ML crossed up through ${Math.round(ML_THRESHOLD * 100)}% (calibrated ${Math.round(notifyProb * 100)}%, raw ${Math.round(mlProb * 100)}%)`);
 
       // Last 4H bar for pending-setup entry-touch detection. Defensive fallback to 0
       // if candles disappeared — the device-pass code handles 0 by skipping the check.
@@ -3955,7 +4025,14 @@ async function computeSymbolPredictions(
       let envelopeFlat: boolean | null = null;
       let envelopeReasons: string[] | null = null;
       if (crossCandidate || newHighStates.length > 0 || pendingSetupSymbols.has(symbol)) {
-        const reasons = await envelopePrecheck(env, symbol, isCrypto, mlProb, candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[], await econEvents());
+        const memoKey = `${symbol}:${last4H?.time ?? 0}:${Math.round(mlProb * 1000)}`;
+        let reasons: string[] | null;
+        if (precheckMemo.has(memoKey)) {
+          reasons = precheckMemo.get(memoKey)!;
+        } else {
+          reasons = await envelopePrecheck(env, symbol, isCrypto, mlProb, candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[], await econEvents(), calForPrecheck(mlProb, isCrypto));
+          precheckMemoSet(memoKey, reasons);
+        }
         envelopeReasons = reasons;
         envelopeFlat = reasons === null ? null : reasons.length > 0;
         if (envelopeFlat) console.log(`[notify] ${symbol} envelope would auto-FLAT (${(reasons ?? []).join(', ')}) — proactive pushes gated`);
@@ -4024,6 +4101,7 @@ async function computeSymbolPredictions(
         symbol,
         isCrypto,
         mlProb,
+        notifyProb,
         dailyScore: features.dailyScore,
         crossed: effectiveCross,
         envelopeFlat,
@@ -4199,8 +4277,13 @@ export async function deferAutoAnalysisCross(env: Env, pushToken: string, symbol
 // DEFERRED back to the suppression machinery rather than dropped — see `deferAutoAnalysisCross`.
 async function runAutoAnalysis(
   env: Env, symbol: string, isCrypto: boolean, deviceId: string, pushToken: string, mlProb: number,
+  notifyProb?: number,
 ): Promise<void> {
-  const mlPct = Math.round(mlProb * 100);
+  // User-facing copy and band decisions quote the CALIBRATED number — the one the gate actually
+  // used. Quoting raw produced pushes like "ML 41% with agreeing signals" for a cross that passed
+  // at calibrated 66%, which reads as a malfunction.
+  const calProb = notifyProb ?? mlProb;
+  const mlPct = Math.round(calProb * 100);
   // ── Defer-not-drop, part 2 (2026-07-24 fix) ──────────────────────────────────────────────────
   // The caller consumed the cross before knowing whether we'd push: `crossed` is a single-tick
   // rising edge (prevMl < 0.70 && mlProb >= 0.70) and the notif_claims claim is taken as a
@@ -4257,6 +4340,23 @@ async function runAutoAnalysis(
     // is at most one per symbol per 3.5h.
     if (setups.length === 0) {
       await deferCross('no setup');
+      // MANDATE BAND (2026-08-21). At/above MANDATE_ML_PCT the envelope tells the model a setup is
+      // MANDATORY, so arriving here means either the model ignored the directive or it emitted a
+      // prose table the JSON contract dropped — both indistinguishable downstream and both the exact
+      // failure this machinery exists to prevent. Log it loudly so recurrence is greppable instead of
+      // requiring another manual replay session to diagnose. (The envelope can also legitimately
+      // SUSPEND the mandate — stale data, earnings gap — which is why this is a log, not an alarm.)
+      if (mlPct >= MANDATE_ML_PCT) {
+        console.log(`[mandate-violation] ${symbol} calibrated ML ${mlPct}% >= ${MANDATE_ML_PCT} produced NO setup — window ignored, JSON contract dropped it, or the window was suspended (stale data / earnings)`);
+      } else {
+        // 65-69 band: BELOW the mandate, so a decline here is the expected, legitimate outcome
+        // rather than news. Pushing it would generate up to one notification per watchlist symbol
+        // per 3.5h of pure "nothing to do" — the volume that trained the user to ignore
+        // notifications before the 2026-07-14 setup gate. Deferred silently; the cross stays armed
+        // and pages the moment a setup appears or the calibrated value reaches the mandate band.
+        console.log(`[autorun] ${symbol} no setup at calibrated ${mlPct}% (below the ${MANDATE_ML_PCT}% mandate band) — deferred, no push`);
+        return;
+      }
       try {
         const m = String(r.result.analysis).match(/##\s*Bottom Line\s*\n([\s\S]*?)(?:\n##\s|\n---|\n```|$)/i);
         const why = m ? m[1].replace(/\*\*/g, '').replace(/\s+/g, ' ').trim() : '';
@@ -4264,7 +4364,7 @@ async function runAutoAnalysis(
         await sendAPNs(env, pushToken,
           `${name} conditions favorable · no setup`,
           why.length ? why.slice(0, 178)
-                     : `ML ${mlPct}% with agreeing signals, but the analysis found no risk-defined entry.`);
+                     : `Move likelihood ${mlPct}% with agreeing signals, but the analysis found no risk-defined entry.`);
         console.log(`[autorun] ${symbol} favourable-conditions push sent (no setup)`);
       } catch (e) {
         console.log(`[autorun] ${symbol} favourable-conditions push failed: ${e}`);
@@ -4371,7 +4471,7 @@ async function processDeviceNotifications(
        WHERE notif_claims.expires_at < ?`
     ).bind(pushToken, symbol, expiresAt, expiresAt, now).run();
     if ((claim.meta.changes ?? 0) === 0) continue;
-    triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb,
+    triggered.push({ symbol, score: pred.dailyScore, mlProb: pred.mlProb, notifyProb: pred.notifyProb,
                      direction: dir === 1 ? 'LONG' : 'SHORT' });
   }
 
@@ -4434,10 +4534,14 @@ async function processDeviceNotifications(
         if (await env.ALERTS.get(notifiedKey)) continue;
         const pred = predictions.get(setup.symbol);
         if (!pred || pred.atrPrice <= 0) continue;
-        // ML must still be favorable. Use 0.55 as the entry-touched gate (slightly
-        // below the 70% conviction gate so we don't suppress moderate setups during
-        // an entry touch, but firm enough to skip stale signals where ML collapsed).
-        if (pred.mlProb < 0.55) continue;
+        // ML must still be favorable, on the CALIBRATED scale (2026-08-21). This compared RAW
+        // ML against 0.55 while every gate that CREATES these setups moved to the calibrated
+        // scale — and on the compressed live curve a setup born at calibrated 66% maps from raw
+        // ~45%, so the raw test silently killed the entry-zone push for exactly the setups the
+        // lowered threshold newly creates. ENTRY_ZONE_ML_FLOOR sits one notch under the notify
+        // threshold: enough to drop a signal whose quality genuinely collapsed since
+        // registration, not so high that it re-litigates the gate that already approved it.
+        if (pred.notifyProb < ENTRY_ZONE_ML_FLOOR) continue;
         // Entry zone: ±0.3 × ATR around the setup's entry price.
         const zoneWidth = setup.atr * 0.3;
         const zoneLow = setup.entry - zoneWidth;
@@ -4499,7 +4603,7 @@ async function processDeviceNotifications(
   // move-likelihood fallback push was removed 2026-07-14, so a silent return is not a lost signal.
   // Per-symbol instead of the old grouped push — every triggered symbol is a real analyzed signal.
   for (const t of triggered) {
-    void runAutoAnalysis(env, t.symbol, t.symbol.endsWith('USDT'), deviceId, pushToken, t.mlProb);
+    void runAutoAnalysis(env, t.symbol, t.symbol.endsWith('USDT'), deviceId, pushToken, t.mlProb, t.notifyProb);
   }
   // Log every triggered symbol regardless of how many APNs we sent — `notifications`
   // is the per-symbol audit trail, not the per-push log.
