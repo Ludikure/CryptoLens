@@ -76,3 +76,75 @@ demonstrated diversification, not prediction.
 Six years is short for regime rotation. Vol-selling covers BTC/ETH only and starts 2021-03. Carry is
 priced at Binance, which the user cannot access ([[funding-carry]]) — so a PASS here would be a
 research finding about mechanism rotation, **not a tradeable allocation**.
+
+---
+
+# RESULTS — run 2026-08-23
+
+1,916 days (2021-04-01 → 2026-06-29), the window where all six exposures exist.
+
+## Verdict: DOES NOT MEET THE BAR — 3 of 5 criteria, and it loses to the control that matters
+
+| arm | total | CAGR | maxDD | Sharpe | Calmar |
+|---|---|---|---|---|---|
+| **T6 ROTATION** | 20.4% | 3.6% | −35.1% | 0.69 | **0.10** |
+| **ctrl1: EQUAL-WEIGHT** | **139.3%** | 18.1% | **−17.2%** | **1.17** | **1.05** |
+| ctrl2: random rotation | 90.4% | 13.1% | −36.0% | 0.68 | 0.36 |
+| ctrl4: buy & hold | 7.8% | 1.4% | −80.6% | 0.40 | 0.02 |
+
+| criterion | result | |
+|---|---|---|
+| 1. beats equal-weight Sharpe ≥2/3 folds | 2/3 | PASS |
+| 2. beats equal-weight on Calmar | **0.10 vs 1.05** | **FAIL** |
+| 3. beats random rotation | 0.69 vs 0.68 | PASS (a tie) |
+| 4. positive in ≥2/3 folds | 2/3 | PASS |
+| 5. persists on holdout | **−4.37 vs +1.21** | **FAIL** |
+
+**Failure B, named in the design, is confirmed: diversify across mechanisms, do not rotate between
+them.** Equal-weight returns 7× the rotation with half the drawdown and a Calmar ten times better.
+
+**Rotation is statistically indistinguishable from random switching** — 0.69 vs 0.68. Criterion 3
+"passes" on a margin of 0.01, which is not evidence of skill; it is evidence the selection rule
+contributes nothing. This is the same shape as [[vol-conditioned-tail]]'s control result.
+
+**Fold Sharpes expose the mechanism:** rotation +3.71 / +4.54 / **−3.77** against equal-weight's
++0.94 / +1.53 / +1.24. Performance chasing worked while one premium persisted and then inverted
+violently — precisely Failure A. The holdout is where it inverted.
+
+The allocator spent most of its life in carry (1,278 of 1,916 days), so "rotation" was largely a slow,
+lagged proxy for a static choice — Failure C as well.
+
+## ⚠️ The exposure-level magnitudes are NOT trustworthy
+
+| exposure | total | CAGR | maxDD | Sharpe |
+|---|---|---|---|---|
+| convex | 577.8% | 44.0% | −26.5% | 3.01 |
+| carry | 75.6% | 11.3% | −3.0% | 4.78 |
+| volsell | 52.3% | 8.4% | −31.0% | 1.12 |
+| hold | 7.8% | 1.4% | −80.6% | 0.40 |
+| trend | 20.0% | 3.5% | −74.4% | 0.35 |
+
+**Two of these must not be quoted:**
+
+- **convex** inherits [[vol-conditioned-tail]]'s unreconciled absolute EV (+0.37R measured there
+  versus the trustworthy +0.151R *gross* / −0.008R *net* in [[strategy-breakeven]]). A Sharpe of 3.01
+  and a 577% return directly contradict the established finding that this strategy is roughly
+  break-even at the user's fees. Treat the series as a *shape*, not a magnitude.
+- **carry** is priced at Binance funding, which the user cannot access, and its −3.0% drawdown
+  excludes venue risk entirely — the FTX-shaped hole a funding series cannot show ([[funding-carry]]).
+
+**The relative conclusion survives all of this**, because rotation and equal-weight are computed from
+the *same* series: whatever the magnitudes, selecting among them loses to holding all of them.
+
+## What is worth taking from this
+
+The equal-weight arm posts Sharpe 1.17 at −17.2% drawdown against buy-and-hold's 0.40 at −80.6%.
+Even discounting the two contaminated exposures, **spreading across imperfectly-correlated
+MECHANISMS did far more than timing between them** — and it required no prediction of any kind.
+
+That is consistent with everything else in [[what-we-tried]]: the value sits in structure and
+diversification, not in forecasting which structure is about to pay.
+
+**Follow-up worth doing** (not run here, and it would need its own frozen design): re-run equal-weight
+with the convex series rebuilt at the trustworthy −0.008R net and carry priced at Coinbase's covered
+basis. If it still beats buy-and-hold on Calmar, that is a real and reachable finding.
