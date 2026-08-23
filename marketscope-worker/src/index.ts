@@ -14,6 +14,7 @@ import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
 import { correlationReport } from './correlation';
 import { pollNewsFeeds, fetchRecentNews } from './news';
+import { fetchBasisRows, findBasisOpportunities, netAnnualized } from './basis';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -2456,6 +2457,35 @@ export default {
         const isCrypto = (url.searchParams.get('market') ?? 'crypto') === 'crypto';
         const prompt = await fetchRecentNews(env as any, { isCrypto, nowMs });
         return json({ lastPoll: cached ? JSON.parse(cached) : null, promptView: prompt });
+      } catch (e) {
+        return json({ error: String(e) }, 500);
+      }
+    }
+
+    // Cash-and-carry basis on Coinbase dated nano futures — the one strategy in this project that
+    // needs no directional forecast (docs/research/funding-carry.md). READ-ONLY: public market data,
+    // no orders, no trade-enabled credentials. `?fee=` overrides the per-side assumption (default
+    // 0.10% = the futures leg only, i.e. the COVERED form against BTC already held; buying the spot
+    // leg at Coinbase retail tiers costs ~0.40-0.60% per side and consumes the entire edge).
+    if (path === '/basis' && request.method === 'GET') {
+      try {
+        const nowMs = Date.now();
+        const fee = Number(url.searchParams.get('fee') ?? '0.001');
+        const rows = await fetchBasisRows(nowMs);
+        const opportunities = findBasisOpportunities(rows, 0.10, 1000, Number.isFinite(fee) ? fee : 0.001);
+        return json({
+          at: nowMs,
+          spot: { BTC: rows.find(r => r.underlying === 'BTC')?.spotPrice ?? null,
+                  ETH: rows.find(r => r.underlying === 'ETH')?.spotPrice ?? null },
+          contracts: rows.map(r => ({
+            ...r,
+            netAnnualized: netAnnualized(r.spotPrice, r.futuresPrice, r.daysToExpiry, fee),
+          })),
+          opportunities: opportunities.map(o => ({ productId: o.row.productId, netAnnual: o.netAnnual, reason: o.reason })),
+          // The one way a correctly-hedged carry still loses: the legs are not cross-margined, so a
+          // rally drains futures margin while the offsetting spot gain sits unreachable.
+          marginNote: 'Coinbase overnight short margin ~28.9% -> liquidation on roughly a 29% rally unless funded',
+        });
       } catch (e) {
         return json({ error: String(e) }, 500);
       }
