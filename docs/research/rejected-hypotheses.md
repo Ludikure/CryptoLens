@@ -213,3 +213,19 @@ Even `liqAsymmetry` (22 splits) failed to help, despite being the one input noth
 a 27:1 short-to-long day (2026-08-19, $311M vs $11M) is apparently inferable from what the model
 already has. **Do not add liquidation columns to the feature set.** Tick-level data is kept for the
 heatmap/cascade work, which asks a different question.
+
+## Cascade exhaustion / continuation — REJECTED (2026-08-22)
+
+`ml-training/cascade_exhaustion.py`, pre-declared in [[cascade-exhaustion]]. 32 symbols, 69,776
+symbol-hours of per-event liquidation data. Does an extreme one-sided cascade (99th pctl hour, ≥70%
+one side) change forward 24h volatility?
+
+**Long flush 0.90x baseline, short squeeze 1.29x — opposite directions, so the "consistent across
+sides" criterion fails and neither reaches the ±20% bar.** The long-side exhaustion is REAL but
+small (episode CI [0.85x, 0.93x] excludes 1.0); the short-side continuation is suggestive
+(CI [0.99x, 1.37x], 74 episodes). Not shipped: a 10% shift in a volatility baseline that varies far
+more than that hour-to-hour cannot change a stop or a target, which is the only place it would act.
+
+**Design flaw recorded:** criterion 2 assumed the sides would agree in sign. They do not. If ever
+re-run, test the sides separately with separate bars. The bar was not re-interpreted to rescue the
+result.
