@@ -601,6 +601,42 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-23 — Federal Register added as a news source; White House tried and dropped
+
+**Federal Register is the best input the feed has.** It is the official record of US rulemaking
+across EVERY agency (SEC, CFTC, Treasury, OCC, FinCEN) in one queryable feed, and it filters AT THE
+SOURCE via `conditions[term]=digital+asset` rather than being keyword-gated after the fact — a
+categorically cleaner input than an outlet. Live check: 24 parsed, 18 kept, including *"Regulation
+Crypto Assets"*, *"GENIUS Act Regulations on Payment Stablecoin Issuance"*, and Cboe exchange
+filings. **It also recovers the Treasury gap indirectly**: Treasury still has no working RSS (both
+documented paths fail again), but Treasury rulemaking publishes here — and a Treasury action is what
+actually moved the tape in the Aug-2026 run.
+
+**whitehouse.gov/presidential-actions TRIED AND DROPPED.** It parsed fine (30 items) but kept
+*"Nominations Sent to the Senate"* — twice — which is precisely the administrative noise stripped
+out of the Fed feed. And it is redundant: presidential documents publish IN the Federal Register
+(verified: a "digital asset" query returns 30 presidential docs including crypto/fintech EOs), so a
+crypto executive order arrives through the FR feed already source-filtered. Better signal, one fewer
+feed.
+
+**`congress` and `senate` removed from the policy vocabulary** — as bare terms they were what
+admitted the routine nominations. Crypto legislation still matches on `legislation`, `regulation`,
+`lawmaker`, `clarity act`, all of which carry subject matter rather than procedure.
+
+**Checked and rejected:** The Block (works, but a third outlet adds volume not signal — outlets run
+~50% noise even after tuning); ECB press (returns 1 item, wrong endpoint — worth revisiting since
+the vault flags US-centricity as a limitation); White House `/briefing-room` and `/news` (404 and
+noise respectively); **Binance announcements** (Cloudflare-protected, no feed — a real loss, since
+leverage-tier changes and delistings are per-symbol actionable in a way macro news is not).
+
+**Elon Musk / social:** not added. X's API is paid and heavily restricted, no reliable free feed
+exists, and the value would be narrative-only for statements CoinDesk and Cointelegraph already
+report within minutes. Given catalyst proximity measured a clean null ([[news-catalyst-test]]), a
+harder-to-obtain catalyst source does not change the calculus.
+
+Feeds now: `fed, sec, cftc, fedreg, coindesk, ctelegraph`. 557/557 green. Worker-only — **needs a
+box redeploy**.
+
 ### 2026-08-22k — ROOT CAUSE of the dead liquidation collector: Binance decommissioned the URL on 2026-04-23
 
 The collector shipped **2026-07-10 — eleven weeks AFTER Binance permanently decommissioned the legacy `wss://fstream.binance.com/ws/` endpoint format (2026-04-23)**. It never captured an event and never could have. The dead endpoint still ACCEPTS connections and simply never pushes data, which is exactly the "open but silent" state observed. Fixed to `wss://fstream.binance.com/market/ws/!forceOrder@arr` (`LIQ_WS_URL` still overrides).

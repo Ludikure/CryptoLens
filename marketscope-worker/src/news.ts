@@ -45,6 +45,18 @@ export const NEWS_FEEDS: NewsFeed[] = [
   { id: 'fed',      name: 'Federal Reserve',  url: 'https://www.federalreserve.gov/feeds/press_all.xml', primary: true,  scope: 'macro' },
   { id: 'sec',      name: 'SEC',              url: 'https://www.sec.gov/news/pressreleases.rss', primary: true,  scope: 'macro' },
   { id: 'cftc',     name: 'CFTC',             url: 'https://www.cftc.gov/RSS/RSSGP/rssgp.xml',   primary: true,  scope: 'macro' },
+  // Federal Register — the OFFICIAL record of US rulemaking across every agency (SEC, CFTC,
+  // Treasury, OCC, FinCEN) in one queryable feed. Filtered AT THE SOURCE by search term rather
+  // than keyword-gated afterwards, which is a categorically cleaner input than an outlet feed.
+  // It also recovers the Treasury gap indirectly: Treasury has no working RSS of its own (both
+  // documented paths fail), but Treasury rulemaking publishes here — and a Treasury action is
+  // what actually moved the tape in the Aug-2026 run. `conditions[term]` is the tuning knob.
+  { id: 'fedreg', name: 'Federal Register', url: 'https://www.federalregister.gov/api/v1/documents.rss?conditions%5Bterm%5D=digital+asset&order=newest', primary: true, scope: 'macro' },
+  // whitehouse.gov/presidential-actions was TRIED and dropped (2026-08-23): it kept "Nominations
+  // Sent to the Senate" twice — the same administrative noise stripped out of the Fed feed — and it
+  // is redundant, because presidential documents publish IN the Federal Register (verified: a
+  // "digital asset" query returns 30 presidential docs incl. crypto/fintech EOs). So crypto EOs
+  // arrive through the feed above, already filtered at the source.
   { id: 'coindesk', name: 'CoinDesk',         url: 'https://www.coindesk.com/arc/outboundfeeds/rss/', primary: false, scope: 'crypto' },
   { id: 'ctelegraph', name: 'Cointelegraph',  url: 'https://cointelegraph.com/rss',              primary: false, scope: 'crypto' },
 ];
@@ -97,7 +109,10 @@ const POLICY_TERMS = [
   'legislation', 'legislative', 'regulation', 'regulations', 'regulator', 'regulatory', 'mica',
   'ban', 'banned', 'lawsuit', 'sued', 'sues', 'court', 'judge', 'settlement', 'indict', 'indicted',
   'subpoena', 'tax', 'taxes', 'license', 'licence', 'lawmaker', 'lawmakers', 'parliament',
-  'congress', 'senate', 'clarity act', 'executive order', 'federal reserve', 'fed', 'sec', 'cftc',
+  // 'congress'/'senate' were REMOVED 2026-08-23: as bare terms they admitted routine
+  // "Nominations Sent to the Senate" procedural items. Crypto legislation still matches via
+  // legislation / regulation / lawmaker / clarity act, all of which carry subject matter.
+  'clarity act', 'executive order', 'federal reserve', 'fed', 'sec', 'cftc',
   'approval', 'approves',
 ];
 // Event-but-not-policy: real happenings that reprice a token without being a policy action.
@@ -135,6 +150,8 @@ const RECAP_PATTERNS = [
 /** Terms that are merely the publisher's own name in its own feed — never subject matter there. */
 const SELF_TERMS: Record<string, string[]> = {
   fed: ['federal reserve', 'fed'], sec: ['sec'], cftc: ['cftc'],
+  // Federal Register prints agency names constantly as metadata; White House likewise.
+  fedreg: ['federal reserve', 'sec', 'cftc'],
 };
 
 export interface NewsItem {
