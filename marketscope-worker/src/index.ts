@@ -438,7 +438,11 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     !isCrypto ? fetchStockEnrichment(env, symbol).catch(() => null) : Promise.resolve(null),
     // Policy/macro catalyst headlines (2026-08-22) — a D1 read of what the cron already polled,
     // so it costs no upstream request. Crypto sees macro + crypto scope; stocks see macro only.
-    fetchRecentNews(env, { isCrypto, nowMs }).catch(() => null),
+    // `noNews: true` suppresses the block — used ONLY by the A/B inertness test, which asks
+    // whether the headlines change the model's output at all. An input the output never reacts to
+    // is decoration, and that failure has already bitten twice (the mandate's JSON contract, the
+    // news block's missing output instruction).
+    body.noNews === true ? Promise.resolve(null) : fetchRecentNews(env, { isCrypto, nowMs }).catch(() => null),
   ]);
 
   // Observed liquidation flow (crypto) — best-effort, from the box collector's archive.
