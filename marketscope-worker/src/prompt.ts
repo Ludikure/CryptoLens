@@ -1139,6 +1139,28 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         structureEntries.push(`${direction} ${formatPrice(level.price)} [${tags.join(',')}]`);
       }
       if (structureEntries.length) L(`Structure Levels (4H, within 2× ATR of price): ${structureEntries.join(' | ')}`);
+
+      // CASCADE ZONE (2026-08-22) — measured, not assumed. Per-event liquidation data
+      // (docs/research/liquidation-map.md) shows price spends only ~1.2% of its time beyond the
+      // prior 7-day extreme, yet ~40% of ALL forced-liquidation notional prints there:
+      //
+      //     BTC 34.0x / 30.1x, ETH 33.6x / 40.2x, SOL 35.2x / 30.0x (long/short side)
+      //     24h-VWAP control: 1.6-1.9x in all six cells — the metric CAN return "nothing".
+      //
+      // Intensity is time-normalised, so this is NOT the tautology "longs die when price falls":
+      // it is forced flow per unit of time spent at that price, ~30-40x its baseline.
+      //
+      // STRICTLY CONDITIONAL. It says what waits there IF price arrives — nothing about whether
+      // price will go. The "liquidity magnet" claim is untested and the wording below must not
+      // imply it, because that would be a direction call and direction is a coin flip here.
+      // The actionable use is STOP PLACEMENT: a stop just past a multi-day extreme sits in the
+      // densest liquidation zone on the chart.
+      const sevenDayHigh = Math.max(...(fourH.candles ?? []).slice(-42).map((c: any) => c.high ?? 0));
+      const sevenDayLow = Math.min(...(fourH.candles ?? []).slice(-42).map((c: any) => c.low ?? Infinity));
+      if (Number.isFinite(sevenDayHigh) && Number.isFinite(sevenDayLow) && sevenDayHigh > 0 && sevenDayLow > 0) {
+        L(`CASCADE ZONES (measured): beyond ${formatPrice(sevenDayLow)} (7d low) and beyond ${formatPrice(sevenDayHigh)} (7d high).`);
+        L(`  Forced-liquidation density past a 7-day extreme runs ~30-40x its time-weighted baseline (measured on per-event data, BTC/ETH/SOL, both sides). Two uses, both CONDITIONAL on price getting there: (a) a stop placed just beyond one of these sits in the densest liquidation zone on the chart — prefer the far side of it or accept it will likely be swept; (b) if price does break one, expect acceleration rather than a clean retest. This says NOTHING about whether price will travel there — do not present it as a target, a magnet, or a direction call.`);
+      }
     }
 
     // Phase E — stock-only context flags
