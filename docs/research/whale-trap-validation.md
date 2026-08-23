@@ -81,8 +81,6 @@ the flag should be simplified to the crowding line it already prints two rows ab
 
 ## RESULTS
 
-## RESULTS
-
 Run 2026-08-22 (`ml-training/whale_trap_validation.py`). BTC/ETH/SOL, **5,357 overlapping days**
 (BTC 2020-09-01→, ETH & SOL 2021-12-01→). Baseline next-day long-liquidation share **52.9%**.
 
