@@ -173,3 +173,44 @@ timestamp resolution.
 seasonality is large enough (34pp peak-to-trough on goodR) to manufacture a double-digit "result"
 from any event set that clusters on weekdays — which is every economic, regulatory, or corporate
 calendar. A >Nh-from-any-event baseline is NOT calendar-neutral and silently selects for weekends.
+
+---
+
+## ADDENDUM: is the news block INERT? (2026-08-23)
+
+Separate question from the predictive null above: forget whether headlines predict anything — do
+they change the model's OUTPUT at all? An input the output never reacts to is decoration, and that
+failure has bitten twice (the mandate satisfiable in prose while the JSON block emitted `[]`; the
+news block shipped with no output instruction).
+
+**v1 was structurally incapable of answering it.** All four sampled symbols sat in envelope
+auto-FLAT, where the setup gate is UPSTREAM of anything news could influence — the decision could
+not change whatever the headlines said. It also checked news terms only in the with-news arm, where
+"Fed" and "ETF" occur for unrelated reasons. Two design errors, both avoidable by asking "what
+result would falsify this?" first.
+
+**v2 fixes** (`ml-training/news_inertness_test.py`):
+1. **Free pre-screen** via `promptOnly` — identify auto-FLAT bars for nothing, spend LLM calls only
+   where a decision can move. Today: **1 of 10 symbols tradeable**, which is why v1 found nothing.
+2. **A/A noise baseline** — run the same config twice. LLM text varies by sampling, so A-vs-B is
+   uninterpretable without knowing A-vs-A'. This is the change that made the result readable.
+3. **Attributable citation** — distinctive tokens from the ACTUAL headlines, required present in the
+   with-news arm and ABSENT in the without-news arm.
+
+| symbol | A vs A' (noise) | A vs B | decision with | decision without | attributable |
+|---|---|---|---|---|---|
+| SOLUSDT (tradeable) | 0.50 | **0.51** | LONG@94.01/sl91.15 | **identical** | none |
+| BTCUSDT (auto-FLAT) | 0.42 | 0.36 | NO_SETUP | NO_SETUP | `minutes` |
+
+**Result: on a no-catalyst day the block changes nothing measurable.** A-vs-B divergence equals the
+sampling floor, and the setup is identical down to the stop. BTC citing `minutes` (from "Minutes of
+the FOMC") shows the model does read the block — it is not ignored wholesale.
+
+**This is consistent with CORRECT behaviour, not proof of inertness.** The guidance explicitly tells
+the model to say nothing about headlines that do not explain the tape, and the freshest primary item
+was days old. The decisive test needs a bar that is BOTH tradeable AND carries a live catalyst;
+today supplied neither together. Harness is built and verified — three calls per symbol to re-run.
+
+**Honest cost note:** on quiet-news days the block spends ~1,000 prompt characters to change nothing.
+Small, but it is a real cost and the value case rests entirely on catalyst days, which remain
+unsampled.
