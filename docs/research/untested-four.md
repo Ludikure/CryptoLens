@@ -90,3 +90,132 @@ A statistically real result here may still be untradeable. Modes 3 and 6 in [[wh
 already killed two validated edges on fees and venue access. T1 in particular would require futures
 margin across several asset classes. **These are research questions about whether the mechanisms
 survive, not proposals to trade next quarter**, and results must be reported that way.
+
+---
+
+# RESULTS — run 2026-08-23. **All four fail. No bar was moved.**
+
+## T1 — multi-asset trend: FAIL (0 of 3 criteria)
+
+29 instruments, 2,178 days. **The diversification premise was confirmed** — mean pairwise
+correlation **0.621 (crypto-only) → 0.324 (full universe)**, and max drawdown improved from −75.2%
+to −41.3%. The mechanism worked exactly as intended.
+
+|  | total | CAGR | maxDD | Sharpe | Calmar |
+|---|---|---|---|---|---|
+| **T1 multi-asset + volTarget** | **−11%** | −1.9% | −41.3% | **−0.06** | −0.05 |
+| ctrl: multi-asset, no volTarget | 54% | 7.5% | −55.8% | 0.39 | 0.13 |
+| ctrl: crypto-only + volTarget | 465% | 33.7% | −75.2% | 0.77 | 0.45 |
+| bench: equal-weight buy & hold | 340% | 28.2% | −50.0% | **0.91** | 0.61 |
+
+**Diversification bought a smoother ride and destroyed the return.** The controls localise why:
+inverse-volatility sizing moves capital toward whatever is *quiet*, and quiet is not the same as
+profitable. Bonds and equity sectors received most of the weight and did not trend profitably over
+2020-2026 (a period containing a historic bond drawdown), while crypto — where the trend signal
+actually paid — was down-weighted for being volatile. Crypto-only + volTarget beat the diversified
+version outright.
+
+Bear behaviour still worked: 2022 −16.9% vs B&H −47.5%; 2025-26 **+3.3% vs −32.5%**.
+
+**Limitation, stated plainly and not as an excuse:** this is a *shallow* multi-asset universe.
+Thirteen of the seventeen ETFs are US equity beta (9 sectors + 4 indices), leaving two bond ETFs,
+one commodity and one volatility product. That is not the 50-100 genuinely uncorrelated markets a
+real CTA runs — no FX, no international rates, no energy/metals/ags. **The negative result is
+therefore weaker evidence than the instrument count suggests**, and a proper test needs a real
+futures dataset. Six years is also short for a strategy evaluated over decades.
+
+## T2 — crash probability: FAIL, narrowly, and it is the most useful of the four
+
+870,093 bars, base rate 40.9%.
+
+| folds | mean AUC |
+|---|---|
+| 0.645 / **0.617** / 0.650 | 0.637 |
+
+Bar required **>0.65 in ALL folds**; fold 2 came in at 0.617.
+
+**But the reliability curve is cleanly monotone**, which is what actually matters for using it:
+
+| predicted | actual crash rate | n |
+|---|---|---|
+| 0.0–0.1 | **24.5%** | 19,185 |
+| 0.1–0.2 | 31.8% | 60,990 |
+| 0.2–0.3 | 32.3% | 100,916 |
+| 0.3–0.5 | 38.5% | 186,688 |
+| 0.5–1.0 | **45.4%** | 154,277 |
+
+So downside risk **is** partially predictable — a bar in the bottom bucket carries roughly half the
+crash rate of one in the top bucket. It missed a bar calibrated against `goodR`'s 0.674, but a
+monotone risk gauge does not need to beat a return model to be useful for sizing. **This is the one
+worth revisiting**, with a bar justified by its actual use (de-risking) rather than by parity with an
+unrelated model.
+
+## T3 — conditional direction: FAIL, after catching two of my own errors
+
+**This test initially reported a PASS. Both apparent findings were artifacts, and the corrections
+are the most valuable output here.**
+
+**Error 1 — wrong null.** The test compared each state against 50%. The unconditional P(up24) in
+this dataset is **48.18%**, not 50% (returns are right-skewed, so the median bar is slightly down).
+Against the correct null, the two "survivors" collapse:
+
+| state | vs 50% | **vs true base** |
+|---|---|---|
+| weekend | −3.1pp | **−2.2pp** — below the 3pp threshold |
+| extreme RSI | −3.3pp | **−2.4pp** — below the threshold |
+
+A different state then appeared to pass: **BTC-alt divergence, +3.7pp at p=1.46e-42**, strengthening
+to +4.9pp on the untouched holdout.
+
+**Error 2 — non-independent observations.** `ethBtcDelta6` is a single market-wide series, so the
+state fires on every symbol simultaneously. The 34,821 "observations" are **684 distinct
+timestamps** — 50.9 symbols each. Collapsing to independent time points:
+
+| | raw | corrected |
+|---|---|---|
+| n | 34,821 | **684** |
+| deviation | +3.7pp | **+2.36pp** |
+| p | 1.46e-42 | **0.081** |
+
+Against a Bonferroni α of 0.00625, **it does not survive**. (Weekend, same correction: −1.83pp,
+p=1.98e-03 — clears the α but not the 3pp effect-size threshold.)
+
+**Direction remains a coin flip, now including conditionally.** And the episode is a live
+demonstration of why the pre-declared thresholds exist: without the 3pp effect-size floor and the
+holdout, error 1 alone would have shipped two false findings with p-values in the e-88 range.
+
+## T4 — dynamic R:R: FAIL (0 of 3 folds)
+
+864,683 bars. Modelled E[MFE] and E[MAE] per bar, then selected the R:R maximising predicted net EV.
+
+| arm | mean net R | folds |
+|---|---|---|
+| fixed 1:2 | +0.0212 | +0.094 / +0.021 / −0.051 |
+| fixed 1:3 | +0.2229 | +0.301 / +0.223 / +0.145 |
+| **fixed 1:5 (current design)** | **+0.4261** | +0.507 / +0.427 / +0.345 |
+| fixed 1:8 | +0.5312 | +0.613 / +0.534 / +0.446 |
+| **DYNAMIC** | **+0.0911** | +0.148 / +0.127 / −0.001 |
+
+Dynamic selection loses to the fixed benchmark in **every fold**. The mechanism is regression to the
+mean: predicted MFE is smoothed toward the average, so the model rarely forecasts a large excursion
+and therefore keeps choosing tight targets — which the same table shows are the worst option.
+**Payoff structure should be fixed and wide, not predicted.**
+
+*Caveat on the absolute numbers:* excursions here come from closes, not highs/lows, which understates
+MAE and therefore under-triggers stops. All arms inherit the bias equally so the ranking holds, but
+these are not tradeable magnitudes — the OHLC-based +0.151R gross / −0.008R net from
+[[strategy-breakeven]] remains the trustworthy absolute. **The apparent "1:8 beats 1:5" is suspect
+for the same reason** and should not be acted on without an OHLC re-run.
+
+---
+
+## What these four add to [[what-we-tried]]
+
+- **Mode 1 extends to conditional direction.** Eight extreme states, none survive correction.
+- **A new lesson: check the null and check independence.** Both errors in T3 produced
+  overwhelming-looking p-values. Test against the *unconditional base rate*, and collapse market-wide
+  states to distinct timestamps before counting evidence.
+- **Diversification is not free.** It worked mechanically (correlation halved, drawdown cut by 34pp)
+  and still destroyed the return, because inverse-vol sizing allocates to quiet assets rather than
+  profitable ones.
+- **T2 is the one genuinely worth another pass**, on a bar tied to its actual use.
