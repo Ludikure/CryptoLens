@@ -109,3 +109,55 @@ and the one time it looked strong it was [[edge-leak-daily-candle]].
 No prompt or model change. The measured exhaustion is ~10% of a volatility baseline that already
 varies far more than that hour to hour — too small to change a stop or a target, which is the only
 place it could have mattered.
+
+---
+
+## FOLLOW-UP: replication split + materiality (2026-08-22, user-proposed)
+
+The ±20% bar above was **arbitrary** — a round number that sounded material, never derived from
+what would change a decision. Since the bar determined the verdict (0.90x missed it by exactly the
+width of my own guesswork), the honest fix is two separate questions, neither of which needs a
+made-up threshold.
+
+**Disclosure:** the pooled result was already seen before this ran, so this is a REPLICATION CHECK,
+not a virgin holdout. It can show whether the effect is stable; it cannot restore blindness.
+
+### 1. Does it replicate? Symbols split alphabetically-alternating, declared before running.
+
+| | long flush | short squeeze |
+|---|---|---|
+| **SET A** (17 syms) | **0.87x**, CI [0.82, 0.93], 118 episodes | 1.10x, CI [0.90, 1.33], 40 ep |
+| **SET B** (16 syms) | **0.90x**, CI [0.84, 0.97], 133 episodes | 1.24x, CI [0.96, 1.60], 34 ep |
+
+**Long-flush exhaustion REPLICATES.** Two independent symbol sets, 0.87x and 0.90x, both CIs
+excluding 1.0. That is a real effect, not an artifact of a few symbols.
+
+**Short-squeeze continuation does NOT replicate.** Both CIs include 1.0. The pooled 1.29x was not
+robust — it came from thin episode counts (40 and 34) and does not survive splitting.
+
+### 2. Is it material? Answered from the app's OWN stop model, not intuition.
+
+`risk-engine.stopQuality()` converts stop distance and σ into a noise-hit probability and a
+TIGHT/OK/WIDE rating. A 10% volatility reduction acts like a proportionally wider stop:
+
+| stop distance | noiseHit @ baseline | @ 0.90x vol | change | rating flips? |
+|---|---|---|---|---|
+| 1.0σ | 31.7% | 26.7% | −5.1pp | **no** |
+| 1.5σ | 13.4% | 9.6% | −3.8pp | **no** |
+| 2.0σ | 4.6% | 2.6% | −1.9pp | **no** |
+| 2.5σ | 1.2% | 0.5% | −0.7pp | **no** |
+
+**The rating never flips at any realistic stop distance.** The app acts on the RATING, so a real
+10% volatility shift changes nothing the app would do. That is the decision-relevant test I should
+have written instead of "±20%".
+
+### Conclusion
+
+**Real, replicated, and immaterial.** The long-flush exhaustion effect exists and survives an
+independent split — but it moves noise-hit probability by 2-5pp and never crosses a rating boundary,
+so it cannot change a stop, a size, or a target. **Not shipped**, now for a defensible reason rather
+than an invented threshold.
+
+Untested extension, recorded rather than pursued: lower forward volatility also makes a distant TP2
+less reachable, so the effect might matter more for TARGET selection than for stops. That would need
+its own design and a bar derived from the band logic in [[strategy-targets-bands]].
