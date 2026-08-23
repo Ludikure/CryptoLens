@@ -192,3 +192,24 @@ this artifact is available to manufacture a double-digit "finding" in any of the
 **Kept regardless:** the news collector itself (`src/news.ts`) — it was shipped as narrative context
 and explicitly not as an edge, and this result confirms that label rather than contradicting it.
 Not tested: H3 (chase-guard FLATs on catalyst days), pre-declared underpowered at ~50 FOMC events.
+
+## Liquidation features → ML_WIN — REJECTED (2026-08-22)
+
+`ml-training/liquidation_feature_test.py`, design pre-declared in [[liquidation-features]]. Prior-day
+aggregated liquidation features (total USD, long/short asymmetry, 30d z-score, magnitude×OI-move)
+over 26,416 daily bars on the 12 symbols with complete 2019+ history.
+
+**Mean ΔAUC +0.0006, positive in 1/3 folds** against a pre-declared bar of +0.005 in all folds.
+
+**The diagnostic that makes this conclusive rather than inconclusive:** the split-share criterion
+PASSED — the trees spend 4.64% of splits on these four features, *more than the entire 20-feature
+derivatives group earns in production (0.82%)*. So this is not the thin-coverage artifact of the
+2026-07-05 audit. The model reaches for them and gains nothing, which is the signature of
+**redundancy**: forced-flow magnitude substitutes for volatility already encoded in `atrPercentile`,
+`volumeRatio`, `dAdx`, `oiChangePct`. Identical to the whale-feature rejection — same family, same
+failure.
+
+Even `liqAsymmetry` (22 splits) failed to help, despite being the one input nothing else encodes:
+a 27:1 short-to-long day (2026-08-19, $311M vs $11M) is apparently inferable from what the model
+already has. **Do not add liquidation columns to the feature set.** Tick-level data is kept for the
+heatmap/cascade work, which asks a different question.
