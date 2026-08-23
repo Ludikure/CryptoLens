@@ -81,8 +81,6 @@ against 110.
 
 ## RESULTS
 
-## RESULTS
-
 Run 2026-08-22 (`ml-training/liquidation_feature_test.py`). 12 declared symbols, **26,416 daily
 bars**, goodR base 0.503, feature coverage 89.4%.
 
