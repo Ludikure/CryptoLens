@@ -20,7 +20,9 @@ DISCIPLINE: this only ACQUIRES. Any hypothesis it enables (cascade asymmetry, he
 gets a pre-declared design in docs/research/ BEFORE measurement — see news-catalyst-test.md for
 the pattern, and rejected-hypotheses.md for the cost of skipping it.
 
-Setup:  export CANDLEFEED_API_KEY=...        (Builder tier or above for liquidations)
+Setup (either one; the file keeps the key out of shell history and out of chat transcripts):
+        echo 'YOUR_KEY' > ml-training/.candlefeed_key      # gitignored
+        export CANDLEFEED_API_KEY=...                       # Builder tier or above for liquidations
 Usage:
   python3 candlefeed_backfill.py liquidations --symbols BTCUSDT,ETHUSDT --start 2026-03-01
   python3 candlefeed_backfill.py liquidations/aggregated --symbols BTCUSDT --start 2019-01-01 --interval 1d
@@ -42,9 +44,26 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-BASE = "https://api.candlefeed.io/v1"
+# NB: the docs print api.candlefeed.io — that host has no DNS record at all. The live
+# API is api.candlefeed.ai (verified: resolves, returns a proper 401 envelope without a key).
+BASE = "https://api.candlefeed.ai/v1"
 OUT_ROOT = Path(__file__).parent / "candlefeed"
-KEY = os.environ.get("CANDLEFEED_API_KEY", "")
+def _load_key() -> str:
+    """Env var first, then a gitignored key file.
+
+    The file path exists so the key never has to be pasted into a chat or a shell history: write
+    it once with `echo 'KEY' > ml-training/.candlefeed_key` and nothing downstream ever echoes it.
+    """
+    v = os.environ.get("CANDLEFEED_API_KEY", "").strip()
+    if v:
+        return v
+    f = Path(__file__).parent / ".candlefeed_key"
+    if f.exists():
+        return f.read_text().strip()
+    return ""
+
+
+KEY = _load_key()
 # Builder tier is 1,000 calls/day. Stop short of it so a long backfill never trips the limit and
 # leaves a half-written day — the script is resumable, so stopping early is free.
 DAILY_CALL_BUDGET = int(os.environ.get("CANDLEFEED_CALL_BUDGET", "900"))
@@ -102,6 +121,25 @@ def rows_of(payload) -> list:
     return []
 
 
+def to_dt(v):
+    """Parse a timestamp that may arrive as ISO 8601 or epoch (s or ms). Returns aware UTC."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)) or (isinstance(v, str) and v.replace(".", "").isdigit()):
+        n = float(v)
+        if n > 1e12:
+            n /= 1000.0
+        return dt.datetime.fromtimestamp(n, dt.timezone.utc)
+    try:
+        return dt.datetime.fromisoformat(str(v).replace("Z", "+00:00")).astimezone(dt.timezone.utc)
+    except ValueError:
+        return None
+
+
+def iso(d: dt.datetime) -> str:
+    return d.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def last_ts(path: Path):
     """Newest timestamp already stored, so the run resumes instead of refetching."""
     if not path.exists() or path.stat().st_size == 0:
@@ -112,51 +150,50 @@ def last_ts(path: Path):
             last = line
     if not last:
         return None
-    try:
-        return int(float(last.split(",", 1)[0]))
-    except ValueError:
-        return None
+    return to_dt(last.split(",", 1)[0].strip().strip('"'))
 
 
-def backfill(dataset: str, symbol: str, start_ms: int, end_ms: int, interval):
+def backfill(dataset: str, symbol: str, start: dt.datetime, end: dt.datetime, interval):
     out_dir = OUT_ROOT / dataset.replace("/", "_")
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{symbol}.csv"
     cursor = last_ts(out)
     if cursor:
-        print(f"  {symbol}: resuming from {dt.datetime.utcfromtimestamp(cursor/1000):%Y-%m-%d %H:%M}")
-        start_ms = cursor + 1
+        print(f"  {symbol}: resuming from {cursor:%Y-%m-%d %H:%M}")
+        start = cursor + dt.timedelta(seconds=1)
     total, header = 0, None
     t0 = time.time()
     with out.open("a", newline="") as f:
         w = csv.writer(f)
-        while start_ms < end_ms:
+        while start < end:
+            # The API takes ISO 8601, not epoch ms — its 400 says so explicitly, and the docs'
+            # own base URL (api.candlefeed.io) has no DNS record either. Trust the API over the docs.
             payload = get(dataset, {"symbol": symbol, "exchange": "binance", "interval": interval,
-                                    "start": start_ms, "end": end_ms, "limit": PAGE_LIMIT})
+                                    "start": iso(start), "end": iso(end), "limit": PAGE_LIMIT})
             rows = rows_of(payload)
             if not rows:
                 break
             if header is None and isinstance(rows[0], dict):
                 header = list(rows[0].keys())
-            newest = start_ms
+                w.writerow(header)          # keep the column names; these schemas are new to us
+            newest = start
             for r in rows:
                 if isinstance(r, dict):
                     vals = [r.get(k) for k in header]
-                    ts = r.get("timestamp") or r.get("time") or r.get("t") or vals[0]
+                    ts = r.get("timestamp") or r.get("time") or r.get("t") or r.get("start_time") or vals[0]
                 else:
                     vals, ts = r, r[0]
-                try:
-                    newest = max(newest, int(float(ts)))
-                except (TypeError, ValueError):
-                    pass
+                d = to_dt(ts)
+                if d and d > newest:
+                    newest = d
                 w.writerow(vals)
                 total += 1
             f.flush()
             if len(rows) < PAGE_LIMIT:
                 break
-            if newest <= start_ms:      # no forward progress — stop rather than loop forever
+            if newest <= start:             # no forward progress — stop rather than loop forever
                 break
-            start_ms = newest + 1
+            start = newest + dt.timedelta(seconds=1)
             time.sleep(DELAY_S)
     mb = out.stat().st_size / 1e6
     print(f"  {symbol}: +{total:,} rows -> {mb:.1f}MB  [{time.time()-t0:.0f}s, {calls_made} calls used]")
@@ -184,13 +221,13 @@ def main():
     if not a.dataset:
         raise SystemExit("pick a dataset (or use --plan). Options: " + ", ".join(DATASETS))
     if not KEY:
-        raise SystemExit("set CANDLEFEED_API_KEY first")
+        raise SystemExit("no API key — write it to ml-training/.candlefeed_key or set CANDLEFEED_API_KEY")
 
-    to_ms = lambda d: int(dt.datetime.fromisoformat(d).replace(tzinfo=dt.timezone.utc).timestamp() * 1000)
+    as_dt = lambda d: dt.datetime.fromisoformat(d).replace(tzinfo=dt.timezone.utc)
     print(f"{a.dataset}: {len(syms)} symbol(s), {a.start} -> {a.end}"
           + (f", interval={a.interval}" if a.interval else " (tick)"))
     for s in syms:
-        backfill(a.dataset, s, to_ms(a.start), to_ms(a.end), a.interval)
+        backfill(a.dataset, s, as_dt(a.start), as_dt(a.end), a.interval)
     print(f"\ndone — {calls_made} API calls used of the {DAILY_CALL_BUDGET} budget")
 
 

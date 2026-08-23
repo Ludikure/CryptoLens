@@ -78,3 +78,73 @@ mean the product's inability to express a multi-month view is an accepted limit,
 
 - **Parameter tuning.** 200/20 is inherited from production. Sweeping would manufacture a fit.
 - **Direction at short horizons.** Settled, coin flip. This test is about compounding, not calling.
+
+---
+
+## RESULTS
+
+Run 2026-08-23 (`ml-training/regime_hold_test.py`). 12 symbols, 2,152 portfolio days
+(2020-08-08 → 2026-06-29), funding counted.
+
+### Verdict: DOES NOT MEET THE BAR — 1 of 4 criteria passed
+
+|  | total | CAGR | maxDD | Sharpe |
+|---|---|---|---|---|
+| REGIME (with funding) | 325% | 27.9% | −81.8% | 0.70 |
+| REGIME (no funding) | 497% | 35.4% | −78.0% | 0.78 |
+| **buy & hold** | **561%** | **37.8%** | −82.5% | **0.80** |
+
+| criterion | result | |
+|---|---|---|
+| 1. beats buy & hold | 325% vs 561% | **FAIL** |
+| 2. lower max drawdown | −81.8% vs −82.5% | PASS (trivially) |
+| 3. positive in both bear folds | 2022 −9.7%, 2025-26 +74.7% | **FAIL** |
+| 4. <50 position changes/symbol | median 81, max 112 | **FAIL** |
+
+### But the user's specific claim is VALIDATED, and strongly
+
+| | regime | buy & hold | spread |
+|---|---|---|---|
+| **2025-26 bear** (the one asked about) | **+74.7%** | −67.8% | **+142pp** |
+| 2022 bear | −9.7% | −80.3% | +71pp |
+
+The move from 125,986 → 58,248 **was** capturable, and not marginally: a rule already present in the
+codebase, acting only on the prior day's close, turned a −68% basket into +75%. The observation that
+prompted this test was correct.
+
+### Why it still fails: it gives it all back in the chop
+
+| fold | regime | B&H | |
+|---|---|---|---|
+| 1 (2020-08 → 2022-07) | +423.9% | +392.4% | win |
+| 2 (2022-07 → 2024-07) | **−37.9%** | +102.2% | **lose badly** |
+| 3 (2024-07 → 2026-06) | +30.8% | −33.6% | win |
+
+This is the classic trend-following signature: wins in sustained moves, bleeds in range-bound
+recovery. Fold 2 alone erases the bear-market gains. **It is not a standalone strategy; it is
+regime-conditional insurance — you pay premiums in chop and collect in crashes.**
+
+### The prediction I got wrong: funding HURTS, by 34.6pp
+
+Before running this I argued that a multi-month short would earn carry, since funding is normally
+positive and shorts receive it. **The measured contribution is −34.6pp — it made the strategy
+materially worse.** The reason is a correlation I did not think through: funding is highest exactly
+during bull runs, which is when this strategy is LONG and paying it. The carry the shorts collect in
+bears is smaller than the carry the longs pay in bulls. Recorded here because it was a specific,
+falsifiable claim made in advance and the data refuted it.
+
+### The structural problem, stated plainly
+
+12 crypto symbols is not a portfolio. They correlate 0.7–0.9 with BTC, so this is one bet held
+twelve times — which is why the drawdown is −82% and the fold variance is enormous. Real
+trend-following systems run dozens of *uncorrelated* markets to smooth exactly this. That
+diversification is not available inside a crypto-only universe, and it is the reason this shape of
+strategy struggles here specifically.
+
+### What survives, as a NEW hypothesis needing its own pre-declaration
+
+Fold 2's damage comes from being SHORT during a recovery. The obvious variant — **go FLAT rather
+than short in bear regimes** — would keep the "don't hold through a crash" benefit while removing
+the whipsaw cost. That is a risk-management rule, not an alpha rule, and it is a different claim
+from the one tested here. **It is not tested in this document, and choosing it after seeing these
+folds would be fitting.** It needs its own frozen design → [[regime-flat-defensive]].
