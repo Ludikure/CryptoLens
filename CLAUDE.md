@@ -601,6 +601,21 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-22k — ROOT CAUSE of the dead liquidation collector: Binance decommissioned the URL on 2026-04-23
+
+The collector shipped **2026-07-10 — eleven weeks AFTER Binance permanently decommissioned the legacy `wss://fstream.binance.com/ws/` endpoint format (2026-04-23)**. It never captured an event and never could have. The dead endpoint still ACCEPTS connections and simply never pushes data, which is exactly the "open but silent" state observed. Fixed to `wss://fstream.binance.com/market/ws/!forceOrder@arr` (`LIQ_WS_URL` still overrides).
+
+**Everything else investigated on 2026-08-22 was real detail and none of it was the cause.** Recorded because the wrong turns are the instructive part:
+- *"undici's WebSocket ignores the dispatcher"* — WRONG, and it was my own broken instrumentation: `openedAfterMs` was computed at resolution rather than at the `open` event, so every path reported ~the 10s timeout and the paths looked identical. With the timing fixed, proxied opens take 1362-1412ms vs 622ms direct — a clean ~2.2x, i.e. the proxy was working all along. The switch to `ws` + HttpsProxyAgent was therefore unnecessary; it is kept because it is at least as reliable, but it fixed nothing.
+- *"the Swiss exit region is Binance-geoblocked"* — WRONG. REST returns **200 from that same Zurich IP**. A country block would fail both, and Binance signals geo-restriction with **451**, not silence.
+- *"the collector is wedged"* — TRUE but secondary; the boot-time error fired with no `close` after it, so `scheduleReconnect` never ran. Fixed, and the watchdog now covers non-open states. It would have retried forever into a dead URL.
+
+**The tell I had and didn't read:** REST worked continuously while the websocket was silent. `fapi.binance.com` (REST) and `fstream.binance.com` (WS) are different hosts with independent lifecycles — so "REST works, WS doesn't" pointed at the WS ENDPOINT, not at the network path. I spent the investigation on egress instead.
+
+The probe now compares the legacy and new URLs side by side through the same proxy with the same client, so the box settles it on the next run: `wsViaProxy DELIVERING` + `legacyViaProxy` silent proves the URL; both silent means the exit IP after all. That test cannot be run from a US dev machine — the geoblock silences every stream there, which is why all four URLs returned zero locally and the local test was uninformative.
+
+557/557 green. Worker-only — **needs a box redeploy**, and this is the one that should finally start capture.
+
 ### 2026-08-22j — Proved the news reaches the model, then split "what it was TOLD" from "what it CONCLUDED" (iOS)
 
 User: *"I ran ai analysis, it gave no info about the news"* — again, after the system-prompt fix. This time it was NOT a bug.

@@ -37,7 +37,20 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 
 interface Env { DB: any }
 
-const WS_URL_DEFAULT = 'wss://fstream.binance.com/ws/!forceOrder@arr';
+// Binance DECOMMISSIONED the legacy `/ws/` URL format on 2026-04-23, replacing it with
+// category-scoped bases (/public, /market, /private). After that date the old endpoint still
+// ACCEPTS connections and simply never pushes data — which is precisely the "open but silent"
+// state this collector sat in.
+//
+// This collector shipped 2026-07-10, ~11 weeks AFTER the decommission, so it never captured a
+// single event and never could have. Everything else investigated on 2026-08-22 — the US egress,
+// the gluetun proxy, undici's dispatcher handling, the Swiss exit region — was real detail but
+// none of it was the cause. REST kept working throughout because fapi.binance.com was unaffected;
+// only the websocket host changed.
+// Ref: developers.binance.com "Important WebSocket Change Notice".
+const WS_URL_DEFAULT = 'wss://fstream.binance.com/market/ws/!forceOrder@arr';
+/** The dead legacy endpoint — kept ONLY so the probe can demonstrate the difference on the box. */
+const WS_URL_LEGACY = 'wss://fstream.binance.com/ws/!forceOrder@arr';
 const FLUSH_INTERVAL_MS = 5_000;
 const BUFFER_CAP = 5_000;                 // safety valve for a market-wide cascade burst
 const BACKOFF_BASE_MS = 1_000;
@@ -187,7 +200,7 @@ export async function probeLiquidationPath(): Promise<any> {
   };
 
   // Distinguishes "rejected at upgrade" from "opens then stays mute" — the whole point of the probe.
-  const ws = (useProxy: boolean, client: 'undici' | 'ws') => new Promise<any>((resolve) => {
+  const ws = (useProxy: boolean, client: 'undici' | 'ws', urlOverride?: string) => new Promise<any>((resolve) => {
     const t0 = Date.now();
     let opened = false, messages = 0, err: string | null = null, settled = false;
     let openedAt: number | null = null;   // captured AT the open event; computing it at resolution
@@ -204,9 +217,10 @@ export async function probeLiquidationPath(): Promise<any> {
       // `client` selects the implementation so the probe can PROVE which one honors the proxy:
       // undici's WebSocket ignored its dispatcher (both egress paths behaved identically), while
       // `ws` + HttpsProxyAgent tunnels through gluetun's CONNECT for real.
+      const target = urlOverride ?? wsUrl;
       sock = client === 'ws'
-        ? (new WsClient(wsUrl, useProxy && proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}) as any)
-        : (new WebSocket(wsUrl, (useProxy && dispatcher ? { dispatcher } : {}) as any) as any);
+        ? (new WsClient(target, useProxy && proxyUrl ? { agent: new HttpsProxyAgent(proxyUrl) } : {}) as any)
+        : (new WebSocket(target, (useProxy && dispatcher ? { dispatcher } : {}) as any) as any);
     } catch (e) { err = String(e).slice(0, 140); return done('constructor-threw'); }
     sock.addEventListener('open', () => { opened = true; openedAt = Date.now(); });
     sock.addEventListener('message', () => { messages++; if (messages === 1) done('DELIVERING'); });
@@ -220,21 +234,24 @@ export async function probeLiquidationPath(): Promise<any> {
   const [restProxy, restDirect, egProxy, egDirect] = await Promise.all([
     rest(true), rest(false), egress(true), egress(false),
   ]);
-  const wsUndiciProxy = await ws(true, 'undici');
   const wsWsProxy = await ws(true, 'ws');
   const wsDirect = await ws(false, 'ws');
+  // The decisive comparison: same client, same proxy, only the URL differs. A US dev machine
+  // cannot run this test — the geoblock silences every stream — so it has to happen on the box.
+  const wsLegacy = await ws(true, 'ws', WS_URL_LEGACY);
   return {
     proxyConfigured: !!proxyUrl,
     wsUrl,
     rest: { viaProxy: restProxy, direct: restDirect },
     egress: { viaProxy: egProxy, direct: egDirect },
     websocket: {
-      undiciViaProxy: wsUndiciProxy,   // the old client — expected to behave like `direct`
-      wsViaProxy: wsWsProxy,           // the new client — should DELIVER if the tunnel is real
-      direct: wsDirect,
+      wsViaProxy: wsWsProxy,           // NEW url + proxy — should DELIVER
+      direct: wsDirect,                // NEW url, no proxy (US egress — expect silence)
+      legacyViaProxy: wsLegacy,        // DEAD url + proxy — expect silence, proving the URL was the cause
     },
     collector: liquidationStatus(),
-    hint: 'wsViaProxy DELIVERING => fixed; the collector uses this client. '
+    hint: 'wsViaProxy DELIVERING while legacyViaProxy is silent => the decommissioned URL was the cause. '
+        + 'BOTH silent => the exit IP is the problem after all. '
         + 'wsViaProxy OPEN-BUT-SILENT while undiciViaProxy is too => the tunnel is fine but that exit '
         + 'country is Binance-geoblocked: change gluetun SERVER_COUNTRIES (Singapore/Japan/Netherlands). '
         + 'wsViaProxy REJECTED-AT-UPGRADE => gluetun refuses CONNECT for wss; fall back to '
