@@ -597,9 +597,40 @@ remains:
   on leak-clean `csv_exports_v11_fixed` (stock was leak-spared, reproduced identically). See the
   2026-06-05 decision entry.
 
+## ⏰ Dated action items
+
+- **2026-09-03 — drop `ICXUSDT` and `STORJUSDT` from `ARCHIVE_CRYPTO`** (`marketscope-worker/src/index.ts`).
+  Binance delists them that day (surfaced by the exchange-announcements feed, 2026-08-23; ICX also
+  carries a Monitoring Tag). After the delist the cron burns a slot per minute per symbol fetching
+  candles that never update and scoring stale prices — fault-isolated, so nothing breaks, it just
+  runs quietly wrong. Leave them in until the date so the archive captures the final tape.
+  **Do NOT remove them from `csv_exports_v14` or any future training set** — see the note below.
+
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-08-23c — ICX / STORJ delisting: remove from LIVE scoring, KEEP in training (survivorship)
+
+Two opposite decisions, recorded because the training one is counterintuitive.
+
+**Training: KEEP.** The vault's standing caveat is that the dataset contains only survivors — the
+2026-05-30 crypto-regime entry: *"the ML edge stays +EV in 2022-bear folds, but only on symbols that
+survived — the dataset has no delisted tokens, so a real leveraged bear is an unmodeled tail risk."*
+ICX (14,230 bars from 2020-01) and STORJ (11,465 from 2021-04) are about to become **the first
+non-survivors the dataset has ever held**, including the decline that preceded delisting. Stripping
+them would restore a survivors-only dataset — deepening precisely the weakness that is already
+documented. Their labels come from real prices and their features were valid while they traded. The
+one honest caveat: the delisting announcement itself is an exogenous shock no technical feature can
+predict, so the final few bars teach noise — a handful out of ~25,000, not worth truncating.
+
+**Opportunity:** tag them delisted. If more accumulate, the model's behaviour on assets that later
+died becomes measurable — the survivorship test the vault currently lists as unmodeled. This is the
+seed of that dataset, so do not throw the first two samples away.
+
+**Live scoring: REMOVE on 2026-09-03** (see the dated action item at the top of this section).
+Opposite logic: a dead symbol costs a cron slot every minute, scores stale prices, and could page
+the user about an untradeable instrument.
 
 ### 2026-08-23b — Binance exchange announcements: the first PER-INSTRUMENT news source (and it found a live delisting)
 
