@@ -89,3 +89,104 @@ Hypotheses will be ranked on four axes, not on headline return:
 
 Axis 4 is included because this project has previously validated edges that were unreachable in
 practice ([[strategy-breakeven]]: +0.151R gross, −0.008R at the user's actual fee tier).
+
+---
+
+# RESULTS — run 2026-08-23. **All five fail their pre-declared bars. No bar was moved.**
+
+## H1 — longer horizons: FAIL, and the direction of the failure is the finding
+
+870,170 bars, 120 features, 77 symbols. LGB d4/t150, 3-fold expanding WF.
+
+| horizon | threshold | base rate | folds | mean AUC |
+|---|---|---|---|---|
+| **24h (control)** | 1.50 ATR | 39.7% | 0.734 / 0.743 / 0.749 | **0.742** |
+| 7d | 3.97 ATR | 52.1% | 0.677 / 0.689 / 0.685 | 0.684 |
+| 30d | 8.22 ATR | 59.4% | 0.616 / 0.713 / 0.690 | 0.673 |
+
+**Predictability DECAYS with horizon** — −0.057 at 7d, −0.067 at 30d, negative in every fold. The
+features carry information about the next day and lose it as the horizon extends.
+
+**This reframes [[regime-hold]] and is the most useful result of the five.** The 200D rule captured
+the 2025-26 decline (+74.7% vs −67.8%) but NOT by predicting it — longer moves are *less*
+predictable, not more. It works through payoff structure: cut losers, ride winners, no forecast
+required. **Trend capture and trend prediction are different mechanisms, and only the first is
+available.** Do not build a long-horizon model; the information is not there.
+
+*Caveat:* the 24h AUC of 0.742 exceeds production's 0.674 because excursions here are computed from
+closes (no intrabar high/low), making the target slightly easier. The cross-horizon comparison is
+internally consistent, which is what the test asks.
+
+## H2 — cross-sectional momentum: FAIL, decisively
+
+| | total | CAGR | maxDD | Sharpe |
+|---|---|---|---|---|
+| gross | −6.7% | −1.1% | −49.5% | 0.09 |
+| **net** | **−28.3%** | −5.1% | −56.7% | **−0.06** |
+
+Folds −5.2 / −23.8 / −0.8%. Negative even GROSS, so this is not a fee problem — crypto
+cross-sectional momentum simply does not work over this period. Turnover of 11.1%/day then buries
+it. Dead; do not revisit.
+
+## H3 — defensive FLAT: FAIL by 4pp, and the closest of the five
+
+| | total | CAGR | maxDD | Sharpe |
+|---|---|---|---|---|
+| **H3 defensive flat** | 218% | 19.5% | **−59.9%** | 0.63 |
+| regime (short-capable) | 16% | 2.4% | −82.2% | 0.35 |
+| buy & hold | 306% | 24.1% | −87.8% | 0.69 |
+
+| criterion | result | |
+|---|---|---|
+| maxDD ≥15pp better | **+27.9pp** | PASS |
+| return within 25% of B&H | 71% (needed 75%) | **FAIL** |
+
+Bear behaviour: 2025-26 flat **−2.6%** vs B&H −66.5%; 2022 flat −30.4% vs B&H −81.3%.
+
+So it does exactly what it was designed to do — removes the crash — at a 29% cost in total return,
+where the bar allowed 25%. **A miss by 4pp on a criterion I chose arbitrarily.** Reported as FAIL
+because the bar was pre-declared, but this is the one worth re-running with a properly justified
+return tolerance rather than a round number.
+
+## H4 — ML_WIN as size: FAIL, and it VALIDATES the current design
+
+1,035,036 simulated convex trades (1R stop / 5R target / 72h, 0.25% round trip).
+
+| arm | capital | net R/unit | Sharpe |
+|---|---|---|---|
+| **binary gate p≥0.70** | 97,486 | **+0.4098** | 1.253 |
+| size ∝ p | 1,035,036 | +0.2126 | **2.045** |
+| size ∝ p² | 1,035,036 | +0.2645 | 1.930 |
+
+Neither sizing arm beat the gate on EV per unit of capital, in any fold (0/3). **The existing binary
+gate is the correct design** — concentrating capital in the top decile extracts more per unit than
+spreading it.
+
+The real finding is the **trade-off the bar obscured**: sizing arms have far higher Sharpe (2.05 vs
+1.25) because they diversify across many more bars. Gate = more return per unit deployed; sizing =
+smoother. Neither dominates; the bar demanded both and so nothing passed.
+
+*Caveat, material:* absolute R here is inflated — close-only paths miss intrabar stop hits, so real
+stops trigger more often. The vault's OHLC-based +0.151R gross / −0.008R at user fees
+([[strategy-breakeven]]) remains the trustworthy absolute. This test's RELATIVE comparison stands.
+
+## H5 — selling volatility: FAIL, on a criterion I mis-specified
+
+30d straddle sold, loss capped at 3× premium, 1% friction.
+
+| | EV/trade | win | worst year | positive years |
+|---|---|---|---|---|
+| **BTC** | **+1.37%** | 62% | **−2.0%** | 4/6 |
+| ETH | +0.04% | 60% | −3.2% | 4/6 |
+
+BTC by year: 2021 +2.7, 2022 +3.7, 2023 −0.3, 2024 +0.1, 2025 +2.5, 2026 −2.0.
+
+**Design error, acknowledged:** the bar required ≥5 of **7** calendar years, but the DVOL history
+spans only 6. The bar was therefore harder than intended from the moment it was written. Even
+adjusted (5 of 6), it got 4 — so it misses either way, but the criterion was not well-formed and
+that is my fault, not the data's.
+
+The economics are real and modest: the vol risk premium is positive as previously measured, and
+selling it with capped risk earns ~+1.37%/trade on BTC with a −2.0% worst year. ETH is
+indistinguishable from zero. **This is a finding about where the premium sits, not a
+recommendation** — as stated in the design.
