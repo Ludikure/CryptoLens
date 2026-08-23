@@ -45,6 +45,8 @@ for the graph/backlink view). Links use `[[note-name]]` wikilink syntax.
   cell it unlocks (ML≥70 = 6.3% of bars). Pre-declared test, nothing shipped, nothing measured yet.
 
 ### The graveyard
+- [[what-we-tried]] — **START HERE for "has this been tested?"** Synthesis of every strategy and
+  feature tried, grouped by the SIX WAYS a hypothesis dies. Read before proposing anything.
 - [[rejected-hypotheses]] — everything tested and discarded, with the numbers that killed it.
 
 ## The two caveats that touch almost everything
