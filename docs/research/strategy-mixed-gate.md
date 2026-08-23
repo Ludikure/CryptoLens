@@ -105,3 +105,52 @@ cost of not having evidence, which is the correct outcome under this project's r
 - **Direction.** Every state in `mixed_flat_test.py` has P(up24) 48-53%. The opened window trades
   as a structure-led setup, never a directional call. See [[edge-leak-daily-candle]] for why that
   line is not negotiable.
+
+---
+
+## RESULTS (2026-08-23) — NONE PASS. Gate stays at 70.
+
+Run via `ml-training/mixed_gate_test.py`, executing the design above without modification. ML from
+the PRODUCTION scorer (`mlPredict` exported over all 870,170 v14 crypto bars) then passed through
+the live calibration curve, so the population matches what the app actually gates on.
+
+- 870,170 bars, **576,647 non-aligned (66%)**
+- Population the gate affects (non-aligned, calibrated ML in [50,70)): **489,906 bars**
+
+| variant | trades | gross EV | net EV | folds (net) |
+|---|---|---|---|---|
+| **A incumbent (FLAT <70)** | 0 | — | — | control |
+| B gate 70→60 | 251,880 | **−0.0325R** | −0.0511R | −0.097 / −0.081 / −0.079 |
+| C gate 70→55 | 398,423 | **−0.0320R** | −0.0506R | −0.067 / −0.101 / −0.077 |
+| D MODERATE cap [50,70) | 475,038 | **−0.0255R** | −0.0441R | −0.046 / −0.114 / −0.064 |
+
+Ship bar required net EV positive in ALL folds and beating A by > +0.02R. **Every variant is
+negative in every fold.** Not close, no variant preferred, nothing shipped.
+
+**Gross EV is already negative**, so this is not the usual "thin edge dies at fees" rejection — the
+trades lose before costs. That is a stronger result than the bar required.
+
+### What prompted the re-examination
+
+A 12-month replay of the real envelope over BTC 4H bars (real per-bar ML, calibrated) measured
+**86.6% of bars auto-FLAT — one bar in seven tradeable** — with this rule the single largest
+contributor at **48.5% of all bars**. The user's read that it "fires too often" was correct on
+FREQUENCY. It is now measured that loosening it is not the remedy.
+
+*(Measurement note: a first pass fed RAW ML where production feeds CALIBRATED, inflating the
+`ML_WIN<50` share from its true 26.8% to 71%. Corrected before reporting; mean ML 41.7% raw →
+55.1% calibrated.)*
+
+### Status of the internal contradiction
+
+The contradiction identified 2026-07-24 is real and remains: the gate demands ≥70 to unlock a cell
+whose own base rate is ~61%. It is now an **accepted cost with evidence behind it** rather than an
+open question — which the design anticipated as the correct outcome absent a positive result.
+
+### Honest caveat for any future re-run
+
+The design pre-declared counter-trend bands of **TP1 1.0 ATR against a 2.0 ATR stop** — risking two
+to make one on the first leg. With direction a coin flip, that geometry is structurally hard to win.
+So this result says *"opening this window and trading it THIS WAY loses money"*, not *"MIXED bars
+contain no edge"*. A geometry sweep would be a different experiment needing its own design and bar;
+it must not be run by re-tuning this one after the fact.

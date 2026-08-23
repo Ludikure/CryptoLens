@@ -229,3 +229,22 @@ more than that hour-to-hour cannot change a stop or a target, which is the only 
 **Design flaw recorded:** criterion 2 assumed the sides would agree in sign. They do not. If ever
 re-run, test the sides separately with separate bars. The bar was not re-interpreted to rescue the
 result.
+
+## Loosening the `biases_MIXED` ML gate — REJECTED (2026-08-23)
+
+`ml-training/mixed_gate_test.py`, executing the design pre-declared 2026-07-24 in
+[[strategy-mixed-gate]]. 489,906 affected bars (non-aligned, calibrated ML in [50,70)).
+
+**All three variants negative in every fold, gross AND net:** gate→60 −0.0325R gross / −0.0511R net;
+gate→55 −0.0320 / −0.0506; MODERATE-cap −0.0255 / −0.0441. Ship bar wanted positive net in all folds
+beating control by +0.02R. **Gate stays at 70.**
+
+Gross EV is already negative, so this is not a fee-margin rejection — the trades lose before costs.
+
+Context: a 12-month envelope replay measured **86.6% of BTC 4H bars auto-FLAT**, this rule being the
+largest single contributor (48.5% of all bars). High firing frequency confirmed; loosening is not the
+remedy. The internal contradiction (gate at 70 unlocking a cell whose base rate is 61%) is now an
+accepted cost WITH evidence rather than an open question.
+
+Caveat recorded: the pre-declared bands (TP1 1.0 ATR vs 2.0 ATR stop) are unfavourable geometry, so
+this rejects the window-as-traded, not the existence of an edge in MIXED bars.
