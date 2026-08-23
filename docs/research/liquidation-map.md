@@ -68,6 +68,26 @@ That distinction is the whole reason this is filed as exploratory. The condition
 directly useful for STOP PLACEMENT, which is a risk decision. The unconditional one would be a
 direction claim, and direction is a coin flip in this project.
 
+## Generalisation check — all 32 symbols with tick data
+
+The first pass measured 3 majors and the prompt line was written from them, which asserted a
+majors number at every crypto symbol. Extended to the full tick set (2026-05-28 → 2026-08-21):
+
+| group | LONG 7d (median) | SHORT 7d (median) | VWAP control |
+|---|---|---|---|
+| **Majors** (n=12) | **34.6x** | 30.5x | 1.9x |
+| **Alts** (n=20) | **30.2x** | 26.0x | 1.7x |
+
+**The effect is universal, not a majors artifact.** Every one of the 32 symbols exceeds 13x, and
+the VWAP control stays pinned at 1.1-2.2x in every cell. Range: TRX 66.0x (long) at the top,
+AAVE 13.1x (short) at the bottom.
+
+**Alts run slightly LOWER than majors** (30.2 vs 34.6 median) — the opposite of the "thin books
+cascade harder" intuition, and the reason this check was worth running rather than assuming.
+
+Prompt wording was corrected from "~30-40x" (the majors figure) to "~20-45x, median ~30x" so the
+app quotes a number that holds across the universe it actually applies to.
+
 ## Limitations
 
 - ~3 months (the tick archive begins 2026-05-28), 3 symbols.

@@ -1144,8 +1144,10 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // (docs/research/liquidation-map.md) shows price spends only ~1.2% of its time beyond the
       // prior 7-day extreme, yet ~40% of ALL forced-liquidation notional prints there:
       //
-      //     BTC 34.0x / 30.1x, ETH 33.6x / 40.2x, SOL 35.2x / 30.0x (long/short side)
-      //     24h-VWAP control: 1.6-1.9x in all six cells — the metric CAN return "nothing".
+      //     32 symbols measured. MAJORS median 34.6x long / 30.5x short; ALTS median 30.2x /
+      //     26.0x. Range 13x (AAVE short) to 66x (TRX long). 24h-VWAP control: 1.1-2.2x in every
+      //     cell — the metric CAN return "nothing structural", which is why the 30x is credible.
+      //     Alts run slightly LOWER than majors, so thin books do not amplify the effect.
       //
       // Intensity is time-normalised, so this is NOT the tautology "longs die when price falls":
       // it is forced flow per unit of time spent at that price, ~30-40x its baseline.
@@ -1159,7 +1161,7 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const sevenDayLow = Math.min(...(fourH.candles ?? []).slice(-42).map((c: any) => c.low ?? Infinity));
       if (Number.isFinite(sevenDayHigh) && Number.isFinite(sevenDayLow) && sevenDayHigh > 0 && sevenDayLow > 0) {
         L(`CASCADE ZONES (measured): beyond ${formatPrice(sevenDayLow)} (7d low) and beyond ${formatPrice(sevenDayHigh)} (7d high).`);
-        L(`  Forced-liquidation density past a 7-day extreme runs ~30-40x its time-weighted baseline (measured on per-event data, BTC/ETH/SOL, both sides). Two uses, both CONDITIONAL on price getting there: (a) a stop placed just beyond one of these sits in the densest liquidation zone on the chart — prefer the far side of it or accept it will likely be swept; (b) if price does break one, expect acceleration rather than a clean retest. This says NOTHING about whether price will travel there — do not present it as a target, a magnet, or a direction call.`);
+        L(`  Forced-liquidation density past a 7-day extreme runs ~20-45x its time-weighted baseline (median ~30x; measured on per-event data across 32 crypto symbols, both sides — majors ~35x, alts ~30x, and every symbol above 13x). Two uses, both CONDITIONAL on price getting there: (a) a stop placed just beyond one of these sits in the densest liquidation zone on the chart — prefer the far side of it or accept it will likely be swept; (b) if price does break one, expect acceleration rather than a clean retest. This says NOTHING about whether price will travel there — do not present it as a target, a magnet, or a direction call.`);
       }
     }
 
