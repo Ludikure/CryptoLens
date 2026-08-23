@@ -1694,7 +1694,31 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         const flush = crowdLong ? 'long flush / liquidation cascade DOWN' : 'short squeeze UP';
         const retailPct = crowdLong ? iTrunc(retailLong) : iTrunc(retailShort);
         L();
-        L(`WHALE TRAP: ${tells.length >= 3 ? 'HIGH' : 'ELEVATED'} — ${retailPct}% of retail is positioned ${crowdSide} and the conditions for a ${flush} are stacking up.`);
+        // The two sides are NOT symmetric, measured against 5,357 days of real liquidation data
+        // (docs/research/whale-trap-validation.md, BTC/ETH/SOL 2020-2026):
+        //
+        //   crowded SHORT -> next-day long-liq share 52.9% -> 34.9%. An 18pp swing: shorts really
+        //     do become the liquidated side. 25 distinct episodes, bootstrap CI [-24.0, -12.9]pp,
+        //     present in every year. Caveat: 29 of 33 firings are BTC, so it is a BTC result with
+        //     ETH support and no SOL firings at all.
+        //
+        //   crowded LONG  -> 52.9% -> 57.7%. Only +4.8pp, and it MISSED the pre-declared +5pp bar.
+        //     Worse, it is regime-unstable: strong 2021-23, but INVERTS in 2024 (49.6%, below
+        //     baseline). The reason it reads weak is that long liquidations are ~53% of the total
+        //     on an ordinary day — crypto simply carries more leveraged longs — so "a long flush
+        //     is coming" is barely more informative than the base rate.
+        //
+        // So the language is differentiated rather than symmetric. Previously both sides claimed
+        // conditions were "stacking up", which the data supports for shorts and overstates badly
+        // for longs. The tells themselves are KEPT: they beat crowding-alone by 2.8pp (long) and
+        // 8.4pp (short), so the machinery earns its place — it is only the wording that was wrong.
+        if (crowdLong) {
+          L(`WHALE TRAP: ${tells.length >= 3 ? 'HIGH' : 'ELEVATED'} — ${retailPct}% of retail is positioned LONG. Going LONG here means joining the crowded side.`);
+          L(`  Calibration: measured on real liquidation data, this state raises the next-day long-liquidation share only modestly (53% -> 58%) and the effect is NOT stable across regimes — do NOT present a cascade as imminent. State the crowding as a POSITIONING fact, not a forecast.`);
+        } else {
+          L(`WHALE TRAP: ${tells.length >= 3 ? 'HIGH' : 'ELEVATED'} — ${retailPct}% of retail is positioned SHORT and the conditions for a ${flush} are stacking up.`);
+          L(`  Calibration: this is the well-supported side — measured on real liquidation data, this state flips the next-day liquidation balance decisively onto SHORTS (long share 53% -> 35%). Surface it prominently. (Measured mostly on BTC; treat alts as plausible-but-untested.)`);
+        }
         L(`  Tells: ${tells.join('; ')}.`);
         L(`  Read for the user: going ${crowdSide} here means JOINING the crowd that is most exposed to a flush — the setup where the majority gets hurt. It is a RISK flag, not a direction call (the squeeze can be slow or never come), but if the user is about to enter ${crowdSide}, they should know they'd be on the crowded, vulnerable side. Surface this in the Risk Map and name the cascade direction (${flush}).`);
       }

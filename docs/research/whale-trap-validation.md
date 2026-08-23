@@ -136,3 +136,37 @@ This is a case where a failed test improves the app rather than deleting a featu
 
 3 symbols, daily resolution against a flag that fires on 4H bars, CVD tell absent so this covers a
 subset of production firings, and n=33 on the side with the strongest effect.
+
+### Robustness checks (run after the headline result, before changing anything)
+
+Daily observations are not independent — liquidation regimes persist — so the headline n is
+optimistic. Collapsing consecutive firing days (gap > 2d) into episodes and bootstrapping over
+those:
+
+| side | days | **episodes** | episode mean | **95% CI vs baseline** | excludes baseline? |
+|---|---|---|---|---|---|
+| crowded SHORT | 33 | **25** | 34.3% | **[−24.0, −12.9]pp** | **YES, decisively** |
+| crowded LONG | 132 | 80 | 57.4% | **[+0.3, +8.6]pp** | barely |
+
+**This moved confidence in both directions.**
+
+*The SHORT side survived.* 33 days are 25 distinct episodes rather than one squeeze repeated, the CI
+is comfortably clear of baseline, and the effect appears in every year (2023 −22pp, 2024 −18pp,
+2025 −13pp). **Concentration caveat:** 29 of 33 firings are BTC, 4 are ETH, and SOL never fired
+crowded-short at all. So this is a BTC result with ETH support and no alt evidence.
+
+*The LONG side got weaker, not stronger.* The CI lower bound is +0.3pp — it clears baseline by a
+hair — and the effect **inverts in 2024** (49.6%, i.e. 3.3pp BELOW baseline) after being strong in
+2021-23. That is regime-dependence, not a stable edge, and it is a stronger argument for softening
+the wording than the +4.8pp headline was on its own.
+
+### Change shipped
+
+`prompt.ts` now prints asymmetric language, with the calibration stated to the model:
+- **crowded SHORT** keeps the "conditions are stacking up" claim and is told to surface it
+  prominently, with the BTC-concentration caveat attached.
+- **crowded LONG** now states crowding as a POSITIONING fact and explicitly instructs the model not
+  to present a cascade as imminent.
+
+The four tells are KEPT in both cases — they beat crowding-alone by 2.8pp (long) and 8.4pp (short),
+so the machinery earns its place. Only the wording was wrong.
