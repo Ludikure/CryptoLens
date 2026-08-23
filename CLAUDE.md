@@ -601,6 +601,39 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-23b — Binance exchange announcements: the first PER-INSTRUMENT news source (and it found a live delisting)
+
+**No VPN needed — I gave up at the wrong door.** The public announcements page sits behind a
+Cloudflare challenge (202, no body), and I recorded it as unreachable. The CMS API behind it answers
+plainly: `bapi/composite/v1/public/cms/article/list/query`, HTTP 200, clean JSON, from a US IP with
+no proxy. A challenge page is not proof a source is closed.
+
+**It immediately surfaced something nothing else in the stack would have:**
+> Binance Will Delist **ICX, SCRT, STORJ** on 2026-09-03 — and **ICX and STORJ are both live in
+> `ARCHIVE_CRYPTO`**, scored by the cron every minute and present in the v14 training data. ICX also
+> carries a fresh Monitoring Tag (Binance's pre-delisting warning).
+
+**Why this source is categorically different from the rest.** Fed minutes describe the backdrop;
+these are facts about the INSTRUMENT being traded — a delisting removes the symbol, a funding-rate
+change alters carry, a tick-size change alters execution, a hard fork halts the wallet. A funding
+change even shifts the liquidation math the cascade zones describe. Catalogs taken: Listing (48),
+News (49), Maintenance (157), Delisting (161). Skipped: Activities and Airdrop, which are marketing.
+
+**Per-symbol ranking, which is what stops it becoming noise.** Binance publishes ~80 relevant items
+at a time and is a PRIMARY source, so plain "primaries first, newest first" would have filled all six
+prompt slots with routine listing announcements and pushed out both the FOMC minutes and the
+delisting. `fetchRecentNews` now takes the analysed symbol, drops exchange notices that name a
+DIFFERENT instrument, keeps market-wide ones (tick-size sweeps, API changes), and ranks a
+symbol-matching exchange notice ABOVE other primaries. So "Binance Will Delist ICX" reaches the ICX
+analysis and never clutters BTC's.
+
+**Action needed (not code):** ICX and STORJ delist 2026-09-03. Decide whether to drop them from
+`ARCHIVE_CRYPTO` now or let their data go stale. They are also in `csv_exports_v14`, so any future
+retrain inherits two symbols that will no longer exist — a mild survivorship wrinkle worth noting
+against the vault's standing caveat that the dataset has no delisted tokens.
+
+560/560 green (3 new). Worker-only — **needs a box redeploy**.
+
 ### 2026-08-23 — Federal Register added as a news source; White House tried and dropped
 
 **Federal Register is the best input the feed has.** It is the official record of US rulemaking

@@ -37,6 +37,8 @@ export interface NewsFeed {
   primary: boolean;
   /** 'macro' reaches both markets; 'crypto' only reaches crypto analyses. */
   scope: 'macro' | 'crypto';
+  /** 'rss' (default) parses XML; 'binanceCms' parses Binance's announcement JSON. */
+  kind?: 'rss' | 'binanceCms';
 }
 
 // Kept short on purpose. Every addition costs prompt space and raises the noise floor; a feed
@@ -57,6 +59,18 @@ export const NEWS_FEEDS: NewsFeed[] = [
   // is redundant, because presidential documents publish IN the Federal Register (verified: a
   // "digital asset" query returns 30 presidential docs incl. crypto/fintech EOs). So crypto EOs
   // arrive through the feed above, already filtered at the source.
+  // Binance exchange announcements — categorically different from every other feed here. Fed
+  // minutes describe the backdrop; these are facts about the INSTRUMENT being traded: a delisting
+  // removes the symbol, a funding-rate change alters carry, a tick-size change alters execution,
+  // and a hard fork halts the wallet. Found 2026-08-23 to be surfacing "Binance Will Delist ICX,
+  // SCRT, STORJ" while ICX and STORJ were both live in ARCHIVE_CRYPTO — nothing else in the stack
+  // would have said so.
+  //
+  // The public announcements PAGE sits behind a Cloudflare challenge, but the CMS API behind it
+  // answers plainly (HTTP 200, clean JSON, no proxy needed even from a geoblocked IP). No VPN
+  // required — the challenge page is not the only door.
+  { id: 'binance', name: 'Binance', kind: 'binanceCms', scope: 'crypto', primary: true,
+    url: 'https://www.binance.com/bapi/composite/v1/public/cms/article/list/query?type=1&pageNo=1&pageSize=20' },
   { id: 'coindesk', name: 'CoinDesk',         url: 'https://www.coindesk.com/arc/outboundfeeds/rss/', primary: false, scope: 'crypto' },
   { id: 'ctelegraph', name: 'Cointelegraph',  url: 'https://cointelegraph.com/rss',              primary: false, scope: 'crypto' },
 ];
@@ -266,6 +280,37 @@ const TERM_RE: Record<string, RegExp> = Object.fromEntries(
   CATALYST_TERMS.map(t => [t, new RegExp(`\\b${escapeRe(t)}\\b`, 'i')]));
 
 /** Which catalyst terms a headline matches, ignoring self-names and context-voided senses. */
+/**
+ * Binance's announcement CMS. Only the catalogs that describe INSTRUMENT changes are taken —
+ * Activities and Airdrop are marketing and would swamp the cap.
+ */
+const BINANCE_CATALOGS = new Set([48, 49, 157, 161]);   // Listing, News, Maintenance, Delisting
+
+export function parseBinanceCms(body: string, feed: NewsFeed): NewsItem[] {
+  const out: NewsItem[] = [];
+  let doc: any;
+  try { doc = JSON.parse(body); } catch { return out; }
+  for (const cat of doc?.data?.catalogs ?? []) {
+    if (!BINANCE_CATALOGS.has(Number(cat?.catalogId))) continue;
+    for (const a of cat?.articles ?? []) {
+      const title = String(a?.title ?? '').trim();
+      const ts = Number(a?.releaseDate);
+      if (!title || !Number.isFinite(ts)) continue;
+      out.push({
+        id: hashId(`binance:${a?.code ?? a?.id ?? title}`),
+        source: feed.id, sourceName: feed.name,
+        title: title.slice(0, 300),
+        // The catalog name IS the classification — carry it so the relevance gate and the prompt
+        // both see "Delisting" rather than having to infer it from the wording.
+        summary: String(cat?.catalogName ?? '').slice(0, 120),
+        url: a?.code ? `https://www.binance.com/en/support/announcement/${a.code}` : '',
+        publishedAt: ts, primary: feed.primary, scope: feed.scope, category: 'exchange',
+      });
+    }
+  }
+  return out;
+}
+
 export function matchedTerms(item: { title: string; summary: string; source?: string }): string[] {
   const hay = `${item.title} ${item.summary}`.toLowerCase();
   const self = SELF_TERMS[item.source ?? ''] ?? [];
@@ -294,6 +339,10 @@ export function matchedTerms(item: { title: string; summary: string; source?: st
  */
 export function isRelevant(item: NewsItem): boolean {
   if (item.source === 'fed' && item.category === 'monetary') return true;
+  // Exchange actions pass on provenance: a delisting, funding-rate change, tick-size update or
+  // hard fork is a fact ABOUT the tradeable instrument, not commentary about the market. The
+  // catalog filter upstream already excluded marketing.
+  if (item.category === 'exchange') return true;
   const terms = matchedTerms(item);
   if (!terms.length) return false;
   // The recap veto and its policy escape are judged on the TITLE ALONE. Summaries are teasers and
@@ -353,8 +402,8 @@ export async function pollNewsFeeds(
         redirect: 'follow',
       });
       if (!res.ok) { health.push({ id: feed.id, ok: false, items: 0, kept: 0, error: `HTTP ${res.status}` }); continue; }
-      const xml = await res.text();
-      const items = parseFeed(xml, feed);
+      const body = await res.text();
+      const items = feed.kind === 'binanceCms' ? parseBinanceCms(body, feed) : parseFeed(body, feed);
       const keep = items.filter(i => isRelevant(i) && nowMs - i.publishedAt < maxAge && i.publishedAt <= nowMs + 3600_000);
       for (const it of keep) {
         try {
@@ -428,7 +477,7 @@ export interface PromptNews { headlines: string[]; catalystActive: boolean; late
  * different animal from the exhaustion the chase guard is built to catch.
  */
 export async function fetchRecentNews(
-  env: { DB: any }, opts: { isCrypto: boolean; nowMs: number; lookbackH?: number; primaryLookbackH?: number; limit?: number; catalystWindowH?: number },
+  env: { DB: any }, opts: { isCrypto: boolean; nowMs: number; symbol?: string; lookbackH?: number; primaryLookbackH?: number; limit?: number; catalystWindowH?: number },
 ): Promise<PromptNews | null> {
   const lookback = (opts.lookbackH ?? 48) * 3600_000;
   const primaryLookback = (opts.primaryLookbackH ?? 24 * 7) * 3600_000;
@@ -443,13 +492,31 @@ export async function fetchRecentNews(
     // release aged out before it could ever be shown.
     // Primaries first, then most recent — the cap should never be spent on outlet chatter while
     // a regulator release goes unshown.
+    // Over-fetch, then rank in JS. Binance publishes ~80 relevant items at a time, so a plain
+    // "primaries first, newest first" ordering would let routine listing announcements crowd out
+    // both the FOMC minutes and the delisting notice that actually matters.
     const res = await env.DB.prepare(
-      `SELECT source_name, title, published_at, primary_source FROM news_items
+      `SELECT source, source_name, title, published_at, primary_source FROM news_items
         WHERE ((primary_source = 1 AND published_at > ?) OR (primary_source = 0 AND published_at > ?))
               ${scopeClause}
-        ORDER BY primary_source DESC, published_at DESC LIMIT ?`
-    ).bind(opts.nowMs - primaryLookback, opts.nowMs - lookback, limit).all();
-    const rows = (res.results || []) as any[];
+        ORDER BY published_at DESC LIMIT 200`
+    ).bind(opts.nowMs - primaryLookback, opts.nowMs - lookback).all();
+    let rows = (res.results || []) as any[];
+    if (!rows.length) return null;
+
+    // Base asset of the symbol under analysis: BTCUSDT -> BTC. Exchange notices are the one source
+    // that is PER-INSTRUMENT, so "Binance Will Delist ICX" must reach the ICX analysis and must not
+    // clutter BTC's.
+    const base = (opts.symbol ?? '').replace(/USDT$|USD$|PERP$/i, '').toUpperCase();
+    const mentions = (t: string) => base.length >= 2 && new RegExp(`\\b${base}\\b`, 'i').test(t);
+    const isExchange = (r: any) => r.source === 'binance';
+    // A notice naming no symbol at all (tick-size sweeps, API changes) is market-wide, so it stays.
+    const namesSomeSymbol = (t: string) => /\b[A-Z0-9]{2,10}(USDT|USD)?\b.*\b(delist|launch|remov|add|monitor)/i.test(t);
+
+    rows = rows.filter(r => !isExchange(r) || mentions(r.title) || !namesSomeSymbol(r.title));
+    const score = (r: any) => isExchange(r) && mentions(r.title) ? 3 : (r.primary_source ? 2 : 1);
+    rows.sort((a, b) => score(b) - score(a) || b.published_at - a.published_at);
+    rows = rows.slice(0, limit);
     if (!rows.length) return null;
     const headlines = rows.map(r => {
       const ageH = Math.max(0, Math.round((opts.nowMs - r.published_at) / 3600_000));

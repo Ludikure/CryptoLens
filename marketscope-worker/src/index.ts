@@ -442,7 +442,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
     // whether the headlines change the model's output at all. An input the output never reacts to
     // is decoration, and that failure has already bitten twice (the mandate's JSON contract, the
     // news block's missing output instruction).
-    body.noNews === true ? Promise.resolve(null) : fetchRecentNews(env, { isCrypto, nowMs }).catch(() => null),
+    body.noNews === true ? Promise.resolve(null) : fetchRecentNews(env, { isCrypto, nowMs, symbol }).catch(() => null),
   ]);
 
   // Observed liquidation flow (crypto) — best-effort, from the box collector's archive.

@@ -2,7 +2,7 @@
 // NOISE GATE — crypto media is mostly price recaps and op-eds, and letting those into the prompt
 // next to validated pre-computed flags is how this becomes a graveyard entry rather than context.
 import { describe, it, expect, afterAll } from 'vitest';
-import { parseFeed, isRelevant, matchedTerms, hashId, pollNewsFeeds, fetchRecentNews, pruneIrrelevant, ensureNewsTable, type NewsFeed } from '../src/news';
+import { parseFeed, parseBinanceCms, isRelevant, matchedTerms, hashId, pollNewsFeeds, fetchRecentNews, pruneIrrelevant, ensureNewsTable, type NewsFeed } from '../src/news';
 import { D1Adapter } from '../server/d1-adapter';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -321,5 +321,38 @@ describe('system prompt must tell the model what to DO with headlines', () => {
       expect(s).toContain('say NOTHING about news');          // no post-hoc narrative invention
       expect(s).toContain('fresh PRIMARY-source headline');    // a live catalyst is not a SHORT-mode day
     }
+  });
+});
+
+describe('Binance CMS source — exchange actions about the traded instrument', () => {
+  const body = JSON.stringify({ data: { catalogs: [
+    { catalogId: 161, catalogName: 'Delisting', articles: [
+      { title: 'Binance Will Delist ICX, SCRT, STORJ on 2026-09-03', releaseDate: 1787000000000, code: 'abc123' } ] },
+    { catalogId: 49, catalogName: 'Latest Binance News', articles: [
+      { title: 'Important Updates on the Funding Rate of USDⓈ-M UNITREEUSDT Perpetual', releaseDate: 1787000001000, code: 'def456' } ] },
+    // Marketing catalogs must be excluded upstream or they swamp the 6-headline cap.
+    { catalogId: 93, catalogName: 'Latest Activities', articles: [
+      { title: 'Trading Competition: Share $200K of rewards', releaseDate: 1787000002000, code: 'ghi789' } ] },
+  ] } });
+  const feed = { id: 'binance', name: 'Binance', url: 'x', primary: true, scope: 'crypto' as const, kind: 'binanceCms' as const };
+
+  it('takes instrument catalogs and drops marketing', () => {
+    const items = parseBinanceCms(body, feed);
+    expect(items).toHaveLength(2);
+    expect(items.map(i => i.title.slice(0, 20))).toEqual(['Binance Will Delist ', 'Important Updates on']);
+    expect(items.some(i => i.title.includes('Trading Competition'))).toBe(false);
+  });
+
+  it('carries the catalog as classification and passes the gate on provenance', () => {
+    const [delist] = parseBinanceCms(body, feed);
+    expect(delist.summary).toBe('Delisting');
+    expect(delist.category).toBe('exchange');
+    // A delisting is a fact about the instrument — it must not depend on keyword luck.
+    expect(isRelevant(delist)).toBe(true);
+  });
+
+  it('returns [] on malformed JSON rather than throwing', () => {
+    expect(parseBinanceCms('not json', feed)).toEqual([]);
+    expect(parseBinanceCms('{}', feed)).toEqual([]);
   });
 });
