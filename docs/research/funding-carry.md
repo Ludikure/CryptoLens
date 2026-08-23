@@ -64,3 +64,47 @@ directional strategies are most tempting and most dangerous.
 Realistic two-leg execution costs, margin and capital treatment, basis at entry/exit, an explicit
 venue-risk position (position limits per exchange), and a funding-negative regime rule. Until then
 this is a promising measurement, nothing more.
+
+---
+
+## MEASURED AT THE USER'S ACTUAL VENUE (2026-08-23, live snapshot)
+
+The 15.2% figure above is **Binance funding, which this user cannot access** (US, 451-geoblocked —
+the reason the backend runs behind gluetun). Corrected by measuring Coinbase directly.
+
+**Coinbase does not publish perp funding** — `BIP-20DEC30-CDE` ("nano BTC Perp Futures", 0.01 BTC,
+the contract the user trades) returns `funding_rate: ""` from the public API. But Coinbase Derivatives
+also lists **dated** nano futures on the same contract size, and those price the carry directly and
+better: the basis is LOCKED at trade time instead of floating with funding.
+
+Spot BTC $77,366.46 / ETH $2,446.94:
+
+| contract | price | basis | days | annualized | 24h vol |
+|---|---|---|---|---|---|
+| BIT-28AUG26-CDE | 77,570.00 | 0.26% | 4.9 | **21.5%** | 23,311 |
+| **BIT-25SEP26-CDE** | 78,195.00 | **1.07%** | 32.9 | **12.5%** | 39,139 |
+| ET-28AUG26-CDE | 2,451.00 | 0.17% | 4.9 | 13.1% | 30,081 |
+| ET-25SEP26-CDE | 2,459.50 | 0.51% | 32.9 | 5.8% | 570 |
+
+### The verdict turns entirely on whether the spot leg must be BOUGHT
+
+Coinbase Advanced spot fees at retail tiers are roughly 0.40% maker / 0.60% taker **per side** —
+enormous against a 1.07% basis. Futures legs are ~0.10%.
+
+| | cost | net over 33d | annualized |
+|---|---|---|---|
+| **buy spot + sell future** (0.40×2 + 0.10×2) | ~1.00% | **+0.07%** | **~0.8% — dead** |
+| at taker spot rates (0.60×2) | ~1.40% | **−0.33%** | **negative** |
+| **sell future against BTC ALREADY HELD** (0.10×2) | ~0.20% | **+0.87%** | **~10%** |
+
+**So the carry fails in its textbook form and works in its covered form.** Buying spot to run it is
+break-even at best — the same fee wall that killed [[strategy-breakeven]]. Selling a dated future
+against BTC the user already owns pays roughly **10% annualized** and needs no directional view.
+
+**The cost is upside.** A covered short future caps participation above the future price — in the
+62k→80k rally that started this whole investigation, this position would have stopped earning at
+78,195. It converts an existing holding into yield; it does not capture moves.
+
+**Caveat: this is one snapshot.** The basis varies with leverage demand — 12.5% today could be 5% or
+25% next month. It is observable at any moment from the public API, so it is monitorable rather than
+assumable, and the app is well placed to display it.
