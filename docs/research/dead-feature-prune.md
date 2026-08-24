@@ -38,3 +38,73 @@ must pass**:
 is still a large set and the removed ones contribute nothing to the *current* model, but a retrain is
 a different model. The honest prior is that it passes, and the value is a provable serving-path win
 either way.
+
+---
+
+# RESULTS — 2026-08-24
+
+## Q1 — serving path: EXACT, as predicted
+
+| fixture | full | dead features removed | |
+|---|---|---|---|
+| BTC | 0.298736755406 | 0.298736755406 | IDENTICAL |
+| ETH | 0.415477764354 | 0.415477764354 | IDENTICAL |
+| TSLA | 0.436893655379 | 0.436893655379 | IDENTICAL |
+
+Bit-identical to 12 decimals. **Trimming the serving path is provably safe** — no retrain, no new
+model, no parity risk.
+
+## Q2 — retrain on the 67 used features: PASSES BOTH AXES
+
+| arm | per-symbol AUC | **within-timestamp AUC** | xs spread |
+|---|---|---|---|
+| FULL 110 | 0.6803 | 0.6664 | 0.0843 |
+| **USED 67** | 0.6797 | 0.6662 | 0.0840 |
+| Δ | −0.0006 | **−0.0003** | **100% retained** |
+
+All four criteria pass. **Contrast with the MINIMAL attempt**, which the same cross-sectional metric
+would have caught immediately:
+
+| | within-timestamp Δ | spread retained |
+|---|---|---|
+| MINIMAL (block ablation) | **−0.1021** | **51%** |
+| **USED-67 (split inspection)** | **−0.0003** | **100%** |
+
+That is the entire difference between choosing features by a metric that measured the wrong axis and
+choosing them by reading what the trained model actually consults.
+
+## ⚠️ But the ACTUALLY removable set is 11, not 43
+
+The 43 are dead in the **crypto** model. Two filters shrink that hard:
+
+| | count |
+|---|---|
+| dead in crypto model | 43 |
+| **dead in BOTH crypto and stock** (the stock model uses 77/110) | **19** |
+| of those, still referenced by the prompt / worker / UI | 8 |
+| **truly removable from the serving path** | **11** |
+
+**The 11:** `dAdxBullish` · `dDivergence` · `hStochCross` · `hMacdCross` · `hDivergence` ·
+`last3Green` · `last3Red` · `last3VolIncreasing` · `basisExtreme` · `isMarketHours` · `vpAbovePoc`
+
+**Still needed despite being model-dead:** `dStochCross`, `dBBSqueeze`, `hBBSqueeze`, `oiSignal`,
+`takerSignal`, `crowdingSignal`, `derivativesCombined`, `basisPct` — all consumed by the prompt's
+positioning/whale-trap sections or the UI.
+
+## Recommendation: do NOT ship a special deploy for this
+
+11 of 111 features is ~10% of the computation, and most are cheap. The only non-trivial saving is RSI
+divergence detection (`dDivergence`/`hDivergence`, peak/trough analysis). Volume profile stays because
+other VP features are live; `basisExtreme` derives from `basisPct` which is still needed.
+
+**The measured benefit does not justify a model deploy, new JSONs, parity re-verification and a box
+restart.** Q2's retrain is −0.0006 — nominally *worse*, statistically nil.
+
+**Fold it into the next scheduled retrain instead**, when the ship cycle is happening anyway. At that
+point training on the 67 used features is free and leaves a cleaner model with less overfitting
+surface for the retrain after it.
+
+## What this exercise actually produced
+
+Not a smaller model. **A correct method for choosing one**, and a demonstration that the previous
+method was wrong by −0.1021 AUC on the axis the product depends on.
