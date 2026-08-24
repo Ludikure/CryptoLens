@@ -115,3 +115,64 @@ apparently what makes it usable.
 the largest gap, and SOL was also the asset where T16 anticipated 8/8 large drawdowns. Whether that
 is a real asset-specific mechanism or the one place noise favoured the model is not resolved here,
 and a single asset is not evidence.
+
+---
+
+# RESULTS — SECTION B: group ablation
+
+Group sizes: 1 TREND/MOMENTUM=43 · 2 REALISED VOL=8 · 3 TAIL SHAPE=3 · 4 PRICE STRUCTURE=26 ·
+5 LIQUIDITY=7 · 6 CROSS-HORIZON=3.
+
+| config | BTC | ETH | SOL | XRP | mean AUC | **ΔAUC** | top-dec | Brier |
+|---|---|---|---|---|---|---|---|---|
+| FULL (arm B) | 0.552 | 0.595 | 0.600 | 0.667 | 0.6036 | — | 51.1% | 0.1974 |
+| **minus 1 TREND/MOMENTUM** | 0.515 | 0.559 | 0.523 | 0.618 | 0.5536 | **−0.0501** | 36.4% | 0.2089 |
+| minus 2 REALISED VOL | 0.529 | 0.570 | 0.616 | 0.675 | 0.5973 | −0.0063 | 51.8% | 0.2015 |
+| minus 3 TAIL SHAPE | 0.550 | 0.593 | 0.601 | 0.668 | 0.6031 | −0.0005 | 50.9% | 0.1974 |
+| **minus 4 PRICE STRUCTURE** | 0.558 | 0.600 | 0.605 | 0.667 | 0.6074 | **+0.0038** | **52.7%** | **0.1964** |
+| minus 5 LIQUIDITY | 0.550 | 0.594 | 0.602 | 0.669 | 0.6035 | −0.0001 | 50.4% | 0.1978 |
+| minus 6 CROSS-HORIZON | 0.547 | 0.593 | 0.601 | 0.667 | 0.6018 | −0.0018 | 50.7% | 0.1977 |
+
+## Attribution: TREND/MOMENTUM, and nothing else
+
+**Removing trend/momentum costs −0.0501 AUC — roughly 8× the next-largest group — and it drops on
+all four assets (BTC −0.037, ETH −0.036, SOL −0.077, XRP −0.049).** Top-decile precision collapses
+from 51.1% to 36.4% and Brier degrades. That is a stable attribution across leave-one-symbol-out
+folds, which is what the design asked for.
+
+**Three findings that are more interesting than the headline:**
+
+**1. The explicit volatility features are nearly redundant (−0.0063).** Given section F showed
+realised volatility *alone* scores 0.598, this looks contradictory — but it is not. The
+trend/momentum block is full of volatility-correlated quantities: ADX measures trend strength, RSI
+extremes track volatility regimes, MACD-histogram magnitude scales with volatility, and the group
+holds every delta and acceleration term. **The volatility information is duplicated inside the
+momentum block**, so deleting the eight explicit vol features changes little.
+
+**2. PRICE STRUCTURE is net noise — removing it IMPROVES every metric** (AUC +0.0038, top-decile
+51.1%→52.7%, Brier 0.1974→0.1964). Twenty-six features covering VWAP position, POC/value-area
+distances, 52-week position, gaps, divergences and Stoch levels are, in aggregate, hurting the model.
+**Noted and deliberately NOT acted on** — dropping them now would be exactly the post-hoc
+optimisation this test forbids, and it is one measurement.
+
+**3. TAIL SHAPE (−0.0005) and LIQUIDITY (−0.0001) contribute nothing measurable.** For tail shape
+that is unsurprising and was declared in advance: the group is near-empty because the production
+feature set never computed distributional moments. **The model cannot be using tail shape, because
+it was never given it.**
+
+## Final verdict on T18
+
+**FAIL — "identifies a correlate, not a mechanism."** Ship-bar criterion 1 fails decisively (+0.015
+AUC over a one-line realised-volatility rule, losing on 2 of 4 assets), so criteria 3-8 are moot.
+
+But the decomposition succeeded at its stated purpose. The information the model uses is now located:
+
+> **The crash signal lives in the trend/momentum feature block, whose predictive content is largely
+> volatility-correlated. Price structure, tail shape and liquidity contribute nothing or worse. The
+> model's advantage over a plain volatility rule is +0.015 AUC and is not consistent across assets —
+> its real contribution is calibration, not discrimination.**
+
+The mechanism, stated without the machinery: **elevated and accelerating momentum-indicator activity
+— which is largely a proxy for volatility regime — precedes extreme drawdowns across crypto assets.**
+That replicates out of sample (T16) and is genuinely general. It is also, essentially, the volatility
+clustering that was already known.
