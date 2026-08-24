@@ -97,6 +97,7 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 | `/direction-accuracy` | GET | required | Live forward track record of the dual-gate direction model (universe-wide, not per-device). Overall accuracy + by-confidence-band + recent graded signals + pending count. Reads `direction_signals` D1 |
 | `/ml-calibration` | GET | required | Live calibration of the ML *quality* model: realized goodR rate by predicted-probability bucket. Drift detector. Reads `ml_calibration` D1. `?market=crypto\|stock` filters to one model AND returns `curve` — the fitted live mapping (2026-08-21 PAV refit) the gates actually apply |
 | `/cron-health` | GET | none (public) | Dead-man's-switch: returns **503** when the cron heartbeat is stale (>10 min), 200 otherwise. Point an external uptime monitor here. Reads `cron:heartbeat` KV |
+| `/basis` | GET | none | Cash-and-carry monitor (2026-08-23): live Coinbase dated nano-futures basis vs spot, annualized, net of fees, with liquidity gating and the margin-call buffer. **READ-ONLY — public market data, no orders, no trade-enabled credentials.** `?fee=` overrides the per-side assumption (default 0.001 = futures legs only, i.e. the COVERED form against BTC already held; buying the spot leg costs ~0.40-0.60%/side and consumes the entire edge). See `docs/research/funding-carry.md` |
 | `/debug/features` | GET | required | Read `debug:<sym>_features` KV for parity investigation |
 | `/debug/backfill-derivatives` | POST | required (X-App-ID gated) | One-off derivatives backfill from Binance to D1 |
 
@@ -609,6 +610,45 @@ remains:
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-08-23d — Twenty pre-declared tests: direction closed for good, crash signal characterised, `/basis` shipped
+
+A single research session that produced **one shipped feature and a great deal of closed territory**.
+Full arc in `docs/research/README.md` (new section); start at [[what-we-tried]].
+
+**Shipped (worker-only, needs a box redeploy):** `GET /basis` — cash-and-carry monitor over Coinbase
+dated nano futures. **Read-only by design**: public market data, no orders, no trade-enabled
+credentials. 14 tests, 574/574 green. Motivation: it is the only mechanism tested that requires no
+directional forecast, and the basis ranges 4-40% annualized so the hard part is *noticing* when it
+pays. Honest limits recorded in `funding-carry.md` — ~8% net on total capital in the COVERED form
+(selling futures against BTC already held); **dead if the spot leg must be bought**, since Coinbase
+retail spot fees of 0.40-0.60%/side consume a ~1.07% basis; and it needs ~$100k to yield ~$700/month.
+
+**The crash overlay is the one surviving signal, and it now has a precise characterisation.** It cuts
+BTC drawdown from −76.6% to −40.4% (Calmar 1.74 vs 0.48), beats shuffled/lagged/realised-vol/200D
+controls, and **replicates leave-one-symbol-out on ETH/SOL/XRP with placebos collapsing to ~0.05**
+(9 of 15 crash clusters are asset-specific, so it is not one correlated bet counted four times).
+But: protection is **episodic** — absent through five 20-28% drawdowns in 2023-25; value is
+**anticipatory**, living in a 20-30 day lead that any confirmation filter destroys; and the ~35×/year
+turnover is **structural, not tunable** — four separate attempts to make it cheaper (confirmation,
+new-capital-only, a floor, continuous sizing) each removed the benefit in proportion.
+
+**Attribution:** the signal lives in the TREND/MOMENTUM feature block (−0.0501 AUC when removed, ~8×
+any other group). **Realised volatility alone captures most of it** — 0.612 against the model's 0.634
+on six untouched assets, so the ML's genuine residual is **+0.022 AUC (6/6 fresh assets)**, real but
+modest, and not reproducible by any simple linear index (two orthogonal projections both failed).
+
+**Two findings that are actionable but deliberately NOT acted on**, because each rests on one
+measurement and acting now would be the post-hoc tuning this vault forbids:
+1. **The 26 price-structure features are net NOISE** — removing them improved AUC, top-decile
+   precision and Brier simultaneously. A pre-declared simplification test is the right way to bank it.
+2. **Tail shape was never in the feature set.** No skew, kurtosis, downside asymmetry or
+   tail-frequency measure exists in the 110 features — for a model whose target is "will there be a
+   10% drawdown", that is the most glaring untested feature class, and it needs no new data source.
+
+**No app behaviour changed and no live bug was found.** Every defect caught this session (a lookahead
+in the persistence mask, a degenerate contribution schedule, a wrong statistical null, a
+non-independence error) was in a research script, not in shipped code.
 
 ### 2026-08-23c — ICX / STORJ delisting: remove from LIVE scoring, KEEP in training (survivorship)
 
