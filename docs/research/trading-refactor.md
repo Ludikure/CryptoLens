@@ -111,8 +111,47 @@ first test pass supplied price units and every stop looked like noise — 99% hi
 candidate rejected. The interface now documents the units at the field, because the failure mode is
 silent: wrong units do not error, they just decline every trade.
 
+## Phases 3-4 — shipped, 18 further tests, 652/652 green
+
+| module | responsibility |
+|---|---|
+| `trading/portfolio.ts` | multi-candidate allocation with evolving state; effective-bets accounting |
+| `trading/journal.ts` | append-only prediction record — the permanent OOS dataset |
+
+### Allocation updates state between candidates, and that is the whole point
+
+`sizePosition` enforces limits for ONE candidate against a fixed portfolio. Allocating a ranked list
+needs the state to evolve as each position is taken, or the third candidate is sized against a
+portfolio that no longer exists.
+
+This matters more in crypto than it sounds. T7 measured mean pairwise correlation across the twelve
+liquid crypto symbols at **0.62** against 0.32 for a mixed universe — a book of "five different
+crypto trades" is closer to one bet held five times, which is exactly how the regime-hold test
+reached an −82% drawdown while looking diversified. `effectiveBets()` reports it directly:
+**five positions at ρ̄ = 0.62 are worth about 1.5 independent bets**, and the test asserts that
+rather than letting the UI imply five.
+
+`simultaneousStopLoss()` reports what the book loses if every stop fills at once — not a tail
+scenario when the constituents gap together.
+
+### The journal is append-only, and `recordOutcome` throws rather than overwriting
+
+Spec §18 says never rewrite historical predictions after a model update. The rule is enforced where
+it would actually be violated: attempting to resolve an already-resolved entry raises. "Just
+correcting" a resolved outcome is how an out-of-sample record quietly becomes an in-sample one.
+
+Every row carries the full config chain, so `statsByConfig()` can compare a model or parameter change
+**on the trades each version actually made** — as opposed to re-scoring history with the new model,
+which is the failure mode the whole module exists to prevent.
+
+`evError` (realized minus predicted EV) is the honesty metric: persistently negative means the
+generator oversells, and it is visible per config rather than buried in an aggregate.
+
+`not_taken` predictions are stored but excluded from performance — they are evidence about the
+generator, not about execution.
+
 ## Not yet built
 
-Phases 3-6: portfolio exposure management beyond the per-candidate limits already enforced, the trade
+Phases 5-6: portfolio exposure management beyond the per-candidate limits already enforced, the trade
 journal, the research harness, and the new UI. Phases 1-2 are the substrate those attach to and are
 independently testable, per the spec's instruction not to rewrite the application at once.
