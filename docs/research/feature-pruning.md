@@ -197,3 +197,59 @@ target. **~55 features instead of 111.**
 3. **The work itself is real:** retrain via `calibrate_v14.py` on the reduced set, new model JSONs,
    worker↔iOS 1e-7 parity re-verification, fixture refresh, deploy. The parity contract is exactly
    what gets smaller and safer as a result.
+
+---
+
+# PRODUCTION VALIDATION — `calibrate_v14.py crypto`, 2026-08-24
+
+Run under the **real training methodology**: 3-fold expanding walk-forward, 77 crypto symbols,
+purged, time-decay weighted — not the LOSO/quarterly setup of T22/T23.
+
+| set | fold AUCs | mean | Δ vs FULL | top-decile | features |
+|---|---|---|---|---|---|
+| FULL (incumbent) | 0.6727 / 0.6694 / 0.6881 | **0.6736** | — | 0.768 | 110 |
+| **MINIMAL** | 0.6791 / 0.6669 / 0.6791 | **0.6750** | **+0.0015** | 0.767 | **43** |
+
+Worst single fold: **−0.0036**, inside the −0.005 tolerance. Top-decile precision within 0.001.
+
+> **★ NON-INFERIOR — SIMPLIFICATION JUSTIFIED. 43 features vs 110: 61% removed.**
+
+**Three independent validations now agree:**
+
+| test | methodology | target | result |
+|---|---|---|---|
+| T22 | LOSO, 10 assets, quarterly | `y_crash` | +0.0106 |
+| T23 | LOSO, 10 assets, quarterly | `goodR` | +0.0038, 10/10 within margin |
+| **production** | **3-fold WF, 77 symbols** | **`goodR`** | **+0.0015, non-inferior** |
+
+The gain shrinks as the methodology gets stricter — +0.0106 → +0.0038 → +0.0015 — which is what an
+honest effect looks like under progressively harder tests. **The claim was never "pruning improves
+the model"; it is "61% of the features carry nothing."** That holds in all three.
+
+## Note: this MINIMAL set is NOT the old `PRUNED` set, which failed
+
+The pre-existing crypto `PRUNED` (71 features) keeps derivatives and volume-profile while dropping
+the delta/acceleration terms. It failed the v14 ship bar. **MINIMAL is close to its opposite** —
+T18's ablation found the delta/accel terms sit inside the only load-bearing block (−0.0501) while
+price structure is net noise (+0.0038) and derivatives are weakest (T17: 0.549; the 2026-07-05 audit
+found zero splits). The older set's failure carries no information about this one.
+
+## What shipping would and would not buy — corrected
+
+I previously wrote that pruning shrinks the worker↔iOS parity contract. **That is wrong as stated.**
+The worker evaluates trees **by feature name**, so a 43-feature model runs unchanged against a worker
+that still computes all 111. Consequences:
+
+- **Shipping the pruned MODEL is low-risk.** No worker code change, no parity break, no fixture
+  regeneration required. The benefit is purely reduced overfitting surface.
+- **Trimming `scoring-full.ts` to stop computing the unused 67** is a *separate*, higher-risk change,
+  and it is what would actually buy the operational win (fewer upstream fetches, smaller parity
+  surface). Several of those features still feed the PROMPT, so that trim is not simply "delete the
+  dead columns".
+
+## Decision point
+
+`calibrate_v14.py` shipped FULL because its winner rule requires beating +0.005 — correct for a
+challenger, wrong for a simplification. Shipping MINIMAL means changing the winner selection to
+prefer the smaller non-inferior set, then `--ship`. **Not done unilaterally**: it replaces the live
+crypto model.

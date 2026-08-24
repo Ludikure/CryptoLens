@@ -121,6 +121,41 @@ else:
     PRUNE = ONEH + MACRO + CANDLE3 + DELTAS_6BAR + DERIV_ALL + SENTIMENT_CRYPTO
 PRUNED = [f for f in FEATURES if f not in PRUNE]
 
+# ---------------------------------------------------------------------------
+# T22/T23 MINIMAL set (added 2026-08-24).
+#
+# DISTINCT from PRUNED above, and nearly opposite on the decisive blocks: the older
+# prune keeps derivatives + volume-profile and drops the delta/accel terms, and it
+# FAILED the v14 ship bar. T18's group ablation found the reverse — the trend/momentum
+# block (deltas and accelerations included) is the ONLY load-bearing one at -0.0501 AUC,
+# while price structure is net NOISE (+0.0038 when removed) and derivatives are weakest.
+#
+# Validated leave-one-symbol-out on TWO independent targets across 10 assets:
+#   T22 y_crash : 55 features scored 0.6260 vs 120's 0.6154  (+0.0106)
+#   T23 goodR   : 55 features scored 0.7867 vs 120's 0.7829  (+0.0038), 10/10 within margin
+# See docs/research/feature-pruning.md.
+M_MKTWIDE = ['vix', 'dxyAboveEma20', 'vixLevelCode', 'vixTermStructure', 'dxyMomentum',
+             'relStrengthVsSpy', 'relStrengthVsSector', 'iwmSpyRatio', 'isCrypto',
+             'fearGreedIndex', 'fearGreedZone', 'ethBtcRatio', 'ethBtcDelta6']
+M_PRICESTRUCT = ['dStructBull', 'dStructBear', 'hStructBull', 'hStructBear',
+                 'dBBPercentB', 'hBBPercentB', 'dAboveVwap', 'hAboveVwap',
+                 'fiftyTwoWeekPct', 'distToFiftyTwoHigh', 'vpDistToPocATR', 'vpAbovePoc',
+                 'vpVAWidth', 'vpInValueArea', 'vpDistToVAH_ATR', 'vpDistToVAL_ATR',
+                 'gapPercent', 'gapFilled', 'gapDirectionAligned', 'dDivergence', 'hDivergence',
+                 'dStochK', 'hStochK', 'eStochK', 'dStochCross', 'hStochCross']
+M_TAIL = ['bodyWickRatio', 'last3Green', 'last3Red']
+M_LIQ = ['dVolumeRatio', 'hVolumeRatio', 'last3VolIncreasing', 'obvRising', 'adLineAccumulation',
+         'shortVolumeRatio', 'shortVolumeZScore']
+M_XHORIZON = ['tfAlignment', 'momentumAlignment', 'structureAlignment']
+MINIMAL_DROP = M_MKTWIDE + M_PRICESTRUCT + M_TAIL + M_LIQ + M_XHORIZON
+if MARKET == 'crypto':
+    # derivatives were T17's weakest block and the 2026-07-05 audit found ZERO splits;
+    # stock-only columns are structural constants here.
+    MINIMAL_DROP = MINIMAL_DROP + DERIV_ALL + STOCK_ONLY
+MINIMAL = [f for f in FEATURES if f not in MINIMAL_DROP]
+
+
+
 
 def load_data():
     parts = []
@@ -282,7 +317,7 @@ def reliability(probs, y_true, x_cal, y_cal, floor):
 
 def main():
     data = load_data()
-    print(f'\nfeature sets: FULL={len(FEATURES)} (111 minus volScalarML), PRUNED={len(PRUNED)}')
+    print(f'\nfeature sets: FULL={len(FEATURES)}, PRUNED={len(PRUNED)}, MINIMAL={len(MINIMAL)}')
 
     print(f'\n===== BASELINE: {PROD_NAME} × FULL =====')
     base_rows, base_p, base_y = wf_run(data, FEATURES, PROD_FN)
@@ -295,6 +330,23 @@ def main():
     ok, d = beats_bar(rows, base_rows)
     print(f'  {fmt(rows)}  Δ{d:+.4f}{"  ★ BEATS BAR" if ok else ""}')
     candidates[(PROD_NAME, 'PRUNED')] = (rows, p, y, PROD_FN, PROD_IS_LGB, PRUNED)
+
+    # MINIMAL is a SIMPLIFICATION candidate, so it is judged on NON-INFERIORITY rather than the
+    # challenger bar: a smaller set that merely MATCHES is strictly better (less overfitting
+    # surface, smaller worker<->iOS parity contract, fewer upstream dependencies to keep alive).
+    # Bar declared here: mean ΔAUC >= -0.002 AND no fold worse than -0.005 AND top-decile within
+    # 0.005. See docs/research/feature-pruning.md.
+    print(f'\n===== MINIMAL feature set ({PROD_NAME}) — T22/T23 =====')
+    rows_m, p_m, y_m = wf_run(data, MINIMAL, PROD_FN)
+    d_m = np.mean([r[0] for r in rows_m]) - np.mean([r[0] for r in base_rows])
+    worst = min(r[0] - b[0] for r, b in zip(rows_m, base_rows))
+    top_ok = np.mean([r[1] for r in rows_m]) >= np.mean([r[1] for r in base_rows]) - 0.005
+    noninf = d_m >= -0.002 and worst >= -0.005 and top_ok
+    print(f'  {fmt(rows_m)}  Δ{d_m:+.4f}  worst fold {worst:+.4f}  '
+          f'{"★ NON-INFERIOR — SIMPLIFICATION JUSTIFIED" if noninf else "fails non-inferiority"}')
+    print(f'  {len(MINIMAL)} features vs {len(FEATURES)} '
+          f'({(1-len(MINIMAL)/len(FEATURES))*100:.0f}% removed)')
+    candidates[(PROD_NAME, 'MINIMAL')] = (rows_m, p_m, y_m, PROD_FN, PROD_IS_LGB, MINIMAL)
 
     print('\n===== CONFIG CHALLENGERS (FULL) =====')
     for name, fn, is_l in CHALLENGERS:
