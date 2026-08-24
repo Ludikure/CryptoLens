@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
     @AppStorage("daily_trade_cadence") private var dailyTradeCadence: Int = 2
     @AppStorage("max_leverage") private var maxLeverage: Double = 3.5
+    @AppStorage("feeRoundTripPercent") private var feeRoundTripPercent: Double = 0.25
 
     var body: some View {
         NavigationStack {
@@ -123,6 +124,16 @@ struct SettingsView: View {
                         Text("Risk Per Trade (%)")
                         Spacer()
                         TextField("%", value: $riskPercent, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    // Drives the "Cost of Trading" card. Fees are not cosmetic here: the one
+                    // validated edge this project measured (+0.151R gross) breaks even at a
+                    // 0.238% round trip, so this number decides whether it exists at all.
+                    HStack {
+                        Text("Fees — Round Trip (%)")
+                        Spacer()
+                        TextField("%", value: $feeRoundTripPercent, format: .number)
                             .keyboardType(.decimalPad)
                             .multilineTextAlignment(.trailing)
                     }

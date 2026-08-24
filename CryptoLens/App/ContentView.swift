@@ -151,10 +151,19 @@ struct ChartTabContent: View {
     }
 
     @State private var newsFeed: WorkerNewsService.Feed?
+    @State private var basis: WorkerBasisService.Snapshot?
+    @State private var recentSetups: [TrackedSetup] = []
 
     /// Best-effort and non-blocking: headlines are context, so a failure just hides the card.
     private func loadNews(for symbol: String) async {
         newsFeed = await WorkerNewsService.fetch(isCrypto: symbol.hasSuffix("USDT"))
+    }
+
+    /// Carry + fee context. Both are best-effort and symbol-independent, so they load once per
+    /// appearance rather than on every symbol switch.
+    private func loadCostContext() async {
+        basis = await WorkerBasisService.fetch()
+        recentSetups = await OutcomeTracker.allSetupsAsync()
     }
 
     var body: some View {
@@ -181,6 +190,20 @@ struct ChartTabContent: View {
                 // is indistinguishable from "the feature is broken" without this card.
                 if let feed = newsFeed {
                     NewsCard(feed: feed)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                }
+
+                // The two cards the 2026-08-23 research arc earned. Both answer "what is this
+                // costing me / paying me", which is the app's validated function — every
+                // directional hypothesis tested measured as a coin flip, while fee drag and the
+                // carry were the two effects that reliably showed up in the numbers.
+                if let b = basis {
+                    BasisCard(snapshot: b)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                }
+
+                if !recentSetups.isEmpty {
+                    FeeDragCard(setups: recentSetups)
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
                 }
 
@@ -227,6 +250,7 @@ struct ChartTabContent: View {
             recomputeBiasChanges()
             activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
             await loadNews(for: selectedSymbol)
+            await loadCostContext()
         }
         .onChange(of: service.currentResult?.timestamp) {
             recomputeBiasChanges()
