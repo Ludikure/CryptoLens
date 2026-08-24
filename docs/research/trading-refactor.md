@@ -150,8 +150,50 @@ generator oversells, and it is visible per config rather than buried in an aggre
 `not_taken` predictions are stored but excluded from performance — they are evidence about the
 generator, not about execution.
 
+## Phase 5 — shipped, 22 further tests, 674/674 green
+
+| module | responsibility |
+|---|---|
+| `trading/metrics.ts` | performance + discrimination, **both AUC axes** |
+| `trading/harness.ts` | evaluation with mandatory controls, cost sweep, regime slices |
+
+### The standing requirement is now structural
+
+`discrimination()` returns `perSymbolAuc` **and** `withinTimestampAuc` together — they cannot be
+requested separately. `evaluate()` emits an explicit warning when the cross-sectional axis cannot be
+computed at all: *"this evaluation covers ONE axis only, which is the configuration that let a bad
+prune pass three validations."*
+
+`survivesControls()` requires an edge on **both** axes, because a model can beat shuffled timing on
+per-symbol AUC while carrying no cross-sectional information — precisely the state the pruned model
+reached before being reverted. A test asserts a time-series-skill-only signal FAILS.
+
+### Controls are mandatory, not optional
+
+`MANDATORY_CONTROLS` = shuffled timing · random labels · 30-day lag. The random-label arm is the
+pipeline's own sanity check: `evaluate()` warns if it returns anything materially off 0.500, because
+a harness that cannot produce chance on random labels cannot be trusted when it produces 0.76 on
+real ones. Permutations are seeded, so every control result in a report is reproducible from it.
+
+The header records why this is not procedural fussiness: T5 passed all five numbered criteria
+including an untouched holdout and was killed by a control; T6 was killed by equal-weight; T14's
+permutation control **inverted**; T22 passed three validations on the wrong axis. In every case the
+ship bar said yes and the controls were right.
+
+### Honest NaN over misleading numbers
+
+Calmar with no drawdown returns NaN rather than Infinity. AUC with one class present returns NaN
+rather than 0.5. `stats()` on an unresolved journal returns NaN rather than zero. A metric that
+cannot be computed should say so.
+
+### Two fixture errors the tests caught, both mine
+
+`auc([1,2,3,4],[0,1,0,1])` is genuinely **0.75** — three of four pos/neg pairs are concordant — and I
+had asserted 0.5. And the Sortino guard required more than one downside observation, silently
+returning NaN for low-drawdown series; downside deviation is well-defined at n=1.
+
 ## Not yet built
 
-Phases 5-6: portfolio exposure management beyond the per-candidate limits already enforced, the trade
+Phase 6: portfolio exposure management beyond the per-candidate limits already enforced, the trade
 journal, the research harness, and the new UI. Phases 1-2 are the substrate those attach to and are
 independently testable, per the spec's instruction not to rewrite the application at once.
