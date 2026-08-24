@@ -67,8 +67,52 @@ because none has independent evidence of predicting returns. Crash risk appears 
 mild penalty; the material reduction happens in sizing, and double-counting would let a risk signal
 suppress an opportunity it should merely shrink.
 
+## Phase 2 — shipped, 25 further tests, 634/634 green
+
+| module | responsibility |
+|---|---|
+| `trading/payoff.ts` | conditional excursion curves, expected value of a target, random-walk baseline |
+| `trading/calibration.ts` | leak-guarded isotonic calibration, reliability / Brier / log loss |
+| `trading/generator.ts` | LONG / SHORT / NO-TRADE generation end to end |
+
+### The random-walk baseline is now a first-class control
+
+`randomWalkCurve()` encodes `P(reach +bR before −1R) = 1/(1+b)` — the driftless barrier result. A
+1R/5R structure should hit its target **16.7%** of the time and be a *fair bet*; the tail-gated
+version measured **~30%**. `edgeOverRandomWalk()` isolates exactly that gap, so a payoff model that
+has merely rederived the geometry is immediately visible rather than looking like a discovery. Tests
+assert the baseline is EV-zero at every multiple.
+
+### `bestTargetR` exists but production does not use it
+
+T4 tested per-bar dynamic target selection and it lost in every fold (+0.0911R against fixed 1:5's
++0.4261R) because predicted excursions regress to the mean and the model kept choosing tight targets.
+The function is kept for corpus-level research and the generator uses a **fixed** multiple; the
+docstring says so at the call site.
+
+### Calibration refuses to run when misapplied
+
+`applyCalibration` throws if the calibrator's `fitThroughTimestamp` is at or after the moment it is
+applied. Fitting on the test period is the most flattering error available — it produces a perfect
+reliability curve that means nothing — so this is an exception, not a warning. Sparse buckets are
+dropped (`minBucketN`, default 40) rather than allowed to fit a step to a handful of points and then
+govern every future prediction landing in it.
+
+### Expected value is deliberately understated
+
+`expectedValueOfTarget` treats anything short of the target as a full −1R. Real outcomes include
+timeouts exiting between the barriers (T5 measured ~20%), which softens the loss side. Understating
+is the correct direction for a number that drives position sizing.
+
+### A units bug the tests caught
+
+`noiseHitProb` takes sigma as a **log-return fraction**, compared against `|log(stop/entry)|`. The
+first test pass supplied price units and every stop looked like noise — 99% hit probability, every
+candidate rejected. The interface now documents the units at the field, because the failure mode is
+silent: wrong units do not error, they just decline every trade.
+
 ## Not yet built
 
-Phases 2-6: expected-payoff model, calibration, candidate generation, portfolio exposure management,
-trade journal, research harness, and the new UI. Phase 1 is the substrate those attach to and is
+Phases 3-6: portfolio exposure management beyond the per-candidate limits already enforced, the trade
+journal, the research harness, and the new UI. Phases 1-2 are the substrate those attach to and are
 independently testable, per the spec's instruction not to rewrite the application at once.
