@@ -192,6 +192,39 @@ cannot be computed should say so.
 had asserted 0.5. And the Sortino guard required more than one downside observation, silently
 returning NaN for low-drawdown series; downside deviation is well-defined at n=1.
 
+## Integration — `GET /opportunities`, additive and read-only
+
+`trading/service.ts` wires the pipeline to live data and `GET /opportunities` exposes it. **Nothing
+about the existing analysis path changes** — no cron behaviour, no notifications, no model serving.
+
+### ⚠️ The excursion model is PROVISIONAL, and that is the honest gap
+
+`generateCandidate` needs `P(reach +NR before −1R)`. **No such model has been trained.** What exists
+is `ML_WIN = P(fwdMaxFavR >= 1.5 ATR within 24h)` — a genuine excursion probability, but at ONE
+point, on a 24h horizon, and direction-agnostic.
+
+`provisionalCurve()` anchors on that real number and damps toward the random-walk tail as R grows,
+because an edge measured at 1.5R is weak evidence about 8R. **That is an assumption about tail shape,
+not a measurement.** The response says so in three places, and `modelVersion` carries a
+`provisional-` prefix so no journal row can later be mistaken for trained-model output. Fabricating a
+confident curve would have been easy and would have poisoned the OOS record the journal exists to
+protect.
+
+### A real architectural gap the integration exposed
+
+First live run: the pipeline produced **+0.234R on both sides** and then declined to trade, because a
+direction-agnostic anchor makes LONG and SHORT exactly tied and `chooseDirection` returns null on a
+near-tie.
+
+Correct by its own logic — and wrong for the product. **The convex structure this project validated
+is itself direction-agnostic**: its edge is excursion probability × payoff geometry, and T5 measured
+the two sides at −0.1033R and +0.0151R ungated. Refusing to trade whenever the model cannot pick a
+side would discard the one edge the research actually found.
+
+`GenerateResult.directionAgnostic` now marks that case: the trade executes with a nominal direction,
+and the flag tells the UI the choice is immaterial rather than implying a view the model does not
+have. Tests assert both branches.
+
 ## Not yet built
 
 Phase 6: portfolio exposure management beyond the per-candidate limits already enforced, the trade

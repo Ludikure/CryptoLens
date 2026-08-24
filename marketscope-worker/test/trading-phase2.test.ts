@@ -158,12 +158,21 @@ describe('candidate generation (spec §15)', () => {
     expect(r.rejectionReasons.join(' ')).toMatch(/expected value|no material edge/);
   });
 
-  it('returns NO TRADE when both sides are equally viable — a coin flip is not a signal', () => {
+  it('TRADES a direction-agnostic structure and flags it — the validated convex case', () => {
+    // Both sides positive-EV with no edge either way. Refusing this would discard the one edge the
+    // project validated: the convex structure is explicitly direction-agnostic (+0.151R gross).
     const r = generateCandidate({ ...base, curves: { LONG: edge, SHORT: edge }, confidence: { LONG: 0.6, SHORT: 0.6 } });
-    expect(r.candidate.recommendedPositionFraction).toBe(0);
-    expect(r.rejectionReasons.join(' ')).toMatch(/no material edge/);
+    expect(r.candidate.recommendedPositionFraction).toBeGreaterThan(0);
+    expect(r.directionAgnostic).toBe(true);
+    expect(r.rejectionReasons.join(' ')).toMatch(/no directional edge/);
     expect(r.considered.long).not.toBeNull();
     expect(r.considered.short).not.toBeNull();
+  });
+
+  it('does NOT flag direction-agnostic when one side genuinely has the edge', () => {
+    const r = generateCandidate({ ...base, curves: { LONG: edge, SHORT: weak }, confidence: { LONG: 0.7, SHORT: 0.4 } });
+    expect(r.directionAgnostic).toBe(false);
+    expect(r.candidate.direction).toBe('LONG');
   });
 
   it('rejects a stop sitting inside the noise band', () => {

@@ -15,6 +15,7 @@ import { computeRiskStates } from './risk-states';
 import { correlationReport } from './correlation';
 import { pollNewsFeeds, fetchRecentNews } from './news';
 import { fetchBasisRows, findBasisOpportunities, netAnnualized } from './basis';
+import { computeOpportunities, PROVISIONAL_CAVEAT, type AssetInput } from './trading/service';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -2485,6 +2486,82 @@ export default {
           // The one way a correctly-hedged carry still loses: the legs are not cross-margined, so a
           // rally drains futures margin while the offsetting spot gain sits unreachable.
           marginNote: 'Coinbase overnight short margin ~28.9% -> liquidation on roughly a 29% rally unless funded',
+        });
+      } catch (e) {
+        return json({ error: String(e) }, 500);
+      }
+    }
+
+    // Ranked trade opportunities from the Phase 1-5 trading pipeline (docs/research/trading-refactor.md).
+    //
+    // ADDITIVE AND READ-ONLY: this touches no cron behaviour, no notifications and no model serving.
+    // The existing /full-analysis path is unchanged.
+    //
+    // ⚠️ PROVISIONAL. No trained excursion model exists yet, so curves are anchored on ML_WIN at 1.5R
+    // and interpolated toward the random-walk tail — an assumption about shape, not a measurement.
+    // Every response says so. Do not trade or journal these as model output.
+    if (path === '/opportunities' && request.method === 'GET') {
+      try {
+        const nowMs = Date.now();
+        const equity = Number(url.searchParams.get('equity') ?? '25000');
+        const symbols = (url.searchParams.get('symbols') ?? 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT')
+          .split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 20);
+
+        const preds = JSON.parse((await env.ALERTS.get('ml_preds:all')) ?? '{}');
+        const assets: AssetInput[] = [];
+        const unavailable: Array<{ asset: string; reasons: string[] }> = [];
+
+        for (const sym of symbols) {
+          const p = preds[sym];
+          if (!p) { unavailable.push({ asset: sym, reasons: ['no cached ML prediction'] }); continue; }
+          try {
+            const c1h = await fetchCandles(sym, '1h', 400);
+            const closes = (c1h ?? []).map((k: any) => k.close).filter((x: number) => x > 0);
+            if (closes.length < 200) { unavailable.push({ asset: sym, reasons: ['insufficient 1h history'] }); continue; }
+            const price = closes[closes.length - 1];
+            const atrPct = p.features?.atrPercent;
+            if (!(atrPct > 0)) { unavailable.push({ asset: sym, reasons: ['no ATR in cached features'] }); continue; }
+            assets.push({
+              asset: sym, closes1h: closes, price, atr: (atrPct / 100) * price,
+              mlWin: typeof p.probability === 'number' ? p.probability : null,
+              crashProbability: null,          // no crash model shipped yet -> no overlay applied
+              liquidityUsd24h: 50_000_000,     // placeholder; real depth wiring is a follow-up
+              isCrypto: sym.endsWith('USDT'),
+              dataTimestamp: p.timestamp ?? nowMs,
+            });
+          } catch (e) {
+            unavailable.push({ asset: sym, reasons: [String(e)] });
+          }
+        }
+
+        const result = computeOpportunities(
+          assets, { equity, openNotionalByAsset: {}, correlations: {} }, nowMs);
+
+        return json({
+          at: nowMs,
+          provisional: true,
+          caveat: PROVISIONAL_CAVEAT,
+          modelVersion: result.modelVersion,
+          equity,
+          opportunities: result.allocation.accepted.map(a => ({
+            asset: a.candidate.asset,
+            direction: a.candidate.direction,
+            directionAgnostic: result.directionAgnosticAssets.includes(a.candidate.asset),
+            entry: a.candidate.entryPrice,
+            stop: a.candidate.stopPrice,
+            target: a.candidate.targetPrice,
+            expectedValueR: a.candidate.payoff.expectedValueR,
+            payoffAsymmetry: a.candidate.payoff.payoffAsymmetry,
+            winProbability: a.candidate.payoff.winProbability,
+            score: a.candidate.riskAdjustedScore,
+            riskFraction: a.sizing.riskFraction,
+            notionalFraction: a.sizing.notionalFraction,
+            positionUsd: a.sizing.positionUsd,
+            crashMultiplier: a.sizing.crashMultiplier,
+            bindingConstraints: a.sizing.bindingConstraints,
+          })),
+          totals: result.allocation.totals,
+          skipped: [...result.skipped, ...unavailable],
         });
       } catch (e) {
         return json({ error: String(e) }, 500);

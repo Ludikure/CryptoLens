@@ -85,6 +85,19 @@ export interface GenerateInput {
 export interface GenerateResult {
   /** The selected candidate, or a NO TRADE. */
   candidate: TradeCandidate;
+  /**
+   * True when BOTH sides carry positive expected value and neither has a directional edge.
+   *
+   * This is not a degenerate case — it is the validated one. The convex structure measured at
+   * +0.151R gross is explicitly direction-agnostic: its edge lives in excursion probability and
+   * payoff geometry, and T5 simulated both sides with near-identical results (long −0.1033R,
+   * short +0.0151R ungated). Refusing to trade it because the model cannot pick a side would
+   * discard the one edge this project actually validated.
+   *
+   * The returned candidate carries a nominal direction so it is executable; the flag tells the UI
+   * to present the choice as immaterial rather than implying a view it does not have.
+   */
+  directionAgnostic: boolean;
   /** Both sides, for transparency in the UI and the journal. */
   considered: { long: TradeCandidate | null; short: TradeCandidate | null };
   /** Why nothing was selected, when nothing was. */
@@ -152,15 +165,22 @@ export function generateCandidate(input: GenerateInput): GenerateResult {
   if (L.reason) reasons.push(L.reason);
   if (S.reason) reasons.push(S.reason);
 
-  const chosen = chooseDirection(L.candidate, S.candidate);
+  let chosen = chooseDirection(L.candidate, S.candidate);
+  let directionAgnostic = false;
+
+  if (!chosen && L.candidate && S.candidate) {
+    // Both sides positive-EV with no edge either way. Trade it, and say so — see the field docs.
+    directionAgnostic = true;
+    chosen = L.candidate;
+    reasons.push('no directional edge — structure is positive-EV on either side');
+  }
+
   if (!chosen) {
-    if (L.candidate && S.candidate) {
-      reasons.push('both sides viable with no material edge either way — treated as no directional view');
-    }
     return {
       candidate: noTrade(input.asset, input.provenance),
       considered: { long: L.candidate, short: S.candidate },
       rejectionReasons: reasons,
+      directionAgnostic: false,
     };
   }
 
@@ -183,6 +203,7 @@ export function generateCandidate(input: GenerateInput): GenerateResult {
       candidate: noTrade(input.asset, input.provenance),
       considered: { long: L.candidate, short: S.candidate },
       rejectionReasons: reasons,
+      directionAgnostic,
     };
   }
 
@@ -193,7 +214,7 @@ export function generateCandidate(input: GenerateInput): GenerateResult {
     provenance: { ...chosen.provenance, sizingConfigId: `${s.id}|${sizing.curveId}|${sizing.limitsId}` },
   };
 
-  return { candidate: sized, considered: { long: L.candidate, short: S.candidate }, rejectionReasons: reasons };
+  return { candidate: sized, considered: { long: L.candidate, short: S.candidate }, rejectionReasons: reasons, directionAgnostic };
 }
 
 /** Structural reward-to-risk of the default config — a sanity value for the UI. */
