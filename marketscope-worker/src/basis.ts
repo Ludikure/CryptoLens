@@ -54,15 +54,25 @@ export function annualizeBasis(spot: number, futuresPrice: number, daysToExpiry:
 /**
  * Net the gross basis down to what actually reaches the user.
  *
- * The covered form is the only one that survives: buying the spot leg costs ~0.40-0.60% PER SIDE at
- * Coinbase retail tiers against a ~1% basis, which consumes the entire edge. Against BTC already
- * held, only the two futures legs are paid. `feePerSide` therefore defaults to the futures rate.
+ * `feePerSide` defaults to **0.0007** — the user's actual Coinbase **Advanced 2** derivatives taker
+ * rate (0.070%; maker is 0.065%). This replaces an earlier 0.001 placeholder taken from a generic
+ * retail tier, which understated the carry.
+ *
+ * NOT included and worth knowing: Coinbase charges a FLAT **$0.12 per contract** for NFA/exchange/
+ * clearing. That is size-dependent, so it cannot live in a percentage: on a nano BTC contract
+ * (0.01 BTC ~ $773) it is 0.0155% per side, but on a nano ETH contract (0.1 ETH ~ $244) it is
+ * 0.049% per side — three times heavier. Subtract ~0.03% (BTC) or ~0.10% (ETH) round trip from any
+ * net figure here.
+ *
+ * The covered form still nets best (futures legs only). But buying the spot leg is NOT dead at this
+ * tier: spot maker is 0.125%, so a bought-spot carry still clears ~9% annualized against a ~1.2%
+ * basis. See docs/research/funding-carry.md.
  */
 export function netAnnualized(
   spot: number,
   futuresPrice: number,
   daysToExpiry: number,
-  feePerSide = 0.001,
+  feePerSide = 0.0007,
 ): number | null {
   if (!(spot > 0) || !(futuresPrice > 0) || !(daysToExpiry > 0.5)) return null;
   const gross = futuresPrice / spot - 1;

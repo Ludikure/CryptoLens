@@ -21,8 +21,11 @@ struct FeeDragCard: View {
     @AppStorage("accountSize") private var accountSize: Double = 28000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
     @AppStorage("max_leverage") private var maxLeverage: Double = 3.5
-    /// Round-trip cost as a percentage of notional. Coinbase Intro-1 ≈ 0.25%.
-    @AppStorage("feeRoundTripPercent") private var feeRoundTripPercent: Double = 0.25
+    /// Round-trip cost as a percentage of notional. Default 0.171% = the user's measured Coinbase
+    /// **Advanced 2** derivatives taker (0.070% × 2) plus the flat $0.12/contract NFA-clearing fee
+    /// expressed against a nano-BTC notional (~0.031% round trip). Nano ETH is heavier (~0.098%)
+    /// because the same $0.12 sits on a third of the notional.
+    @AppStorage("feeRoundTripPercent") private var feeRoundTripPercent: Double = 0.171
 
     private static let lookbackDays = 30
 
@@ -88,7 +91,9 @@ struct FeeDragCard: View {
 
                 // The measured stake, stated without drama: this is the constraint that decided
                 // the project's only real edge.
-                Text("Break-even for the one validated edge was a 0.238% round trip. You pay ~\(String(format: "%.2f", feeRoundTripPercent))%.")
+                Text(feeRoundTripPercent < 0.238
+                     ? "Break-even for the validated convex edge is a 0.238% round trip. At ~\(String(format: "%.3f", feeRoundTripPercent))% you clear it."
+                     : "Break-even for the validated convex edge is a 0.238% round trip. At ~\(String(format: "%.3f", feeRoundTripPercent))% you do not.")
                     .font(Theme.micro)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

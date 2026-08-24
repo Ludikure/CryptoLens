@@ -108,3 +108,38 @@ against BTC the user already owns pays roughly **10% annualized** and needs no d
 **Caveat: this is one snapshot.** The basis varies with leverage demand — 12.5% today could be 5% or
 25% next month. It is observable at any moment from the public API, so it is monitorable rather than
 assumable, and the app is well placed to display it.
+
+
+---
+
+## ⚠️ CORRECTION 2026-08-24 — the fee assumptions were WRONG, and the conclusion changes
+
+The user's actual Coinbase tier is **Advanced 2**, not the generic retail tier I assumed:
+
+| | assumed | **actual** |
+|---|---|---|
+| spot | 0.40-0.60% per side | **0.125% maker / 0.250% taker** |
+| derivatives | ~0.10% per side | **0.065% maker / 0.070% taker** |
+| plus | — | **flat $0.12 per contract** (NFA/exchange/clearing) |
+
+The flat per-contract fee is size-dependent and cannot be expressed as one percentage: on a nano BTC
+contract (0.01 BTC ≈ $773) it is **0.0155% per side**; on a nano ETH contract (0.1 ETH ≈ $244) it is
+**0.049%** — three times heavier for the same $0.12, because the notional is a third the size.
+
+### What this changes
+
+Recomputed against the measured BIT-25SEP26 basis (1.18% over 32.5 days):
+
+| form | round-trip cost | net annualized |
+|---|---|---|
+| **covered** (futures legs only) | 0.166% | **12.0%** |
+| **buy spot (maker) + futures** | 0.416% | **8.9%** |
+| buy spot (taker) + futures | 0.666% | 5.9% |
+
+**"Buying the spot leg is dead" was wrong.** At 0.125% maker spot rather than the 0.40-0.60% I
+assumed, a bought-spot carry still clears ~9% annualized. The covered form remains better (12.0%),
+but the textbook form is viable, which materially widens who can run this.
+
+`GET /basis` default `feePerSide` corrected from 0.001 to **0.0007**. The $0.12/contract fee is NOT
+in that percentage — subtract ~0.03% (nano BTC) or ~0.10% (nano ETH) round trip from any net figure
+the endpoint reports.
