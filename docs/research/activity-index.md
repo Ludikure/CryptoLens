@@ -59,3 +59,77 @@ showed the momentum block's content is largely volatility-correlated and activit
 volatility-adjacent projection. **If it again lands near 0.53, the honest conclusion is that the
 momentum block's information is not expressible as a simple linear index at all — and I will stop,
 rather than try a third formula.**
+
+---
+
+# RESULTS — run 2026-08-23
+
+## PRIMARY — six assets never used in T16-T19
+
+| asset | **activity index** | realised vol | ML | shuffled | idx−rv | ML−idx |
+|---|---|---|---|---|---|---|
+| ADA | 0.542 | 0.564 | 0.586 | 0.499 | −0.022 | +0.044 |
+| DOGE | 0.507 | 0.636 | 0.675 | 0.502 | −0.129 | +0.168 |
+| LINK | 0.540 | 0.601 | 0.608 | 0.501 | −0.061 | +0.068 |
+| AVAX | 0.549 | 0.602 | 0.652 | 0.501 | −0.053 | +0.103 |
+| DOT | 0.524 | 0.635 | 0.642 | 0.502 | −0.110 | +0.117 |
+| LTC | 0.578 | 0.638 | 0.643 | 0.502 | −0.060 | +0.065 |
+| **MEAN** | **0.540** | **0.612** | **0.634** | 0.501 | **−0.073** | **+0.094** |
+
+| criterion | result | |
+|---|---|---|
+| 1. index beats shuffled | 0.540 vs 0.501 | PASS |
+| 2. index ≥ realised volatility | **0.540 vs 0.612** | **FAIL** |
+| 3. consistent on ≥4/6 | 5/6 | PASS |
+
+## Verdict, and the pre-declared STOP
+
+The index landed at **0.540** — essentially where T19's landed (0.530). The design said:
+
+> *"If it again lands near 0.53, the honest conclusion is that the momentum block's information is not
+> expressible as a simple linear index at all — and I will stop, rather than try a third formula."*
+
+**It did, and I am stopping.** Two orthogonal projections of the momentum block — **position**
+(T19: oscillator levels, 0.530) and **activity** (T20: movement magnitudes, 0.540) — both carry
+real-but-weak signal (each clears shuffled) and both lose decisively to a one-line volatility rule.
+
+**Conclusion: the momentum block's predictive content is not reducible to a simple equal-weighted
+linear score.** Whatever the model extracts from those 43 features is interactive.
+
+## ⚠️ A genuine update to T18's conclusion — and it goes the model's way
+
+T18 measured the ML's advantage over realised volatility at **+0.015**, with the model *losing* on
+BTC and XRP — which is why the standing reading was *"mostly volatility-regime detection."*
+
+**On the six fresh assets the picture is cleaner and more favourable to the model:**
+
+| | ML | realised vol | gap |
+|---|---|---|---|
+| fresh six | **0.634** | 0.612 | **+0.022, on 6/6 assets** |
+| burned four | 0.604 | 0.598 | +0.006, on 2/4 assets |
+
+**The ML beats realised volatility on every one of the six untouched assets**, by a small but
+consistent margin. That is a stronger and cleaner result than the burned four produced, and it was
+measured on data never used for this question.
+
+**Revised standing interpretation:** the model's discrimination *is* mostly volatility-regime
+detection — realised volatility alone reaches 0.612 of the model's 0.634 — but there is a **small,
+consistent, genuinely out-of-sample residual (+0.022) that volatility does not capture and that no
+simple linear momentum index reproduces.** That residual is real; it is also modest, and modest is
+the honest word for it.
+
+## What the attribution arc T17→T20 established
+
+1. **T17** — the signal is asset-specific, not systemic; derivatives contribute least.
+2. **T18** — it lives in the trend/momentum block; price structure is net noise; tail shape was never
+   in the feature set.
+3. **T19** — momentum *position* does not predict crashes (0.530). My baseline, honestly reported as
+   inadequate.
+4. **T20** — momentum *activity* does not either (0.540), on fresh assets. Two projections, both
+   negative → **the information is interactive, not linear.**
+5. **Throughout** — realised volatility captures most of it, and the ML's genuine residual over
+   volatility is **+0.022 AUC, consistent across six untouched assets.**
+
+**The mechanism is now as identified as this data can identify it.** Further decomposition would need
+either features the production set never computed (distributional moments, order-flow) or a different
+model class — not another linear index.
