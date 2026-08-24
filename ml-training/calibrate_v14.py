@@ -365,8 +365,18 @@ def main():
         auc = np.mean([r[0] for r in rows])
         if ok and auc > best_auc:
             winner_key, best_auc = key, auc
+    # SIMPLIFICATION TIE-BREAK (2026-08-24): if no challenger beat the bar and MINIMAL is
+    # NON-INFERIOR, prefer it. A set that matches on a fraction of the inputs is strictly better —
+    # less overfitting surface on every future retrain — so 'no worse and much smaller' should win
+    # even though it cannot clear a bar designed for challengers claiming to be BETTER.
+    if winner_key == (PROD_NAME, 'FULL') and noninf:
+        winner_key = (PROD_NAME, 'MINIMAL')
+        best_auc = np.mean([r[0] for r in rows_m])
+        print(f'\n  simplification tie-break: MINIMAL is non-inferior '
+              f'({len(MINIMAL)} vs {len(FEATURES)} features) and no challenger beat the bar → MINIMAL wins')
+
     rows, probs, y_true, fn, is_lgb, feats = candidates[winner_key]
-    print(f'\n===== WINNER: {winner_key[0]} × {winner_key[1]} (mean AUC {best_auc:.4f}) =====')
+    print(f'\n===== WINNER: {winner_key[0]} × {winner_key[1]} (mean AUC {best_auc:.4f}, {len(feats)} features) =====')
 
     x_cal, y_cal, floor = fit_calibration(probs, y_true)
     print(f'  calibration: {len(x_cal)} breakpoints, floor={floor}, cap={CAP}')

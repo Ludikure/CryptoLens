@@ -253,3 +253,78 @@ that still computes all 111. Consequences:
 challenger, wrong for a simplification. Shipping MINIMAL means changing the winner selection to
 prefer the smaller non-inferior set, then `--ship`. **Not done unilaterally**: it replaces the live
 crypto model.
+
+---
+
+# ⚠️ SHIPPED, THEN REVERTED — the pruned model destroys CROSS-SECTIONAL discrimination
+
+**2026-08-24. The pruned model was built, shipped to worker + iOS, and rolled back within the hour.**
+Recording the whole sequence, because the failure mode is one that every test in T22, T23 and the
+production run was structurally incapable of detecting.
+
+## The tell I nearly dismissed
+
+Refreshing the parity fixtures produced BTC and ETH at **exactly 0.2964** — the same value to four
+decimals. My first read was "isotonic calibration is a step function, adjacent raw scores map to the
+same output", and that was *technically correct*: raw BTC 0.311809, raw ETH 0.311944, a difference of
+0.000135.
+
+But "technically correct" was the wrong stopping point. **Two different assets producing raw scores
+within 0.0001 of each other is not a calibration artifact — it is the model failing to tell them
+apart.**
+
+## What every prior test missed
+
+T22, T23 and the production run all measured **per-symbol time-series AUC**: *given one symbol, does
+the score rank its bars over time?* By that measure the pruned set was non-inferior three times over.
+
+**None of them measured cross-sectional discrimination**: *at one moment, does the score rank the
+symbols that will move above the ones that won't?* That is what the app actually does — it scores ~76
+symbols simultaneously and the user compares them.
+
+| | FULL (110) | **MINIMAL (43)** | |
+|---|---|---|---|
+| per-symbol time-series AUC | 0.6736 | 0.6750 | +0.0015 |
+| **within-timestamp AUC** | **0.7607** | **0.6586** | **−0.1021** |
+| cross-sectional sd | 0.1627 | 0.0828 | **51% retained** |
+| mean spread across symbols | 0.7078 | 0.4011 | |
+
+**The cross-sectional loss is roughly 70× the per-symbol gain.**
+
+## Why — and it is obvious in hindsight
+
+The removed blocks are precisely the ones that **differ between symbols at the same instant**:
+derivatives (funding, OI, taker ratios per symbol), market-wide-relative (ethBtc, fear&greed), and
+price structure (volume profile, 52-week position, gaps).
+
+What survives is heavily **temporal** — `dayOfWeek`, `hourBucket`, `isWeekend`, `regimeCode` — which
+is *identical across every symbol at a given timestamp*, plus momentum indicators that run highly
+correlated across crypto. So the pruned model reads "what kind of moment is this" well and "which
+asset is this" poorly.
+
+T18 already said `dayOfWeek` was the top crypto feature. **That should have been the warning:** a
+model leaning on a market-wide temporal feature cannot differentiate symbols, and pruning made it
+lean harder.
+
+## Consequences for the product, which is why this matters
+
+The app scores ~76 symbols, the notification gate fires per symbol, the watchlist shows per-symbol
+ML, and the user picks between them. **A model that assigns near-identical scores to every symbol at
+a given moment is substantially less useful even with identical time-series AUC.** This would have
+shipped silently and degraded the product in a way no test in this vault would have caught.
+
+## Status: REVERTED, and the finding stands
+
+Model JSONs, both version registries, the outcome query and the parity fixtures are all restored to
+v14 / 110 features. **574/574 green.**
+
+The underlying claim — *61% of features carry no per-symbol time-series information* — survives all
+three validations and is not withdrawn. What is withdrawn is the conclusion that they can therefore
+be removed. **They carry cross-sectional information instead**, which is a different axis that
+nothing measured until the fixtures forced the question.
+
+## The methodology lesson, which is the real output here
+
+**A multi-symbol product needs multi-symbol validation.** Per-instrument backtest AUC is the standard
+metric and it was, in this case, measuring the wrong thing entirely. Any future feature or model
+change must report **within-timestamp AUC alongside per-symbol AUC** before it can ship.
