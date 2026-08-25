@@ -1400,3 +1400,87 @@ A tighter stop with unchanged targets changes both the R multiple and the noise-
 the shipped geometry may not inherit the measured entry edge cleanly. This needs a pre-declared test
 (re-run the Part 4 arms at the app's actual stop construction), not an assertion — and certainly not
 a change to a stop rule on the strength of one screenshot.
+
+---
+
+# PART 10 — the chase guard vs the app's own entry rule, and the stop it actually ships (PRE-DECLARED)
+
+Two questions raised by a live BTC analysis on 2026-08-25, neither answerable from a screenshot.
+
+## Q1 — does the chase guard earn its auto-FLAT under a PULLBACK entry?
+
+Part 1 dismissed `chase_into_extended_aligned_trend` as a bar filter. Part 4 **rehabilitated** it on
+the grounds that it defends the CHASING arm, which measured −0.129R (short) / −0.195R (long), 0/9
+periods — the worst outcome in the whole study.
+
+But the app **never chases**: `ENTRY DISCIPLINE` (shipped 2026-08-25b) forbids a market entry
+outright and requires a 0.2-0.5 ATR pullback. A pullback entry into an extended trend is the
+OPPOSITE of a chase. So the guard may now be defending against something the app already cannot do,
+while blocking the entry that Parts 4-5 measured as the single most valuable decision in the system.
+
+**The cost of being wrong is concrete and visible.** On a chase-FLAT the analysis computes the
+measured pullback band, tells the user to wait for it, and then emits `[]` — and `index.ts:3443`
+monitors only `kind='setup' AND state='pending'`, so a FLAT row is never watched. The app names a
+price 0.33% away and has no mechanism to say when it arrives.
+
+**The decisive comparison is the guard's lift under MARKET entry versus under PULLBACK entry**, on
+the same bars. If it helps at market and not at pullback, it is redundant with the entry rule.
+
+### Reconstruction, and its two declared gaps
+
+`chaseLevel` is transcribed from `prompt.ts`:
+
+```
+chaseScore = (stretch>=2) + rsiHot + stochHot + intoLevel + (exhaustionCount>=1)
+coreChase  = stretch>=2 || exhaustionCount>=2
+HIGH       = coreChase && chaseScore>=3
+```
+
+| component | reconstructed from | status |
+|---|---|---|
+| `stretch` = \|price − EMA200\| / daily ATR | daily bars aggregated from the hourly klines | exact |
+| `rsiHot` (dRsi≥70 or hRsi≥72; inverted for bearish) | `dRsi`, `hRsi` | exact |
+| `stochHot` (dStochK≥85 or hStochK≥85; inverted) | `dStochK`, `hStochK` | exact |
+| exhaustion: RSI divergence | `dDivergence` / `hDivergence` | exact |
+| exhaustion: volume diverging | 4H candles (3 same-direction bars, vol ratio < 0.8) | exact |
+| exhaustion: rejection wick | 4H candles (wick > 2× body) | exact |
+| exhaustion: crowded positioning | `crowdingSignal` | exact |
+| **`intoLevel`** (a level within 0.6× 4H ATR in the chase direction) | — | **MISSING** — no S/R in the feature set |
+| **exhaustion: CVD divergence** | — | **MISSING** — no spot-pressure in the feature set |
+
+Both gaps can only LOWER `chaseScore`, so the reconstruction fires **less often** than the real
+guard and classifies a strict subset as HIGH. That is a conservative bias and it is declared here
+rather than discovered later. A robustness arm uses the unambiguous `stretch >= 2` alone.
+
+## Q2 — does the entry edge survive the stop the app actually uses?
+
+Parts 4-5 measured at a mechanical **2.0 × 4H-ATR** stop. The app places stops at a structural swing
+± 0.3-0.5 × **1H**-ATR: on the 2026-08-25 tape, a risk of $1,559 against the researched $2,565 —
+about **61%**, roughly **1.22 × 4H-ATR**. A tighter stop with unchanged target distance changes both
+the R multiple and the noise-hit probability, and fees rise in R terms as the stop tightens.
+
+Sweep the stop over {1.0, 1.25, 1.5, 2.0, 2.5, 3.0} × 4H ATR with TP2 held at a fixed **2.5 ATR**
+absolute distance, and re-measure market vs pullback at each.
+
+## Declared before computing
+
+**Primary metric** is unchanged: R per OPPORTUNITY, unfilled scoring exactly 0.
+
+**Q1 bar:** the guard earns its auto-FLAT if, *under the 0.25 ATR pullback entry*, blocking chase-HIGH
+bars lifts the mean by ≥ **+0.02R** with ≥ **6/9** periods positive and ≥ **20%** coverage retained.
+Per-blocked-bar penalty and its period consistency are reported alongside, per the Part 8 correction,
+so a sparse guard is not dismissed on coverage arithmetic.
+
+**Q2 bar:** the entry edge survives if `oppR(pullback) − oppR(market)` is ≥ **+0.02R** with ≥ **6/9**
+periods positive at a **1.25 ATR** stop.
+
+**Stated explicitly, because it is the finding most likely to matter:** a surviving RELATIVE gain is
+NOT sufficient. The absolute `oppR` of the pullback arm is reported at every stop, and if it is
+negative at the app's geometry then the entry rule is real while the trade as shipped is
+unprofitable — a different and more serious result than either question asks on its own.
+
+**Predictions recorded in advance, so neither can be fitted afterwards:**
+1. The chase guard **helps under MARKET entry and not under PULLBACK entry** — i.e. it is redundant
+   with `ENTRY DISCIPLINE`. If it helps under BOTH, it stays and Q1 is closed in its favour.
+2. The pullback-minus-market gain **shrinks as the stop tightens**, because a tighter stop converts
+   the pullback's better fill price into a smaller edge while fees grow in R terms.
