@@ -206,3 +206,35 @@ wearing a model's clothes — the same mistake [[regime-hold]] documented.
 
 **What it forbids:** presenting any of this as a profitable signal. It is not, in rising markets,
 which is 5 of the 9 periods measured.
+
+
+---
+
+## LIVE VERIFICATION 2026-08-24 — the pipeline independently rediscovered the stop problem
+
+First live call to `/opportunities` on the real book (BTC, ETH, SOL, XRP, ADA, LINK, $28k equity):
+
+**Crash warnings fired on all six.** BTC 39%, ETH 39%, SOL 40%, **XRP 50% (HIGH)**, ADA 43%,
+LINK 42% — against a 41% base rate.
+
+**The book came back EMPTY, and the rejection reasons are the finding:**
+
+| asset | reason |
+|---|---|
+| BTCUSDT | stop inside the noise band (P=60%) both sides |
+| ETHUSDT | stop inside the noise band (P=47% / 48%) |
+| SOLUSDT | stop inside the noise band (P=57% / 58%) |
+| ADAUSDT | stop inside the noise band (P=46% / 48%) |
+| LINKUSDT | LONG non-positive EV; SHORT stop inside the noise band (P=46%) |
+| XRPUSDT | non-positive expected value both sides |
+
+`maxNoiseHitProbability` is 0.45, and the live noise-hit probability on a 1 ATR stop is **46-60%**.
+
+**This is a third independent line of evidence on the same point.** The historical measurement said
+73.9% of long trades stop out at 1 ATR; widening the stop monotonically recovered the drift
+(1 ATR −0.344%/trade → 3 ATR +0.272%); and now the pipeline's own vol-based noise gate — which knows
+nothing about either measurement — rejects the 1 ATR stop on 4 of 6 live assets.
+
+**`DEFAULT_STRUCTURE.stopAtrMultiple = 1.0` is the binding constraint on the whole product.** With it,
+the feed is structurally almost always empty. That is honest behaviour, not a bug — but it means the
+stop-width test is now the highest-value open question, not a nice-to-have.
