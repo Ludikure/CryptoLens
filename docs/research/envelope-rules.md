@@ -1353,3 +1353,50 @@ SPARSE — and at 29.2% coverage the lift metric is perfectly capable of express
 coverage-limited, it is simply below the bar. It stays removed. Recorded because a re-open criterion
 that fires on a non-sparse condition is a bug in the criterion, and a "finding" produced by it would
 have been an artifact — the fifth near-miss of that shape in this document.
+
+
+---
+
+## CORRECTION (2026-08-25) — a reported entry-discipline violation that never happened
+
+Two live BTC analyses were read as proposing entries at **0.99 ATR and 0.96 ATR**, twice the
+measured 0.2-0.5 band, and a fix was shipped on that basis. **The diagnosis was wrong.** Verified
+with `promptOnly` against the deployed build:
+
+| quantity | value (2026-08-25) |
+|---|---:|
+| daily ATR | $2,248.35 |
+| **4H ATR** — the unit Parts 4-5 measured in (`atrPercent`) | **$1,282.43** |
+| **1H ATR** — the unit TAGGED LEVELS and CANDIDATE SETUPS use (`atrForRR`) | **$669.40** |
+
+The analysis quoted a pullback zone of $77,958-$78,343 against a live price of $78,599.64. On the 4H
+ATR that is **exactly 0.500 and 0.200** — the band's boundaries to three decimals. **The model was
+in perfect compliance.** I had inferred the ATR from the level-proximity figures ("$78,266.50 ... at
+0.5 ATR"), which are stated in 1H ATR, and the ~1.9x unit error turned 0.50 into 0.99.
+
+**What was actually wrong is the collision itself**: one prompt using three different quantities all
+called "ATR", unlabelled, where a reader — human or model — is expected to compare a level against a
+band expressed in a different one. That is now fixed by naming the units (`x 1H-ATR from live`) and
+by an explicit instruction never to convert between them, only to compare prices against prices.
+
+**The lesson, which is the reason this is recorded rather than quietly amended:** I checked the
+model's output against a number I had *derived from the output itself* instead of from the input.
+`promptOnly` returns the exact prompt for free in ~5 seconds and would have settled it before any
+code changed. The 2026-08-22j entry already recorded that lesson for a different question, and I did
+not apply it here. **Read the input before diagnosing the output.**
+
+The `SHALLOW PULLBACK BAND` line shipped alongside the bad diagnosis is kept: it removes an ATR→price
+conversion the model would otherwise do in its head, and the post-deploy analysis quotes the band's
+bounds exactly. It is a good change that was justified by a wrong reason.
+
+## Open, NOT asserted — the app's stop is not the researched stop
+
+Found while checking the above, recorded so it is not lost. The Parts 4-5 measurement used a
+mechanical **2.0 x 4H-ATR** stop. The app places stops at a **structural swing ± 0.3-0.5 x 1H-ATR**
+buffer (`prompt.ts` candidate setups). On the 2026-08-25 tape that was a risk of $1,559 against a
+researched $2,565 — about **61%** of the measured stop distance, with the same targets.
+
+A tighter stop with unchanged targets changes both the R multiple and the noise-hit probability, so
+the shipped geometry may not inherit the measured entry edge cleanly. This needs a pre-declared test
+(re-run the Part 4 arms at the app's actual stop construction), not an assertion — and certainly not
+a change to a stop rule on the strength of one screenshot.

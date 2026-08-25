@@ -2084,6 +2084,9 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L(`(ABOVE / BELOW is each level's side of the LIVE price ${formatPrice(refPx)} — resistance sits ABOVE, support BELOW. `
         + `Only call price "between"/"squeezed"/"pinned"/"caught" when at least one ABOVE level AND one BELOW level bracket it. `
         + `A cluster entirely on one side means price is sitting ABOVE it or BELOW it — not squeezed. Name the actual bracketing levels, not just any two.)`);
+      L(`(Distances here are in 1H ATR. The SHALLOW PULLBACK BAND above is in 4H ATR — a different, `
+        + `larger unit. NEVER convert between them: to judge whether a level is a valid entry, compare `
+        + `its PRICE against the band's PRICES, never its "x 1H-ATR" figure against the band's 0.2-0.5.)`);
       // Cap by NEAREST-to-live (the actionable levels), then display high→low. Slicing the
       // high→low sort kept the 15 highest prices and silently dropped the nearest below-live
       // supports — exactly the levels the bracketing directive above depends on.
@@ -2091,7 +2094,16 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const sortedForDisplay = nearest.sort((a, b) => b.price - a.price);   // high → low
       for (const level of sortedForDisplay) {
         const side = level.price >= refPx ? 'ABOVE live' : 'BELOW live';
-        L(`${formatPrice(level.price)} [${side}] (${level.type}) [${level.proximity}, ${f(level.atrDistance, 1)}x ATR from live, str=${f(level.strength, 1)}]`);
+        // "1H ATR" is spelled out because this prompt carries THREE quantities called ATR — daily,
+        // 4H and 1H — differing by ~2x at any moment ($2,248 / $1,282 / $669 on 2026-08-25). This
+        // section and the CANDIDATE SETUPS geometry use the 1H ATR (`atrForRR`), while the SHALLOW
+        // PULLBACK BAND uses the 4H ATR, because that is the unit the Parts 4-5 entry measurement
+        // was made in (`atrPercent`, which is 4H). Both are correct for their purpose and the
+        // collision is only in the NAME — but an unlabelled "0.5x ATR" invites converting a level
+        // into the band's units and getting a number ~1.9x wrong. It fooled me on 2026-08-25 into
+        // reporting a compliant 0.50-ATR entry as a 0.99-ATR violation; the model can make the same
+        // mistake, and unlike me it will not check.
+        L(`${formatPrice(level.price)} [${side}] (${level.type}) [${level.proximity}, ${f(level.atrDistance, 1)}x 1H-ATR from live, str=${f(level.strength, 1)}]`);
       }
     }
 

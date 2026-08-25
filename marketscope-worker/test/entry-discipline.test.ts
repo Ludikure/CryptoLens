@@ -71,3 +71,26 @@ describe('the shallow pullback band is computed, not left as an ATR conversion',
     expect(src).toMatch(/Deeper is NOT safer/);
   });
 });
+
+// This prompt carries THREE quantities called "ATR" — daily, 4H and 1H, ~2x apart. TAGGED LEVELS
+// and CANDIDATE SETUPS use the 1H ATR (`atrForRR`); the SHALLOW PULLBACK BAND uses the 4H ATR,
+// because that is the unit Parts 4-5 measured in (`atrPercent` is 4H). Both are right for their
+// purpose; the collision is only in the name. On 2026-08-25 it made me read a compliant 0.50-ATR
+// entry as a 0.99-ATR violation, so the units are now spelled out.
+describe('the two ATR units are never confusable', () => {
+  const src = () => readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+
+  it('labels level distances as 1H-ATR rather than a bare "ATR"', () => {
+    expect(src()).toMatch(/x 1H-ATR from live/);
+    expect(src()).not.toMatch(/\{f\(level\.atrDistance, 1\)\}x ATR from live/);
+  });
+
+  it('tells the model to compare PRICES, never to convert between the two units', () => {
+    expect(src()).toMatch(/NEVER convert between them/);
+    expect(src()).toMatch(/compare .*its PRICE against the band's PRICES/s);
+  });
+
+  it('the band still names its own unit', () => {
+    expect(src()).toMatch(/\(4H ATR \$\{formatPrice\(entryAtr\)\}\)/);
+  });
+});
