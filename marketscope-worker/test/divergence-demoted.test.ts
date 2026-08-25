@@ -20,16 +20,20 @@ describe('divergence is context, not a gate', () => {
   });
 
   it('killDivergence no longer contributes to ANY_KILLED', () => {
-    expect(src).toMatch(/const anyKilled = killVolume \|\| killFunding \|\| killMacro;/);
+    expect(src).toMatch(/const anyKilled = killVolume \|\| killMacro;/);
     expect(src).not.toMatch(/const anyKilled = killDivergence/);
   });
 
-  it('the other three kill conditions are UNTOUCHED', () => {
-    // Volume and funding are structural; macro guards an exogenous event rather than claiming
-    // prediction. A null EV test does not refute a rule that never claimed predictive power.
-    expect(src).toMatch(/killVolume/);
-    expect(src).toMatch(/killFunding/);
-    expect(src).toMatch(/killMacro/);
+  it('ANY_KILLED now contains only the conditions that survived testing', () => {
+    // Part 7 removed killFunding too: it blocked bars averaging +0.0911R against a +0.0624R
+    // baseline on shorts. Like divergence, it CLAIMED prediction (funding paying the counter side
+    // makes the counter move likelier) and did not deliver.
+    // killVolume stays — noise rather than inverted, firing on 1.2% of bars.
+    // killMacro stays — it guards an exogenous scheduled event and never claimed prediction, so a
+    // null EV test could not refute it. It was also never testable here (no economic calendar).
+    expect(src).toMatch(/const anyKilled = killVolume \|\| killMacro;/);
+    expect(src).not.toMatch(/const anyKilled = .*killDivergence/);
+    expect(src).not.toMatch(/const anyKilled = .*killFunding/);
   });
 
   it('is absent from EVERY gating structure, not merely tagged inside one', () => {

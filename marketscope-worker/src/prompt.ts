@@ -836,7 +836,18 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // variant tests, zero passes; every LONG lift negative). The other three kill conditions are
       // untouched: counter-move volume and funding are structural, and macro guards an exogenous
       // event rather than claiming prediction.
-      const anyKilled = killVolume || killFunding || killMacro;
+      // `killFunding` removed from ANY_KILLED 2026-08-25 (envelope-rules.md Part 7). It blocked bars
+      // averaging +0.0911R against a +0.0624R baseline on the SHORT side and kept +0.0506R — the
+      // same block-the-best-bars signature as biases_MIXED, alignment_not_full and the divergence
+      // rules. On LONG it was +0.0132 at 6/9: consistent, but under the +0.02 magnitude bar.
+      //
+      // It is a PREDICTION CLAIM — that funding paying the counter side makes the counter move more
+      // likely — and by the Part 6 principle a prediction claim has to be earned. Still computed and
+      // reported in the DERIVATIVES block as positioning context; it just no longer hard-FLATs.
+      //
+      // `killVolume` stays: noise rather than inverted, and it fires on 1.2% of bars, so removing it
+      // would change almost nothing. "Does nothing measurable" is not "proven wrong".
+      const anyKilled = killVolume || killMacro;
       envAnyKilled = anyKilled;
 
       // Phase 3 — Kill duration tracking (candle-anchored)
@@ -862,7 +873,6 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // contradictory — a tag saying "does not block" is weaker governance than not being there.
       // (CVD divergence, a different signal in the whale-trap flag, is untested and untouched.)
       if (killVolume) killParts.push(`counter_move_volume_exceeds(${durState.volume ?? 1} candles)`);
-      if (killFunding) killParts.push(`funding_supports_counter(${durState.funding ?? 1} candles)`);
       if (killMacro) killParts.push('macro_event_within_4h');
       L(`Kill Conditions: ${killParts.length ? killParts.join(', ') : 'none'}, ANY_KILLED=${anyKilled}`);
     }

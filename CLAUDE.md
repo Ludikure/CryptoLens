@@ -609,6 +609,37 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25d — Part 7: swept every remaining testable envelope condition
+
+Enumerated the envelope's untested surface rather than assuming it. **Zero conditions clear the bar
+on either side**, and two more are inverted.
+
+| condition | SHORT lift | LONG lift | action |
+|---|---:|---:|---|
+| **`funding_supports_counter`** (kill) | **−0.0119** (3/9) | +0.0132 (6/9) | **removed from `ANY_KILLED`** |
+| **`structureAlignment` weak** | **−0.0098** (4/9) | +0.0124 (6/9) | not a standalone rule; noted |
+| `counter_move_volume_exceeds` (kill) | +0.0001 | −0.0004 | **kept** — inert, fires 1.2% of bars |
+| `1H opposes daily` (downgrade) | +0.0028 | −0.0026 | noise |
+| macro proxy (VIX high) | +0.0066 | −0.0084 | not the real rule; says nothing about it |
+| `continuation < 2` / `< 3` | — | — | **PROXY BROKEN — not tested** |
+
+`funding_supports_counter` blocked bars averaging **+0.0911R** against a **+0.0624R** baseline. Like
+divergence it is a PREDICTION claim (funding paying the counter side makes the counter move likelier)
+and by the Part 6 principle that must be earned. **`ANY_KILLED` is now `killVolume || killMacro`.**
+
+**A failed reconstruction, reported as such:** `continuation < 2/3` fired on 100% of bars because
+`momentumAlignment` ranges −1..+1, making `|mom| < 2` trivially true. A 100% fire rate is the tell
+that a proxy is wrong, not that a condition is universal — recorded NOT TESTED rather than reporting
+the resulting `nan`.
+
+**The envelope after Parts 1-7.** Kept: ML_WIN thresholds (the only component with positive lift),
+`chase_into_extended_aligned_trend` (the only one with positive *evidence*, via Part 4),
+`alignment_not_full` on LONG only, the inert volume kill, and every untestable exogenous-event guard
+(macro, earnings, news, staleness). Removed: `biases_MIXED`, `alignment_not_full` on SHORT, both
+divergence rules, `funding_supports_counter`, `conformal_abstain`. **Every removal claimed predictive
+power and measured inverted; every retention is measured-positive, exogenous-event cover, or inert.**
+731/731 green.
+
 ### 2026-08-25c — Envelope surgery: removed what measured inverted, demoted what claims prediction
 
 Acting on the user's rule — *"remove what is proven to be wrong, include what is proven to be

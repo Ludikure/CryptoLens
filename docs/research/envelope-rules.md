@@ -874,3 +874,60 @@ count printed beside its p-value.
 ## Expected outcome
 
 Null across the board, consistent with Parts 1-3 and 6. Recorded in advance.
+
+## PART 7 RESULTS — nothing earns its place; two more conditions are INVERTED
+
+| condition | fires | episodes | SHORT lift | LONG lift | verdict |
+|---|---:|---:|---:|---:|---|
+| `counter_move_volume_exceeds` (kill) | 1.2% | 3,501 | +0.0001 | −0.0004 | noise, and near-inert |
+| **`funding_supports_counter` (kill)** | 29.2% | 14,401 | **−0.0119** (3/9) | +0.0132 (6/9) | **INVERTED on SHORT** |
+| `1H opposes daily` (downgrade) | 18.7% | 18,711 | +0.0028 (6/9) | −0.0026 (4/9) | noise |
+| **`structureAlignment` weak** | 82.4% | 4,880 | **−0.0098** (4/9) | +0.0124 (6/9) | **INVERTED on SHORT** |
+| macro proxy: VIX high | 25.5% | 942 | +0.0066 (7/9) | **−0.0084** (4/9) | noise / inverted |
+| `continuation < 2` / `< 3` | **100%** | — | — | — | **PROXY BROKEN — not tested** |
+
+**Zero conditions clear the bar on either side.**
+
+### `funding_supports_counter` blocks the best bars on the short side
+
+It discards bars averaging **+0.0911R** against a **+0.0624R** baseline and keeps **+0.0506R** — the
+same block-the-best-bars signature as `biases_MIXED`, `alignment_not_full` and the divergence rules.
+On LONG it is +0.0132 at 6/9: consistent but under the +0.02 magnitude bar, so it does not earn its
+place there either.
+
+**This is a prediction claim, not a structural guard.** It asserts that funding paying the counter
+side makes the counter move more likely. By the Part 6 principle that has to be earned, and it is
+not. Removed from `ANY_KILLED`.
+
+### A failed reconstruction, reported rather than dressed up
+
+`continuation < 2` and `< 3` fired on **100% of bars**. That is not a finding, it is a broken proxy:
+`momentumAlignment` ranges −1..+1, so `|mom| < 2` is trivially always true. The envelope's
+continuation count is a different quantity that this dataset does not carry. **Recorded as NOT
+TESTED.** A 100% fire rate is the tell that a reconstruction is wrong, not that a condition is
+universal — and reporting the resulting `nan` lift as a result would have been worse than useless.
+
+### What stays, and why
+
+- **`counter_move_volume_exceeds`** — noise, not inverted, and fires on 1.2% of bars. Removing it
+  would change almost nothing either way, and "does nothing measurable" is not "proven wrong". Left
+  in place.
+- **`macro_IMMINENT`, earnings, news conflict, staleness, the stock gates** — not testable here and
+  excluded from every arm. The macro *proxy* above is VIX regime, which is not the same thing as a
+  scheduled release, so it says nothing about the real rule.
+- **`chase_into_extended_aligned_trend`** — the only envelope condition with positive evidence, via
+  Part 4: it defends the −0.125R chase arm.
+
+## The envelope after Parts 1-7
+
+| kept | removed / demoted |
+|---|---|
+| ML_WIN thresholds (only component with positive lift) | `biases_MIXED_and_ML<70` — blocked +0.0503R bars |
+| `chase_into_extended_aligned_trend` — Part 4 | `alignment_not_full` on SHORT — kept the losers |
+| `alignment_not_full` on LONG only | `divergence_escalated_6+` — 12 tests, 0 passes |
+| macro / earnings / news / staleness (untestable, exogenous) | `divergence_against_bias` — same |
+| `counter_move_volume_exceeds` (inert) | `funding_supports_counter` — blocked +0.0911R bars |
+| | `conformal_abstain` — dead code |
+
+Every removal was a condition that **claimed predictive power and measured inverted**. Every
+retention is either measured-positive, exogenous-event cover, or inert.
