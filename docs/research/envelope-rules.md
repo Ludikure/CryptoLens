@@ -1552,3 +1552,72 @@ reading survives, the gate does not.
 measured pullback band instead of `[]`. That setup registers in `tracked_setups`, the cron monitors
 it, and the entry-zone push fires when price actually arrives — closing the gap where the app named a
 price 0.33% away and had no way to tell the user it got there.
+
+---
+
+# PART 11 — how the ML gate should be PARAMETERIZED (PRE-DECLARED)
+
+The live PAV calibration is self-updating and correct; nothing needs re-fitting. What broke is that
+recalibrating moved the SCALE while the cutoffs built on it stayed fixed, so the gates silently
+changed meaning. Measured on the 2026-08-25 curve (9,490 graded samples, live base rate **58.3%**
+against v14's **50.5%** training base):
+
+| gate | needs raw | fires on |
+|---|---:|---:|
+| ML auto-FLAT (calibrated < 50) | < 30.3% | **8.0%** of bars |
+| FAVORABLE (calibrated ≥ 60) | ≥ 44.1% | **66.0%** of bars |
+| notify (calibrated ≥ 65) | ≥ 62.5% | 23.7% |
+
+The floor was meant to block dead tape at raw < 50 — 45% of bars — and now fires on 8%. **A ~5×
+loosening that nobody decided.** "FAVORABLE" now describes two thirds of all bars.
+
+## The question is not which numbers — it is which PARAMETERIZATION
+
+Two candidates, and they differ exactly when the base rate moves:
+
+- **ABSOLUTE** — `gate = calibrated_ML >= t`. Correct if the trade decision depends on the true
+  probability of the event, since EV at fixed ATR-normalised geometry depends on the probability
+  itself, not on how it ranks against other bars.
+- **COVERAGE / QUANTILE** — `gate = ML in the top q of the recent distribution`. Correct if what was
+  validated was a level of SELECTIVITY. Part 1's finding — the ML component alone beating the full
+  envelope fourfold — was measured at **26% exposure**, an exposure level, not a probability.
+
+Both arguments are real. Rather than choose by argument, choose by **which one generalizes**.
+
+## Design — walk-forward parameter selection, the decisive test
+
+For each half-year period from the 4th onward: fit the parameter on **all earlier periods only**,
+apply it to the held-out period, record realized R per opportunity. Repeat for both
+parameterizations on identical bars.
+
+- **Arm A (absolute):** pick the threshold `t` maximising oppR on the training periods; apply that
+  same `t` to the test period.
+- **Arm B (coverage):** pick the coverage `q` maximising oppR on the training periods; apply that
+  same `q` to the test period, re-deriving the threshold from the TEST period's own ML distribution.
+  This is what makes it self-adjusting.
+- **Control 1 — no gate:** trade every bar.
+- **Control 2 — the shipped gate**, at its current effective coverage.
+
+**Decision rule, declared now:** adopt the parameterization with the higher out-of-sample mean oppR
+across held-out periods AND the higher count of periods where it beats no-gate. If they split, or if
+the difference is under **+0.01R**, keep ABSOLUTE — it is the incumbent and the simpler object, and
+a tie is not a reason to add machinery.
+
+**Reported regardless, because it may matter more than the winner:** the spread of the per-period
+optimum for each parameterization. A parameter whose best value swings wildly between periods is not
+a parameter, it is noise being fitted, and that would argue against gating on ML at all beyond the
+crude floor.
+
+**Geometry is the app's:** 0.25 ATR pullback entry, unfilled scoring 0, stop **1.25 ATR** (the
+shipped geometry per Part 10) with 2.0 ATR as a robustness arm, fees scaling with the stop.
+
+**A structural argument recorded in advance so it is not mistaken for a result:** a coverage gate is
+scale-invariant and therefore transfers from backtest to live without a scale-matching step, while
+an absolute threshold learned on the training scale (base 50.5%) cannot be applied to live-calibrated
+values (base 58.3%) without exactly the correction that is at issue here. That is an argument for
+coverage, but it is an argument, not evidence, and the walk-forward test above is what decides.
+
+**Prediction recorded before running:** coverage wins, because the base rate demonstrably moves and
+an absolute threshold cannot track it. If ABSOLUTE wins instead, that is evidence the probability —
+not the ranking — is what carries the edge, and the gates should simply be restated once against the
+current base and left alone.
