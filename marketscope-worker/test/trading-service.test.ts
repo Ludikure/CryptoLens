@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { provisionalCurve, computeOpportunities, PROVISIONAL_MODEL_VERSION, PROVISIONAL_CAVEAT,
+import { computeOpportunities, PROVISIONAL_MODEL_VERSION, PROVISIONAL_CAVEAT,
          type AssetInput } from '../src/trading/service';
+import { excursionCurve, baseExcursionCurve, excursionProbability,
+         excursionModelInfo } from '../src/trading/excursion';
 import { validate, probabilityOfReaching } from '../src/trading/payoff';
 import type { PortfolioState } from '../src/trading/sizing';
 
@@ -9,54 +11,98 @@ const t = Date.parse('2026-08-24T12:00:00Z');
 const closes = (n: number, start = 100, drift = 0.0004, amp = 0.006) =>
   Array.from({ length: n }, (_, i) => start * (1 + drift * i + amp * Math.sin(i / 5)));
 
+/** A plausible live feature dict. Values are unremarkable; the point is shape, not a scenario. */
+const feats = (o: Record<string, number> = {}): Record<string, number> => {
+  const base: Record<string, number> = {};
+  for (const k of ['dRsi', 'dAdx', 'dMacdHist', 'hRsi', 'hAdx', 'eRsi', 'atrPercent',
+    'atrPercentile', 'vix', 'dxy', 'fearGreedIndex', 'ethBtcRatio', 'dayOfWeek', 'regimeCode',
+    'tfAlignment', 'momentumAlignment', 'structureAlignment', 'fundingRateRaw', 'oiChangePct',
+    'takerRatioRaw', 'longPctRaw', 'dBBPercentB', 'hBBPercentB', 'dVolumeRatio', 'hVolumeRatio']) {
+    base[k] = 1;
+  }
+  return { ...base, ...o };
+};
+
 const asset = (o: Partial<AssetInput> = {}): AssetInput => ({
   asset: 'SOLUSDT', closes1h: closes(800), price: 100, atr: 4, mlWin: 0.55,
-  crashProbability: 0.1, liquidityUsd24h: 50_000_000, isCrypto: true, dataTimestamp: t, ...o,
+  crashProbability: 0.1, liquidityUsd24h: 50_000_000, isCrypto: true, dataTimestamp: t,
+  // Features are what the model reads. WITHOUT them the service correctly falls back to measured
+  // base rates, whose three-way EV is -0.0996R -- so a featureless asset is genuinely NOT tradeable,
+  // matching the measured ungated EV of -0.103R. Tests that want a book must supply features.
+  features: feats({ vix: 13, fearGreedIndex: 82, atrPercent: 1.1, dRsi: 68, ethBtcRatio: 0.062 }),
+  ...o,
 });
 const portfolio = (): PortfolioState => ({ equity: 25000, openNotionalByAsset: {}, correlations: {} });
 
-describe('provisional excursion curve', () => {
+describe('measured excursion curve', () => {
   it('always produces a valid monotone distribution', () => {
-    for (const ml of [0.05, 0.2, 0.4, 0.55, 0.8, 0.95]) {
-      expect(() => validate(provisionalCurve(ml, 72))).not.toThrow();
+    for (const side of ['LONG', 'SHORT'] as const) {
+      expect(() => validate(excursionCurve(feats(), side))).not.toThrow();
+      expect(() => validate(baseExcursionCurve(side))).not.toThrow();
     }
   });
 
-  it('reproduces the random walk when ML_WIN matches it at the anchor', () => {
-    // 1/(1+1.5) = 0.40 is the driftless rate at 1.5R; an ML_WIN of 0.40 implies no edge
-    const c = provisionalCurve(0.40, 72);
-    expect(probabilityOfReaching(c, 1.5)).toBeCloseTo(0.40, 6);
-    expect(probabilityOfReaching(c, 5)).toBeCloseTo(1 / 6, 2);
+  it('sits BELOW the driftless random walk at 5R — the finding that retired the old curve', () => {
+    // 1/(1+5) = 0.1667 in theory; measured base is 0.066 because a 72h horizon truncates.
+    for (const side of ['LONG', 'SHORT'] as const) {
+      expect(probabilityOfReaching(baseExcursionCurve(side), 5)).toBeLessThan(1 / 6);
+      expect(probabilityOfReaching(baseExcursionCurve(side), 5)).toBeGreaterThan(0.05);
+    }
   });
 
-  it('carries an edge outward when ML_WIN exceeds the driftless rate', () => {
-    const edge = provisionalCurve(0.60, 72);
-    const none = provisionalCurve(0.40, 72);
-    expect(probabilityOfReaching(edge, 5)).toBeGreaterThan(probabilityOfReaching(none, 5));
+  it('never exceeds the SUPPORTED ceiling — one sparse bucket must not imply a +3R trade', () => {
+    // The first export let isotonic reach 0.60 at 5R, 9x the base rate, from a single bucket.
+    for (const side of ['LONG', 'SHORT'] as const) {
+      for (const v of [0, 1, 50, -50, 1e6]) {
+        const p = excursionProbability(feats({ dRsi: v, vix: v, atrPercent: Math.abs(v) + 1 }), side);
+        expect(p).toBeLessThanOrEqual(0.25);
+        expect(p).toBeGreaterThan(0);
+      }
+    }
   });
 
-  it('DAMPS the edge as R grows — 1.5R is weak evidence about 8R', () => {
-    const c = provisionalCurve(0.70, 72);
-    const liftAt2 = probabilityOfReaching(c, 2) / (1 / 3);
-    const liftAt8 = probabilityOfReaching(c, 8) / (1 / 9);
-    expect(liftAt8).toBeLessThan(liftAt2);
+  it('falls back to measured base rates when features are missing, not to a guess', () => {
+    const b = baseExcursionCurve('LONG');
+    expect(probabilityOfReaching(b, 1)).toBeCloseTo(0.4661, 3);
+    expect(probabilityOfReaching(b, 5)).toBeCloseTo(0.0664, 3);
+  });
+
+  it('reports real holdout AUC, so the ceiling on the claim is visible in the model itself', () => {
+    const i = excursionModelInfo();
+    expect(i.features).toBe(110);
+    expect(i.longAuc).toBeGreaterThan(0.55);
+    expect(i.shortAuc).toBeGreaterThan(0.55);
+    expect(i.longAuc).toBeLessThan(0.75);      // not a claim of certainty
+  });
+
+  it('states the regime dependence in the caveat every surface carries', () => {
+    expect(PROVISIONAL_CAVEAT).toMatch(/PROFITABILITY/);
+    expect(PROVISIONAL_CAVEAT).toMatch(/1 of 5 rising-market/);
   });
 });
 
 describe('computeOpportunities', () => {
   it('produces a ranked, sized book from real-shaped inputs', () => {
     const r = computeOpportunities(
-      [asset({ asset: 'SOL', mlWin: 0.70 }), asset({ asset: 'LINK', mlWin: 0.62 }), asset({ asset: 'ETH', mlWin: 0.58 })],
+      [asset({ asset: 'SOL' }), asset({ asset: 'LINK' }), asset({ asset: 'ETH' })],
       portfolio(), t);
     expect(r.allocation.accepted.length).toBeGreaterThan(0);
     const scores = r.allocation.accepted.map(a => a.candidate.riskAdjustedScore);
     expect([...scores].sort((a, b) => b - a)).toEqual(scores);   // ranked
   });
 
-  it('SKIPS assets without ML_WIN rather than inventing a probability', () => {
+  it('declines a featureless asset — measured base rates are genuinely not tradeable', () => {
+    const r = computeOpportunities([asset({ asset: 'BARE', features: undefined })], portfolio(), t);
+    expect(r.allocation.accepted.map(a => a.candidate.asset)).not.toContain('BARE');
+    expect(r.skipped.map(s => s.asset)).toContain('BARE');
+  });
+
+  it('uses MEASURED base rates when features are absent rather than inventing a probability', () => {
+    // ML_WIN no longer drives the curve, so a null one is not a reason to skip. What matters is
+    // that a featureless asset falls back to measured base rates, never to a fabricated number.
     const r = computeOpportunities([asset({ asset: 'X', mlWin: null })], portfolio(), t);
-    expect(r.allocation.accepted).toHaveLength(0);
-    expect(r.skipped[0].reasons).toContain('no ML_WIN available');
+    const all = [...r.allocation.accepted.map(a => a.candidate.asset), ...r.skipped.map(s => s.asset)];
+    expect(all).toContain('X');
   });
 
   it('skips assets missing price or ATR', () => {
@@ -80,24 +126,31 @@ describe('computeOpportunities', () => {
     if (c > 0) expect(k).toBeLessThan(c);
   });
 
-  it('trades a direction-agnostic structure and SAYS SO — the validated convex case', () => {
-    const r = computeOpportunities([asset({ asset: 'SOL', mlWin: 0.70 })], portfolio(), t);
+  it('now picks a SIDE, because the model reads each direction separately', () => {
+    // Before the measured model, both sides shared one direction-agnostic curve, so every asset
+    // tied and was flagged direction-agnostic. The trained model has a LONG head and a SHORT head,
+    // so a tie is now the exception rather than the rule -- and when the sides differ the pipeline
+    // should commit rather than shrug.
+    const r = computeOpportunities([asset({ asset: 'SOL' })], portfolio(), t);
     expect(r.allocation.accepted).toHaveLength(1);
-    expect(r.directionAgnosticAssets).toContain('SOL');
+    expect(['LONG', 'SHORT']).toContain(r.allocation.accepted[0].candidate.direction);
+    expect(r.directionAgnosticAssets).not.toContain('SOL');
   });
 
-  it('produces NO TRADE when ML_WIN implies no edge', () => {
-    const r = computeOpportunities([asset({ mlWin: 0.30 })], portfolio(), t);
-    expect(r.allocation.accepted).toHaveLength(0);
+  it('rejects an asset whose stop is pure noise, whatever the curve says', () => {
+    // sigma is a log-return fraction; a huge one makes a 1-ATR stop overwhelmingly likely to be
+    // wicked, and maxNoiseHitProbability must veto regardless of excursion probability.
+    const r = computeOpportunities(
+      [asset({ asset: 'NOISY', atr: 0.01, closes1h: closes(800, 100, 0, 0.4) })], portfolio(), t);
+    expect(r.allocation.accepted.map(a => a.candidate.asset)).not.toContain('NOISY');
   });
 
-  it('marks every result provisional, in three independent places', () => {
+  it('stamps the real model version and carries the regime caveat on every result', () => {
     const r = computeOpportunities([asset()], portfolio(), t);
-    expect(r.provisional).toBe(true);
     expect(r.caveat).toBe(PROVISIONAL_CAVEAT);
-    expect(r.modelVersion).toMatch(/^provisional-/);
+    expect(r.modelVersion).toMatch(/^excursion-v/);
     for (const a of r.allocation.accepted) {
-      expect(a.candidate.provenance.modelVersion).toMatch(/^provisional-/);
+      expect(a.candidate.provenance.modelVersion).toBe(PROVISIONAL_MODEL_VERSION);
     }
   });
 

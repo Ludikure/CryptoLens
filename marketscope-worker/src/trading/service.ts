@@ -1,25 +1,27 @@
 /**
- * Wires the trading pipeline to real market data (Phase 6 groundwork).
+ * Wires the trading pipeline to real market data.
  *
  * ADDITIVE BY DESIGN. This runs alongside the existing analysis path and changes nothing about it:
- * no cron behaviour, no notifications, no model serving. The pipeline is read-only until it has been
- * validated against live output.
+ * no cron behaviour, no notifications, no model serving.
  *
- * ⚠️ THE EXCURSION MODEL IS PROVISIONAL, AND THIS IS THE HONEST GAP.
+ * THE CURVE IS NOW MEASURED. It previously anchored on ML_WIN at 1.5R and extrapolated toward the
+ * driftless barrier result 1/(1+R) -- an assumption about tail shape. Measured on 3.5M simulated
+ * trades, real barrier rates sit ~10pp BELOW that benchmark at every R, so every expected value the
+ * old curve produced was optimistic. `trading/excursion.ts` serves the trained model instead.
  *
- * `generateCandidate` needs `P(reach +NR before −1R)` per side. No such model has been trained and
- * shipped. What EXISTS is `ML_WIN` = `P(fwdMaxFavR >= 1.5 ATR within 24h)` — a genuine excursion
- * probability, but at ONE point (1.5R), on a 24h horizon, and direction-agnostic.
+ * WHAT THE MODEL EARNS, AND WHAT IT DOES NOT (docs/research/excursion-model.md):
+ *   - cross-sectional AUC ~0.62, verified to be genuine asset selection rather than shared market
+ *     state (the market-wide feature block alone scores exactly 0.5000 within a timestamp);
+ *   - a tradeable spread of only +0.109R gross, median 0.000R, positive in 34% of timestamps;
+ *   - **profitability that is regime-dependent** -- 1 of 5 rising-market periods, corr with BTC
+ *     return -0.509.
  *
- * So `provisionalCurve()` anchors on that real number and interpolates toward the random-walk tail.
- * It is explicitly NOT a trained model, every response says so, and `modelVersion` carries
- * `provisional-` so no journal entry can later be mistaken for one produced by a real tail model.
- *
- * Fabricating a confident curve here would have been easy and would have poisoned the OOS record
- * the journal exists to protect.
+ * So it ranks. It does not promise money, and `PROVISIONAL_CAVEAT` carries that to every surface.
  */
 
 import { forecastVol } from '../vol';
+import { excursionCurve, baseExcursionCurve, regimeCaveat,
+         EXCURSION_MODEL_VERSION } from './excursion';
 import type { CrashRisk, Provenance } from './candidate';
 import { crashRegime, PLACEHOLDER_CURVE } from './crash-risk';
 import { generateCandidate, DEFAULT_STRUCTURE, type StructureConfig } from './generator';
@@ -28,36 +30,8 @@ import { allocatePortfolio, type AllocationResult } from './portfolio';
 import type { ExcursionCurve } from './payoff';
 import type { PortfolioState } from './sizing';
 
-export const PROVISIONAL_MODEL_VERSION = 'provisional-mlwin-anchored-2026-08-24';
+export const PROVISIONAL_MODEL_VERSION = EXCURSION_MODEL_VERSION;
 
-/**
- * Build an excursion curve from the one real anchor available.
- *
- * `mlWin` is P(≥1.5 ATR favourable move in 24h). Beyond that anchor the curve decays toward the
- * driftless barrier result 1/(1+R), scaled by how much the anchor already exceeds it — so an asset
- * whose measured 1.5R rate merely matches random walk gets a random-walk tail, and one that exceeds
- * it keeps a proportional edge further out.
- *
- * This is an assumption about tail SHAPE, not a measurement. The vault's tail-gated corpus figure
- * (~30% at 5R against 16.7% theory) is the number a trained model should reproduce; this
- * interpolation should not be mistaken for it.
- */
-export function provisionalCurve(mlWin: number, horizonHours: number): ExcursionCurve {
-  const anchorR = 1.5;
-  const rwAtAnchor = 1 / (1 + anchorR);                       // 0.40
-  const edgeRatio = rwAtAnchor > 0 ? Math.max(0, mlWin / rwAtAnchor) : 1;
-  const points = [1, 1.5, 2, 3, 5, 8].map(r => {
-    const rw = 1 / (1 + r);
-    // Damp the edge as R grows: an edge measured at 1.5R is weakest evidence about 8R.
-    const damped = 1 + (edgeRatio - 1) * Math.exp(-(r - anchorR) / 3);
-    return { atR: r, probability: Math.min(0.95, Math.max(0.001, rw * damped)) };
-  });
-  // Enforce the monotonicity `validate()` requires; damping can otherwise cross over.
-  for (let i = 1; i < points.length; i++) {
-    points[i].probability = Math.min(points[i].probability, points[i - 1].probability);
-  }
-  return { horizonHours, points };
-}
 
 export interface AssetInput {
   asset: string;
@@ -86,10 +60,7 @@ export interface OpportunityResult {
   modelVersion: string;
 }
 
-export const PROVISIONAL_CAVEAT =
-  'PROVISIONAL: no trained excursion model exists. Curves are anchored on ML_WIN at 1.5R and ' +
-  'interpolated toward the random-walk tail — an assumption about shape, not a measurement. ' +
-  'Expected values are illustrative and must not be traded or journalled as model output.';
+export const PROVISIONAL_CAVEAT = regimeCaveat();
 
 /**
  * Run the full pipeline over a set of assets and return a ranked, sized, constrained book.
@@ -111,7 +82,6 @@ export function computeOpportunities(
   for (const a of assets) {
     liquidityByAsset[a.asset] = a.liquidityUsd24h;
 
-    if (a.mlWin == null) { skipped.push({ asset: a.asset, reasons: ['no ML_WIN available'] }); continue; }
     if (!(a.atr > 0) || !(a.price > 0)) { skipped.push({ asset: a.asset, reasons: ['missing price or ATR'] }); continue; }
 
     const vf = forecastVol(a.closes1h, a.isCrypto, a.price);
@@ -132,12 +102,22 @@ export function computeOpportunities(
       sizingConfigId: structure.id,
     };
 
-    const curve = provisionalCurve(a.mlWin, structure.holdingHorizonHours);
+    // MEASURED curves, one per side. The model predicts the level at 5R; the rest of the curve
+    // scales the measured base rates. Without features we fall back to those base rates rather
+    // than inventing a number -- a made-up probability flows straight into position size.
+    const hasFeatures = a.features != null && Object.keys(a.features).length > 20;
+    const curves = hasFeatures
+      ? { LONG: excursionCurve(a.features!, 'LONG', structure.holdingHorizonHours),
+          SHORT: excursionCurve(a.features!, 'SHORT', structure.holdingHorizonHours) }
+      : { LONG: baseExcursionCurve('LONG', structure.holdingHorizonHours),
+          SHORT: baseExcursionCurve('SHORT', structure.holdingHorizonHours) };
+
     const res = generateCandidate({
       asset: a.asset, price: a.price, atr: a.atr, sigma,
       liquidityUsd24h: a.liquidityUsd24h, crashRisk: crash,
-      curves: { LONG: curve, SHORT: curve },   // direction-agnostic: the anchor has no side
-      confidence: { LONG: 0.5, SHORT: 0.5 },
+      curves,
+      // Holdout AUC ~0.60 on both sides: real discrimination, a long way from certainty.
+      confidence: { LONG: hasFeatures ? 0.6 : 0.4, SHORT: hasFeatures ? 0.6 : 0.4 },
       portfolio, provenance, structure,
     });
 

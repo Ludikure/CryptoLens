@@ -143,7 +143,10 @@ describe('candidate generation (spec §15)', () => {
     portfolio, provenance: prov(),
   };
   const edge = curve([[1, 0.62], [3, 0.40], [5, 0.30], [8, 0.20]]);
-  const weak = curve([[1, 0.50], [3, 0.25], [5, 0.16], [8, 0.10]]);
+  // BELOW the measured base rates (5R = 0.066). The previous fixture used 0.16 at 5R -- 2.4x base
+  // -- which was only "weak" under the binary EV formula's pessimism. Under the measured three-way
+  // payoff that is a genuinely good trade, so the fixture, not the code, was wrong.
+  const weak = curve([[1, 0.30], [3, 0.08], [5, 0.03], [8, 0.01]]);
 
   it('generates a LONG when the long side has the edge', () => {
     const r = generateCandidate({ ...base, curves: { LONG: edge, SHORT: weak }, confidence: { LONG: 0.7, SHORT: 0.4 } });

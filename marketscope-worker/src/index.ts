@@ -16,6 +16,7 @@ import { correlationReport } from './correlation';
 import { pollNewsFeeds, fetchRecentNews } from './news';
 import { fetchBasisRows, findBasisOpportunities, netAnnualized } from './basis';
 import { computeOpportunities, PROVISIONAL_CAVEAT, type AssetInput } from './trading/service';
+import { excursionModelInfo } from './trading/excursion';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -2514,7 +2515,7 @@ export default {
 
         for (const sym of symbols) {
           const p = preds[sym];
-          if (!p) { unavailable.push({ asset: sym, reasons: ['no cached ML prediction'] }); continue; }
+          if (!p) { unavailable.push({ asset: sym, reasons: ['no cached prediction'] }); continue; }
           try {
             const c1h = await fetchCandles(sym, '1h', 400);
             const closes = (c1h ?? []).map((k: any) => k.close).filter((x: number) => x > 0);
@@ -2525,6 +2526,9 @@ export default {
             assets.push({
               asset: sym, closes1h: closes, price, atr: (atrPct / 100) * price,
               mlWin: typeof p.probability === 'number' ? p.probability : null,
+              // The 110 serving features the excursion model reads. Without them the pipeline
+              // falls back to measured base rates, whose EV is negative -- i.e. no trade.
+              features: p.features && typeof p.features === 'object' ? p.features : undefined,
               crashProbability: null,          // no crash model shipped yet -> no overlay applied
               liquidityUsd24h: 50_000_000,     // placeholder; real depth wiring is a follow-up
               isCrypto: sym.endsWith('USDT'),
@@ -2542,6 +2546,7 @@ export default {
           at: nowMs,
           provisional: true,
           caveat: PROVISIONAL_CAVEAT,
+          model: excursionModelInfo(),
           modelVersion: result.modelVersion,
           equity,
           opportunities: result.allocation.accepted.map(a => ({
