@@ -176,3 +176,45 @@ describe('pending setups — candle evidence outranks the wall clock', () => {
     expect(res.row.outcome).toBe('expired');
   });
 });
+
+// Observed live on BTCUSDT 2026-08-25: one prompt saying three contradictory things about the same
+// bar, because the Conviction Envelope gates on the LIVE-CALIBRATED ML_WIN while two other lines
+// still banded on the RAW one.
+//
+//   Conviction Envelope: max_allowed: LOW ... NOT auto-FLAT on ML alone      (calibrated 60%)
+//   ML Bucket: UNFAVORABLE (ML_WIN 44%) — NO TRADE regardless of ...          (raw)
+//   POSITION SIZING: NO TRADE — ML_WIN < 60% ...                              (raw)
+//
+// This is the user-visible form of "it tells me not to trade and to trade at the same time".
+describe('raw vs calibrated ML_WIN cannot contradict the gate', () => {
+  const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+
+  it('POSITION SIZING gates on the same calibrated value as the envelope', () => {
+    expect(src).toMatch(/const mlWin = input\.calibratedMlWin \?\? rawWin;/);
+    expect(src).not.toMatch(/const mlWin = daily\.mlWinProbability, qualityOK/);
+  });
+
+  it('the ML Bucket TIER stays on the RAW scale — the mandate reads rawMlPct >= 70', () => {
+    // Banding the tier on the calibrated value would re-split it from the mandate, undoing the
+    // 2026-08-22 alignment. The tier is raw on purpose; only the DIRECTIVE changed.
+    expect(src).toMatch(/const mlPct = iTrunc\(daily\.mlWinProbability \* 100\), isStock = !!stockInfo;/);
+    expect(src).toMatch(/const MANDATE_RAW_PCT = 70/);
+  });
+
+  it('the weakest bucket no longer issues a categorical NO TRADE over the envelope', () => {
+    expect(src).not.toMatch(/UNFAVORABLE \(\$\{shown\}\) — NO TRADE regardless of directional clarity/);
+    expect(src).toMatch(/Do NOT read this tier as a veto; read max_allowed/);
+  });
+
+  it('both scales are rendered wherever they differ, in both lines', () => {
+    expect(src).toMatch(/ML_WIN raw \$\{mlPct\}% \(live-calibrated \$\{calPct\}%\)/);
+    expect(src).toMatch(/\(raw \$\{iTrunc\(rawWin \* 100\)\}%, live-calibrated/);
+  });
+
+  it('the macro moderate-block label is not self-contradictory', () => {
+    // Asserted on the emitted string, not on the file — the comment above it quotes the old label
+    // by design, and a bare /_exceeds_NEARBY/ would match that prose forever.
+    expect(src).not.toMatch(/moderateBlocks\.push\(`macro_\$\{envMacroRisk\}_exceeds_NEARBY`\)/);
+    expect(src).toMatch(/moderateBlocks\.push\(`macro_\$\{envMacroRisk\}_at_or_inside_NEARBY`\)/);
+  });
+});

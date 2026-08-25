@@ -794,11 +794,21 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // Sizing is gated ONLY by quality (ML_WIN). Direction is NOT predictable from ML
         // (validated ~chance), so the model can't size by direction — the side, if any, must
         // come from the LLM's own structural read, and is inherently a coin-flip-ish bet.
-        const mlWin = daily.mlWinProbability, qualityOK = mlWin >= 0.60;
+        // Sizing gates on the LIVE-CALIBRATED ML_WIN, the same quantity the Conviction Envelope
+        // uses (2026-08-25). It previously used the RAW value, so on a bar the envelope allowed at
+        // max_allowed:LOW this line printed a flat "POSITION SIZING: NO TRADE — ML_WIN < 60%" —
+        // observed live on BTCUSDT alongside a contradictory ML Bucket line. Unlike the TOP tier,
+        // this 0.60 threshold has no drift-independence argument behind it: it is a quality gate,
+        // and the gate the system honours is the calibrated one.
+        const rawWin = daily.mlWinProbability;
+        const mlWin = input.calibratedMlWin ?? rawWin;
+        const rawTxt = input.calibratedMlWin != null && iTrunc(rawWin * 100) !== iTrunc(mlWin * 100)
+          ? ` (raw ${iTrunc(rawWin * 100)}%, live-calibrated ${iTrunc(mlWin * 100)}%)` : '';
+        const qualityOK = mlWin >= 0.60;
         let mult: number, reason: string;
-        if (!qualityOK) { mult = 0.0; reason = 'ML_WIN < 60% — below quality threshold, no trade'; }
-        else if (mlWin >= 0.70) { mult = 0.75; reason = 'high move-quality (≥1.5 ATR move likely) but direction is a coin flip — size for a direction-uncertain bet (0.75x), or trade direction-agnostic (breakout either way). Only go full size if YOUR structural read gives a genuinely clear side'; }
-        else { mult = 0.5; reason = 'marginal quality + unknowable direction — half size or pass'; }
+        if (!qualityOK) { mult = 0.0; reason = `ML_WIN < 60%${rawTxt} — below quality threshold, no trade`; }
+        else if (mlWin >= 0.70) { mult = 0.75; reason = `high move-quality (≥1.5 ATR move likely)${rawTxt} but direction is a coin flip — size for a direction-uncertain bet (0.75x), or trade direction-agnostic (breakout either way). Only go full size if YOUR structural read gives a genuinely clear side`; }
+        else { mult = 0.5; reason = `marginal quality + unknowable direction${rawTxt} — half size or pass`; }
         const multTxt = mult === 0 ? 'NO TRADE' : `${g2(mult)}x base risk`;
         L(`POSITION SIZING: ${multTxt} — ${reason}. Cap 1.0x. ML_WIN is a VOLATILITY signal, not a directional one.`);
       }
@@ -1437,7 +1447,9 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const continuationBlockApplies = isCryptoSym && alignedDirection === 'SHORT';
       if (continuationBlockApplies && envContinuationCount < 2) moderateBlocks.push(`continuation_${envContinuationCount}/2+_required`);
       if (mlPct != null && mlPct < 60) moderateBlocks.push(`ML_WIN_${mlPct}<60`);
-      if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON' && envMacroRisk !== 'UPCOMING') moderateBlocks.push(`macro_${envMacroRisk}_exceeds_NEARBY`);
+      // Label was `macro_${risk}_exceeds_NEARBY`, which rendered as "macro_NEARBY_exceeds_NEARBY"
+      // — literally false, and the commonest case. The rule fires at NEARBY or closer.
+      if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON' && envMacroRisk !== 'UPCOMING') moderateBlocks.push(`macro_${envMacroRisk}_at_or_inside_NEARBY`);
       if (isTreatment) {
         if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'PARTIAL') moderateBlocks.push('treatment_long_confirm_PARTIAL_cap_LOW');
         const transitioningHighOk = regime === 'TRANSITIONING' && envAlignment === 'ALIGNED_BULLISH' && (mlPct ?? 0) >= 65 && (treatmentLongConfirmStatus === 'PASS' || treatmentLongConfirmStatus === 'n/a');
@@ -1602,13 +1614,33 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
 
     // Phase C5 — ML Bucket
     if (daily.mlWinProbability != null) {
+      // FIXED 2026-08-25: this banded on the RAW ML_WIN while the Conviction Envelope gates on the
+      // LIVE-CALIBRATED one, so a single prompt could say
+      //     Conviction Envelope: max_allowed: LOW ... NOT auto-FLAT on ML alone   (calibrated 60%)
+      //     ML Bucket: UNFAVORABLE (ML_WIN 44%) — NO TRADE regardless of directional clarity  (raw)
+      // — a categorical NO TRADE directly contradicting the gate two lines above it. Observed live
+      // on BTCUSDT. Same defect the mandate lines were fixed for on 2026-08-22 ("one prompt
+      // printing ML_WIN on two scales with no annotation"); the fix was never propagated here.
+      //
+      // The TIER stays on the RAW scale deliberately — the mandate reads `rawMlPct >= 70` and the
+      // 2026-08-22 fix aligned it to THIS line's "TOP" label precisely so the two stop disagreeing.
+      // Banding the tier on the calibrated value would re-split them. What changes is the DIRECTIVE:
+      // a quality descriptor must not issue a categorical NO TRADE that overrules the gate, and both
+      // numbers are now rendered whenever they differ so no cross-scale comparison can happen
+      // silently.
       const mlPct = iTrunc(daily.mlWinProbability * 100), isStock = !!stockInfo;
+      const calPct = input.calibratedMlWin != null ? iTrunc(input.calibratedMlWin * 100) : null;
+      const shown = calPct != null && calPct !== mlPct
+        ? `ML_WIN raw ${mlPct}% (live-calibrated ${calPct}%)` : `ML_WIN ${mlPct}%`;
       let bucket: string;
-      if (isStock && mlPct >= 85) bucket = `STOCK_TOP (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes, relaxed_confluence: 2_ok`;
-      else if (mlPct >= 70) bucket = `TOP (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes`;
-      else if (mlPct >= 60) bucket = `FAVORABLE (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: no`;
-      else if (mlPct >= 50) bucket = `MARGINAL (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling MODERATE, counter-trend qualified: no`;
-      else bucket = `UNFAVORABLE (ML_WIN ${mlPct}%) — NO TRADE regardless of directional clarity`;
+      if (isStock && mlPct >= 85) bucket = `STOCK_TOP (${shown}) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes, relaxed_confluence: 2_ok`;
+      else if (mlPct >= 70) bucket = `TOP (${shown}) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes`;
+      else if (mlPct >= 60) bucket = `FAVORABLE (${shown}) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: no`;
+      else if (mlPct >= 50) bucket = `MARGINAL (${shown}) — direction-agnostic move quality, conviction ceiling MODERATE, counter-trend qualified: no`;
+      else bucket = `UNFAVORABLE (${shown}) — weakest quality tier on the raw scale`
+        + (calPct != null && calPct >= 50
+            ? `. NOTE: the live forward calibration corrects this bar to ${calPct}%, and the Conviction Envelope — which gates on the CALIBRATED value — is the authority on whether a trade is allowed. Do NOT read this tier as a veto; read max_allowed.`
+            : `. The Conviction Envelope is the authority on whether a trade is allowed — read max_allowed, not this tier.`);
       L(`ML Bucket: ${bucket}`);
     } else {
       // Missing-ML was previously SILENT (every ML section just disappeared, including the
