@@ -931,3 +931,60 @@ universal — and reporting the resulting `nan` lift as a result would have been
 
 Every removal was a condition that **claimed predictive power and measured inverted**. Every
 retention is either measured-positive, exogenous-event cover, or inert.
+
+## PART 7 FOLLOW-UP — two "untestable" conditions were testable after all
+
+Prompted by the user asking what remained untestable. Checking rather than asserting overturned two
+of the exclusions.
+
+### `continuation` — the variable was wrong, not the data
+
+The envelope counts specific 4H signals (EMA-stack alignment, direction-supporting funding), and both
+are in the feature set. My Part 7 proxy used `momentumAlignment`, which is simply a different
+quantity. Reconstructed properly:
+
+| | SHORT | LONG |
+|---|---:|---:|
+| `continuation < 2` (cap LOW) | +0.0220 lift, **5/9** | **−0.0218**, 4/9 |
+| `continuation < 3` (cap MODERATE) | degenerate — fires 100% | — |
+
+SHORT clears the magnitude bar and **fails consistency at 5/9**; LONG is inverted. Neither earns its
+place. **`< 3` is still not tested**: my reconstruction captures only two of the envelope's signals
+so it maxes at 2, making `< 3` trivially true — the same 100%-fire tell as before, from the same
+cause. Even the `< 2` figure is a **partial proxy**, not the real rule.
+
+### `macro` — testable against the 986 Fed releases, and day-of-week changes the answer
+
+| | raw SHORT | **DoW-stratified SHORT** | raw LONG | **DoW-stratified LONG** |
+|---|---:|---:|---:|---:|
+| IMMINENT (≤4h) | −0.0032 | **−0.0053** | +0.0043 | +0.0082 (7/9) |
+| NEARBY (≤24h) | −0.0128 | **−0.0231** | +0.0107 | **+0.0284 (6/9)** |
+
+Stratification **flipped the LONG result into a pass** — the artifact running the other way this
+time. But three things make that pass weak: it is one side only, it appears only after a correction,
+and Fed releases are a **subset** of the calendar the real rule uses (no CPI, no NFP).
+
+### The framing that actually settles macro
+
+**EV is the wrong test for it.** Per the Part 6 distinction, `macro_IMMINENT` guards an EXOGENOUS
+SCHEDULED EVENT — it never claimed to predict direction, it claims a release can gap the price. The
+right question is whether macro proximity raises the chance of a large ADVERSE move, not whether
+avoiding it raises mean EV. **A null or even inverted EV result does not refute a variance guard.**
+
+So macro stays, and the EV numbers above are recorded as context rather than as grounds for action.
+
+## What remains genuinely untestable, and why
+
+| condition | why | could it become testable? |
+|---|---|---|
+| `news_thesis_conflict` | `news_items` D1 only starts 2026-08-22 — ~3 days | yes, with months of accumulation |
+| earnings gates (0-2d / 3-7d / 8-14d) | stocks only; no stock intraday paths in `vision_backfill` | **yes** — needs a stock kline pull |
+| `treatment_short_gate_stocks` | stocks only | same |
+| `treatment_long_confirm_*` | needs `relStrengthVsSpy`, which is **0.0 on 100% of crypto rows** | only on stocks |
+| `data_stale_N_sources` | a pipeline-health condition with no market-state analogue | **no** — not a market claim at all |
+| `continuation < 3` | reconstruction captures 2 of N signals | yes, with the full signal list ported |
+| full economic calendar | only Fed releases backfilled; no CPI/NFP | yes, with more backfill |
+
+**The honest count: of ~20 envelope conditions, 13 are now directly tested, 2 are tested on partial
+proxies, and 5 remain untested — 4 of which are stock-only or need data accumulation, and 1 of which
+(`data_stale`) is not a market claim and never will be testable this way.**
