@@ -427,6 +427,7 @@ export interface PromptIndicator {
   // ML overlay (supplied by /full-analysis from the cron/ml-predict path; daily TF carries these)
   mlWinProbability?: number | null; mlPersistenceProbability?: number | null; mlDirectionUp?: number | null;
   mlBigMoveProb?: number | null;  // tail head: P(>=4 ATR move in 24h), crypto-only
+  mlCrashProb?: number | null;    // validated crash model: P(>=10% drawdown in 10d), crypto-only
   mlConfident?: boolean | null; mlMetaDirection?: number | null; mlMetaProbability?: number | null; mlQ75?: number | null;
   // Optional stock display extras (not yet computed by the worker; emitted when present)
   smaCross?: { status: string; recentCross?: string | null } | null;
@@ -676,6 +677,30 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       }
     }
     L(`Environment Risk: ${envRisk} — ${envReason}.`);
+
+    // CRASH RISK (2026-08-24). Distinct from Environment Risk above, which is a HEURISTIC read of
+    // trend danger from ADX/regime/stretch. This is a MEASURED model: P(price falls >=10% below
+    // here within 10 days), and it is the one signal in this project that survived every control
+    // (drawdown -76.6% -> -40.4%, replicated leave-one-symbol-out with placebos at ~0.05).
+    //
+    // The episodic caveat ships WITH the number, deliberately. The signal stayed quiet through five
+    // separate 20-28% drawdowns in 2023-25, so a low reading is NOT evidence of safety and the model
+    // must never treat it that way.
+    const crashP = daily.mlCrashProb;
+    if (crashP != null && Number.isFinite(crashP)) {
+      const pct = Math.round(crashP * 100);
+      const band = crashP > 0.50 ? 'HIGH' : crashP > 0.30 ? 'ELEVATED' : 'LOW';
+      const action = crashP > 0.50
+        ? 'Size is already cut hard by the overlay. Treat any new entry as needing exceptional evidence.'
+        : crashP > 0.30
+          ? 'Size is reduced. Raise the bar for a new entry; prefer waiting to sizing down further.'
+          : 'No size reduction from this gauge.';
+      L(`Crash Risk: ${band} — ${pct}% chance of a >=10% fall within 10 days (base rate 41%). ${action}`);
+      L(`  Crash Risk is about DRAWDOWN, not direction — it never says which way price goes, and a `
+        + `high reading is not a SHORT signal. It is EPISODIC: it has stayed quiet through real `
+        + `20-28% falls, so LOW is "no warning", NOT "safe". Never cite a low reading as support for `
+        + `a trade.`);
+    }
     // Phase 1: HAR-RV expected range — the direction-agnostic "how big", calibrated bands.
     const vf = input.volForecast;
     if (vf?.horizons?.['24h']) {

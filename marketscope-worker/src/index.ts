@@ -17,7 +17,7 @@ import { pollNewsFeeds, fetchRecentNews } from './news';
 import { fetchBasisRows, findBasisOpportunities, netAnnualized } from './basis';
 import { computeOpportunities, PROVISIONAL_CAVEAT, type AssetInput } from './trading/service';
 import { excursionModelInfo } from './trading/excursion';
-import { crashModelInfo } from './trading/crash';
+import { crashModelInfo, crashProbability } from './trading/crash';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -367,6 +367,13 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
         d.mlMetaDirection = e.metaDirection ?? null;
         d.mlMetaProbability = e.probabilityMeta ?? null;
         d.mlQ75 = e.q75 ?? null;
+        // Crash/drawdown risk from the validated model. Crypto-only (that is what was trained and
+        // replicated leave-one-symbol-out). Best-effort: a failure leaves the line off the prompt
+        // rather than blocking the analysis.
+        if (isCrypto && e.features) {
+          try { d.mlCrashProb = crashProbability(e.features as Record<string, number>); }
+          catch { d.mlCrashProb = null; }
+        }
       }
       if (isCrypto && symbol !== 'BTCUSDT') {
         const btc = all['BTCUSDT'];

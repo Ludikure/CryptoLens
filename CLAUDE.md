@@ -611,6 +611,53 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-24 — Excursion + crash models shipped; the crash overlay was never in the app
+
+Two models trained, validated against pre-declared bars, and wired end-to-end. Full write-ups:
+`docs/research/excursion-model.md`, `docs/research/crash-overlay.md`.
+
+**The crash overlay — the most validated finding in the vault — was not in the product at all.** No
+model file, `crashProbability: null`, and a sizing curve whose own description read "NOT fitted, NOT
+validated". Now shipped as `ml-model-crash-crypto.json` (870,093 bars, 77 symbols, target frozen from
+T2: `P(fall >= 10% within 10 days)`; WF AUC 0.596; calibration monotone 26.0 → 38.1 → 53.7%).
+`VALIDATED_CURVE` replaces `PLACEHOLDER_CURVE` with T8 arm D exactly. **The zero at high probability
+is deliberate**: T15 measured that an exposure floor removes the benefit in proportion, so the
+safer-looking version is the worse one — a test pins the floor's absence. Warnings lead the
+Opportunity card, fire even when nothing is tradeable, and every message states the EPISODIC caveat
+(the signal sat silent through five 20-28% drawdowns).
+
+**The prompt now carries it too — both halves.** `Crash Risk:` line in `buildUserPrompt` plus a
+matching contract in BOTH markets' `prompt-system.json`, because the 2026-08-22g lesson was that an
+input without an output instruction is a silent no-op. The stock prompt is explicitly told the model
+is crypto-only so its absence is never read as LOW. `test/crash-prompt.test.ts` pins both halves.
+
+**Excursion model** (`ml-model-excursion-crypto.json`) replaces `provisionalCurve`. Three findings:
+(a) real barrier rates sit **~10pp BELOW** the driftless benchmark `1/(1+R)` at every R (5R: 6.6% vs
+16.7%) because a 72h horizon truncates — so the old extrapolation was optimistic everywhere;
+(b) `expectedValueR`'s binary formula was **wrong by +0.50R at 5R** — 20-25% of trades hit neither
+barrier and exit at the horizon averaging +1.43R, an outcome the formula had no room for;
+(c) ranking is real (cross-sectional AUC 0.62, verified as genuine asset selection — the market-wide
+feature block alone scores exactly 0.5000 within a timestamp) but **profitability is regime-dependent**:
+1 of 5 rising-market periods, corr(EV, BTC return) −0.509.
+
+**Two silent defects caught, both of which would have shipped.** LightGBM bakes its own
+`feature_names` into the dump and they override anything passed in, so fitting on `f_`-prefixed
+columns made every live lookup miss and return **a constant** — no error anywhere, caught only
+because three very different feature dicts gave identical probabilities. And isotonic's top grid
+point reached 0.60 at 5R (9× base) resting on ONE sparse bucket, which would have implied a +3R
+expected value; both exporters now cap at the highest rate a 500-sample bucket actually realised.
+
+**A control-design error worth remembering:** the regime control's first version tested `mean > 0`
+and PASSED on a single outlier period (+0.768R of five). Without it the mean is −0.054R. Five
+observations cannot support a mean; the sign count fails cleanly.
+
+**And the stop is a noise magnet.** `DEFAULT_STRUCTURE.stopAtrMultiple = 1.0` stops out **73.9% of
+long trades in bull markets**. Per trade in rising blocks: no stop +0.639%, 1 ATR −0.344%, 2 ATR
++0.083%, 3 ATR +0.272%, 4 ATR +0.327%. Deliberately NOT changed — one measurement is not a
+pre-declared test — but it is the top candidate for the next one. Related: BTC buy-and-hold
+2023-01→2025-10 was **+590%** while the equal-weight 24-symbol basket compounded to **−83.1%** over
+4.5 years. "Long crypto" was only right if it meant BTC.
+
 ### 2026-08-23d — Twenty pre-declared tests: direction closed for good, crash signal characterised, `/basis` shipped
 
 A single research session that produced **one shipped feature and a great deal of closed territory**.
