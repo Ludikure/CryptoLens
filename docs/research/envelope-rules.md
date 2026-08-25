@@ -575,3 +575,58 @@ opportunity** and is positive in **≥ 6 of 9** six-month periods by sign count.
 their *strength* is unrankable and snapping TARGETS to them lowers EV. I therefore expect structure
 to be roughly comparable to mechanical on entry, not clearly better — with deeper levels filling less
 often and trading that away.
+
+## PART 5 RESULTS — a SHALLOW mechanical pullback beats structural levels
+
+| SHORT | fill | mean depth | R/opp | vs mechanical | periods+ |
+|---|---:|---:|---:|---:|---:|
+| market | 100% | 0.00 | −0.0035 | −0.0660 | 0/9 |
+| **mechanical 0.25 ATR** | 88.3% | 0.25 | **+0.0625** | — | — |
+| swing 24h | 25.8% | 0.63 | +0.0067 | −0.0558 | 1/9 |
+| swing 72h | 15.4% | 0.80 | +0.0023 | −0.0602 | 1/9 |
+
+| LONG | fill | mean depth | R/opp | vs mechanical | periods+ |
+|---|---:|---:|---:|---:|---:|
+| market | 100% | 0.00 | −0.0710 | −0.0919 | 0/9 |
+| **mechanical 0.25 ATR** | 92.2% | 0.25 | **+0.0209** | — | — |
+| swing 24h | 26.5% | 0.69 | −0.0027 | −0.0237 | 5/9 |
+| swing 72h | 15.4% | 0.85 | −0.0027 | −0.0236 | 5/9 |
+
+**Structure loses, and it is not merely a depth effect.** Part 4 measured a mechanical 0.50 ATR
+pullback at **+0.0555 (SHORT)** — comparable depth to swing-24h's 0.63, but nearly 8× the return, and
+it fills 65% of the time against swing's 26%.
+
+So a swing level at the same nominal distance both fills far less often AND performs no better when
+it does. That makes sense mechanically: a recent swing low is a price the market has *already
+rejected once*, and reaching it again requires a move large enough to change the situation the setup
+was premised on.
+
+### The dominant variable is FILL RATE, not level quality
+
+Per opportunity, missing 74% of trades costs far more than a better entry price gains. Ranked by
+what actually matters:
+
+| depth | fill | R/opp (SHORT) |
+|---|---:|---:|
+| 0.00 (market) | 100% | −0.0036 |
+| **0.25** | **88%** | **+0.0624** |
+| 0.50 | 65% | +0.0555 |
+| 0.80 (swing 24h) | 26% | +0.0067 |
+| 1.00 | 29% | +0.0215 |
+
+There is a sweet spot at **shallow**: deep enough to avoid paying the spread into a move, shallow
+enough to actually fill.
+
+## Conclusion — the analysis layer's level-picking is NOT load-bearing
+
+This is the outcome that simplifies the app. A **fixed shallow limit order captures the entire
+effect**, and choosing a "good" structural level makes it worse by trading away fill rate for a price
+the market has already rejected.
+
+Consistent with `strategy-levels.md`, which found levels are real LOCATIONS but their strength is
+unrankable and snapping TARGETS to them lowers EV. The same now holds for entries.
+
+**Caveat on the proxy:** swing here is the extreme low/high of the prior 24h/72h, which is cruder
+than an LLM's choice — a model might pick a nearer, more relevant level. But the mechanism found
+(fill rate dominates, and shallow wins) does not depend on the proxy's precision, and the mechanical
+0.50 ATR comparison isolates it from depth.
