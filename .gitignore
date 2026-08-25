@@ -24,3 +24,8 @@ ml-training/daily_candles_stock.csv.gz
 ml-training/cg_data/
 ml-training/whale_backfill/
 ml-training/vision_cache/
+
+# stray sqlite files from a mis-pathed sqlite3 invocation
+marketscope.db
+marketscope.db-shm
+marketscope.db-wal

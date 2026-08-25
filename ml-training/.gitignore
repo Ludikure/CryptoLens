@@ -2,3 +2,4 @@ vision_backfill/
 candlefeed/
 .candlefeed_key
 stock_klines/
+*.pkl.gz

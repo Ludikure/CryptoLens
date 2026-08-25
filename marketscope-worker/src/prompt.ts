@@ -788,7 +788,13 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         treatmentLongConfirmStatus = rsPass && drsPass ? 'PASS' : rsPass || drsPass ? 'PARTIAL' : 'FAIL';
         treatmentLongConfirmReasons.push(`relStrengthVsSpy=${f(relStrApprox, 2)}${rsPass ? '✓' : '✗(need>=1.0)'}`);
         treatmentLongConfirmReasons.push(`dRsiDelta=${f(dRsiDelta, 2)}${drsPass ? '✓' : '✗(need>=1.0)'}`);
-        const resultText = treatmentLongConfirmStatus === 'PASS' ? 'PASS — LONG conviction unrestricted' : treatmentLongConfirmStatus === 'PARTIAL' ? 'PARTIAL — cap LONG conviction at LOW' : 'FAIL — no LONG trade';
+        // FAIL no longer says "no LONG trade" — the auto-FLAT behind that sentence was removed
+        // 2026-08-25 (Part 8) after measuring −0.0070R on the very bars it governed. Leaving the
+        // old wording would instruct the model to stand aside on a rule the envelope no longer
+        // enforces, which is the 2026-08-22g failure mode: an input whose output contract lies.
+        const resultText = treatmentLongConfirmStatus === 'PASS' ? 'PASS — LONG conviction unrestricted'
+          : treatmentLongConfirmStatus === 'PARTIAL' ? 'PARTIAL — cap LONG conviction at LOW'
+          : 'FAIL — context only, NOT a block (tested: no measured edge either way)';
         L(`LONG_CONFIRMATION: ${treatmentLongConfirmReasons.join(' | ')} → ${resultText}`);
       } else {
         L('LONG_CONFIRMATION: n/a (crypto or missing data — gate inactive)');
@@ -1229,9 +1235,16 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       }
       if (si.earningsDate != null && si.earningsDate > nowMs) {
         const days = Math.floor((si.earningsDate - nowMs) / 86400000);
-        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW (gap risk 5-20%, stop will not hold)`);
-        else if (days <= 7) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_MODERATE (skip if 4H momentum opposes thesis)`);
-        else if (days <= 14) L(`Earnings Proximity: ${days}d to earnings — flag in Risk Factors, no conviction cap`);
+        // MEASURED 2026-08-25 (Part 8) on 487k stock opportunities, 159 symbols, 2020-2026 — the
+        // first envelope condition validated on its OWN stated mechanism rather than merely
+        // surviving an EV null. Baseline P(overnight gap >= 2 ATR inside the hold window) away from
+        // earnings is 7.4%; inside these windows it is 52% / 52% / 37% — 7.1x / 7.0x / 5.0x, in
+        // 8/8, 9/9 and 9/9 half-year periods. The numbers are in the prompt because "gap risk" as a
+        // bare phrase invites the model to weigh it against a chart pattern; "42% of stops gap
+        // straight through" does not.
+        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW. MEASURED: 52% of bars see an overnight gap >= 2 ATR (7.1x baseline) and 43% of stops fill BEYOND the stop, averaging 1.4R lost on a 1R budget — the stop does not hold. This is a variance fact, not a direction call.`);
+        else if (days <= 7) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_MODERATE. MEASURED: gap >= 2 ATR on 52% of bars (7.0x baseline); ~31% of stops gap through. Skip if 4H momentum opposes thesis.`);
+        else if (days <= 14) L(`Earnings Proximity: ${days}d to earnings — flag in Risk Factors, no conviction cap. MEASURED: still 5.0x the baseline gap rate, because a multi-day hold opened this far out often straddles the report anyway.`);
       }
     }
 
@@ -1298,19 +1311,26 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (envChaseLevel === 'HIGH' && envAlignment !== 'MIXED' && envAlignment !== 'UNKNOWN') autoFlat.push('chase_into_extended_aligned_trend');
       if (envMacroRisk === 'IMMINENT') autoFlat.push('macro_IMMINENT');
       if (isTreatment) {
-        // Scoped to a genuinely aligned LONG (2026-08-21). `alignedDirection` derives from the
-        // DAILY bias alone, so in MIXED it reads 'LONG' off a bullish daily even though the
-        // MIXED playbook says direction is NOT implied — a LONG-only relative-strength check was
-        // therefore auto-FLATting the best big-move cell on bars where no LONG was proposed.
-        if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'FAIL' && envAlignment !== 'MIXED') autoFlat.push('treatment_long_confirm_FAIL');
+        // `treatment_long_confirm_FAIL` REMOVED 2026-08-25 (Part 8). Tested on the stock intraday
+        // paths the earlier parts lacked — 487k opportunities, 159 symbols, the app's own geometry:
+        // 4/9 periods, +0.0007R global, and −0.0070R on the LONG bars it actually governs. A hard
+        // auto-FLAT with no measured benefit and a mild inversion where it matters, which is the
+        // same profile as `biases_MIXED` and SHORT-side `alignment_not_full`. The PARTIAL cap below
+        // survives: it measured mildly positive (+0.0074R, 6/9) and is a soft conviction cap rather
+        // than a block, so being wrong costs far less. Both numbers are noise-scale — the
+        // asymmetric action tracks the asymmetric cost, not a claim that either was demonstrated.
+        //
+        // Aligned-bearish stock SHORTs stay blocked, but WITHOUT the three-way escape hatch, which
+        // was inert: across 43,904 applicable bars, ML≥70 fired on 1.4%, 4H Stoch bearish on 11.5%,
+        // TRENDING on 32.0% — and all three together on 0.02%, SEVEN bars in four years, which then
+        // averaged −0.2082R, worse than the 43,897 the gate blocked. By the Part 6 principle a
+        // condition claiming predictive power must earn it; this one never once demonstrated it.
+        // The ban itself is well supported: blocked bars average −0.1123R against a −0.0457R
+        // stock-SHORT average (8/9 periods) — aligned-bearish shorts are 2.5× worse than stock
+        // shorts generally. See docs/research/envelope-rules.md Part 8.
         const isStock = !!stockInfo;
         if (isStock && alignedDirection === 'SHORT' && envAlignment === 'ALIGNED_BEARISH') {
-          const mlOk = (mlPct ?? 0) >= 70, stochOk = treatmentStochCross4H === 'bearish', regimeOk = regime === 'TRENDING';
-          if (!(mlOk && stochOk && regimeOk)) {
-            const reasons: string[] = [];
-            if (!mlOk) reasons.push('ML<70'); if (!stochOk) reasons.push('STOCH_CROSS_4H≠bearish'); if (!regimeOk) reasons.push('regime≠TRENDING');
-            autoFlat.push(`treatment_short_gate_stocks(${reasons.join(',')})`);
-          }
+          autoFlat.push('aligned_bearish_stock_SHORT_measured_-0.11R');
         }
       }
       const highBlocks: string[] = [];

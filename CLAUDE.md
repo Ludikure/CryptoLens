@@ -609,6 +609,78 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25e — Part 8: the "untestable" stock gates were testable, and earnings is the first condition to PASS
+
+Part 7 filed four conditions as untestable — *"stocks only; no stock intraday paths in
+`vision_backfill`"*. **That described a directory, not a data gap.** The stock hourly bars have been
+in the box's own candle archive since **2019-01-07** (AAPL 13,063 bars, deeper than any crypto
+symbol), and a 1.0 GB snapshot of that archive is sitting in the working tree. **159 symbols,
+487,155 opportunities, joining at 97.6%** — no tunnel, no `/history` fan-out, no new data source.
+**Second time in two days that "untestable" meant "I did not look."** The rule this earns: name the
+specific missing data and where it would come from, or it is not a data gap.
+
+**The entry finding replicates out of sample.** Parts 4-5 measured entry discipline on crypto only:
+
+| entry | SHORT | LONG |
+|---|---:|---:|
+| at MARKET | −0.0794R | +0.0562R |
+| **0.25 ATR PULLBACK** | **−0.0333R** | **+0.0810R** |
+
++0.046 / +0.025 against crypto's +0.066 / +0.092. Same sign, same order, different asset class.
+**The only finding this project has that replicates across markets**, and still ~20-40× the gating layer.
+
+**A simulator limitation I built in, found here, corrected.** Every payoff script in Parts 1-7
+prices a stopped trade at **exactly −1R**. Real stops do not fill there when price gaps through them
+overnight — so the EV arm could not see gap damage *by construction*, and its earnings null was an
+artifact rather than evidence. Re-priced at the honest fill (the breaching bar's OPEN):
+
+| window | gapped through | idealR | **realR** | cost of the assumption |
+|---|---:|---:|---:|---:|
+| LONG 0-2d | **42.7%** | +0.0296 | **−0.1565** | **−0.186R** |
+| LONG 3-7d | 30.6% | +0.0864 | −0.0222 | −0.109R |
+| LONG >14d | 16.8% | +0.0833 | +0.0629 | −0.020R |
+| SHORT 0-2d | **44.6%** | −0.0100 | **−0.6933** | **−0.683R** |
+
+The average stopped SHORT within two days of earnings loses **2.43R against a 1R budget**. **Parts
+1-7 stand**: the same measurement on crypto gives **0.3% gap-through, −0.0013R across all stops** —
+a 24/7 tape has no session boundary to gap across. Stocks-only correction.
+
+**Earnings gates: the first envelope condition validated on its OWN stated mechanism.** The code
+says *"gap risk, stop will not hold"* — a variance claim, and by the Part 6 principle an EV null
+cannot refute an exogenous-event guard, so it was tested directly. Baseline P(gap ≥ 2 ATR) = 7.4%:
+
+| window | P(gap ≥ 2 ATR) | ratio | periods+ |
+|---|---:|---:|---:|
+| 0-2d | 0.5217 | **7.08×** | **8/8** |
+| 3-7d | 0.5181 | **7.03×** | **9/9** |
+| 8-14d | 0.3680 | **4.99×** | **9/9** |
+
+Three to five times the pre-declared 1.5× bar, every period — **including 8-14d, which the
+pre-declaration called "least plausible on its face"** and which survives because a multi-day hold
+opened that far out still straddles the report. All three kept, with the measured numbers now
+**in the prompt**: "gap risk" as a bare phrase invites the model to weigh it against a chart pattern;
+"43% of stops fill beyond the stop" does not.
+
+**An arithmetic correction to the harness.** The earnings arms still score "noise" on global lift
+(+0.006). That is the metric's ceiling, not a verdict: max lift is `fire_rate × (kept − blocked)`,
+and for LONG 0-2d that is `0.0215 × 0.213 = 0.0046` against an observed **+0.0046** — **100% of its
+theoretical maximum**. The Parts 1-7 bar is only meaningful above ~20% coverage; below it, the right
+statistics are per-blocked-bar penalty and period consistency.
+
+**Two stock gates changed.** `treatment_long_confirm_FAIL` **removed** — 4/9 periods, +0.0007R
+global, **−0.0070R on the LONG bars it governs**: a hard auto-FLAT with no benefit and a mild
+inversion, the same profile as `biases_MIXED`. Its PARTIAL cap is **kept** (+0.0074R, 6/9, and a
+soft cap costs far less when wrong — the asymmetric action tracks the asymmetric cost, not a claim
+either was demonstrated). `treatment_short_gate_stocks` **keeps its ban, loses its escape hatch**:
+of 43,904 applicable bars, ML≥70 fired on 1.4%, Stoch bearish 11.5%, TRENDING 32.0% — **all three
+together on 0.02%, seven bars in four years, averaging −0.2082R, worse than the 43,897 it blocked**.
+The ban is well supported (−0.1123R blocked vs a −0.0457R stock-SHORT average, 8/9). Also fixed the
+line that still read `FAIL — no LONG trade` after the block was gone — the 2026-08-22g failure mode
+in reverse.
+
+**Of ~20 envelope conditions, 16 are now directly tested.** 738/738 green. Worker-only — **needs a
+box redeploy**.
+
 ### 2026-08-25d — Part 7: swept every remaining testable envelope condition
 
 Enumerated the envelope's untested surface rather than assuming it. **Zero conditions clear the bar

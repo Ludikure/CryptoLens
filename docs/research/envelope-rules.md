@@ -1092,3 +1092,113 @@ mechanism rather than a proxy for it.
 `data_stale_N_sources` is a pipeline-health condition with no market analogue and is not tested here
 or ever. `news_thesis_conflict` still needs months of `news_items` accumulation. `continuation < 3`
 still needs the full signal list ported. Those three remain genuinely open.
+
+## PART 8 RESULTS — the earnings gates are the first envelope conditions to PASS
+
+Run at 8396f25 against the declarations above. **487,155 opportunities, 159 symbols, 2020-01 →
+2026-05**; 299,377 of them carrying an out-of-fold ML_WIN.
+
+### First, the entry finding replicates out of sample
+
+Not a gate result, but the most important line in this Part. Parts 4-5 measured entry discipline on
+crypto only. On stocks, untouched by that work:
+
+| entry | SHORT | LONG |
+|---|---:|---:|
+| at MARKET | −0.0794R | +0.0562R |
+| **0.25 ATR PULLBACK** | **−0.0333R** | **+0.0810R** |
+| **gain** | **+0.0461R** | **+0.0248R** |
+
+Crypto measured +0.066 / +0.092. Same sign, same order of magnitude, a different asset class, a
+different market structure, 159 symbols. **Entry discipline is the one finding this project has that
+replicates across markets** — and it is still ~20-40× anything the gating layer produces.
+
+Note also that stock LONGs are positive at market (+0.056R) where crypto LONGs were negative. The
+2020-2026 tape is the obvious reason and it is not a claim about the future.
+
+### A simulator limitation I built in, found here, and corrected
+
+`stock_rows.py` — like every payoff script in Parts 1-7 — prices a stopped trade at **exactly −1R**.
+Real stops do not fill at the stop price when the market gaps through them overnight. So the EV arm
+could not see gap damage **by construction**, and its earnings null was an artifact rather than
+evidence.
+
+Re-priced at the honest fill (breaching bar's OPEN when that open is already beyond the stop):
+
+| window | stops | **gapped through** | mean slip | idealR | **realR** | cost of the assumption |
+|---|---:|---:|---:|---:|---:|---:|
+| LONG 0-2d | 4,768 | **42.7%** | −0.408R | +0.0296 | **−0.1565** | **−0.186R** |
+| LONG 3-7d | 9,145 | 30.6% | −0.260R | +0.0864 | −0.0222 | −0.109R |
+| LONG 8-14d | 12,791 | 20.5% | −0.105R | +0.0809 | +0.0392 | −0.042R |
+| LONG >14d | 133,418 | 16.8% | −0.057R | +0.0833 | +0.0629 | −0.020R |
+| SHORT 0-2d | 4,987 | **44.6%** | **−1.434R** | −0.0100 | **−0.6933** | **−0.683R** |
+
+The average stopped SHORT inside two days of earnings loses **2.43R against a 1R risk budget**. The
+cost rises monotonically as earnings approach, exactly as a gap-risk guard would predict.
+
+**Parts 1-7 are unaffected.** The same measurement on crypto: **0.3% of stops gap through, −0.0013R
+across all stops.** A 24/7 tape has no session boundary to gap across, so the −1R assumption is
+near-exact there. This is a stocks-only correction.
+
+### The earnings gates' own claim, tested directly
+
+The code says *"gap risk 5-20%, stop will not hold"*. Baseline P(overnight gap ≥ 2 ATR inside the
+hold window) away from earnings = **0.0737**.
+
+| window | n | P(gap ≥ 2 ATR) | ratio | periods+ | verdict |
+|---|---:|---:|---:|---:|---|
+| 0-2d | 6,320 | 0.5217 | **7.08×** | **8/8** | **REAL** |
+| 3-7d | 13,427 | 0.5181 | **7.03×** | **9/9** | **REAL** |
+| 8-14d | 20,194 | 0.3680 | **4.99×** | **9/9** | **REAL** |
+
+**All three clear the pre-declared 1.5× bar by a factor of three to five, in every period.**
+Including 8-14d, which the pre-declaration called "the least plausible on its face" — wrongly: a
+9-trading-day hold opened 8-14 days out straddles the report about half the time, so the exposure
+is real even that far ahead.
+
+### The global-lift bar cannot validate a low-coverage guard — an arithmetic correction
+
+The earnings arms still score "noise" on global lift (+0.006 / +0.003 / +0.003). That is not a
+verdict about the gate; it is the ceiling of the metric. Maximum achievable lift is
+`fire_rate × (kept − blocked)`, and for LONG 0-2d that is `0.0215 × 0.213 = 0.0046` — against an
+observed **+0.0046**. **The gate is delivering 100% of its theoretical maximum.**
+
+So the bar declared in Parts 1-7 is only meaningful for conditions firing on ≳20% of bars. For
+anything sparser, the right statistics are the **per-blocked-bar penalty** and its **period
+consistency**, both of which the earnings windows pass emphatically (0.21R worse per trade on
+LONG 0-2d, 8/9 and 9/9 periods). Recorded as a correction to the harness, not to the earnings result.
+
+### The two stock gates
+
+| condition | fires | blocked | kept | global lift | periods+ | applicable-only lift |
+|---|---:|---:|---:|---:|---:|---:|
+| `treatment_short_gate_stocks` (SHORT) | 14.7% | **−0.1123** | −0.0343 | +0.0114 | **8/9** | n/a — see below |
+| `treatment_long_confirm_FAIL` (LONG) | 9.5% | +0.0838 | +0.0906 | +0.0007 | 4/9 | **−0.0070** |
+| `treatment_long_confirm_PARTIAL` (LONG) | 14.5% | +0.0597 | +0.0951 | +0.0052 | 6/9 | +0.0074 |
+
+Stable across all four robustness arms (HOLD 72, fee 0.00%, fee 0.171%, day-of-week stratified).
+
+**`treatment_short_gate_stocks` is a blanket ban wearing a three-way confirmation.** Of 43,904
+aligned-bearish bars, ML ≥ 70 fires on 1.4%, 4H Stoch bearish on 11.5%, TRENDING on 32.0% — and
+**all three together on 0.02%: seven bars in four years**, which averaged −0.2082R, worse than the
+43,897 it blocked. The ban itself is right (blocked bars −0.1123R against a −0.0457R stock-SHORT
+average — aligned-bearish shorts are 2.5× worse than stock shorts generally, 8/9 periods). The
+escape hatch is inert and, per the Part 6 principle, makes a PREDICTION claim it has never once
+demonstrated. **Simplified to the ban it measurably is.**
+
+**`treatment_long_confirm_FAIL` does not earn its auto-FLAT.** 4/9 periods, +0.0007 global, and
+**−0.0070 on the LONG bars it actually governs** — mildly inverted where it matters. Same class as
+`biases_MIXED` and `alignment_not_full` on SHORT: a hard block with no measured benefit. **Removed.**
+The PARTIAL cap is kept — it measures mildly positive (+0.0074, 6/9), it is a soft conviction cap
+rather than a block, so the cost of being wrong is much lower, and nothing about it inverted.
+
+Both LONG_CONFIRMATION numbers are noise-scale. The asymmetric action — drop the hard block, keep the
+soft cap — reflects the asymmetric cost of being wrong, not a claim that either was measured.
+
+### Where Part 8 leaves the count
+
+**Of ~20 envelope conditions, 16 are now directly tested.** Three remain genuinely open
+(`news_thesis_conflict` needs months of accumulation, `continuation < 3` needs the full signal list,
+`data_stale` is not a market claim). And for the first time, a condition has been **positively
+validated on its own stated mechanism** rather than merely surviving: the earnings gates guard a
+gap that is 5-7× more likely inside their windows, in every period tested.
