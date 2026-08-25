@@ -9,6 +9,7 @@
 // It is still COMPUTED and REPORTED — it is context for the model — but it cannot auto-FLAT.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
+import { systemPrompt } from '../src/prompt';
 import { join } from 'path';
 
 const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
@@ -31,12 +32,29 @@ describe('divergence is context, not a gate', () => {
     expect(src).toMatch(/killMacro/);
   });
 
-  it('divergence is still computed and surfaced, tagged as non-blocking', () => {
-    expect(src).toMatch(/CONTEXT_ONLY_does_not_block/);
-    expect(src).toMatch(/Divergence Escalated/);
+  it('is absent from EVERY gating structure, not merely tagged inside one', () => {
+    // A "does not block" tag under a heading called "Kill Conditions" is weaker governance than
+    // not being there. Both the kill-list entry and the `Divergence Escalated` line are gone, and
+    // `envDivergenceEscalated` with them — nothing read it once the auto-FLAT was deleted.
+    expect(src).not.toMatch(/killParts\.push\(`divergence_against_bias/);
+    expect(src).not.toMatch(/L\(`Divergence Escalated/);
+    expect(src).not.toMatch(/envDivergenceEscalated =/);
   });
 
-  it('the surfaced line states WHY it does not block, so it is not silently demoted', () => {
-    expect(src).toMatch(/DAILY divergence is INVERTED/);
+  it('the raw per-timeframe reading STAYS — the indicator block is descriptive', () => {
+    // Removing one indicator from a descriptive block because it happens to have been tested,
+    // while RSI/MACD/ADX sit there equally untested, would be inconsistent. The prior is governed
+    // in the system prompt instead, which addresses the actual risk directly.
+    expect(src).toMatch(/Divergence: \$\{ind\.divergence\}/);
+  });
+
+  it('the SYSTEM prompt governs the model\'s prior, since the literature disagrees with the data', () => {
+    const c = systemPrompt(true), st = systemPrompt(false);
+    for (const p of [c, st]) {
+      expect(p).toMatch(/RSI DIVERGENCE — CALIBRATION NOTE/);
+      expect(p).toMatch(/do NOT cite it as evidence for a direction/i);
+      expect(p).toMatch(/~44 bars/);                       // the episode correction, not the bar count
+      expect(p).toMatch(/CVD divergence.*different, untested signal/s);
+    }
   });
 });

@@ -571,7 +571,8 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
 
   if (indicators.length >= 2) {
     const daily = indicators[0], fourH = indicators[1], oneH = indicators.length > 2 ? indicators[2] : null;
-    let envAnyKilled = false, envDivergenceEscalated = false, envMacroRisk = 'NONE', envContinuationCount = 0, envAlignment = 'UNKNOWN', envNewsConflicts = false;
+    // `envDivergenceEscalated` removed 2026-08-25: nothing read it once the auto-FLAT was deleted.
+    let envAnyKilled = false, envMacroRisk = 'NONE', envContinuationCount = 0, envAlignment = 'UNKNOWN', envNewsConflicts = false;
     let envChaseLevel = 'none';   // CHASE/EXHAUSTION level, hoisted so the Conviction Envelope can hard-FLAT a mature-aligned chase
     const isTreatment = true;
     let treatmentStochCrossDaily = 'none', treatmentStochCross4H = 'none', treatmentLongConfirmStatus = 'n/a';
@@ -855,16 +856,15 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       }
       newState.killDur = durState;
 
-      const divergenceEscalated = (durState.divergence ?? 0) >= 6;
-      envDivergenceEscalated = divergenceEscalated;
       const killParts: string[] = [];
-      // Reported as CONTEXT, tagged so the model does not read it as a blocking condition.
-      if (killDivergence) killParts.push(`divergence_against_bias(${durState.divergence ?? 1} candles, CONTEXT_ONLY_does_not_block)`);
+      // RSI divergence is NOT listed here. It was removed from ANY_KILLED on 2026-08-25 after direct
+      // testing, and listing a non-blocking item under a heading called "Kill Conditions" is
+      // contradictory — a tag saying "does not block" is weaker governance than not being there.
+      // (CVD divergence, a different signal in the whale-trap flag, is untested and untouched.)
       if (killVolume) killParts.push(`counter_move_volume_exceeds(${durState.volume ?? 1} candles)`);
       if (killFunding) killParts.push(`funding_supports_counter(${durState.funding ?? 1} candles)`);
       if (killMacro) killParts.push('macro_event_within_4h');
       L(`Kill Conditions: ${killParts.length ? killParts.join(', ') : 'none'}, ANY_KILLED=${anyKilled}`);
-      L(`Divergence Escalated: ${divergenceEscalated} (context only — measured to carry no tradeable edge: 4H divergence moves P(up24) +2.2pp at p=4e-9 yet makes no money, and DAILY divergence is INVERTED)`);
     }
 
     // Phase 5 — Macro event window

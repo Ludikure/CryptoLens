@@ -639,8 +639,18 @@ decision is unchanged on the grounds that always carried it**: the 4H reversal t
 A genuine directional signal too small to trade. **Fourth time in three days that dependent
 observations nearly produced a finding** — any claim from this dataset must state its effective n.
 
-Divergence is still computed and surfaced, tagged `CONTEXT_ONLY_does_not_block`, with the reason on
-the line so it is not silently demoted. Removing the mixed rule also orphaned its FRAMING variant
+**Divergence is now out of EVERY gating structure**, not merely tagged inside one — a "does not
+block" label under a heading called `Kill Conditions` is weaker governance than not being there. The
+kill-list entry, the `Divergence Escalated` line and `envDivergenceEscalated` are all gone (nothing
+read the last once the auto-FLAT went).
+
+The raw per-timeframe `Divergence:` reading **stays** in the indicator block: removing one indicator
+because it happens to have been tested, while RSI/MACD/ADX sit there equally untested, would be
+inconsistent. The real risk — that the model's training literature treats divergence as a strong
+reversal signal — is addressed where it belongs, with an `RSI DIVERGENCE — CALIBRATION NOTE` in both
+system prompts carrying the episode-corrected numbers and an explicit *"do NOT cite it as evidence
+for a direction"*. **CVD divergence in the whale-trap flag is a different, untested signal and is
+untouched.** Removing the mixed rule also orphaned its FRAMING variant
 (`mixedGated` could no longer be true) — deleted rather than left compiling. 730/730 green.
 
 ### 2026-08-25b — The value was in the ENTRY LEVEL all along (Parts 4-5)
