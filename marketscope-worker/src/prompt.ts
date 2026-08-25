@@ -829,7 +829,13 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (derivatives) { const fr = derivatives.fundingRatePercent; if (dailyBearish && fr < -0.01) killFunding = true; if (dailyBullish && fr > 0.01) killFunding = true; }
       killMacro = economicEvents.some(e => e.isHighImpact && e.isUpcoming && (e.date - nowMs) > 0 && (e.date - nowMs) < 4 * 3600 * 1000);
 
-      const anyKilled = killDivergence || killVolume || killFunding || killMacro;
+      // `killDivergence` no longer contributes to ANY_KILLED (2026-08-25). It is still COMPUTED and
+      // still REPORTED below, because it is informative context for the model — it just no longer
+      // hard-FLATs the analysis, having been directly tested and found to gate nothing (twelve
+      // variant tests, zero passes; every LONG lift negative). The other three kill conditions are
+      // untouched: counter-move volume and funding are structural, and macro guards an exogenous
+      // event rather than claiming prediction.
+      const anyKilled = killVolume || killFunding || killMacro;
       envAnyKilled = anyKilled;
 
       // Phase 3 — Kill duration tracking (candle-anchored)
@@ -852,12 +858,13 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const divergenceEscalated = (durState.divergence ?? 0) >= 6;
       envDivergenceEscalated = divergenceEscalated;
       const killParts: string[] = [];
-      if (killDivergence) killParts.push(`divergence_against_bias(${durState.divergence ?? 1} candles)`);
+      // Reported as CONTEXT, tagged so the model does not read it as a blocking condition.
+      if (killDivergence) killParts.push(`divergence_against_bias(${durState.divergence ?? 1} candles, CONTEXT_ONLY_does_not_block)`);
       if (killVolume) killParts.push(`counter_move_volume_exceeds(${durState.volume ?? 1} candles)`);
       if (killFunding) killParts.push(`funding_supports_counter(${durState.funding ?? 1} candles)`);
       if (killMacro) killParts.push('macro_event_within_4h');
       L(`Kill Conditions: ${killParts.length ? killParts.join(', ') : 'none'}, ANY_KILLED=${anyKilled}`);
-      L(`Divergence Escalated: ${divergenceEscalated}`);
+      L(`Divergence Escalated: ${divergenceEscalated} (context only — measured to carry no tradeable edge: 4H divergence moves P(up24) +2.2pp at p=4e-9 yet makes no money, and DAILY divergence is INVERTED)`);
     }
 
     // Phase 5 — Macro event window
@@ -1231,7 +1238,20 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const autoFlat: string[] = [];
       if (mlPct != null && mlPct < 50) autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);
       if (envAnyKilled) autoFlat.push('ANY_KILLED=true');
-      if (envDivergenceEscalated) autoFlat.push('divergence_escalated_6+_candles');
+      // REMOVED 2026-08-25 — directly tested and unsupported (envelope-rules.md Part 6 + follow-up).
+      //
+      // Twelve variant tests, zero passes. Best SHORT lift +0.0028R against a +0.02R bar, and EVERY
+      // LONG lift negative — `against bias (daily)` blocked bars averaging +0.0504R while keeping
+      // +0.0186R, the same block-the-best-bars signature as biases_MIXED and alignment_not_full.
+      //
+      // The underlying signal is real but worthless: 4H divergence moves P(up24) by +2.24pp at
+      // p=3.9e-09 and does not convert into money, while DAILY divergence is INVERTED (bearish
+      // divergence precedes UP more often, significantly). One indicator, two timeframes, opposite
+      // signs — a weak effect sliced two ways, not a mechanism.
+      //
+      // WHY THIS GOES WHILE macro_IMMINENT AND EARNINGS STAY: those guard an EXOGENOUS EVENT and
+      // never claimed predictive power, so a null EV test does not refute them. Divergence CLAIMS
+      // prediction, and a claim of prediction has to be earned.
       // biases_MIXED auto-FLAT is ML-GATED (2026-07-06, ml-training/mixed_flat_test.py on the
       // clean v14 regen — 870K crypto + 503K stock bars). Non-aligned bars (daily/4H mixed or
       // neutral) carry ~2× the goodR rate of aligned bars (crypto 61/59% vs 33/30%; stocks

@@ -747,3 +747,36 @@ A null on the underlying signal makes a real effect in a subset unlikely, but th
 test of either rule**, and removing them on this evidence would be the same over-reach the alignment
 result was nearly subjected to. The honest status is **unsupported, not disproven** — and the
 narrower variants are a cheap follow-up whenever it is worth running.
+
+## PART 6 FOLLOW-UP — the two ACTUAL rules, tested directly: unsupported
+
+Part 6 tested the raw flag. These are the envelope's real conditions.
+
+| rule | fires | SHORT lift | periods+ | LONG lift | periods+ |
+|---|---:|---:|---:|---:|---:|
+| escalated 6+ (daily) | 11.2% | +0.0022 | 5/9 | **−0.0028** | 4/9 |
+| against bias (daily) | 7.5% | +0.0019 | 7/9 | **−0.0024** | 2/9 |
+| escalated 6+ (4H) | 4.1% | +0.0006 | 5/9 | −0.0007 | 3/9 |
+| against bias (4H) | 7.5% | −0.0002 | 4/9 | −0.0003 | 4/9 |
+| escalated 6+ (either) | 14.9% | +0.0028 | 6/9 | **−0.0035** | 2/9 |
+| against bias (either) | 14.4% | +0.0011 | 6/9 | **−0.0021** | 2/9 |
+
+**Twelve tests, zero pass.** Best SHORT lift is +0.0028R against a +0.02R bar. **Every LONG lift is
+negative**, and `against bias (daily)` blocks bars averaging **+0.0504R** while keeping bars
+averaging **+0.0186R** — the same block-the-best-bars signature as `biases_MIXED` and
+`alignment_not_full`.
+
+### Why these are removed while macro and earnings stay
+
+The distinction matters and is worth stating once, because it governs every future decision of this
+kind:
+
+- **`macro_IMMINENT`, earnings proximity** — guard against an EXOGENOUS EVENT. Their justification is
+  that a scheduled release can gap the price regardless of what any indicator says. They were never
+  claiming predictive power, so a null EV test does not refute them.
+- **The divergence rules** — claim PREDICTIVE POWER. Divergence is asserted to foretell a reversal.
+  A claim of prediction must be earned empirically, and this one is not: the underlying signal
+  carries a real but economically worthless direction effect (Part 6), and both narrow variants gate
+  nothing (above).
+
+Removing them, so the envelope stops asserting something the data does not support.

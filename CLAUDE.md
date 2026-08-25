@@ -609,6 +609,35 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25c — Envelope surgery: removed what measured inverted, demoted what claims prediction
+
+Acting on the user's rule — *"remove what is proven to be wrong, include what is proven to be
+correct"* — against `docs/research/envelope-rules.md`. **Removed only what was directly tested;
+every untested guard is untouched.**
+
+| condition | evidence | action |
+|---|---|---|
+| `biases_MIXED_and_ML<70` | blocked bars averaging **+0.0503R** vs a +0.0197R baseline, 2/9 periods | **removed** |
+| `alignment_not_full` | SHORT −0.0276R at 3/9 (kept the losers); LONG +0.0264R at 6/9 | **scoped to LONG** |
+| `conformal_abstain_not_confident` | flag declared `false`, never assigned — could not fire | **removed** |
+| `divergence_escalated_6+_candles` | 12 variant tests, 0 passes; every LONG lift negative | **removed** |
+| `divergence_against_bias` (kill) | same | **demoted to CONTEXT** — no longer feeds `ANY_KILLED` |
+
+**The principle that decided which guards stay**, worth recording because it governs future calls:
+`macro_IMMINENT` and earnings guard an **exogenous event** and never claimed predictive power, so a
+null EV test does not refute them. The divergence rules **claim prediction**, and a claim of
+prediction must be earned. Same for counter-move volume and funding, which are structural — both
+untouched.
+
+**The divergence finding is the cleanest statistical-vs-economic split in the vault:** 4H divergence
+moves P(up24) by **+2.24pp at p = 3.9e−09** and makes no money; DAILY divergence is **inverted**
+(bearish divergence precedes UP, significantly). One indicator, two timeframes, opposite signs — a
+weak effect sliced two ways. At 290,000 rows almost anything reaches p < 0.001.
+
+Divergence is still computed and surfaced, tagged `CONTEXT_ONLY_does_not_block`, with the reason on
+the line so it is not silently demoted. Removing the mixed rule also orphaned its FRAMING variant
+(`mixedGated` could no longer be true) — deleted rather than left compiling. 730/730 green.
+
 ### 2026-08-25b — The value was in the ENTRY LEVEL all along (Parts 4-5)
 
 Parts 1-3 found no gate that generalises. Part 4 asked why, and the answer was that **every one of
