@@ -147,3 +147,67 @@ excursion relative to ATR is simply less available.
   and the product.
 - **Concluding anything is profitable.** Ungated shorts at +0.0197R on 1.25R targets is thin, one
   dataset, one period, and the basket it is measured on fell 83%.
+
+
+---
+
+# PART 2 — the envelope as a WHOLE — PRE-DECLARED 2026-08-25, before computing
+
+Part 1 tested conditions one at a time. That cannot answer the real question, which the user put
+directly: *"I feel like envelope was a thesis that wasn't verified."*
+
+## What the envelope actually is
+
+Not a filter — a **sizing function**. Four tiers, and conviction is what the LLM is told it may
+express:
+
+| tier | trigger | assumed size |
+|---|---|---:|
+| HIGH | nothing blocking | 1.00 |
+| MODERATE | any `highBlock` | 0.66 |
+| LOW | any `moderateBlock` | 0.33 |
+| FLAT | any `autoFlat` | 0.00 |
+
+The size mapping is an **assumption** — the prompt says "conviction", not "fraction" — so the result
+is reported at a second mapping (1.0/0.5/0.25/0) as a sensitivity check. If the verdict flips between
+them, that is itself the finding.
+
+## Arms
+
+| arm | description |
+|---|---|
+| **A — no envelope** | trade every bar at full size. The thing to beat. |
+| **B — envelope as built** | faithful reconstruction of the tier logic |
+| **C — B minus the inverted three** | drop `biases_MIXED`, `alignment_not_full`, `trend_mature` |
+| **D — ML only** | the one component that showed any positive lift |
+| **E — random, coverage-matched** | **the control that decides this** |
+| **F — inverted envelope** | size = 1 − envelope size. If B is worse than nothing, F should beat it |
+
+**Arm E is the point.** Any gate that reduces exposure will change returns; the question is whether
+the envelope's *specific* choices beat a random gate that trades equally often. Part 1's biggest
+finding — that the alignment gates keep the worse bars — predicts the envelope loses to random here.
+
+## Pre-declared bar
+
+The envelope is **verified** only if arm B:
+
+1. beats arm A (no envelope) by **≥ 0.02R** per trade, AND
+2. beats arm E (coverage-matched random) by **≥ 0.02R**, AND
+3. does both in **≥ 6 of 9** six-month periods, by **sign count**, AND
+4. holds under both size mappings.
+
+Failing 2 while passing 1 means the envelope is **merely trading less**, not choosing better — the
+outcome Part 1 predicts.
+
+## Outcomes that are NOT failures of the test
+
+- **B loses to A**: the envelope is net harmful and should be cut back to what survives.
+- **B ties E**: the structure is decorative; any equally-sparse rule would do as well.
+- **F beats B**: the strongest possible statement that the thesis is inverted.
+
+## Honest limits, stated in advance
+
+Untestable conditions (kills, macro, earnings, news, stock gates) are **absent from every arm**, so
+this measures the envelope's *reconstructible core*, not all of it. Entry is at the bar close, while
+real setups enter at a level the LLM picks. And `continuation` is approximated by momentum alignment.
+None of that is fixable with this dataset and all of it is stated rather than papered over.
