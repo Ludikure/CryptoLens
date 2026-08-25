@@ -6,7 +6,6 @@ struct SettingsView: View {
     @StateObject private var status = ConnectionStatus.shared
     @State private var selectedProvider: AIProviderType = .deepseek
     @State private var selectedModel: String = ""
-    @AppStorage("auto_alerts_enabled") private var autoAlerts: Bool = false
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @AppStorage("accountSize") private var accountSize: Double = 28000
     @AppStorage("riskPercent") private var riskPercent: Double = 2.0
@@ -71,18 +70,6 @@ struct SettingsView: View {
                     .onChange(of: selectedModel) {
                         configureService()
                     }
-                }
-
-                // Alerts
-                Section {
-                    Toggle("Auto-generate alerts from trade setups", isOn: $autoAlerts)
-                        .onChange(of: autoAlerts) {
-                            UserDefaults.standard.set(autoAlerts, forKey: "auto_alerts_enabled")
-                        }
-                } header: {
-                    Text("Alerts")
-                } footer: {
-                    Text("When enabled, running AI analysis will automatically create price alerts for Entry, Stop Loss, and Take Profit levels.")
                 }
 
                 // Notifications

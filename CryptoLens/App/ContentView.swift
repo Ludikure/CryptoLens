@@ -2,7 +2,6 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var service: AnalysisService
-    @EnvironmentObject var alertsStore: AlertsStore
     @EnvironmentObject var coordinator: NavigationCoordinator
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
     @Environment(\.colorScheme) private var systemScheme
@@ -34,7 +33,6 @@ struct ContentView: View {
         //   Chart   — show me the tape
         //   Market  — the surrounding context (derivatives, macro, calendar, sentiment)
         //   Record  — is this system actually working? (was buried in Settings)
-        //   Alerts  — my alerts
         // The full AI analysis is no longer a peer tab: it's PUSHED from the verdict card on Now,
         // which is both the right hierarchy (you land on the answer, tap for the reasoning) and what
         // freed the fifth slot for Record without spilling into iOS's "More" tab.
@@ -56,14 +54,6 @@ struct ContentView: View {
             }
             .tabItem { Label("Record", systemImage: "checkmark.seal") }
             .tag(5)
-
-            NavigationStack {
-                AlertsView()
-            }
-            .tabItem {
-                Label("Alerts", systemImage: alertsStore.activeAlerts.isEmpty ? "bell" : "bell.badge")
-            }
-            .tag(3)
         }
         .preferredColorScheme(colorSchemeOverride == "light" ? .light : colorSchemeOverride == "dark" ? .dark : nil)
         .task {
@@ -74,7 +64,7 @@ struct ContentView: View {
     }
 
     /// The three symbol-scoped tabs share one chrome: a NavigationStack plus the asset toolbar and
-    /// its sheets. Record and Alerts deliberately opt out — neither is scoped to a symbol, so the
+    /// its sheets. Record deliberately opts out — it is not scoped to a symbol, so the
     /// symbol picker there would be meaningless.
     @ViewBuilder
     private func symbolScopedTab<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {

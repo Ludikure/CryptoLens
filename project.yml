@@ -49,8 +49,6 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
         UIRequiresFullScreen: false
         # API keys removed from bundle — all calls go through worker proxy
-        BGTaskSchedulerPermittedIdentifiers:
-          - com.ludikure.CryptoLens.priceCheck
         UIBackgroundModes:
           - fetch
           - remote-notification

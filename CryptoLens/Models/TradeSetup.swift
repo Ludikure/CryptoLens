@@ -98,50 +98,6 @@ struct TradeSetup: Codable, Identifiable {
     var rrTP1: Double { rrRatio(for: tp1) }
     var rrTP2: Double? { tp2.map { rrRatio(for: $0) } }
 
-    /// Generate price alerts for this setup.
-    func toAlerts(symbol: String, currentPrice: Double) -> [PriceAlert] {
-        var alerts = [PriceAlert]()
-        let groupId = UUID()
-
-        func alertCondition(for target: Double) -> PriceAlert.Condition {
-            currentPrice > target ? .below : .above
-        }
-
-        alerts.append(PriceAlert(
-            symbol: symbol,
-            targetPrice: entry,
-            condition: alertCondition(for: entry),
-            note: "\(direction) entry",
-            setupId: groupId
-        ))
-
-        alerts.append(PriceAlert(
-            symbol: symbol,
-            targetPrice: stopLoss,
-            condition: alertCondition(for: stopLoss),
-            note: "\(direction) stop loss",
-            setupId: groupId
-        ))
-
-        alerts.append(PriceAlert(
-            symbol: symbol,
-            targetPrice: tp1,
-            condition: alertCondition(for: tp1),
-            note: "\(direction) TP1",
-            setupId: groupId
-        ))
-        if let tp2 = tp2 {
-            alerts.append(PriceAlert(
-                symbol: symbol,
-                targetPrice: tp2,
-                condition: alertCondition(for: tp2),
-                note: "\(direction) TP2",
-                setupId: groupId
-            ))
-        }
-
-        return alerts
-    }
 }
 
 // MARK: - Trade Outcome

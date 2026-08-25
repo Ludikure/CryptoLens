@@ -48,7 +48,6 @@ struct MarketScopeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var analysisService = AnalysisService()
     @StateObject private var favoritesStore = FavoritesStore()
-    @StateObject private var alertsStore = AlertsStore()
     @StateObject private var navigationCoordinator = NavigationCoordinator()
     @Environment(\.scenePhase) private var scenePhase
     @State private var showWhatsNew = false
@@ -62,8 +61,6 @@ struct MarketScopeApp: App {
             "feeRoundTripPercent": 0.171, "max_leverage": 3.5])
         // Analysis runs entirely on the shared-brain Worker (Phase 4 complete) — no on-device
         // engine, no toggle. The Worker is the single source of truth for the prompt + LLM.
-        BackgroundRefreshManager.register()
-        AlertsStore.requestPermission()
         PushService.ensureRegistered()
         // Migrate kill duration / regime state from UserDefaults → SwiftData
         AnalysisStateMigration.migrateIfNeeded()
@@ -79,17 +76,14 @@ struct MarketScopeApp: App {
                 ContentView()
                     .environmentObject(analysisService)
                     .environmentObject(favoritesStore)
-                    .environmentObject(alertsStore)
                     .environmentObject(navigationCoordinator)
 
                 SplashView()
             }
                 .modelContainer(for: [AnalysisState.self])
                 .onAppear {
-                    analysisService.configure(alertsStore: alertsStore)
                     analysisService.prefetchFavorites(favoritesStore.orderedFavorites)
                     PushService.syncWatchlist(favoritesStore.orderedFavorites)
-                    alertsStore.syncFromServer()
                     Task { await OutcomeTracker.refresh() }   // server-resolved tracked setups (2026-07-09 cutover)
                     // Show What's New after splash dismisses
                     if WhatsNewManager.shouldShow {
@@ -105,7 +99,6 @@ struct MarketScopeApp: App {
                     WhatsNewView()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
-                    BackgroundRefreshManager.schedule()
                 }
                 .onChange(of: scenePhase) { _, newPhase in
                     switch newPhase {
@@ -120,11 +113,8 @@ struct MarketScopeApp: App {
                         // reactivates the app) and the switched-symbol case. recoverPendingAnalyses
                         // switches to the recovered symbol so the result is actually shown.
                         analysisService.recoverPendingAnalyses()
-                        alertsStore.processPendingBackgroundAlerts()
-                        alertsStore.syncFromServer()
-                        // Replay any offline alert changes
+                            // Replay any offline alert changes
                         if ConnectionStatus.shared.pendingOfflineChanges {
-                            PushService.syncAlerts(alertsStore.alerts)
                         }
                     case .background:
                         analysisService.stopAutoRefresh()

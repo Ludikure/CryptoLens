@@ -1,6 +1,6 @@
 import Foundation
 
-/// Syncs alerts and device token to the self-hosted backend (the TrueNAS "box").
+/// Syncs the device token and watchlist to the self-hosted backend (the TrueNAS "box").
 /// Auth: server-issued token obtained on first registration.
 /// All state is @MainActor-isolated to prevent data races on deviceId, authToken, and isAuthenticating.
 @MainActor
@@ -175,60 +175,6 @@ enum PushService {
             }
         }
         ConnectionStatus.shared.workerAuth = .error
-    }
-
-    /// Sync current alerts to the worker. Marks pending if offline.
-    nonisolated static func syncAlerts(_ alerts: [PriceAlert]) {
-        Task { @MainActor in
-            let offline = NetworkMonitor.shared.isOffline
-            if offline {
-                ConnectionStatus.shared.alertSync = .pending
-                ConnectionStatus.shared.pendingOfflineChanges = true
-                return
-            }
-
-            await ensureAuth()
-            guard let url = URL(string: "\(workerURL)/alerts") else { return }
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            addAuthHeaders(&request)
-
-            let payload = alerts.filter { !$0.triggered }.map { alert -> [String: Any] in
-                [
-                    "id": alert.id.uuidString,
-                    "symbol": alert.symbol,
-                    "targetPrice": alert.targetPrice,
-                    "condition": alert.condition.rawValue,
-                    "note": alert.note,
-                    "triggered": false,
-                ]
-            }
-
-            request.httpBody = try? JSONSerialization.data(withJSONObject: ["alerts": payload])
-            #if DEBUG
-            print("[MarketScope] Syncing \(payload.count) alerts to worker...")
-            #endif
-            if let (data, response) = try? await URLSession.shared.data(for: request),
-               let http = response as? HTTPURLResponse {
-                #if DEBUG
-                let body = String(data: data, encoding: .utf8) ?? ""
-                print("[MarketScope] Alert sync: HTTP \(http.statusCode) — \(body)")
-                #endif
-                if (200...299).contains(http.statusCode) {
-                    ConnectionStatus.shared.alertSync = .ok
-                    ConnectionStatus.shared.pendingOfflineChanges = false
-                } else {
-                    if http.statusCode == 401 { await handleAuthFailure() }
-                    ConnectionStatus.shared.alertSync = .error
-                }
-            } else {
-                #if DEBUG
-                print("[MarketScope] Alert sync: network error")
-                #endif
-                ConnectionStatus.shared.alertSync = .error
-            }
-        }
     }
 
     /// Sync watchlist symbols to worker for server-side score notifications.

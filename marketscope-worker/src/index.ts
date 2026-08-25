@@ -954,38 +954,7 @@ export default {
     }
 
     // === Alert sync (D1) ===
-    if (path === '/alerts' && request.method === 'POST') {
-      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      try {
-        const body = await request.json() as { alerts: any[] };
-        if (!body.alerts || !Array.isArray(body.alerts)) return json({ error: 'Missing alerts' }, 400);
-        const validated = body.alerts.slice(0, MAX_ALERTS).map(validateAlert).filter((a): a is Alert => a !== null);
-        // Write to D1
-        const stmts = [env.DB.prepare('DELETE FROM alerts WHERE device_id = ?').bind(deviceId)];
-        for (const a of validated) {
-          stmts.push(env.DB.prepare(
-            'INSERT INTO alerts (id, device_id, symbol, target_price, condition, note, triggered) VALUES (?, ?, ?, ?, ?, ?, ?)'
-          ).bind(a.id, deviceId, a.symbol, a.targetPrice, a.condition, a.note || '', a.triggered ? 1 : 0));
-        }
-        await env.DB.batch(stmts);
-        return json({ ok: true, count: validated.length });
-      } catch {
-        return json({ error: 'Invalid request' }, 400);
-      }
-    }
-    if (path === '/alerts' && request.method === 'GET') {
-      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      const rows = await env.DB.prepare(
-        'SELECT id, symbol, target_price as targetPrice, condition, note, triggered FROM alerts WHERE device_id = ? AND triggered = 0'
-      ).bind(deviceId).all();
-      return json(rows.results);
-    }
-    if (path === '/alerts' && request.method === 'DELETE') {
-      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
-      await env.DB.prepare('DELETE FROM alerts WHERE device_id = ?').bind(deviceId).run();
-      return json({ ok: true });
-    }
-
+            
     // === /pending-setups: REMOVED 2026-07-24 ===
     // These three handlers (POST/GET/DELETE) were the legacy iOS registration path for conditional
     // setups. iOS stopped calling them at the 2026-07-09 server-side cutover (WorkerPendingSetupService
@@ -2705,7 +2674,6 @@ export default {
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     setProxyConfig(env);
-    ctx.waitUntil(checkAllDeviceAlerts(env));
     ctx.waitUntil(checkAllDeviceScores(env));
     ctx.waitUntil(archiveShortInterest(env));
     ctx.waitUntil(cleanupStaleDevices(env));
@@ -2832,23 +2800,6 @@ async function checkRateLimit(env: Env, key: string, limit: number, windowSec: n
 }
 
 // === Alert Checking (Cron — iterates all devices) ===
-async function checkAllDeviceAlerts(env: Env) {
-  // Get all devices with active alerts from D1
-  const devices = await env.DB.prepare(
-    'SELECT DISTINCT device_id FROM alerts WHERE triggered = 0'
-  ).all();
-  // Parallel + allSettled so one device's failure (rate-limited provider, malformed
-  // alert row, etc.) doesn't push subsequent devices past the cron's wall-time budget.
-  // Pre-fix this was sequential and a slow upstream could starve the tail of the list.
-  const results = await Promise.allSettled(
-    devices.results.map(row => checkDeviceAlerts(env, row.device_id as string))
-  );
-  results.forEach((r, i) => {
-    if (r.status === 'rejected') {
-      console.log(`[cron] alert check failed for ${devices.results[i].device_id}: ${r.reason}`);
-    }
-  });
-}
 
 async function checkDeviceAlerts(env: Env, deviceId: string) {
   const rows = await env.DB.prepare(

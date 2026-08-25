@@ -24,11 +24,7 @@ class AnalysisService: ObservableObject {
     // selection (autoConfigureKey reads it on init). DeepSeek R1's reasoning is well-suited to
     // our rule-based prompt at ~5x lower cost than Sonnet 4.6 + extended thinking.
     @Published var providerType: AIProviderType = .deepseek
-    private(set) var alertsStore: AlertsStore?
 
-    func configure(alertsStore: AlertsStore) {
-        self.alertsStore = alertsStore
-    }
 
     @Published var isLoading = false
     @Published var loadingStatus = ""
@@ -462,7 +458,6 @@ class AnalysisService: ObservableObject {
                 loadingStatus = ""
                 isAIStale = !result.claudeAnalysis.isEmpty && !result.claudeAnalysis.contains("not configured") && (result.analysisTimestamp == nil || result.timestamp.timeIntervalSince(result.analysisTimestamp!) > 600)
             }
-            alertsStore?.checkAlerts(prices: [symbol: result.daily.price])
             // Outcome resolution is SERVER-SIDE since the 2026-07-09 thin-client cutover —
             // the box's cron advances every open setup per minute (15m crypto candles / 1h
             // stock candles), no phone involvement. Just pull the fresh snapshot for display.
@@ -812,15 +807,6 @@ class AnalysisService: ObservableObject {
             // so the new rows show up in Active Trades / the dashboard immediately.
             Task { await OutcomeTracker.refresh() }
 
-            if let store = alertsStore, UserDefaults.standard.bool(forKey: "auto_alerts_enabled") {
-                store.removeAlerts(forSymbol: symbol)
-                if !tradeSetups.isEmpty {
-                    let price = result.daily.price
-                    for alert in tradeSetups.flatMap({ $0.toAlerts(symbol: symbol, currentPrice: price) }) {
-                        store.addAlert(alert)
-                    }
-                }
-            }
             saveCache(result)
 
         } catch {

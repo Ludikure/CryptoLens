@@ -67,7 +67,6 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 |---|---|---|---|
 | `/` `/health` | GET | none | Liveness check |
 | `/register` | POST | X-App-ID only (IP rate-limited 3/24h) | Issue auth token for a new device; idempotent for existing device_id with valid token |
-| `/alerts` | POST/GET/DELETE | required | Sync alerts list to D1 / fetch active / clear |
 | `/pending-setups` | POST/GET | required | Register conditional setups for entry-zone touch monitoring |
 | `/watchlist` | POST | required | Set symbols to monitor + ML thresholds (symbols are sanitized + uppercased) |
 | `/analyze` | POST | required (60/min rate-limited) | Proxy AI provider call (Claude/Gemini/DeepSeek) with allowlist enforcement |
@@ -103,7 +102,6 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 
 **Cron-only operations (no endpoint):**
 - `checkAllDeviceScores` (orchestrator) → `computeSymbolPredictions` (symbol pass, writes `ml_preds:all` etc.) → `processDeviceNotifications` (per-device gating + APNs)
-- `checkAllDeviceAlerts` (price-alert evaluation, `Promise.allSettled` for fault isolation)
 - `archiveShortInterest` (daily FINRA pull → `short_interest_history` D1)
 - `cleanupStaleDevices` (daily, 30-day inactivity sweep)
 - `dedupe_old_setups` (in pending-setup loop)
@@ -242,7 +240,7 @@ A unified touch-state machine in chart.html owns gesture bookkeeping with stalen
 
 ### Navigation
 
-4-tab layout in `ContentView`: Chart (0), Market (1), Analysis (2), Alerts (3). Tabs 0-2 share a `NavigationStack`; tab 3 (`AlertsView`) gets its own `NavigationStack` from `ContentView`. **Do not add a NavigationStack inside AlertsView.**
+Tabs in `ContentView`: Now (verdict-first landing), Chart, Market, Record. **The Alerts tab and the entire price-alert feature were removed 2026-08-24** — unused since creation. Symbol-scoped tabs share one chrome via `symbolScopedTab`; Record opts out.
 
 ## System Prompt Architecture
 
@@ -610,6 +608,30 @@ remains:
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-08-24b — Price alerts removed entirely (unused since creation)
+
+User: *"I do not need alerts feature and tab. It has been unused since it was created."* Removed from
+both sides after tracing every dependency first.
+
+**iOS deleted:** `AlertsView.swift`, `AlertsStore.swift`, `PriceAlert.swift`, and
+`BackgroundRefreshManager.swift` — that last one existed *solely* to poll prices for alerts, so it had
+no other reason to exist. Also removed: the tab, `TradeSetup.toAlerts()`, `PushService.syncAlerts`,
+`ConnectionStatus.alertSync` (no writer left), the Settings auto-alert toggle, and the
+`BGTaskSchedulerPermittedIdentifiers` declaration in both `project.yml` and `Info.plist`.
+
+**Worker deleted:** the three `/alerts` handlers and `checkAllDeviceAlerts`, which ran **every minute
+for every device**. The `alerts` D1 table is deliberately LEFT IN PLACE — dropping it is destructive
+and gains nothing; it simply stops being written.
+
+**The coupling was safer than it looked:** the analysis path could auto-create alerts from setups,
+but only behind `auto_alerts_enabled`, which defaults to `false`. So nothing that mattered was wired
+through it.
+
+**Lesson from the removal itself:** three brace-unbalancing regexes broke the build, one of which ate
+`TradeSetup`'s struct boundary and took `TradeOutcome`'s declaration with it. Deleting Swift by
+regex is a bad idea — the fix was `git checkout` plus a brace-depth walk to find the function's real
+end. 713 worker tests green, iOS build green.
 
 ### 2026-08-24 — Excursion + crash models shipped; the crash overlay was never in the app
 
