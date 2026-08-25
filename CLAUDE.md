@@ -609,6 +609,42 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25b — The value was in the ENTRY LEVEL all along (Parts 4-5)
+
+Parts 1-3 found no gate that generalises. Part 4 asked why, and the answer was that **every one of
+those tests entered at the bar close** — the worst possible entry, and the only arm negative on both
+sides. Gates were being asked to rescue an entry method that loses by construction.
+
+Measured on 290,000 opportunities, net of fees, **counting setups that never filled as zero**:
+
+| entry | SHORT | LONG | periods+ |
+|---|---:|---:|---:|
+| at MARKET | −0.004R | −0.071R | — |
+| **~0.25 ATR PULLBACK** | **+0.062R** | **+0.021R** | **9/9** |
+| CHASING 0.25 ATR | −0.129R | −0.195R | **0/9** |
+
+**Roughly 40-60× the entire gating apparatus** (the envelope and the best evidence-selected gate set
+each beat random by +0.0012R).
+
+**All three controls hold.** Delaying 12h then entering at market gives +0.0003R (2/9) — the benefit
+is the LEVEL, not patience. Requiring price to trade THROUGH the level rather than touch it costs a
+third and leaves 9/9. And the adverse arm is near-perfectly symmetric at −0.125R on BOTH sides, 0/9 —
+a simulation bug would not produce that.
+
+**Part 5: SHALLOW beats STRUCTURAL, which simplifies the app.** Swing-24h/72h entries returned
++0.007R/+0.002R against the mechanical +0.062R, at 1/9 periods. Not a depth effect — a mechanical
+0.50 ATR arm (comparable to swing-24h's 0.63) returned +0.0555R and filled 65% against swing's 26%.
+**Fill rate dominates**: a recent swing low is a price the market ALREADY rejected, so reaching it
+again needs a move that invalidates the setup's premise. The analysis layer's level-picking is
+**not load-bearing**.
+
+**Shipped:** an `ENTRY DISCIPLINE` block in both markets' `prompt-system.json` carrying the measured
+numbers and three rules — never enter at current price (output NO SETUP instead), place entries on a
+SHALLOW 0.2-0.5 ATR pullback rather than a deep "significant" level, and treat an **unfilled setup as
+a success** so the model never widens toward price. `test/entry-discipline.test.ts` pins all of it.
+Also rehabilitates `chase_into_extended_aligned_trend`: Part 1 dismissed it as a bar filter under
+market entry, but it defends exactly the −0.125R arm. 725/725 green.
+
 ### 2026-08-25 — The envelope failed verification; the app stopped contradicting itself
 
 User: *"The app is a mess now, it tells me not to trade, trade long, trade short at the same time."*
