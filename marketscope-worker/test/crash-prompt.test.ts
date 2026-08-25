@@ -33,17 +33,37 @@ describe('crash risk reaches the model — input AND output contract', () => {
     expect(p).toMatch(/62% chance of a >=10% fall within 10 days/);
   });
 
-  it('bands at the validated 0.30 / 0.50 thresholds', () => {
-    expect(promptWithCrash(0.20)).toMatch(/Crash Risk: LOW/);
-    expect(promptWithCrash(0.40)).toMatch(/Crash Risk: ELEVATED/);
-    expect(promptWithCrash(0.62)).toMatch(/Crash Risk: HIGH/);
+  it('bands against the 41% BASE RATE, not against the sizing curve', () => {
+    // REGRESSION 2026-08-25. This line used to band on the SIZING curve's 0.30/0.50 breakpoints,
+    // so 0.39 — BELOW the 41% base rate — printed "Crash Risk: ELEVATED ... raise the bar for a new
+    // entry", a sentence that reports a below-average day and calls it elevated. A live BTC
+    // analysis shipped exactly that. Same defect as the six spurious card warnings fixed in
+    // crash.ts on 2026-08-24; the fix had never been propagated to the prompt.
+    expect(promptWithCrash(0.39)).toMatch(/Crash Risk: ORDINARY/);
+    expect(promptWithCrash(0.39)).not.toMatch(/Crash Risk: ELEVATED/);
+    expect(promptWithCrash(0.20)).toMatch(/Crash Risk: ORDINARY/);
+    expect(promptWithCrash(0.50)).toMatch(/Crash Risk: ELEVATED/);   // base + 0.08
+    expect(promptWithCrash(0.62)).toMatch(/Crash Risk: HIGH/);       // base + 0.18
+  });
+
+  it('says which side of the base rate the reading falls on', () => {
+    expect(promptWithCrash(0.39)).toMatch(/2pp BELOW the 41% base rate/);
+    expect(promptWithCrash(0.62)).toMatch(/21pp ABOVE the 41% base rate/);
+  });
+
+  it('reports the size cut without dressing it as a warning', () => {
+    // Both facts are true at 39%: the validated T8 arm-D curve halves size above 0.30, AND 39% is
+    // an unremarkable reading. The curve is the measured finding and stays; only the label changed.
+    const p = promptWithCrash(0.39);
+    expect(p).toMatch(/halves size here \(validated at 0\.30, which sits below the base rate/);
+    expect(p).toMatch(/NOT a reason to raise the bar on an entry/);
   });
 
   it('always ships the EPISODIC caveat with the number', () => {
     // A gauge that fires twice then misses a 25% fall reads as broken unless it says so itself.
     for (const p of [0.20, 0.40, 0.62]) {
       expect(promptWithCrash(p)).toMatch(/EPISODIC/);
-      expect(promptWithCrash(p)).toMatch(/LOW is "no warning", NOT "safe"/);
+      expect(promptWithCrash(p)).toMatch(/ORDINARY is "no warning", NOT "safe"/);
     }
   });
 

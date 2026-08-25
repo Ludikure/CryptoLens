@@ -693,17 +693,39 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     const crashP = daily.mlCrashProb;
     if (crashP != null && Number.isFinite(crashP)) {
       const pct = Math.round(crashP * 100);
-      const band = crashP > 0.50 ? 'HIGH' : crashP > 0.30 ? 'ELEVATED' : 'LOW';
-      const action = crashP > 0.50
-        ? 'Size is already cut hard by the overlay. Treat any new entry as needing exceptional evidence.'
-        : crashP > 0.30
-          ? 'Size is reduced. Raise the bar for a new entry; prefer waiting to sizing down further.'
+      // FIXED 2026-08-25: this line labelled the band off the SIZING curve's 0.30/0.50 breakpoints,
+      // so a 39% reading — BELOW the 41% base rate — printed as "Crash Risk: ELEVATED ... raise the
+      // bar for a new entry". A live BTC analysis said exactly that, in one sentence that both
+      // reported a below-average day and called it elevated.
+      //
+      // This is the SAME defect fixed in `crashWarning` on 2026-08-24 (where six symbols warned at
+      // 41/41/43/41/50/39%), and the fix was never propagated here. Root cause both times: a SIZING
+      // threshold reused as a WARNING threshold. They answer different questions and 0.30 is below
+      // the base rate, so as a warning it fires on an ordinary day.
+      //
+      // The two are now stated SEPARATELY, because both facts are true at 39%: the validated T8
+      // arm-D curve really does halve size above 0.30 (that stays — it is the measured finding),
+      // while 39% is genuinely unremarkable as a risk READING. Warning thresholds match crash.ts:
+      // base + 0.08 and base + 0.18.
+      const CRASH_BASE = 0.41;
+      const band = crashP >= CRASH_BASE + 0.18 ? 'HIGH' : crashP >= CRASH_BASE + 0.08 ? 'ELEVATED' : 'ORDINARY';
+      const vsBase = crashP >= CRASH_BASE
+        ? `${Math.round((crashP - CRASH_BASE) * 100)}pp ABOVE the ${Math.round(CRASH_BASE * 100)}% base rate`
+        : `${Math.round((CRASH_BASE - crashP) * 100)}pp BELOW the ${Math.round(CRASH_BASE * 100)}% base rate`;
+      const sizing = crashP > 0.50
+        ? 'The overlay has cut size to zero.'
+        : crashP > 0.30 ? 'The overlay halves size here (validated at 0.30, which sits below the base rate — so this is routine, not a warning).'
           : 'No size reduction from this gauge.';
-      L(`Crash Risk: ${band} — ${pct}% chance of a >=10% fall within 10 days (base rate 41%). ${action}`);
+      const action = band === 'HIGH'
+        ? 'Treat any new entry as needing exceptional evidence.'
+        : band === 'ELEVATED'
+          ? 'Raise the bar for a new entry; prefer waiting to sizing down further.'
+          : 'This reading is NOT a reason to raise the bar on an entry — do not cite it as one.';
+      L(`Crash Risk: ${band} — ${pct}% chance of a >=10% fall within 10 days, ${vsBase}. ${sizing} ${action}`);
       L(`  Crash Risk is about DRAWDOWN, not direction — it never says which way price goes, and a `
         + `high reading is not a SHORT signal. It is EPISODIC: it has stayed quiet through real `
-        + `20-28% falls, so LOW is "no warning", NOT "safe". Never cite a low reading as support for `
-        + `a trade.`);
+        + `20-28% falls, so ORDINARY is "no warning", NOT "safe". Never cite a low reading as `
+        + `support for a trade.`);
     }
     // Phase 1: HAR-RV expected range — the direction-agnostic "how big", calibrated bands.
     const vf = input.volForecast;
@@ -1174,6 +1196,27 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         : pctInt >= 70 ? 'elevated_vol_caution_on_extension_targets'
         : pctInt <= 30 ? 'compressed_vol_breakout_setups_favored' : 'normal_range_no_bias';
       L(`Vol Regime: ATR_PERCENTILE_${pctInt} → ${implication}`);
+    }
+
+    // The ENTRY DISCIPLINE rule is stated in ATR ("a shallow 0.2-0.5 ATR pullback"), but every entry
+    // the model writes is a PRICE, so it has to do the conversion — and a live BTC analysis showed
+    // it skipping the conversion and reaching for named 1H supports instead: one at 0.37 ATR (fine)
+    // and one at 0.99 ATR, twice the measured maximum and exactly the "deep significant level" the
+    // rule forbids (structural entries returned +0.007R against +0.062R, filling a quarter as
+    // often). Doing the arithmetic here removes the step where it goes wrong — the same reasoning
+    // as putting the measured gap numbers in the earnings line rather than the phrase "gap risk".
+    {
+      const entryAtr = fourH.atr?.atr ?? 0;
+      const entryPx = (input.livePrice != null && input.livePrice > 0) ? input.livePrice : fourH.price;
+      if (entryAtr > 0 && entryPx > 0) {
+        L(`SHALLOW PULLBACK BAND (the measured entry zone, computed — do not re-derive):`);
+        L(`  LONG entries: ${formatPrice(entryPx - 0.5 * entryAtr)} to ${formatPrice(entryPx - 0.2 * entryAtr)}  `
+          + `| SHORT entries: ${formatPrice(entryPx + 0.2 * entryAtr)} to ${formatPrice(entryPx + 0.5 * entryAtr)}  `
+          + `(4H ATR ${formatPrice(entryAtr)})`);
+        L(`  An entry OUTSIDE this band is outside the measured evidence. Deeper is NOT safer — it is `
+          + `mostly not filled. If a named level sits inside the band, prefer it; if the nearest `
+          + `"significant" level sits well beyond it, use the band, not the level.`);
+      }
     }
 
     // Phase E3 — Structure levels (neutral)

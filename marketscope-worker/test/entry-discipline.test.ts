@@ -7,6 +7,8 @@
 // This pins the guidance because the 2026-08-22 lesson was that an input without an output
 // instruction is a silent no-op — and here the instruction IS the whole change.
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { systemPrompt } from '../src/prompt';
 
 for (const [label, isCrypto] of [['crypto', true], ['stock', false]] as const) {
@@ -43,3 +45,29 @@ for (const [label, isCrypto] of [['crypto', true], ['stock', false]] as const) {
     });
   });
 }
+
+// The rule is stated in ATR; every entry the model writes is a price. A live BTC analysis (2026-08-25,
+// price $79,114, 4H ATR ~$609) proposed a pullback zone of $78,888-$78,514 — 0.37 ATR to 0.99 ATR.
+// The lower bound was twice the measured maximum, and it was a named 1H support: exactly the "deep
+// significant level" rule 2 forbids. Computing the band removes the step where it went wrong.
+describe('the shallow pullback band is computed, not left as an ATR conversion', () => {
+  it('emits explicit LONG and SHORT price bands with the 4H ATR', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+    expect(src).toMatch(/SHALLOW PULLBACK BAND \(the measured entry zone, computed — do not re-derive\)/);
+    expect(src).toMatch(/entryPx - 0\.5 \* entryAtr/);
+    expect(src).toMatch(/entryPx - 0\.2 \* entryAtr/);
+    expect(src).toMatch(/entryPx \+ 0\.2 \* entryAtr/);
+    expect(src).toMatch(/entryPx \+ 0\.5 \* entryAtr/);
+  });
+
+  it('anchors the band to the LIVE price, not the stale closed bar', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+    expect(src).toMatch(/const entryPx = \(input\.livePrice != null && input\.livePrice > 0\) \? input\.livePrice : fourH\.price;/);
+  });
+
+  it('tells the model to prefer the band over a distant "significant" level', () => {
+    const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+    expect(src).toMatch(/use the band, not the level/);
+    expect(src).toMatch(/Deeper is NOT safer/);
+  });
+});
