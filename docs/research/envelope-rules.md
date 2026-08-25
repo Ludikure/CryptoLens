@@ -683,3 +683,67 @@ question as Part 1: a condition can correlate with poor outcomes and still be a 
 Null. Every direction primitive tested in this vault has come back a coin flip, and divergence is a
 direction claim. But `alignment_not_full` measured inverted rather than merely useless, so an
 inverted result here would not be unprecedented.
+
+## PART 6 RESULTS — divergence is statistically real and economically worthless
+
+### A. Direction — and the two timeframes CONTRADICT each other
+
+Unconditional P(up 24h) = **0.4930**, not 0.50.
+
+| | n | P(up24) | vs base | p | classical TA expects |
+|---|---:|---:|---:|---:|---|
+| **DAILY** bullish div | 21,449 | 0.4868 | **−0.0062** | 0.070 | UP — **wrong sign** |
+| **DAILY** bearish div | 15,399 | 0.5072 | **+0.0143** | 4.0e−04 | DOWN — **wrong sign** |
+| **4H** bullish div | 17,284 | 0.5154 | **+0.0224** | 3.9e−09 | UP — correct |
+| **4H** bearish div | 16,167 | 0.4770 | **−0.0160** | 4.6e−05 | DOWN — correct |
+
+On the **4H** divergence behaves exactly as traders claim, at p = 3.9e−09. On the **DAILY** it is
+**inverted** — bearish divergence is followed by UP more often than baseline, significantly.
+
+**The same indicator on two timeframes gives opposite signs.** That is not what a real mechanism
+looks like; it is what a weak effect looks like when it is sliced two ways.
+
+### B. Money — neither trade clears the bar
+
+| | R/opp | vs no-div | periods+ |
+|---|---:|---:|---:|
+| DAILY: reversal (classical TA) | 0.0307 | −0.0108 | 5/9 |
+| DAILY: continuation (opposite) | 0.0551 | +0.0135 | 4/9 |
+| 4H: reversal (classical TA) | 0.0371 | −0.0048 | 4/9 |
+| 4H: continuation (opposite) | 0.0447 | +0.0029 | 5/9 |
+
+**The 4H direction effect is significant at p = 3.9e−09 and does not convert into money.** A +2.24pp
+edge on a near-coin-flip is real and far too small to survive the payoff geometry. This is the
+cleanest example in the vault of statistical significance without economic significance — and with
+290,000 rows, almost anything reaches significance.
+
+### C. The app's own rule — noise
+
+| | blocked bars | kept bars | lift | periods+ |
+|---|---:|---:|---:|---:|
+| DAILY, SHORT | 0.0453 | 0.0649 | +0.0025 | 5/9 |
+| DAILY, LONG | 0.0405 | 0.0182 | −0.0028 | 4/9 |
+| 4H, SHORT | 0.0674 | 0.0618 | −0.0007 | 4/9 |
+| 4H, LONG | 0.0143 | 0.0219 | +0.0009 | 6/9 |
+
+Every lift is within ±0.003R of zero. Flatting on divergence neither helps nor hurts.
+
+## Verdict — NULL on all three questions
+
+Traders are **not** right (the money test kills the reversal trade, and the daily direction is
+inverted). The app is **not** right either (its FLAT does nothing). And the opposite trade does not
+work. Per the pre-declaration, that is the null branch.
+
+**So the user's framing — "traders predict a move, we say stay put, we do the opposite" — resolves
+as: everyone is arguing about a signal that carries no usable information.**
+
+## What this does NOT license, stated carefully
+
+I tested the **raw divergence flag**. The envelope's two rules are narrower:
+- `divergence_escalated_6+_candles` requires divergence *worsening over 6+ candles*
+- `divergence_against_bias` requires divergence *opposing the current bias*
+
+A null on the underlying signal makes a real effect in a subset unlikely, but this is **not a direct
+test of either rule**, and removing them on this evidence would be the same over-reach the alignment
+result was nearly subjected to. The honest status is **unsupported, not disproven** — and the
+narrower variants are a cheap follow-up whenever it is worth running.
