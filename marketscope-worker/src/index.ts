@@ -945,7 +945,6 @@ export default {
       }
     }
 
-    // === Alert sync (D1) ===
             
     // === /pending-setups: REMOVED 2026-07-24 ===
     // These three handlers (POST/GET/DELETE) were the legacy iOS registration path for conditional
@@ -2781,7 +2780,6 @@ async function checkRateLimit(env: Env, key: string, limit: number, windowSec: n
   return false;
 }
 
-// === Alert Checking (Cron — iterates all devices) ===
 
 
 // === APNs ===
