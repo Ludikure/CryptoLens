@@ -489,6 +489,7 @@ export interface BuildPromptInput {
   // Insight enrichments (2026-07-02) — all derived from data the system already stores:
   mlCalibration?: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null;  // live realized goodR for the CURRENT prediction's bucket (ml_calibration D1)
   calibratedMlWin?: number | null;   // raw ML_WIN corrected by the live forward calibration — used by the auto-FLAT/quality gate so drift can't over-suppress
+  mlShortGateCut?: number | null;    // RAW ML value at the top-41% mark of the live distribution (Part 11) — the SHORT-only quality gate, expressed as selectivity so it cannot drift with the base rate
   mlTrajectory?: { points: number[]; hours: number } | null;                   // sampled ML_WIN path over the last N hours, oldest→newest (score_history D1)
   btcContext?: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null; // BTC regime read for alt analyses (ml_preds:all KV)
   volPricing?: { dvol: number; impliedMovePct: number; forecastMovePct: number } | null;  // options-implied vs model-forecast move (BTC/ETH, Deribit DVOL)
@@ -1313,6 +1314,26 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const staleCount = dataQuality?.missingEnrichments.length ?? 0;
       const autoFlat: string[] = [];
       if (mlPct != null && mlPct < 50) autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);
+      // Part 11 — the SHORT-only quality gate, expressed as SELECTIVITY rather than as a number.
+      //
+      // Measured on 274,079 opportunities at the app's geometry, against a NO-GATE control (not
+      // against the envelope, which is what Part 1 compared to): a fixed gate admitting the top
+      // ~41% beats no-gate on SHORT by +0.0257R at 7/8 half-year periods. On LONG every threshold
+      // is negative, so it is not applied there — the sixth envelope condition to be
+      // direction-dependent. Thresholds tighter than ~30% coverage are WORSE than no gate.
+      //
+      // The cut is derived from the LIVE prediction distribution each run because an absolute
+      // number does not survive a base-rate shift: `0.55` admits 41.3% of backtest bars and only
+      // 36.3% of live ones, and reproducing the measured selectivity needs raw ~0.479 today. That
+      // silent drift is exactly what loosened the plain ML floor ~5x before anyone noticed.
+      //
+      // The coverage is FIXED at the measured value and must not be re-optimised: Part 11's
+      // walk-forward arms showed that fitting this parameter destroys it (argmax selection chased
+      // slices admitting 0.2-4.5% of bars, one returning -0.53R out of sample).
+      const shortCut = input.mlShortGateCut, rawMlWin = daily.mlWinProbability;
+      if (alignedDirection === 'SHORT' && shortCut != null && rawMlWin != null && rawMlWin < shortCut) {
+        autoFlat.push(`ML_SHORT_selectivity_raw_${iTrunc(rawMlWin * 100)}%<top41%_cut_${iTrunc(shortCut * 100)}%`);
+      }
       if (envAnyKilled) autoFlat.push('ANY_KILLED=true');
       // REMOVED 2026-08-25 — directly tested and unsupported (envelope-rules.md Part 6 + follow-up).
       //

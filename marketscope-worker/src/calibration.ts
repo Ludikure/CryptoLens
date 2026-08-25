@@ -72,3 +72,43 @@ export function applyCalibration(curve: CalPoint[], raw: number): number {
   }
   return last.y;   // unreachable, but keeps the function total
 }
+
+/**
+ * The ML gate expressed as SELECTIVITY rather than as an absolute probability (Part 11).
+ *
+ * Measured: a fixed `ML >= 0.55` gate beats no-gate on SHORT by +0.0257R at 7/8 half-year periods
+ * with 41.3% coverage — the first ML gate configuration to clear the standing bar against a
+ * no-gate control. On LONG every threshold is negative and it is not applied.
+ *
+ * It is stored as COVERAGE because an absolute number does not survive a base-rate shift. The
+ * training base was 50.5% and the live base is 58.3%, and at that shift `0.55` admits 41.3% of
+ * backtest bars but only 36.3% of live ones — reproducing the measured selectivity needs raw
+ * ~0.479 today. Deriving the cut from the live distribution each time removes that drift entirely,
+ * which is the same failure that silently loosened the ML floor ~5x in the first place.
+ *
+ * NOTE the walk-forward arms of Part 11 showed that FITTING this parameter destroys it (argmax
+ * selection chased slices admitting 0.2-4.5% of bars). The coverage is therefore FIXED at the
+ * measured value and must not be re-optimised.
+ */
+export const ML_SHORT_GATE_COVERAGE = 0.41;
+
+/** Raw ML value at which the top `coverage` share of the live distribution begins, or null. */
+export function coverageCut(buckets: CalBucket[], coverage: number): number | null {
+  if (!buckets.length || !(coverage > 0) || !(coverage < 1)) return null;
+  const total = buckets.reduce((s, b) => s + b.n, 0);
+  if (total < CAL_MIN_TOTAL_N) return null;
+  // Buckets come from `CAST(predicted_prob * 20 AS INTEGER)`, so each spans 0.05 and predMean is
+  // the mean inside it. Walk from the top accumulating mass until the target share is reached.
+  const sorted = [...buckets].sort((a, b) => b.predMean - a.predMean);
+  let acc = 0;
+  for (const b of sorted) {
+    const share = b.n / total;
+    if (acc + share >= coverage) {
+      const need = (coverage - acc) / share;          // fraction into this bucket from its top
+      const hi = b.predMean + 0.025, lo = b.predMean - 0.025;
+      return Math.max(0, Math.min(1, hi - need * (hi - lo)));
+    }
+    acc += share;
+  }
+  return sorted[sorted.length - 1]?.predMean ?? null;
+}

@@ -3,7 +3,7 @@
 // compressed (predicted 25→77 realizing 41→69) with one small inversion; the fit must
 // pool the inversion, interpolate honestly, and refuse to fit thin data.
 import { describe, it, expect } from 'vitest';
-import { fitCalibrationCurve, applyCalibration, CAL_MIN_BUCKET_N, CAL_MIN_TOTAL_N, type CalBucket } from '../src/calibration';
+import { fitCalibrationCurve, applyCalibration, coverageCut, ML_SHORT_GATE_COVERAGE, CAL_MIN_BUCKET_N, CAL_MIN_TOTAL_N, type CalBucket } from '../src/calibration';
 
 // The live curve observed 2026-08-21 (mixed-market /ml-calibration, rates as 0-1).
 const LIVE_AUG_2026: CalBucket[] = [
@@ -109,5 +109,48 @@ describe('applyCalibration', () => {
 
   it('returns raw unchanged on an empty curve', () => {
     expect(applyCalibration([], 0.42)).toBe(0.42);
+  });
+});
+
+// Part 11: the ML gate as SELECTIVITY. A fixed ML>=0.55 beats no-gate on SHORT by +0.0257R at 7/8
+// periods with 41.3% coverage; on LONG every threshold is negative. It is stored as coverage
+// because an absolute number does not survive a base-rate shift — 0.55 admits 41.3% of backtest
+// bars and only 36.3% of live ones.
+describe('coverageCut — the ML gate expressed as selectivity', () => {
+  // The live 2026-08-25 crypto distribution, as fetchLiveCalBuckets returns it.
+  const live: CalBucket[] = [
+    { predMean: 0.15, realized: 0.416, n: 1138 },
+    { predMean: 0.40, realized: 0.603, n: 3459 },
+    { predMean: 0.55, realized: 0.597, n: 1565 },
+    { predMean: 0.65, realized: 0.663, n: 706 },
+    { predMean: 0.775, realized: 0.714, n: 346 },
+  ];
+
+  it('returns a cut inside the distribution for the shipped coverage', () => {
+    const cut = coverageCut(live, ML_SHORT_GATE_COVERAGE)!;
+    expect(cut).toBeGreaterThan(0.4);
+    expect(cut).toBeLessThan(0.6);
+  });
+
+  it('is monotone — asking for MORE coverage returns a LOWER cut', () => {
+    const tight = coverageCut(live, 0.10)!, loose = coverageCut(live, 0.80)!;
+    expect(tight).toBeGreaterThan(coverageCut(live, 0.41)!);
+    expect(coverageCut(live, 0.41)!).toBeGreaterThan(loose);
+  });
+
+  it('the coverage is FIXED at the measured value and never re-optimised', () => {
+    // Part 11's walk-forward arms showed fitting this parameter destroys it: argmax selection
+    // chased slices admitting 0.2-4.5% of bars, one returning -0.53R out of sample.
+    expect(ML_SHORT_GATE_COVERAGE).toBe(0.41);
+  });
+
+  it('refuses to produce a cut from too little data rather than guessing', () => {
+    expect(coverageCut([{ predMean: 0.5, realized: 0.5, n: 10 }], 0.41)).toBeNull();
+    expect(coverageCut([], 0.41)).toBeNull();
+  });
+
+  it('rejects degenerate coverage values', () => {
+    expect(coverageCut(live, 0)).toBeNull();
+    expect(coverageCut(live, 1)).toBeNull();
   });
 });

@@ -1621,3 +1621,70 @@ coverage, but it is an argument, not evidence, and the walk-forward test above i
 an absolute threshold cannot track it. If ABSOLUTE wins instead, that is evidence the probability —
 not the ranking — is what carries the edge, and the gates should simply be restated once against the
 current base and left alone.
+
+## PART 11 RESULTS — fitting the gate destroys it; a FIXED gate works, on SHORT only
+
+### The declared arms both lose to no gate
+
+Walk-forward parameter selection, fit on earlier periods only:
+
+| stop 1.25 (the app) | absolute | coverage | **no gate** | periods beating no-gate |
+|---|---:|---:|---:|---|
+| SHORT | −0.0062 | +0.0027 | **+0.0711** | absolute 1/5, coverage 1/5 |
+| LONG | +0.0217 | +0.0382 | **+0.0432** | absolute 0/5, coverage 0/5 |
+
+**No gate wins every cell.** The declared rule ("if they split or the gap is under +0.01R, keep
+ABSOLUTE") technically returns ABSOLUTE, but that is choosing between two losers and is not
+actionable. The cause is visible in the selection: argmax on training data picked thresholds
+admitting **0.2-4.5%** of bars, one of which returned **−0.5342R** on its held-out period, and the
+coverage arm repeatedly converged on **q = 1.00** — the optimizer choosing "no gate" itself.
+
+That is a property of FITTING, not of gating. Which is why Control 2 was declared.
+
+### Control 2 — a fixed, never-fitted gate, and it changes the answer
+
+| gate | coverage | SHORT oppR | vs no gate | periods+ | LONG vs no gate | periods+ |
+|---|---:|---:|---:|---:|---:|---:|
+| ML ≥ 0.40 | 71.6% | +0.1107 | +0.0079 | 6/8 | −0.0084 | 1/8 |
+| ML ≥ 0.50 | 52.0% | +0.1205 | +0.0177 | 7/8 | −0.0175 | 2/8 |
+| **ML ≥ 0.55** | **41.3%** | **+0.1285** | **+0.0257** | **7/8** | −0.0247 | 2/8 |
+| ML ≥ 0.60 | 30.4% | +0.1149 | +0.0121 | 4/8 | −0.0231 | 3/8 |
+| ML ≥ 0.65 | 20.1% | +0.0984 | **−0.0044** | 3/8 | −0.0213 | 4/8 |
+| ML ≥ 0.70 | 11.1% | +0.0844 | **−0.0183** | 3/8 | +0.0002 | 5/8 |
+
+(no gate: SHORT +0.1028, LONG +0.0139. Stop 2.0 reproduces the same shape.)
+
+**SHORT at ML ≥ 0.55 clears the standing bar** — +0.0257R, 7/8 periods, 41.3% coverage. It is the
+first ML gate configuration in this vault to do so against a no-gate control rather than against the
+envelope.
+
+**LONG fails at every threshold.** Every sensible cut is negative against no gate; only 0.70 reaches
++0.0002 at 5/8, which is nothing. The ML gate is **direction-dependent**, the sixth envelope
+condition with that signature.
+
+**Thresholds above 0.60 are WORSE than no gate on SHORT.** The notify threshold at calibrated 65
+sits past the point where the gate stops helping.
+
+### The parameterization question, answered by the transfer
+
+The prediction was that coverage wins, and it does — not through the fitted arms, but concretely:
+
+> ML ≥ 0.55 admits **41.3%** of backtest bars. On the live distribution the same absolute 0.55
+> admits only **36.3%**. Reproducing the *measured selectivity* on live data needs **raw ≥ 47.9%**.
+
+An absolute threshold carried across the base-rate shift (50.5% → 58.3%) silently tightens by ~5
+percentage points of coverage. A coverage gate transfers exactly. This is the same failure that
+loosened the ML floor 5× in the first place, running the other way.
+
+### Shipped
+
+- **The ML gate is scoped to SHORT** and set at the measured **41% selectivity**, derived from the
+  live `ml_calibration` distribution rather than from a fixed number, so it cannot drift again.
+- **LONG keeps its existing loose floor.** The accidental loosening to ~8% turns out to be roughly
+  correct for LONG, where no threshold helps — an accident that landed on the right answer, kept
+  deliberately now that it has been measured.
+
+**Regime caveat, recorded as it was for `alignment_not_full` and `continuation`:** this window is a
+crypto bear (equal-weight basket −83%), and SHORT is the better side ungated (+0.1028 vs +0.0139).
+7/8 period consistency spanning both directions of that regime is strong evidence, but the mechanism
+may be regime rather than skill, and it is kept because it passed a bar declared in advance.

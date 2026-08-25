@@ -609,6 +609,56 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25h — Part 11: no, don't recalibrate — the live layer already does. The THRESHOLDS were the bug
+
+User asked "do we need to recalibrate?" after seeing the app show ML 45 while the analysis reasoned
+on 60. **No.** `src/calibration.ts` refits the PAV curve from `ml_calibration` D1 on every use over
+a rolling 90 days — it is self-updating and it already absorbed the drift; the 60% IS that
+correction. And no retrain either: the pre-declared 2026-08-14 ladder says compressed-but-monotonic
+→ recalibrate, and the curve is monotone (one 0.6pp wiggle on n=3,459/1,565) with a real ~30pp
+spread from bottom bucket (41.6%) to top (71.4%).
+
+**What actually broke: recalibrating moved the SCALE while the cutoffs on it stayed fixed.** Live
+base rate is **58.3%** against v14's **50.5%** training base, so:
+
+| gate | needs raw | fires on |
+|---|---:|---:|
+| ML auto-FLAT (calibrated < 50) | < 30.3% | **8.0%** of bars (was meant to be 45%) |
+| FAVORABLE (calibrated ≥ 60) | ≥ 44.1% | **66.0%** of bars |
+
+**A ~5× loosening nobody decided.** Same defect class as the crash band, the persistence ladder and
+the continuation gate — absolute thresholds against a base rate that moved.
+
+**Fitting the threshold destroys it.** Walk-forward parameter selection (fit on earlier periods,
+apply to held-out) loses to NO GATE in all four cells: argmax chased slices admitting **0.2-4.5%**
+of bars, one returning **−0.5342R** out of sample, and the coverage arm kept converging on q=1.00 —
+the optimizer choosing "no gate" itself.
+
+**A FIXED, never-fitted gate works — on SHORT only:**
+
+| gate | coverage | SHORT vs no-gate | periods+ | LONG vs no-gate |
+|---|---:|---:|---:|---:|
+| ML ≥ 0.50 | 52.0% | +0.0177 | 7/8 | −0.0175 |
+| **ML ≥ 0.55** | **41.3%** | **+0.0257** | **7/8** | −0.0247 |
+| ML ≥ 0.65 | 20.1% | **−0.0044** | 3/8 | −0.0213 |
+
+First ML gate configuration in the vault to clear the standing bar against a **no-gate** control
+rather than against the envelope. LONG fails at every threshold — the **sixth** direction-dependent
+envelope condition. And thresholds above ~30% coverage are WORSE than no gate, which puts the
+notify threshold (calibrated 65) past the point where gating stops helping.
+
+**Shipped as SELECTIVITY, not as a number**, because the transfer is quantified: `0.55` admits 41.3%
+of backtest bars but only **36.3%** of live ones, and reproducing the measured selectivity needs raw
+**≥ 0.479** today. New `coverageCut()` derives the cut from the live prediction distribution each
+run (reusing `fetchLiveCalBuckets`, no extra query), so it cannot drift again. The coverage is FIXED
+at 0.41 and must never be re-optimised — that is what the walk-forward arms proved destroys it.
+**LONG keeps its existing loose floor**: the accidental ~8% turns out to be about right for a side
+where no threshold helps, an accident that landed on the right answer and is now kept deliberately.
+
+Regime caveat recorded as for `alignment_not_full` and `continuation`: the window is a crypto bear
+and SHORT is the better side ungated (+0.1028 vs +0.0139). 7/8 across both directions of that regime
+is strong, but the mechanism may be regime. 770/770 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-25g — Part 10: the chase guard is noise, and a tighter stop makes entry discipline MORE valuable
 
 Two questions a live BTC analysis raised. 274,079 opportunities, 24 symbols, both pre-declared at
