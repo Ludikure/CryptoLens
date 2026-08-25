@@ -609,6 +609,45 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25 — The envelope failed verification; the app stopped contradicting itself
+
+User: *"The app is a mess now, it tells me not to trade, trade long, trade short at the same time."*
+A screenshot showed ADA with the Opportunity Book saying SHORT, the analysis card saying LONG SETUP,
+and the analysis PROSE saying "this is a chase, wait for a pullback". Three instructions, one symbol,
+one screen. All three causes were real and distinct.
+
+**1. The Conviction Envelope is NOT VERIFIED** (`docs/research/envelope-rules.md`, pre-declared at
+52b386b/397ac3d, measured at the app's real geometry — 2 ATR stop, TP2 1.25R — not the 5R research
+structure it never governed). Measured end-to-end as the sizing function it actually is:
+
+> **The envelope beats a coverage-matched RANDOM gate by +0.0012R.**
+
+It cuts exposure to 8.5% of bars to gain +0.0028R/unit over trading everything, and almost none of
+that is its reasoning. **The ML component ALONE beats the full envelope fourfold** (+0.0121R at 26%
+exposure). On LONGS it is *worse than random* and **its own inverse beats it**. Fails all four
+pre-declared criteria under both size mappings.
+
+Mechanism: the alignment gates **keep the worse bars**. `biases_MIXED` blocks bars averaging
++0.0503R against a +0.0197R baseline; `alignment_not_full` blocks +0.0288R bars and KEEPS −0.0079R
+ones. Not a weak filter — an inverted one, applied at 91.5% sparsity. Confirms the user's read that
+"timeframes rarely align and when they do the move happened", but corrects the mechanism: outcome is
+**flat across trend age**, so aligned is uniformly bad (compression, ATR-normalised) rather than
+bad-because-late. **No code changed** — the untestable guards (kills, macro, earnings, news) are
+absent from every arm and prevent specific harms rather than raise EV.
+
+**2. Two recommendation systems, unreconciled.** `VerdictCard` and `OpportunityFeedCard` rendered
+side by side with nothing making them agree, and neither is verified. `OpportunityFeedCard` is
+**deleted**; `DrawdownRiskCard` keeps only its crash warnings — the one component with replicated
+out-of-sample evidence, and one that says nothing about direction so it cannot contradict anything.
+The AI analysis is now the single place a trade is proposed. `/opportunities` stays as a read-only
+research endpoint.
+
+**3. A pullback entry rendered as an actionable one.** "LONG SETUP" in green with entry $0.2140 while
+price was $0.2210. The card and the prose actually agreed; the HEADLINE did not. New `waiting` state:
+`WAIT FOR LONG ENTRY`, caution-coloured (never the direction colour — green reads as "go"), hourglass
+glyph, and a plain line: *"Price is $0.2210 — this setup only starts at $0.2140. Nothing to do until
+it gets there."* 0.15% band stops it flickering at the money.
+
 ### 2026-08-24b — Price alerts removed entirely (unused since creation)
 
 User: *"I do not need alerts feature and tab. It has been unused since it was created."* Removed from

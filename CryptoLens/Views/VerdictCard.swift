@@ -25,23 +25,42 @@ struct VerdictCard: View {
     /// with the sibling buttons for every touch — the other half of "the buttons aren't responsive".
     @State private var showFullRead = false
 
-    /// Three states, in the order a trader cares about.
+    /// Four states, in the order a trader cares about.
+    ///
+    /// `waiting` was added 2026-08-25 after a screen showed "LONG SETUP" in green with an entry of
+    /// $0.2140 while price was $0.2210 — and the model's own text underneath said "this is a chase,
+    /// wait for a pullback to $0.2140". The card and the prose agreed; the HEADLINE did not, because
+    /// it rendered a conditional pullback entry exactly like an actionable one. A setup you cannot
+    /// take yet must not look like a setup you should take now.
     private enum Verdict {
-        case setup(TradeSetup)      // a risk-defined setup survived every gate
-        case noEdge                 // analysis ran, produced nothing — the common case
-        case notRun                 // no analysis for this bar yet
+        case setup(TradeSetup)           // entry is reachable now
+        case waiting(TradeSetup, Double) // valid setup, price not there yet (setup, live price)
+        case noEdge                      // analysis ran, produced nothing — the common case
+        case notRun                      // no analysis for this bar yet
 
         var headline: String {
             switch self {
-            case .setup(let s): return "\(s.direction) SETUP"
-            case .noEdge:       return "NO ENTRY EDGE"
-            case .notRun:       return "NOT ANALYSED"
+            case .setup(let s):   return "\(s.direction) SETUP"
+            case .waiting(let s, _): return "WAIT FOR \(s.direction) ENTRY"
+            case .noEdge:         return "NO ENTRY EDGE"
+            case .notRun:         return "NOT ANALYSED"
+            }
+        }
+
+        /// The setup behind either active state, for the levels table.
+        var tradeSetup: TradeSetup? {
+            switch self {
+            case .setup(let s), .waiting(let s, _): return s
+            default: return nil
             }
         }
 
         var accent: Color {
             switch self {
             case .setup(let s): return s.direction == "LONG" ? Theme.bullish : Theme.bearish
+            // Deliberately NOT the direction colour: a green card reads as "go", and the whole
+            // point of this state is that you should not act yet.
+            case .waiting:      return Theme.caution
             case .noEdge:       return Theme.neutral
             case .notRun:       return Theme.info
             }
@@ -49,15 +68,25 @@ struct VerdictCard: View {
 
         var glyph: String {
             switch self {
-            case .setup:  return "target"
-            case .noEdge: return "hand.raised"
+            case .setup:   return "target"
+            case .waiting: return "hourglass"      // not a target — nothing to aim at yet
+            case .noEdge:  return "hand.raised"
             case .notRun: return "sparkles"
             }
         }
     }
 
     private var verdict: Verdict {
-        if let setup = result.tradeSetups.first { return .setup(setup) }
+        if let setup = result.tradeSetups.first {
+            // Is the entry reachable from here? A LONG entry BELOW live price is a pullback the
+            // market has not offered yet; a SHORT entry ABOVE it is the same in reverse. The 0.15%
+            // band keeps an at-the-money entry from flickering between states on every tick.
+            let live = result.daily.price
+            guard live > 0, setup.entry > 0 else { return .setup(setup) }
+            let gapPct = (live - setup.entry) / setup.entry * 100
+            let unreachable = setup.direction == "LONG" ? gapPct > 0.15 : gapPct < -0.15
+            return unreachable ? .waiting(setup, live) : .setup(setup)
+        }
         return result.claudeAnalysis.isEmpty ? .notRun : .noEdge
     }
 
@@ -100,8 +129,19 @@ struct VerdictCard: View {
                 }
             }
 
+            // Says plainly why nothing is actionable yet. Without this the levels table looks
+            // like an instruction, which is exactly how "LONG SETUP / entry 0.2140" read while
+            // price sat at 0.2210.
+            if case .waiting(let s, let live) = verdict {
+                Text("Price is \(Formatters.formatPrice(live)) — this setup only starts at \(Formatters.formatPrice(s.entry)). "
+                     + "Nothing to do until it gets there.")
+                    .font(.caption)
+                    .foregroundStyle(Theme.caution)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             // ── The setup's actual numbers, when there is one ──
-            if case .setup(let s) = verdict {
+            if let s = verdict.tradeSetup {
                 HStack(spacing: 14) {
                     levelColumn("Entry", s.entry, Theme.info)
                     levelColumn("Stop", s.stopLoss, Theme.bearish)

@@ -204,11 +204,12 @@ struct ChartTabContent: View {
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
                 }
 
-                // Ranked book from the measured excursion model. Shown even when empty is NOT the
-                // choice here — an empty book is rendered by the card itself, because "nothing
-                // clears the bar" is a real answer and hiding it would look like a broken feature.
-                if let b = book {
-                    OpportunityFeedCard(book: b)
+                // Drawdown warnings only. The book's TRADE cards were removed 2026-08-25: they
+                // proposed a direction on the same screen as the AI analysis, with nothing
+                // reconciling the two, and were seen recommending ADA SHORT while the analysis
+                // showed ADA LONG. The analysis is now the single place a trade is proposed.
+                if let ws = book?.crashWarnings, !ws.isEmpty {
+                    DrawdownRiskCard(warnings: ws)
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
                 }
 
