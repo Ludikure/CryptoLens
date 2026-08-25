@@ -2525,9 +2525,12 @@ export default {
           const p = preds[sym];
           if (!p) { unavailable.push({ asset: sym, reasons: ['no cached prediction'] }); continue; }
           try {
-            const c1h = await fetchCandles(sym, '1h', 400);
-            const closes = (c1h ?? []).map((k: any) => k.close).filter((x: number) => x > 0);
-            if (closes.length < 200) { unavailable.push({ asset: sym, reasons: ['insufficient 1h history'] }); continue; }
+            // fetchAllTimeframesCached, not a bare fetch: it shares the KV candle cache the cron
+            // already fills, so this endpoint costs no extra upstream calls on a warm cache.
+            const isC = sym.endsWith('USDT');
+            const tf = await fetchAllTimeframesCached(env, sym, isC);
+            const closes = (tf.oneH ?? []).map((k: any) => k.close).filter((x: number) => x > 0);
+            if (closes.length < 200) { unavailable.push({ asset: sym, reasons: [`insufficient 1h history (${closes.length} bars)`] }); continue; }
             const price = closes[closes.length - 1];
             const atrPct = p.features?.atrPercent;
             if (!(atrPct > 0)) { unavailable.push({ asset: sym, reasons: ['no ATR in cached features'] }); continue; }
@@ -2539,12 +2542,22 @@ export default {
               features: p.features && typeof p.features === 'object' ? p.features : undefined,
               crashProbability: null,          // no crash model shipped yet -> no overlay applied
               liquidityUsd24h: 50_000_000,     // placeholder; real depth wiring is a follow-up
-              isCrypto: sym.endsWith('USDT'),
+              isCrypto: isC,
               dataTimestamp: p.timestamp ?? nowMs,
             });
           } catch (e) {
             unavailable.push({ asset: sym, reasons: [String(e)] });
           }
+        }
+
+        // A SYSTEMIC failure must not look like "nothing qualifies". The first live call to this
+        // endpoint returned 200 with an empty book while every asset had thrown ReferenceError --
+        // indistinguishable, from the outside, from a genuinely quiet market. If nothing was
+        // scoreable AND every failure looks like a thrown error, say so loudly instead.
+        const threw = unavailable.filter(u => u.reasons.some(r => /Error|error:/i.test(r)));
+        if (assets.length === 0 && threw.length > 0 && threw.length === unavailable.length) {
+          console.error(`[opportunities] SYSTEMIC failure: all ${threw.length} assets threw`, threw[0].reasons);
+          return json({ error: 'opportunity pipeline failed for every asset', detail: threw.slice(0, 3) }, 500);
         }
 
         const result = computeOpportunities(
