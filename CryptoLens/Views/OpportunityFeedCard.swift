@@ -71,17 +71,34 @@ struct OpportunityFeedCard: View {
     }
 
     private var nothingToDo: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // "The analysis blocked this" and "the maths did not clear" are different answers and the
+        // user is entitled to know which. Conflating them is what made the book look like it was
+        // contradicting the AI on the same screen.
+        let blocked = book.skipped.filter { $0.reasons.contains { $0.hasPrefix("analysis says stand aside") } }
+        let noisy = book.skipped.filter { $0.reasons.contains { $0.contains("noise band") } }
+
+        return VStack(alignment: .leading, spacing: 4) {
             Text("Nothing worth trading right now").font(.subheadline.weight(.semibold))
-            Text(book.skipped.isEmpty
-                 ? "No setup cleared the bar."
-                 : "Checked \(book.skipped.count) coin\(book.skipped.count == 1 ? "" : "s"). "
-                   + "Most were rejected because the stop sits inside normal price noise — "
-                   + "it would get hit by random movement before the trade had a chance.")
+            Text(explanation(blocked: blocked.count, noisy: noisy.count, total: book.skipped.count))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func explanation(blocked: Int, noisy: Int, total: Int) -> String {
+        if total == 0 { return "No setup cleared the bar." }
+        var parts: [String] = []
+        if blocked > 0 {
+            parts.append("\(blocked) blocked by the same checks the AI analysis uses — "
+                         + "things like chasing a move that has already run.")
+        }
+        if noisy > 0 {
+            parts.append("\(noisy) rejected because the stop sits inside normal price noise: "
+                         + "random movement would knock you out before the trade had a chance.")
+        }
+        if parts.isEmpty { parts.append("None cleared the bar.") }
+        return "Checked \(total) coin\(total == 1 ? "" : "s"). " + parts.joined(separator: " ")
     }
 
     // MARK: - A trade, in money

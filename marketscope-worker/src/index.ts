@@ -24,6 +24,15 @@ import { crashModelInfo, crashProbability } from './trading/crash';
 const VOL_MIN_1H_BARS = 720;
 
 /**
+ * Minimum expected value before a trade is worth showing.
+ *
+ * `generateCandidate` only requires EV > 0, which let a +0.01R candidate onto the card — about TWO
+ * DOLLARS of expected value on a 28k account, presented in the same shape as a real opportunity.
+ * Anything under this is noise dressed as a decision.
+ */
+const MIN_DISPLAY_EV_R = 0.05;
+
+/**
  * Pairwise Pearson correlation of 1h LOG RETURNS across the fetched assets.
  *
  * Returns, not prices: two assets in a shared uptrend have near-1.0 price correlation regardless of
@@ -2537,6 +2546,25 @@ export default {
             const isC = sym.endsWith('USDT');
             if (!isC) { unavailable.push({ asset: sym, reasons: ['vol model is crypto-only'] }); continue; }
 
+            // THE BOOK MUST RESPECT THE SAME GUARDS THE ANALYSIS USES.
+            //
+            // Without this the two halves of the Now tab contradict each other: the book offered an
+            // ETH SHORT while the AI on the same screen said do not enter. The AI was applying the
+            // Conviction Envelope — chase into an extended trend, kill conditions, macro IMMINENT,
+            // mixed biases below the calibrated gate — and the book was applying none of them.
+            //
+            // The envelope encodes validated guards; an EV number does not override them. So a
+            // symbol the envelope would auto-FLAT is dropped here, carrying the envelope's own
+            // reason so the card can say WHY rather than silently omitting it.
+            const tfAll = await fetchAllTimeframesCached(env, sym, true);
+            const flatReasons = await envelopePrecheck(
+              env, sym, true, typeof p.probability === 'number' ? p.probability : 0,
+              tfAll.daily, tfAll.fourH as any, tfAll.oneH as any, []);
+            if (flatReasons && flatReasons.length) {
+              unavailable.push({ asset: sym, reasons: [`analysis says stand aside: ${flatReasons.join(', ')}`] });
+              continue;
+            }
+
             // 800 bars, NOT the shared 300-bar cache. `forecastVol` needs comp_bars['30d'] = 720
             // one-hour bars for its 30-day component and returns null if ANY component is short --
             // with 300 bars every asset silently reported "no volatility forecast".
@@ -2597,7 +2625,9 @@ export default {
           model: excursionModelInfo(),
           modelVersion: result.modelVersion,
           equity,
-          opportunities: result.allocation.accepted.map(a => ({
+          opportunities: result.allocation.accepted
+            .filter(a => a.candidate.payoff.expectedValueR >= MIN_DISPLAY_EV_R)
+            .map(a => ({
             asset: a.candidate.asset,
             direction: a.candidate.direction,
             directionAgnostic: result.directionAgnosticAssets.includes(a.candidate.asset),
