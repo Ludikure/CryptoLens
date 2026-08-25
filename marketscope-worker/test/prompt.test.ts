@@ -346,10 +346,15 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(prompt).toContain('BUYING THE TOP');
     expect(prompt).toContain('classic retail trap');
     expect(prompt).toContain('extended');
-    // Symmetry fix: an aligned trend that has already run (CHASE HIGH) now hard-FLATs the
-    // envelope, the same way MIXED does — no more green-lighting the late chase.
-    expect(prompt).toContain('chase_into_extended_aligned_trend');
-    expect(prompt).toContain('Output NO SETUP');
+    // Part 10 (2026-08-25): the chase READING survives — every assertion above still holds — but
+    // it no longer auto-FLATs. Measured as a bar filter on 274,079 opportunities it was noise in
+    // all four cells (MARKET −0.0005/+0.0022, PULLBACK −0.0017/−0.0005) and its robust arm was
+    // INVERTED on LONG. The thing it protected against, chasing, is already forbidden outright by
+    // ENTRY DISCIPLINE, so it was blocking 27% of bars from producing the best action available.
+    expect(prompt).not.toContain('chase_into_extended_aligned_trend');
+    // The guidance that actually does the work is untouched: prefer a pullback entry, never chase.
+    expect(prompt).toContain('the lower-risk play is to WAIT');
+    expect(prompt).toContain('prefer a pullback entry over the current extreme');
   });
 
   it('F-1: CHASE / EXHAUSTION guard stays quiet on a calm, mid-range tape', () => {

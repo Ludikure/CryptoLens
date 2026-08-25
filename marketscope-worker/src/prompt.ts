@@ -1345,13 +1345,29 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // (Kept as history: the 2026-07-06 change already ML-gated this rule after mixed_flat_test
       // showed non-aligned bars carry ~2x the goodR rate. That was the right direction and did not
       // go far enough — the correct gate strength turned out to be zero.)
-      // Symmetry fix (2026-07-02): the envelope hard-blocked MIXED (no coherent trade) but only
-      // WARNED on the opposite bad state — an aligned trend that has already run (CHASE HIGH).
-      // Measured (trend_direction_test.py): a MATURE aligned trend has ~0% forward EV — entering
-      // it is the late chase. So "aligned + CHASE HIGH" now auto-FLATs too, leaving only the
-      // young/just-confirmed alignment window (the one cell with any edge) tradeable. This makes
-      // the app MORE selective — the honest direction — not more generous.
-      if (envChaseLevel === 'HIGH' && envAlignment !== 'MIXED' && envAlignment !== 'UNKNOWN') autoFlat.push('chase_into_extended_aligned_trend');
+      // `chase_into_extended_aligned_trend` REMOVED from auto-FLAT 2026-08-25 (Part 10). It was
+      // added 2026-07-02 as a symmetry fix and REHABILITATED in Part 4 on the grounds that it
+      // defends the CHASING arm (entering 0.25 ATR the wrong way, −0.129R/−0.195R at 0/9 periods).
+      // Both of those still stand. What changed underneath them is that `ENTRY DISCIPLINE` now
+      // forbids the app from chasing at all — so the guard defends against a move that can no
+      // longer be made, while blocking 27% of bars from producing the entry that is the single
+      // best action in the system.
+      //
+      // Measured as a bar filter on 274,079 opportunities, faithfully reconstructed:
+      //   MARKET   SHORT −0.0005 (4/9)   LONG +0.0022 (5/9)
+      //   PULLBACK SHORT −0.0017 (3/9)   LONG −0.0005 (4/9)
+      // Noise in all four cells, and the robust `stretch>=2` arm is INVERTED on LONG (−0.0067, 3/9).
+      // By the Part 6 principle this rule claims PREDICTION — that entering after an extended move
+      // is worse — and a prediction claim must be earned.
+      //
+      // It survives as CONTEXT, exactly like divergence in Part 6: the loud CHASE / EXHAUSTION RISK
+      // line, the "prefer a pullback entry" directive and the Risk Map instruction are untouched.
+      // The reading stays; the gate goes.
+      //
+      // The product consequence is the point. A chase-HIGH bar can now emit a CONDITIONAL setup at
+      // the measured pullback band instead of an empty array — which registers in `tracked_setups`,
+      // gets monitored by the cron, and fires the entry-zone push when price actually arrives. The
+      // previous behaviour named a price 0.33% away and had no mechanism to say it got there.
       if (envMacroRisk === 'IMMINENT') autoFlat.push('macro_IMMINENT');
       if (isTreatment) {
         // `treatment_long_confirm_FAIL` REMOVED 2026-08-25 (Part 8). Tested on the stock intraday
@@ -1482,8 +1498,12 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // would be exactly the mistake this project's graveyard is full of. What it fixes is the
         // MESSAGE — a chase FLAT otherwise suppresses the framing hatch entirely and emits a bare
         // NO SETUP, which reads as "nothing here" on the one day the tape is repricing hardest.
-        if (input.news?.catalystActive && autoFlat.includes('chase_into_extended_aligned_trend')) {
-          L(`  FRAMING (catalyst): a PRIMARY-source policy release landed ~${input.news.latestPrimaryAgeH}h ago (see POLICY / MACRO HEADLINES). An extended move WITH a fresh policy catalyst behind it is a repricing, not the buyer-exhaustion this FLAT is designed to catch — so say plainly that the FLAT is about ENTRY TIMING (chasing an already-run move risks a violent retrace), NOT a claim that the move is over or that the trend should be faded. If the user already holds a position in the trend direction, this is explicitly NOT an exit signal. Still output NO SETUP — but name the catalyst and give the level a pullback entry would need.`);
+        // RETARGETED 2026-08-25 (Part 10). This fired on `autoFlat.includes('chase_...')`, which can
+        // no longer be true — the chase auto-FLAT is gone. The framing itself is still worth having,
+        // so it now keys on the chase READING, and its tail no longer orders a NO SETUP: on an
+        // extended bar the correct output is a conditional entry at the pullback band, not silence.
+        if (input.news?.catalystActive && envChaseLevel === 'HIGH') {
+          L(`  FRAMING (catalyst): a PRIMARY-source policy release landed ~${input.news.latestPrimaryAgeH}h ago (see POLICY / MACRO HEADLINES). An extended move WITH a fresh policy catalyst behind it is a repricing, not buyer exhaustion — the whole range can reset rather than mean-revert. Two consequences: do NOT treat the extension itself as a reason to stand aside, and do NOT assume price must return to the pullback band just because it is extended. Set the conditional entry at the band and accept that it may never fill. If the user already holds a position in the trend direction, this is explicitly NOT an exit signal.`);
         }
       }
       else {
@@ -1551,10 +1571,16 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
           }
         }
         if (envAlignment === 'MIXED' && inTopTier) {
-          // The MIXED window bypasses gates scoped to full alignment (the stock-SHORT gate and
-          // the chase auto-FLAT both require a non-MIXED alignment). Harmless while declining was
-          // allowed; load-bearing once a tail forbids NO SETUP — so the MANDATE tail is withheld
-          // in exactly those states while the informational window still prints.
+          // The MIXED window bypasses the stock-SHORT gate, which is scoped to full alignment.
+          // Harmless while declining was allowed; load-bearing once a tail forbids NO SETUP — so
+          // the MANDATE tail is withheld in those states while the informational window still prints.
+          //
+          // `chaseUnguarded` is DELIBERATELY KEPT after Part 10 removed the chase auto-FLAT. Part 10
+          // tested the chase reading as a bar FILTER and found it noise; it did NOT test it as a
+          // suppressor of a mandate that FORBIDS declining. Those are different questions, and the
+          // asymmetric cost points the same way it did for `treatment_long_confirm`: leaving a
+          // conservative brake on a rule that forces output is cheap, removing it on an untested
+          // inference is not. The comment is corrected rather than the behaviour.
           const chaseUnguarded = envChaseLevel === 'HIGH';
           const stockShortUnguarded = !!stockInfo && has(daily.bias, 'Bearish');
           const mixedMandate = mandateOK && !chaseUnguarded && !stockShortUnguarded;

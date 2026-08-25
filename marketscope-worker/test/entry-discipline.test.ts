@@ -94,3 +94,41 @@ describe('the two ATR units are never confusable', () => {
     expect(src()).toMatch(/\(4H ATR \$\{formatPrice\(entryAtr\)\}\)/);
   });
 });
+
+// Part 10: the chase guard was rehabilitated in Part 4 for defending the CHASING arm
+// (-0.129R/-0.195R, 0/9). That still holds and is now moot -- ENTRY DISCIPLINE forbids chasing
+// outright, so the guard defended a move the app can no longer make while blocking 27% of bars.
+// As a bar filter on 274,079 opportunities it was noise in all four cells and INVERTED on LONG in
+// the robust arm. The READING stays, the GATE goes -- same treatment as divergence in Part 6.
+describe('the chase reading is context, not a gate (Part 10)', () => {
+  const src = () => readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+
+  it('chase HIGH can no longer auto-FLAT', () => {
+    expect(src()).not.toMatch(/autoFlat\.push\('chase_into_extended_aligned_trend'\)/);
+  });
+
+  it('keeps the loud CHASE / EXHAUSTION reading and its pullback directive', () => {
+    expect(src()).toMatch(/CHASE \/ EXHAUSTION RISK: \$\{chaseLevel\}/);
+    expect(src()).toMatch(/prefer a pullback entry over the current extreme/);
+  });
+
+  it('the catalyst framing keys on the READING, not on a FLAT that can never fire', () => {
+    // It used to test autoFlat.includes('chase_...'), which is now permanently false — a dead
+    // branch that reads as live governance, the conformal_abstain shape.
+    expect(src()).not.toMatch(/autoFlat\.includes\('chase_into_extended_aligned_trend'\)/);
+    expect(src()).toMatch(/input\.news\?\.catalystActive && envChaseLevel === 'HIGH'/);
+  });
+
+  it('the catalyst framing no longer orders a NO SETUP', () => {
+    // On an extended bar the correct output is a conditional entry at the band, not silence.
+    expect(src()).not.toMatch(/Still output NO SETUP — but name the catalyst/);
+    expect(src()).toMatch(/Set the conditional entry at the band and accept that it may never fill/);
+  });
+
+  it('keeps chaseUnguarded on the MIXED mandate — a different question, untested', () => {
+    // Part 10 tested the reading as a bar FILTER, not as a suppressor of a rule that FORBIDS
+    // declining. Leaving a conservative brake on forced output is cheap; removing it on an
+    // untested inference is not.
+    expect(src()).toMatch(/const chaseUnguarded = envChaseLevel === 'HIGH';/);
+  });
+});

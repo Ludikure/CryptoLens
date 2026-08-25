@@ -609,6 +609,61 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25g — Part 10: the chase guard is noise, and a tighter stop makes entry discipline MORE valuable
+
+Two questions a live BTC analysis raised. 274,079 opportunities, 24 symbols, both pre-declared at
+ce81648 with predictions recorded in advance. **One prediction held, one was wrong.**
+
+**Q1 — the chase guard earns nothing, at EITHER entry style.** Reconstructed faithfully from
+`prompt.ts` (with `intoLevel` and CVD missing from the feature set, which can only make it fire
+LESS, declared up front):
+
+| entry | SHORT lift | LONG lift |
+|---|---:|---:|
+| MARKET | −0.0005 (4/9) | +0.0022 (5/9) |
+| **PULLBACK** | −0.0017 (3/9) | −0.0005 (4/9) |
+
+Noise in all four cells; the robust `stretch>=2` arm is **INVERTED on LONG** (−0.0067, 3/9). This
+does not contradict Part 4, it narrows it: Part 4 rehabilitated the guard because chase bars punish
+the **CHASING** arm (−0.129R/−0.195R at 0/9), which is still true and now **moot**, because
+`ENTRY DISCIPLINE` forbids chasing outright. The guard defended a move the app can no longer make
+while blocking 27% of bars from producing the best action in the system.
+
+**`chase_into_extended_aligned_trend` REMOVED from auto-FLAT. The READING stays** — the loud
+CHASE/EXHAUSTION line, the pullback directive, the Risk Map instruction are untouched. Same
+treatment as divergence in Part 6: the reading survives, the gate does not.
+
+**Q2 — the entry edge does not merely survive the app's tighter stop, it GROWS. My prediction was
+wrong.** TP2 fixed at 2.5 ATR, fees scaling with the stop:
+
+| stop | SHORT mkt → pullback | gain | LONG mkt → pullback | gain |
+|---:|---|---:|---|---:|
+| **1.25** (≈ the app) | −0.0247 → **+0.1029** | **+0.1276** | −0.1515 → **+0.0194** | **+0.1710** |
+| 2.00 (researched) | +0.0023 → +0.0684 | +0.0661 | −0.0775 → +0.0165 | +0.0940 |
+| 3.00 | −0.0011 → +0.0400 | +0.0411 | −0.0490 → +0.0102 | +0.0591 |
+
+**9/9 periods at every stop, both sides.** I predicted the gain would shrink as the stop tightened;
+it roughly **triples** from 3.0 to 1.0 ATR. The mechanism is plain in hindsight: entering 0.25 ATR
+better is 12.5% of the risk distance at a 2.0 ATR stop but **20% at 1.25**, so a tighter stop makes
+the entry price worth more. The pullback arm barely moves while the market arm collapses.
+
+**The absolute level answers what the pre-declaration flagged as most serious:** at the app's
+geometry the pullback arm is positive on both sides, so the shipped trade is profitable — and a
+MARKET entry there is **−0.15R on LONG**, making "never enter at market" considerably more important
+than Parts 4-5 implied, not less.
+
+**The product consequence is the point.** A chase-HIGH bar previously computed the pullback band,
+told the user to wait for it, and emitted `[]` — while `index.ts:3443` monitors only
+`kind='setup' AND state='pending'`, so a FLAT row was never watched. The app named a price 0.33%
+away with no mechanism to say it arrived. It can now emit a CONDITIONAL setup at the band, which
+registers, gets monitored by the cron, and fires the entry-zone push.
+
+Two follow-on cleanups: the catalyst FRAMING line keyed on `autoFlat.includes('chase_...')`, now
+permanently false, so it was retargeted to the chase READING and its "Still output NO SETUP" tail
+removed. `chaseUnguarded` on the MIXED mandate is **deliberately kept** — Part 10 tested the reading
+as a bar FILTER, not as a suppressor of a rule that FORBIDS declining, and those are different
+questions. 760/760 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-25f — Part 9: `continuation` had never once fired satisfiably on a stock
 
 Closes the last testable envelope condition, and finds a defect by reading the code rather than

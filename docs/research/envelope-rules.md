@@ -1484,3 +1484,71 @@ unprofitable — a different and more serious result than either question asks o
    with `ENTRY DISCIPLINE`. If it helps under BOTH, it stays and Q1 is closed in its favour.
 2. The pullback-minus-market gain **shrinks as the stop tightens**, because a tighter stop converts
    the pullback's better fill price into a smaller edge while fees grow in R terms.
+
+## PART 10 RESULTS — the chase guard is noise, and the app's tighter stop makes entry discipline MORE valuable
+
+274,079 opportunities, 24 symbols, 2020-07 → 2026-06. Chase HIGH fires on **27.2%** of bars in the
+conservative reconstruction (the real guard fires more, since `intoLevel` and CVD are missing).
+
+### Q1 — the chase guard earns nothing, at EITHER entry style
+
+| gate | entry | side | blocked | kept | lift | periods+ | verdict |
+|---|---|---|---:|---:|---:|---:|---|
+| chase HIGH | MARKET | SHORT | +0.0037 | +0.0017 | −0.0005 | 4/9 | noise |
+| chase HIGH | MARKET | LONG | −0.0833 | −0.0754 | +0.0022 | 5/9 | noise |
+| chase HIGH | **PULLBACK** | SHORT | +0.0730 | +0.0667 | −0.0017 | 3/9 | noise |
+| chase HIGH | **PULLBACK** | LONG | +0.0178 | +0.0160 | −0.0005 | 4/9 | noise |
+| stretch≥2 | PULLBACK | SHORT | +0.0654 | +0.0761 | +0.0077 | 6/9 | noise |
+| stretch≥2 | PULLBACK | LONG | +0.0191 | +0.0098 | **−0.0067** | 3/9 | **INVERTED** |
+
+**Prediction 1 was half right.** I predicted the guard would help at MARKET and not at PULLBACK. It
+helps at NEITHER — the largest lift anywhere in the faithful arm is +0.0022R at 5/9. As a bar filter
+it does nothing, on either side, at either entry.
+
+That does not contradict Part 4, it narrows it. Part 4 rehabilitated the guard because chase-HIGH
+bars punish the **CHASING** arm (entering 0.25 ATR the WRONG way, −0.129R/−0.195R at 0/9). That
+remains true — and it is now **moot**, because `ENTRY DISCIPLINE` forbids the app from chasing at
+all. The guard defends against a move the app can no longer make, while blocking 27% of bars from
+producing the entry that is the best action in the system.
+
+By the Part 6 principle the guard makes a PREDICTION claim — that entering after an extended move is
+worse — and a prediction claim must be earned. It measured noise across four cells.
+
+### Q2 — the edge does not merely survive the tighter stop, it GROWS. Prediction 2 was WRONG.
+
+TP2 held at a fixed 2.5 ATR; fees scale with the stop.
+
+| stop (×4H ATR) | R at TP2 | SHORT mkt | SHORT pullback | gain | LONG mkt | LONG pullback | gain |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1.00 | 2.50 | −0.0626 | +0.1177 | **+0.1803** | −0.2074 | +0.0187 | **+0.2261** |
+| **1.25** (≈ the app) | 2.00 | −0.0247 | **+0.1029** | **+0.1276** | −0.1515 | **+0.0194** | **+0.1710** |
+| 2.00 (researched) | 1.25 | +0.0023 | +0.0684 | +0.0661 | −0.0775 | +0.0165 | +0.0940 |
+| 3.00 | 0.83 | −0.0011 | +0.0400 | +0.0411 | −0.0490 | +0.0102 | +0.0591 |
+
+**9 of 9 periods at every single stop, both sides.**
+
+I predicted the gain would shrink as the stop tightened. It roughly **triples** going from 3.0 to
+1.0 ATR. The mechanism is obvious in hindsight and worth stating: entering 0.25 ATR better is 12.5%
+of the risk distance at a 2.0 ATR stop but **20% at 1.25** — so the tighter the stop, the more the
+entry price is worth. The pullback arm barely moves (+0.0165 → +0.0194 on LONG) while the market arm
+collapses (−0.0775 → −0.1515).
+
+**The absolute level answers the question the pre-declaration flagged as most serious:** at the app's
+~1.25 ATR geometry the pullback arm is **positive on both sides** (+0.1029 / +0.0194), so the shipped
+trade is not merely relatively better, it is profitable. **A market entry at that stop is −0.15R on
+LONG** — the app's tighter stop makes "never enter at market" considerably more important than Parts
+4-5 implied, not less.
+
+### Action
+
+**`chase_into_extended_aligned_trend` removed from the auto-FLAT list.** It measured noise in every
+cell, its robust arm inverted on LONG, and the thing it protects against is already forbidden.
+
+**It stays as CONTEXT** — the loud `CHASE / EXHAUSTION RISK` line, the "prefer a pullback entry"
+directive and the Risk Map instruction are untouched. Same treatment as divergence in Part 6: the
+reading survives, the gate does not.
+
+**The product consequence is the point.** A chase-HIGH bar can now produce a CONDITIONAL setup at the
+measured pullback band instead of `[]`. That setup registers in `tracked_setups`, the cron monitors
+it, and the entry-zone push fires when price actually arrives — closing the gap where the app named a
+price 0.33% away and had no way to tell the user it got there.
