@@ -409,3 +409,55 @@ without suspicion:
 4. **The gap that could still overturn this**: every test enters at the BAR CLOSE. Real setups enter
    at a level the LLM picks. If gating value lives in level selection rather than bar selection, none
    of these three parts would see it — and that is the one experiment left worth running.
+
+---
+
+# PART 4 — does the value live in LEVEL selection? — PRE-DECLARED 2026-08-25
+
+Parts 1-3 all enter at the **bar close**. Real setups name a LEVEL and enter only if price comes to
+it — the ADA example: *"wait for a pullback to $0.2140"* while price sat at $0.2210. If gating value
+lives there, none of the previous three parts could have seen it.
+
+## What a conditional entry actually changes
+
+Two distinct effects, and they pull in opposite directions:
+
+1. **A better price.** Entering on a pullback means a tighter stop distance in absolute terms and a
+   larger move to target from the fill.
+2. **A selection effect, and it is adverse.** You only trade when price comes BACK. Bars where price
+   runs away without retracing are exactly the strongest moves — and a pullback rule **systematically
+   misses them**. This is the trap: any measurement that ignores unfilled setups will look great and
+   mean nothing.
+
+## Method
+
+At each bar: place an entry `depth × ATR` against the direction, wait up to **12 hours** (the app's
+own pending-setup expiry), and:
+
+- **filled** → enter at the level, then run stop (2 ATR) and targets (1.5 / 2.5 ATR) from THERE;
+- **unfilled** → no trade, recorded as such.
+
+Depths tested: 0.00 (market, the control), 0.25, 0.50, 1.00 ATR.
+
+**Fill rate is reported alongside every result.** A depth that fills 20% of the time is trading a
+fifth as often, and per-trade R is not comparable across depths without it — so total R per
+*opportunity* (filled and unfilled together) is the primary number.
+
+## Hypotheses
+
+- **H1** — pullback entry beats market entry on R per opportunity.
+- **H2** — gates that failed under market entry pass under level entry.
+
+## Pre-declared bar
+
+- **H1 supported** if some depth beats depth-0.00 by **≥ 0.02R per opportunity**, positive in
+  **≥ 6 of 9** six-month periods by sign count.
+- **H2 supported** if out-of-sample gate-selection lift under the best depth reaches **≥ 0.02R**
+  against both no-gate and coverage-matched random — the same bar Part 3 failed.
+
+## Expected outcome, recorded in advance
+
+The adverse-selection effect is mechanical and I expect it to dominate: better fills on the trades
+you get, paid for by missing the runners. Most likely **H1 is null or negative on R per opportunity
+while looking positive on R per filled trade** — and the per-filled number is the one that would be
+quoted by someone trying to sell the result.
