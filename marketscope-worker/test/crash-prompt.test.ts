@@ -87,3 +87,34 @@ describe('crash risk reaches the model — input AND output contract', () => {
     expect(systemPrompt(false)).toMatch(/absence carries no information/);
   });
 });
+
+// The same defect class as the crash band, found in the persistence ladder on 2026-08-25: absolute
+// thresholds applied to a probability whose base rate is not 50%. The crypto h72t25 target's base
+// rate is 53.9% (measured over 352,972 bars in csv_exports_v14), so the old "WEAK (50-59%)" band
+// straddled the average and called an entirely ordinary reading sub-par. Guidance unchanged; only
+// the words describing the number moved.
+describe('ML Persistence labels are stated against the 54% base rate, not 50%', () => {
+  const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+
+  it('no longer calls the band containing the base rate "WEAK"', () => {
+    expect(src).not.toMatch(/WEAK \(50-59%\)/);
+    expect(src).toMatch(/AVERAGE \(50-59% — the base rate is 54%, so this is an ORDINARY reading/);
+  });
+
+  it('names the base rate in every band so the number is interpretable', () => {
+    for (const band of [/WELL ABOVE AVERAGE \(≥70% vs a 54% base\)/,
+                        /ABOVE AVERAGE \(60-69% vs a 54% base\)/,
+                        /BELOW AVERAGE \(<50% vs a 54% base\)/]) {
+      expect(src).toMatch(band);
+    }
+  });
+
+  it('leaves the trade-management ladder byte-identical', () => {
+    // The thresholds were tuned for TP2 distance and hold time, and that tuning was never in
+    // question — relabelling must not quietly retune it.
+    expect(src).toMatch(/TP2 at 4-5× ATR\(4H\), runner targets the upper multiplier, trail 1-1\.5× ATR after TP1/);
+    expect(src).toMatch(/TP2 at 3-4× ATR\(4H\), 48h hold target, take partial 50% at TP1 \+ trail the runner 1× ATR/);
+    expect(src).toMatch(/TP2 at 2-3× ATR\(4H\) max, 24h hold, take TP1 at \+1R-1\.5R/);
+    expect(src).toMatch(/do NOT hold for TP2\. Take TP1 fast \(\+1R-1\.5R\)/);
+  });
+});

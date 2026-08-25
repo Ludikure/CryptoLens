@@ -1622,10 +1622,18 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     // ML Persistence (72h)
     if (daily.mlPersistenceProbability != null) {
       const p72Pct = iTrunc(daily.mlPersistenceProbability * 100);
-      const guidance = p72Pct >= 70 ? 'HIGH (≥70%) — full 72h hold viable, TP2 at 4-5× ATR(4H), runner targets the upper multiplier, trail 1-1.5× ATR after TP1'
-        : p72Pct >= 60 ? 'MODERATE (60-69%) — TP2 at 3-4× ATR(4H), 48h hold target, take partial 50% at TP1 + trail the runner 1× ATR'
-        : p72Pct >= 50 ? 'WEAK (50-59%) — TP2 at 2-3× ATR(4H) max, 24h hold, take TP1 at +1R-1.5R and trail tightly (0.7× ATR) or exit at BE after TP1'
-        : 'LOW (<50%) — do NOT hold for TP2. Take TP1 fast (+1R-1.5R) or pass the setup if TP1 < 1.5R. Persistence model expects mean-reversion before 2.5 ATR.';
+      // Labels are stated against the TARGET'S OWN BASE RATE (53.9%, measured over 352,972 crypto
+      // bars in csv_exports_v14), not against 50%. The old ladder called 50-59% "WEAK" — a band
+      // that straddles the base rate, so an entirely average bar read as sub-par and biased the
+      // model toward shorter holds and tighter trails on the most common reading there is. Same
+      // defect class as the crash band fixed earlier today: absolute thresholds applied to a
+      // probability whose base is not 50%. **The management guidance is unchanged** — only the
+      // words describing the number moved, because the ladder was tuned for trade management and
+      // that tuning was never the thing in question.
+      const guidance = p72Pct >= 70 ? 'WELL ABOVE AVERAGE (≥70% vs a 54% base) — full 72h hold viable, TP2 at 4-5× ATR(4H), runner targets the upper multiplier, trail 1-1.5× ATR after TP1'
+        : p72Pct >= 60 ? 'ABOVE AVERAGE (60-69% vs a 54% base) — TP2 at 3-4× ATR(4H), 48h hold target, take partial 50% at TP1 + trail the runner 1× ATR'
+        : p72Pct >= 50 ? 'AVERAGE (50-59% — the base rate is 54%, so this is an ORDINARY reading, not a weak one) — TP2 at 2-3× ATR(4H) max, 24h hold, take TP1 at +1R-1.5R and trail tightly (0.7× ATR) or exit at BE after TP1'
+        : 'BELOW AVERAGE (<50% vs a 54% base) — do NOT hold for TP2. Take TP1 fast (+1R-1.5R) or pass the setup if TP1 < 1.5R. Persistence model expects mean-reversion before 2.5 ATR.';
       L(`ML Persistence (72h ≥2.5 ATR): ${p72Pct}% — ${guidance}`);
     }
 
