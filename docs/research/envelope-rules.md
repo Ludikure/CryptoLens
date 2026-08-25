@@ -461,3 +461,81 @@ The adverse-selection effect is mechanical and I expect it to dominate: better f
 you get, paid for by missing the runners. Most likely **H1 is null or negative on R per opportunity
 while looking positive on R per filled trade** — and the per-filled number is the one that would be
 quoted by someone trying to sell the result.
+
+## PART 4 RESULTS — the value IS in the entry level, and it survives every control
+
+### H1: strongly supported
+
+| SHORT | fill | R/opportunity | vs market | periods+ |
+|---|---:|---:|---:|---:|
+| market (control) | 100% | −0.0036 | — | — |
+| **pullback 0.25 ATR** | 88.3% | **+0.0624** | **+0.0660** | **9/9** |
+| pullback 0.25 STRICT fill | 84.0% | +0.0431 | +0.0467 | **9/9** |
+| delay 12h, then market | 100% | −0.0032 | +0.0003 | 2/9 |
+| **CHASE 0.25 (adverse)** | 99.9% | **−0.1288** | **−0.1252** | **0/9** |
+
+| LONG | fill | R/opportunity | vs market | periods+ |
+|---|---:|---:|---:|---:|
+| market (control) | 100% | −0.0709 | — | — |
+| **pullback 0.25 ATR** | 92.2% | **+0.0210** | **+0.0919** | **9/9** |
+| pullback 0.25 STRICT fill | 88.7% | +0.0081 | +0.0790 | **9/9** |
+| delay 12h, then market | 100% | −0.0637 | +0.0072 | 8/9 |
+| **CHASE 0.25 (adverse)** | 99.9% | **−0.1954** | **−0.1245** | **0/9** |
+
+Measured **per opportunity**, so the adverse selection is already paid for — unfilled setups score
+exactly zero and are counted.
+
+### The three controls all land the right way
+
+**Delay is not the mechanism.** Waiting the same 12 hours and then entering at market gives
++0.0003R (SHORT, 2/9 periods). The benefit is the LEVEL, not the patience. This was the control most
+likely to kill the result and it passes cleanly.
+
+**Conservative fills survive.** Requiring price to trade THROUGH the level by 0.05 ATR rather than
+merely touch it — a limit order at a price the market kisses once often does not fill — attenuates
+the effect by roughly a third and leaves it at +0.0467 / +0.0790, still 9/9 periods.
+
+**The adverse arm is almost perfectly symmetric.** Chasing 0.25 ATR the wrong way costs −0.125R on
+BOTH sides, **0/9 periods**. Buying dips helps by ~+0.09; buying rips hurts by ~−0.125. A simulation
+bug would not produce that symmetry — it is the signature of a real price-level effect, namely
+short-horizon mean reversion.
+
+### Scale, against everything else measured
+
+| finding | effect |
+|---|---:|
+| best gate set over random (Part 3) | +0.0012R |
+| whole envelope over random (Part 2) | +0.0012R |
+| **entry level, strict fill (Part 4)** | **+0.047 to +0.079R, 9/9** |
+
+**Entry discipline is worth roughly 40-60× the entire gating apparatus.**
+
+## Why Parts 1-3 found nothing
+
+They all entered at the bar close — which is the WORST arm here, and the one arm that is negative on
+both sides. Gates were being asked to rescue an entry method that loses by construction. The pre-
+declaration for this part named that possibility, and it turned out to be the whole story.
+
+## What this means for the app
+
+**The app already does the right thing, and it was the untested part.** The LLM names an entry LEVEL,
+frequently a pullback — *"wait for a pullback to $0.2140"* in the ADA example. That mechanic, not the
+envelope wrapped around it, is where the measurable value lives.
+
+It also rehabilitates one guard: `chase_into_extended_aligned_trend` defends against precisely the
+−0.125R arm. Part 1 dismissed it because it was tested as a BAR filter under market entry; as an
+entry-level rule it is guarding the single most expensive mistake measured here.
+
+**And it explains the new `WAIT FOR LONG ENTRY` state.** Rendering a pullback entry as though it were
+actionable at market invites the user into the −0.125R arm instead of the +0.079R one.
+
+## Limits
+
+- Strict fill still assumes execution on a 0.05 ATR penetration.
+- Fees are charged at the **taker** rate both ways; a limit entry would be maker, so this is
+  conservative.
+- Short-horizon mean reversion is well known and crowded — it is measured net of fees here, but this
+  is not a private discovery.
+- **H2 is NOT yet run**: whether gates that failed under market entry pass under level entry. Given
+  the entry effect is ~50× the gate effect, it is secondary, but it remains open and is recorded as
+  such rather than quietly dropped.
