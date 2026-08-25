@@ -988,3 +988,107 @@ So macro stays, and the EV numbers above are recorded as context rather than as 
 **The honest count: of ~20 envelope conditions, 13 are now directly tested, 2 are tested on partial
 proxies, and 5 remain untested — 4 of which are stock-only or need data accumulation, and 1 of which
 (`data_stale`) is not a market claim and never will be testable this way.**
+---
+
+# PART 8 — the four stock-only conditions (PRE-DECLARED, nothing computed yet)
+
+Part 7 listed four conditions as untestable "stocks only; no stock intraday paths". That was wrong
+in the same way the `continuation` exclusion was wrong: I checked the crypto backfill directory,
+found no stock paths, and stopped. **The stock hourly bars have been in the box's own candle archive
+since 2019-01-07** — 13,063 bars for AAPL, deeper than any crypto symbol — and a 1.0 GB local
+snapshot of that archive sits in the repo working tree. No tunnel, no `/history` fan-out, no new
+data source. Extracted with `stock_klines_extract.py`.
+
+**Second time in two days that "untestable" meant "I did not look".** The rule this earns: before
+recording a condition as untestable, name the specific data that is missing and where it would have
+to come from. "No stock paths in `vision_backfill`" describes a directory, not a data gap.
+
+## The data
+
+| | |
+|---|---|
+| symbols | **159** (the full stock universe) |
+| joinable opportunities | **490,794** (97.6% exact-timestamp join to `csv_exports_v14_stocks`) |
+| span | 2020-01 → 2026-06 |
+| price paths | `stock_klines/` — hourly, from the D1 snapshot |
+| features | `csv_exports_v14_stocks/` — the existing v14 regen, unchanged |
+
+Coverage ends 2026-06-12 (the snapshot date) against crypto's 2026-07-31. Periods are scored
+per-window, so the shorter tail costs at most the final half-year window, not the comparison.
+
+## Declared BEFORE computing
+
+**1. Horizon — hold ATR-periods constant, not clock hours.** Barrier distances are in units of the
+**4H** ATR, so the horizon must be counted in 4H-bars or the two markets get different tests. Crypto
+used WAIT 12 / HOLD 72 hourly bars = **3 / 18 ATR-periods**. A stock "4H" bar is ET-session
+aggregated — two bars per 6.5-hour session, so **3.25 trading hours each**. Holding 3/18 periods
+gives **WAIT_H = 10, HOLD_H = 59** stock trading-hour bars. Robustness re-run at HOLD_H = 72
+(22 periods); a conclusion that flips between the two is reported as unstable, not as a finding.
+
+**2. Fee = 0.05% round trip.** Retail stock commissions are zero; this covers spread and slippage on
+liquid large caps. Crypto's 0.171% is a derivatives taker fee and does not apply. Sensitivity at
+0.00% and 0.171% — a verdict that depends on the fee is reported as fee-dependent.
+
+**3. Primary metric — `d0.25_{side}_oppR`**, R per OPPORTUNITY at the shipped 0.25 ATR pullback
+entry, unfilled setups scoring exactly 0. Same as Parts 4-7.
+
+**4. The exact conditions, transcribed from `prompt.ts`, not from memory.**
+
+| condition | fires when |
+|---|---|
+| `treatment_long_confirm_FAIL` (auto-FLAT) | aligned LONG, alignment ≠ MIXED, and **neither** `relStrengthVsSpy ≥ 1.0` **nor** `dRsiDelta1 ≥ 1.0` |
+| `treatment_long_confirm_PARTIAL` (cap LOW) | aligned LONG and **exactly one** of the two passes |
+| `treatment_short_gate_stocks` (auto-FLAT) | aligned-bearish SHORT, unless **all** of ML ≥ 70, 4H Stoch bearish, regime TRENDING |
+| `earnings_in_0-2d` (cap LOW) / `3-7d` (cap MODERATE) / `8-14d` (downgrade) | forward days to the next earnings date |
+
+**The column choice is declared in advance because Part 7 got exactly this wrong.** `prompt.ts`
+computes `rsiSeries[last] − rsiSeries[last−1]` — a **ONE-bar** daily RSI delta. That is the CSV's
+`dRsiDelta1` (std 3.33, passes on 20.9% of bars), **not** `dRsiDelta`, which is the 6-bar
+rate-of-change (std 8.54, passes on 46.5%). `dRsiDelta1` is primary; the 6-bar column is reported as
+a sensitivity only, and a pass that appears only on the wrong column is not a pass.
+
+Earnings days come from `earnings_history.json` (161 symbols, real dates) as **forward** days to the
+next report. The `earningsProximity` feature is deliberately NOT used: it is `exp(−daysToNearest/7)`
+over the nearest report in **either** direction, so it cannot distinguish "two days before" — the
+gap risk the gate exists for — from "two days after", when the risk has already resolved.
+
+**5. Ship bar (unchanged from Parts 1-7):** lift ≥ **+0.02R**, positive in ≥ **6 of 9** half-year
+periods, and kept coverage ≥ **20%**. Both sides reported separately; a rule that passes on one side
+and inverts on the other is scoped, not adopted whole — the `alignment_not_full` precedent.
+
+**6. Day-of-week stratification is mandatory for the earnings arms.** Earnings land on weekdays and
+cluster in four seasonal windows, so the baseline "far from earnings" set is not calendar-neutral.
+`news-catalyst-test.md` recorded a −10.8pp result at z = −10.4 that was entirely this artifact.
+
+**7. Episode-level reporting for anything that persists.** The Part 6 correction — daily divergence
+looked significant at p = 4.0e−04 and collapsed to p = 0.32 once ~44-bar episodes were counted
+instead of bars — applies to every condition here. `treatment_long_confirm` keys on a daily bias and
+a daily RSI delta, so consecutive 4H bars are NOT independent observations. Any claim states its
+effective n.
+
+## The earnings gates get a SECOND, different test — and the EV test cannot refute them
+
+By the Part 6 principle, a condition that guards an **exogenous scheduled event** never claimed
+predictive power, so a null EV result does not refute it. `macro_IMMINENT` was retained on exactly
+this ground. Earnings gates are the same class: the code's own words are *"gap risk 5-20%, stop will
+not hold"* — a **variance** claim, not a direction claim.
+
+So the EV sweep is recorded as CONTEXT for the earnings arms and cannot remove them. The claim they
+actually make is tested separately and directly:
+
+> **Do large adverse GAPS cluster near earnings?** For every opportunity, take the largest
+> overnight gap `|open[t] − close[t−1]|` inside the hold window, in ATR units, and measure
+> `P(max gap ≥ 2 ATR)` — a gap that jumps clean over the app's 2 ATR stop.
+>
+> **Bar: the rate inside the earnings window must be ≥ 1.5× the far-from-earnings baseline, in ≥ 6
+> of 9 periods.** Below that, the guard is not doing what it says, and the specific windows that
+> fail are the ones to narrow — 8-14d being the least plausible on its face.
+
+This is the one arm where a null result is genuinely actionable, because it tests the stated
+mechanism rather than a proxy for it.
+
+## What this part CANNOT settle
+
+`data_stale_N_sources` is a pipeline-health condition with no market analogue and is not tested here
+or ever. `news_thesis_conflict` still needs months of `news_items` accumulation. `continuation < 3`
+still needs the full signal list ported. Those three remain genuinely open.
