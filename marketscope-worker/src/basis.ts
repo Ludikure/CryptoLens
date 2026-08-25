@@ -186,7 +186,7 @@ export function findBasisOpportunities(
   rows: BasisRow[],
   minNetAnnual = 0.10,
   minVolume = 1000,
-  feePerSide = 0.001,
+  feePerSide = 0.0007,
 ): BasisAlert[] {
   const out: BasisAlert[] = [];
   for (const r of rows) {

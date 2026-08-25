@@ -2466,14 +2466,15 @@ export default {
     // Cash-and-carry basis on Coinbase dated nano futures — the one strategy in this project that
     // needs no directional forecast (docs/research/funding-carry.md). READ-ONLY: public market data,
     // no orders, no trade-enabled credentials. `?fee=` overrides the per-side assumption (default
-    // 0.10% = the futures leg only, i.e. the COVERED form against BTC already held; buying the spot
-    // leg at Coinbase retail tiers costs ~0.40-0.60% per side and consumes the entire edge).
+    // 0.0007 = the user's measured Coinbase Advanced 2 derivatives taker, futures legs only — i.e.
+    // the COVERED form against BTC already held. Buying the spot leg costs 0.250%/side at the same
+    // tier, which is 0.50% round trip and consumes most of a typical basis.)
     if (path === '/basis' && request.method === 'GET') {
       try {
         const nowMs = Date.now();
-        const fee = Number(url.searchParams.get('fee') ?? '0.001');
+        const fee = Number(url.searchParams.get('fee') ?? '0.0007');
         const rows = await fetchBasisRows(nowMs);
-        const opportunities = findBasisOpportunities(rows, 0.10, 1000, Number.isFinite(fee) ? fee : 0.001);
+        const opportunities = findBasisOpportunities(rows, 0.10, 1000, Number.isFinite(fee) ? fee : 0.0007);
         return json({
           at: nowMs,
           spot: { BTC: rows.find(r => r.underlying === 'BTC')?.spotPrice ?? null,
