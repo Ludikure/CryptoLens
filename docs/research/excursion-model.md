@@ -80,4 +80,82 @@ direction tests in [[what-we-tried]].
 
 ## RESULTS
 
-*(to be filled after the run — nothing below this line existed when the bar above was fixed)*
+### The base rates are BELOW the random-walk benchmark at every R
+
+| R | LONG | SHORT | random walk 1/(1+R) | edge |
+|---:|---:|---:|---:|---:|
+| 1 | 0.4661 | 0.5230 | 0.5000 | −0.034 |
+| 1.5 | 0.3437 | 0.3926 | 0.4000 | −0.056 |
+| 2 | 0.2630 | 0.3012 | 0.3333 | −0.070 |
+| 3 | 0.1616 | 0.1799 | 0.2500 | −0.088 |
+| **5** | **0.0664** | **0.0670** | **0.1667** | **−0.100** |
+| 8 | 0.0206 | 0.0189 | 0.1111 | −0.091 |
+
+`1/(1+R)` assumes *infinite* time. A 72h cap means many paths reach neither barrier, and those are
+not wins. **`provisionalCurve` extrapolated toward a benchmark the real data sits 10pp below**, so
+every expected value the pipeline has produced was optimistic.
+
+### The binary EV formula is wrong by half an R
+
+`opportunity.ts:expectedValueR` is `p·winR − (1−p)·lossR`, which has no room for the third outcome.
+Measured pooled at 5R, **20-25% of trades hit neither barrier** and exit at the 72h mark:
+
+| | P(target) | P(stop) | P(timeout) | E[R \| timeout] | EV real | EV if binary | error |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| LONG 5R | 0.066 | 0.729 | 0.205 | +1.431 | −0.103 | −0.602 | **+0.498** |
+| SHORT 5R | 0.067 | 0.682 | 0.252 | +1.435 | +0.015 | −0.598 | **+0.613** |
+
+Timeout exits average **+1.43R** — they are not neutral, and pricing them at zero (or ignoring them)
+is the difference between "this structure is hopeless" and "this structure is roughly flat".
+
+### Against the pre-declared bar
+
+| | LONG | SHORT |
+|---|---|---|
+| 1 AUC ≥ 0.55 both axes | PASS 0.648 / 0.562 | PASS 0.646 / 0.619 |
+| 2 beats controls +0.02 | **FAIL** (lag-30 xs +0.014) | PASS |
+| 3 random-label ≈ 0.50 | PASS 0.5015 | PASS 0.5036 |
+| 4 monotonic calibration | PASS (1 inversion) | PASS (1 inversion) |
+| 5 beats incumbent all folds | PASS +0.047/+0.032/+0.060 | PASS +0.051/+0.072/+0.182 |
+| | **DO NOT SHIP** | **SHIP** |
+
+Criterion 5 passing is the least interesting result here — training on the actual target ought to
+beat training on a proxy. The informative ones are 1 and 2.
+
+LONG's failure is specific and honest: its cross-sectional information barely decays under a 30-day
+lag, which means it reads something slow-moving rather than timing — precisely what that control
+exists to catch ([[crash-overlay]], T12).
+
+### And then the regime control killed the profitability
+
+The SHORT holdout EV looked strong (+0.27R net at top-10%). **That holdout contains BTC's run to
+~124k and the crash to ~59k**, so a window-wide number cannot separate "the model selects" from
+"the window fell". Nine non-overlapping 6-month periods, each trained only on prior data:
+
+| control | result | verdict |
+|---|---|---|
+| 1 — beats always-short | +0.154R vs −0.014R | PASS |
+| 2 — profitable in rising markets | **1 of 5 periods**, median −0.047R, corr(EV, BTC ret) = **−0.509** | **FAIL** |
+| 3 — top-decile beats bottom-decile | +0.443R, **9 of 9 periods** | PASS |
+
+**A control-design error worth recording**: the first version of Control 2 tested `mean > 0` and
+PASSED. The mean was +0.111R — carried entirely by one period (2025-01 at +0.768R). Remove it and
+the mean is **−0.054R**. Five observations cannot support a mean; the sign count and median can, and
+on those the control fails cleanly.
+
+## Conclusion
+
+**Ranking is real. Profitability is a regime bet.**
+
+The model orders assets by barrier outcome in *every* window tested, up or down, 9/9 — that is not
+regime, and it is the thing `opportunity.ts` exists to do. But the SHORT-only structure it ranks
+only pays when the tape falls, so shipping "short the top-ranked asset" would be a directional bet
+wearing a model's clothes — the same mistake [[regime-hold]] documented.
+
+**What this licenses:**
+- Replacing the extrapolated curve with **measured** barrier probabilities.
+- Fixing the binary EV formula, which is wrong by ~0.5R at the structure's own target.
+- Using the model to **rank**, with EV stated honestly and its regime dependence surfaced.
+
+**What it forbids:** presenting any of this as a profitable signal. It is not, in rising markets,
+which is 5 of the 9 periods measured.
