@@ -28,6 +28,59 @@ export function expectedValueR(winProbability: number, averageWinR: number, aver
 }
 
 /**
+ * Probability that a bounded-horizon trade ends at NEITHER barrier, and what it pays when it does.
+ *
+ * Measured on 3.5M simulated trades over 24 symbols, 2020-2026 (`ml-training/excursion_payoff.py`).
+ * At the 5R/1R/72h structure, **20-25% of trades hit neither barrier** and exit at the horizon
+ * averaging **+1.43R**. The binary formula has no room for that branch, and pricing it away makes
+ * the estimate wrong by **+0.50R at 5R** — the difference between "hopeless" and "roughly flat".
+ *
+ * The timeout share grows with R because a distant target is less reachable inside a fixed window;
+ * this interpolates the measured LONG shares rather than assuming a constant.
+ */
+const MEASURED_TIMEOUT = [
+  { atR: 1.0, share: 0.008, meanR: -0.016 },
+  { atR: 1.5, share: 0.029, meanR: 0.221 },
+  { atR: 2.0, share: 0.060, meanR: 0.455 },
+  { atR: 3.0, share: 0.124, meanR: 0.849 },
+  { atR: 5.0, share: 0.205, meanR: 1.431 },
+  { atR: 8.0, share: 0.248, meanR: 1.922 },
+] as const;
+
+export function timeoutBranch(targetR: number): { share: number; meanR: number } {
+  const pts = MEASURED_TIMEOUT;
+  if (targetR <= pts[0].atR) return { share: pts[0].share, meanR: pts[0].meanR };
+  const last = pts[pts.length - 1];
+  if (targetR >= last.atR) return { share: last.share, meanR: last.meanR };
+  for (let i = 1; i < pts.length; i++) {
+    if (targetR <= pts[i].atR) {
+      const a = pts[i - 1], b = pts[i];
+      const w = (targetR - a.atR) / (b.atR - a.atR);
+      return { share: a.share + w * (b.share - a.share), meanR: a.meanR + w * (b.meanR - a.meanR) };
+    }
+  }
+  return { share: last.share, meanR: last.meanR };
+}
+
+/**
+ * THREE-WAY expected value: target, stop, or the horizon.
+ *
+ * `pTarget` is the measured probability of reaching the target BEFORE the stop. The remaining mass
+ * splits between a stop-out and a timeout using the measured timeout share, and the timeout pays its
+ * measured mean rather than zero. Clamped into [-1, targetR] because a timeout exit cannot pay more
+ * than the target or less than the stop — the position would have closed.
+ */
+export function expectedValueThreeWay(pTarget: number, targetR: number): number {
+  const pt = Math.min(Math.max(pTarget, 0), 1);
+  const { share, meanR } = timeoutBranch(targetR);
+  // The timeout share is measured unconditionally; it cannot exceed the mass left after a win.
+  const pTimeout = Math.min(share, 1 - pt);
+  const pStop = Math.max(0, 1 - pt - pTimeout);
+  const timeoutPay = Math.min(Math.max(meanR, -1), targetR);
+  return pt * targetR + pStop * -1 + pTimeout * timeoutPay;
+}
+
+/**
  * Net expected value after round-trip cost, converted from percent-of-notional into R.
  *
  * The conversion is the part that matters and is easy to get wrong: a 0.171% round trip costs far
@@ -56,7 +109,8 @@ export function buildPayoff(args: {
   const winR = structureR(args.entryPrice, args.stopPrice, args.targetPrice, args.direction);
   const lossR = 1;                               // by definition: one R is the stop
   const stopPct = Math.abs(args.entryPrice - args.stopPrice) / args.entryPrice * 100;
-  const gross = expectedValueR(args.winProbability, winR, lossR);
+  // Three-way, not binary: a bounded horizon has a timeout branch worth ~+0.5R at this structure.
+  const gross = expectedValueThreeWay(args.winProbability, winR);
   return {
     winProbability: args.winProbability,
     averageWinR: winR,

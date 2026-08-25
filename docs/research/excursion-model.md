@@ -143,12 +143,59 @@ PASSED. The mean was +0.111R — carried entirely by one period (2025-01 at +0.7
 the mean is **−0.054R**. Five observations cannot support a mean; the sign count and median can, and
 on those the control fails cleanly.
 
+## CORRECTION — the first conclusion overstated the spread by 4×
+
+Feature importance was checked *after* writing the conclusion above, and the top five splits are
+`ethBtcRatio`, `dxyMomentum`, `vixTermStructure`, `vix`, `fearGreedIndex` — **all market-wide**,
+identical across all 24 symbols at any timestamp. That prompted a test of whether the model selects
+assets or times the market (`excursion_selection_vs_timing.py`).
+
+**Test B — which block carries the signal** (holdout, trained on each alone):
+
+| features | per-symbol AUC | within-timestamp AUC |
+|---|---:|---:|
+| all 117 | 0.6084 | 0.6330 |
+| 29 market-wide only | 0.5718 | **0.5000** |
+| 88 asset-specific only | 0.6233 | 0.6198 |
+
+The market-wide block scores **exactly 0.5000** cross-sectionally — as it must, since constant scores
+cannot rank. So the within-timestamp AUC ≈ 0.62 **is** genuine asset selection, and that metric was
+constructed correctly.
+
+**Test A — but the tradeable spread was not.** The earlier Control 3 pooled its deciles across
+symbols *and time*, so its "top decile" was substantially "the worst days" — market timing wearing
+cross-sectional clothes, the same error class as the T3 non-independence mistake. Ranking *within*
+each timestamp, so market-wide state cancels exactly between the legs:
+
+| | value |
+|---|---:|
+| pooled spread (what was reported above) | +0.4427R |
+| **true within-timestamp spread** | **+0.1086R** |
+| per-timestamp median | **0.0000R** |
+| per-timestamp share positive | **34.4%** |
+
+**The mean is outlier-driven** — the same shape that broke Control 2. At 5R the win rate is 7-12%, so
+most timestamps contain no winner at all and the spread is exactly zero; the positive mean comes from
+a minority of timestamps where a rare 5R hit lands in the top decile.
+
+**Test C — effective sample size.** 97,672 holdout rows across 4,244 timestamps = 23 rows each. For
+any market-wide signal, n is the timestamp count, and a p-value computed on rows is overstated by
+~4.8×. Recorded so it is not repeated.
+
+**Two independent measurements now agree**, which is the one genuinely reassuring thing here: this
+spread is +0.1086R gross against a ~0.075R median fee, i.e. **~+0.034R net** — and
+`strategy_breakeven.py` measured +0.151R gross / +0.042R net at the corrected fee tier by a
+completely different route.
+
 ## Conclusion
 
-**Ranking is real. Profitability is a regime bet.**
+**Asset selection is real but thin and violently high-variance. Profitability is a regime bet.**
 
-The model orders assets by barrier outcome in *every* window tested, up or down, 9/9 — that is not
-regime, and it is the thing `opportunity.ts` exists to do. But the SHORT-only structure it ranks
+The model orders assets by barrier outcome cross-sectionally at AUC ~0.62, and Test B proves that
+number is asset selection rather than shared market state. But it converts to only **+0.109R gross
+per trade, realised in 34% of timestamps with a median of zero** — mostly nothing, occasionally a
+large hit. That is the convex profile, and it means the edge exists only if traded mechanically
+across many opportunities. But the SHORT-only structure it ranks
 only pays when the tape falls, so shipping "short the top-ranked asset" would be a directional bet
 wearing a model's clothes — the same mistake [[regime-hold]] documented.
 
