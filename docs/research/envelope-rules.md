@@ -211,3 +211,84 @@ Untestable conditions (kills, macro, earnings, news, stock gates) are **absent f
 this measures the envelope's *reconstructible core*, not all of it. Entry is at the bar close, while
 real setups enter at a level the LLM picks. And `continuation` is approximated by momentum alignment.
 None of that is fixable with this dataset and all of it is stated rather than papered over.
+
+
+---
+
+## PART 2 RESULTS — NOT VERIFIED, on both sides, under both size mappings
+
+### SHORT (baseline: trade everything = +0.0197R at 100% exposure)
+
+| arm | exposure | net R | vs A | periods+ |
+|---|---:|---:|---:|---:|
+| A no envelope | 100.0% | +0.0197 | — | — |
+| **B envelope as built** | **8.5%** | +0.0225 | **+0.0028** | **5/9** |
+| C minus the inverted three | 12.5% | +0.0250 | +0.0053 | 5/9 |
+| **D ML component only** | 26.0% | **+0.0318** | **+0.0121** | 5/9 |
+| **E random, coverage-matched** | 8.5% | **+0.0213** | +0.0016 | — |
+| F inverted envelope | 91.5% | +0.0195 | −0.0003 | — |
+
+**The envelope beats a coin flip by +0.0012R.** That is the whole result. Arm E trades exactly as
+often on randomly chosen bars and lands within a rounding error, so the envelope's *specific*
+choices — the alignment logic, the mixed-bias rule, the chase guard — contribute essentially nothing.
+
+It reaches that by **cutting exposure to 8.5%**: it discards 91.5% of the tape to gain +0.0028R per
+unit of exposure, and 0.0012 of that is attributable to its actual reasoning.
+
+**Arm D beats arm B.** The ML component ALONE (+0.0121R at 26% exposure) outperforms the full
+envelope (+0.0028R at 8.5%) more than fourfold. Everything bolted around ML is subtracting value.
+
+### LONG (baseline −0.0993R)
+
+| arm | exposure | net R | vs A | periods+ |
+|---|---:|---:|---:|---:|
+| A no envelope | 100.0% | −0.0993 | — | — |
+| **B envelope as built** | 11.2% | −0.1159 | **−0.0166** | **3/9** |
+| C minus inverted three | 16.5% | −0.1131 | −0.0138 | 3/9 |
+| D ML only | 30.9% | −0.1260 | −0.0268 | 2/9 |
+| E random, matched | 11.2% | −0.0995 | −0.0002 | — |
+| **F inverted envelope** | 88.8% | **−0.0972** | **+0.0021** | — |
+
+On longs the envelope is **worse than random** (−0.0164R vs arm E) and **its own inverse beats it**.
+Arm F was written as the strongest possible statement that a thesis is backwards, and it fires.
+
+### Against the pre-declared bar
+
+| criterion | required | actual |
+|---|---|---|
+| 1 beats no-envelope | ≥ +0.02R | +0.0028 short / **−0.0166 long** — FAIL |
+| 2 beats coverage-matched random | ≥ +0.02R | **+0.0012 short / −0.0164 long** — FAIL |
+| 3 consistent | ≥ 6/9 periods | 5/9 short, 3/9 long — FAIL |
+| 4 holds under both size mappings | yes | fails identically under both — FAIL |
+
+**Comprehensively NOT VERIFIED.** The pre-declaration named this outcome in advance: *"Failing 2
+while passing 1 means the envelope is merely trading less, not choosing better."* It does not even
+pass 1.
+
+## Conclusion
+
+The user's read was right: **the envelope was a thesis, and it does not survive verification.** Its
+reconstructible core is statistically indistinguishable from a random gate of the same sparsity on
+shorts, and worse than one on longs.
+
+The mechanism is now clear from Part 1: the alignment gates **keep the worse bars**. `biases_MIXED`
+blocks bars averaging +0.0503R against a +0.0197R baseline; `alignment_not_full` keeps bars averaging
+−0.0079R. The envelope is not a weak filter — it is inverted, and its aggressive sparsity means it
+acts on that inversion hard.
+
+**What the evidence supports:** the three inverted gates should go (arm C beats arm B on both sides,
+consistently), and the ML component is the only part carrying signal (arm D beats arm B fourfold on
+shorts).
+
+**What it does NOT support:** deleting the envelope. The untestable guards — kill conditions, macro
+proximity, earnings, news conflict — are absent from every arm here and exist to prevent specific
+identified harms rather than to raise average EV. Removing an earnings gate because it did not appear
+in a crypto backtest would be a category error.
+
+## The limits that keep this from being final
+
+- **Reconstructible core only.** Roughly half the envelope's conditions are not represented.
+- **Entry is at the bar close**; real setups enter at a LEVEL the LLM picks, and the whole point of a
+  conviction tier is to shape a setup that is then entered elsewhere. This gap is real.
+- **`continuation` is approximated** by momentum alignment.
+- One dataset, 24 symbols, a window in which the equal-weight basket fell 83%.
