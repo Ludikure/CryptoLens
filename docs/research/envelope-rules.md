@@ -829,3 +829,48 @@ This is the **fourth** occasion in three days that treating dependent observatio
 nearly produced a finding: T3's market-wide features (34,821 rows → 684 timestamps), Control 2's mean
 over five periods, Part 3's gate-selection mean, and now this. **Any claim from this dataset must
 state its effective n.** Bars are almost never the right unit.
+
+---
+
+# PART 7 — sweep EVERY remaining testable envelope condition — PRE-DECLARED 2026-08-25
+
+Parts 1-6 tested the conditions I reached for. This tests **everything left that the data can
+express**, so the envelope's untested surface is enumerated rather than assumed.
+
+## Testable here
+
+| condition | envelope tier | reconstruction |
+|---|---|---|
+| `counter_move_volume_exceeds` (kill) | AUTO-FLAT via ANY_KILLED | elevated volume ratio while price moves against bias |
+| `funding_supports_counter` (kill) | AUTO-FLAT via ANY_KILLED | funding sign favouring the counter direction |
+| `continuation < 2` | cap LOW | momentum-alignment magnitude |
+| `continuation < 3` | cap MODERATE | same, stricter |
+| `counter_trend_pullback` (1H opposes) | downgrade | 1H bias opposing the daily |
+| `macro` proxy (VIX regime) | cap tiers | high-VIX state, the only macro variable present |
+| `structureAlignment` | (feeds continuation) | included so its own contribution is visible |
+
+## NOT testable, and excluded rather than guessed
+
+`macro_IMMINENT` (no economic calendar in this dataset), `news_thesis_conflict` (no news), all
+earnings gates and `treatment_short_gate_stocks` (stocks only, no stock paths here),
+`treatment_long_confirm_*` (needs `relStrengthVsSpy`, which is null on crypto), and
+`data_stale_N_sources` (a runtime condition with no historical analogue).
+
+**These stay in the envelope regardless of what Part 7 finds.** Several guard exogenous events and
+never claimed predictive power — the distinction established in Part 6.
+
+## Same bar as every previous part
+
+A condition **earns its place** if blocking its bars raises the mean net-R of the remainder by
+**≥ 0.02R** at the app's geometry (2 ATR stop, TP2 1.25R), **positive in ≥ 6 of 9** six-month periods
+by **sign count**, retaining **≥ 20%** coverage. Entry is the Part 4/5 discipline (0.25 ATR pullback,
+unfilled = 0), so no condition is judged under the market-entry handicap that made Parts 1-3
+uninformative.
+
+**Effective n is reported for every condition.** Four times in three days a dependent-observation
+error nearly produced a finding here; any condition that persists across many bars gets its episode
+count printed beside its p-value.
+
+## Expected outcome
+
+Null across the board, consistent with Parts 1-3 and 6. Recorded in advance.
