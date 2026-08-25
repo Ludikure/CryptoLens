@@ -225,8 +225,27 @@ side would discard the one edge the research actually found.
 and the flag tells the UI the choice is immaterial rather than implying a view the model does not
 have. Tests assert both branches.
 
+## Phase 6 — the Opportunity Feed (shipped)
+
+`WorkerOpportunitiesService` + `OpportunityFeedCard` on the Now tab, scoped to the user's favourites
+and sized against their real `account_size`.
+
+**The honesty requirement drove the design.** The model behind this ranks (cross-sectional AUC 0.62,
+verified as genuine asset selection) but its profitability is regime-dependent — 1 of 5 rising-market
+periods, +0.109R gross with a **median of zero**. A card rendering "EV +0.34R" in confident green
+would present a regime bet as a model output. So:
+
+- the regime caveat is **on the face**, not behind a disclosure arrow;
+- expected values are rendered **untinted** — a green +EV reads as a promise the median outcome does
+  not support;
+- the model's own **holdout AUC is displayed**, so the ceiling on the claim is visible;
+- `effectiveBets` is shown next to the position count, because at crypto's measured ρ̄ = 0.62 five
+  positions are ~1.5 independent bets and a book that looks diversified is not;
+- an **empty book renders as "nothing clears the bar"** rather than hiding — a real answer that
+  would otherwise look like a broken feature.
+
 ## Not yet built
 
-Phase 6: portfolio exposure management beyond the per-candidate limits already enforced, the trade
+Phase 6 remainder: portfolio exposure management beyond the per-candidate limits already enforced, the trade
 journal, the research harness, and the new UI. Phases 1-2 are the substrate those attach to and are
 independently testable, per the spec's instruction not to rewrite the application at once.

@@ -152,6 +152,7 @@ struct ChartTabContent: View {
 
     @State private var newsFeed: WorkerNewsService.Feed?
     @State private var basis: WorkerBasisService.Snapshot?
+    @State private var book: WorkerOpportunitiesService.Book?
     @State private var recentSetups: [TrackedSetup] = []
 
     /// Best-effort and non-blocking: headlines are context, so a failure just hides the card.
@@ -164,6 +165,12 @@ struct ChartTabContent: View {
     private func loadCostContext() async {
         basis = await WorkerBasisService.fetch()
         recentSetups = await OutcomeTracker.allSetupsAsync()
+        // The ranked book is scoped to the user's favourites and sized against their real equity,
+        // so the numbers on the card are the numbers for THIS account, not a generic illustration.
+        let syms = Array(favorites.orderedFavorites.prefix(12))
+        let equity = UserDefaults.standard.double(forKey: "account_size")
+        book = await WorkerOpportunitiesService.fetch(symbols: syms,
+                                                     equity: equity > 0 ? equity : 28000)
     }
 
     var body: some View {
@@ -204,6 +211,14 @@ struct ChartTabContent: View {
 
                 if !recentSetups.isEmpty {
                     FeeDragCard(setups: recentSetups)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                }
+
+                // Ranked book from the measured excursion model. Shown even when empty is NOT the
+                // choice here — an empty book is rendered by the card itself, because "nothing
+                // clears the bar" is a real answer and hiding it would look like a broken feature.
+                if let b = book {
+                    OpportunityFeedCard(book: b)
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
                 }
 

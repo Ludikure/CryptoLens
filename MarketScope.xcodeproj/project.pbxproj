@@ -25,6 +25,7 @@
 		164EE37FBF8E8E28EEA60B29 /* PriceHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7157B5018D071A646EC0BD /* PriceHeaderView.swift */; };
 		16D655DAF13FD9EEC310E60D /* YahooFinanceService.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC9A005B372BCAA04AAAE663 /* YahooFinanceService.swift */; };
 		17B9CDEF1FDE960EEDCA024C /* FavoritePillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFEAFEA0595DECFF1680C007 /* FavoritePillsView.swift */; };
+		1800B1BB6893A4FD9F002442 /* WorkerOpportunitiesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E796EB91237E6F2944BAE871 /* WorkerOpportunitiesService.swift */; };
 		19F5CE7F2B9912BB51A8195F /* chart.html in Resources */ = {isa = PBXBuildFile; fileRef = CE52F94E061882EE7DD97D75 /* chart.html */; };
 		1B5CA24C22D0CBED6012138B /* DataQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB185A3EE56E7A9E6F8C472B /* DataQuality.swift */; };
 		1DA91CCD4AD89D7CA73F3150 /* ScoringSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A034ED23A494C9E41E6826B /* ScoringSnapshot.swift */; };
@@ -102,6 +103,7 @@
 		BCEF01959EB182E6FA771303 /* StockInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFA633D2B542DD98F048501E /* StockInfoView.swift */; };
 		BEC943FDAEBC13F5829D425E /* WidgetDataWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67EB3815C6E991CB6DA2743D /* WidgetDataWriter.swift */; };
 		BEEB5B883C585F11B4B5BD38 /* DerivativesContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B5DF5B97757DB990D9DEBEB /* DerivativesContext.swift */; };
+		BFA16B74A97F6DFAF6E02283 /* OpportunityFeedCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89B4809AD2811B3FF008D722 /* OpportunityFeedCard.swift */; };
 		C05DE975C43EE58FD3D930EF /* ViewHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62CE99FFC8BC38D6E0F4D297 /* ViewHelpers.swift */; };
 		C317573E9EB9CEF6C0FBBF55 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2F38502C13543C7C5271A47D /* Assets.xcassets */; };
 		C6A387FD4277EB50F0F09E3C /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = 240E25E0B2FC9470C9FD86AF /* Formatters.swift */; };
@@ -225,6 +227,7 @@
 		85DB9C1704BB9E0E2FAB4DA1 /* WorkerTrackedSetupsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerTrackedSetupsService.swift; sourceTree = "<group>"; };
 		885D71681696A62F6B8F1E64 /* LevelsChartView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelsChartView.swift; sourceTree = "<group>"; };
 		89482A4D97526BEB2F46FEE2 /* BasisCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BasisCard.swift; sourceTree = "<group>"; };
+		89B4809AD2811B3FF008D722 /* OpportunityFeedCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpportunityFeedCard.swift; sourceTree = "<group>"; };
 		8A04B3AA46E9815EE2047D9C /* ml-model-crypto.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ml-model-crypto.json"; sourceTree = "<group>"; };
 		8D87BB163A44C9CA82CFF0F1 /* AnalysisStateMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisStateMigration.swift; sourceTree = "<group>"; };
 		9152F34D3CCD450200D49DC6 /* BiasNotificationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BiasNotificationManager.swift; sourceTree = "<group>"; };
@@ -271,6 +274,7 @@
 		E22D9662FBD9530344EE84B3 /* LayerDiagnostic.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayerDiagnostic.swift; sourceTree = "<group>"; };
 		E4C9B78005A59E85CF6BECFC /* MarketScope.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = MarketScope.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E687573C82B61768A3DA2604 /* AnalysisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisService.swift; sourceTree = "<group>"; };
+		E796EB91237E6F2944BAE871 /* WorkerOpportunitiesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerOpportunitiesService.swift; sourceTree = "<group>"; };
 		E7C0A38B26B77F59B2CE5BB6 /* FeeDragCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeeDragCard.swift; sourceTree = "<group>"; };
 		E969F0701C9DD31D4D15711C /* WorkerMarketService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerMarketService.swift; sourceTree = "<group>"; };
 		EBE73383B2D2B3C845AD17B4 /* TradeSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeSetup.swift; sourceTree = "<group>"; };
@@ -354,6 +358,7 @@
 				E969F0701C9DD31D4D15711C /* WorkerMarketService.swift */,
 				AAE82500326A2DCE4B7C4CFF /* WorkerMLService.swift */,
 				2FAA05394E269F731EAB8A5B /* WorkerNewsService.swift */,
+				E796EB91237E6F2944BAE871 /* WorkerOpportunitiesService.swift */,
 				85DB9C1704BB9E0E2FAB4DA1 /* WorkerTrackedSetupsService.swift */,
 				DC9A005B372BCAA04AAAE663 /* YahooFinanceService.swift */,
 			);
@@ -454,6 +459,7 @@
 				885D71681696A62F6B8F1E64 /* LevelsChartView.swift */,
 				08FE6A3E4EF46DDD47822E60 /* MacroContextView.swift */,
 				F3A4DF9821FDF5400D93AC3B /* NewsCard.swift */,
+				89B4809AD2811B3FF008D722 /* OpportunityFeedCard.swift */,
 				04E451D5B1A589DBED045C12 /* OutcomeDashboardView.swift */,
 				95C1F0FBEEB3FCB16E4418C5 /* PositionSizeCalculatorView.swift */,
 				BDB023939777AFC1AC8D15B4 /* PositionSizeCard.swift */,
@@ -754,6 +760,7 @@
 				5A12CD0571201B779989DCE1 /* NavigationCoordinator.swift in Sources */,
 				ED59023079801F4E8ED088AE /* NetworkMonitor.swift in Sources */,
 				B49D6EDC7E4466477B81DAC7 /* NewsCard.swift in Sources */,
+				BFA16B74A97F6DFAF6E02283 /* OpportunityFeedCard.swift in Sources */,
 				E5B52D181CC00BB83D52937F /* OutcomeDashboardView.swift in Sources */,
 				311277D07A0E6B0CC72E55C3 /* OutcomeTracker.swift in Sources */,
 				D306D0638955B4A3E48BCD78 /* PositionSizeCalculatorView.swift in Sources */,
@@ -800,6 +807,7 @@
 				98CC11CE748131B1C3DAF377 /* WorkerMLService.swift in Sources */,
 				9ECCAA9D938D5D4B00DCAD8B /* WorkerMarketService.swift in Sources */,
 				9DB458342FC640F7704D0D51 /* WorkerNewsService.swift in Sources */,
+				1800B1BB6893A4FD9F002442 /* WorkerOpportunitiesService.swift in Sources */,
 				0F774DEDFEA67C32CD9E07E5 /* WorkerTrackedSetupsService.swift in Sources */,
 				16D655DAF13FD9EEC310E60D /* YahooFinanceService.swift in Sources */,
 			);
