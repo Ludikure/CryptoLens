@@ -576,7 +576,10 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     const isTreatment = true;
     let treatmentStochCrossDaily = 'none', treatmentStochCross4H = 'none', treatmentLongConfirmStatus = 'n/a';
     const treatmentLongConfirmReasons: string[] = [];
-    let envConformalNotConfident = false, envCryptoBearRegime = false;
+    // `envConformalNotConfident` removed 2026-08-25: it was declared `false` and never assigned
+    // anywhere, so `conformal_abstain_not_confident_cap_LOW` could not fire. Dead since the
+    // leak-era conformal head was retracted.
+    let envCryptoBearRegime = false;
 
     // CRYPTO REGIME guard
     if (isCryptoSym && daily.ema200 != null && daily.price > 0) {
@@ -1242,9 +1245,20 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // stands. (The old "Stoch agreement overrides this" exemption stays removed — Stoch
       // direction is noise and can't rescue a mixed-bias setup; ML_WIN gates VOLATILITY, which
       // is the edge that actually exists here.)
-      if (envAlignment === 'MIXED' && (mlPct == null || mlPct < 70)) {
-        autoFlat.push(mlPct == null ? 'biases_MIXED_(ML_unavailable)' : `biases_MIXED_and_ML_${mlPct}<70`);
-      }
+      // REMOVED 2026-08-25 — measured INVERTED (docs/research/envelope-rules.md Part 1).
+      //
+      // This rule blocked bars averaging **+0.0503R** against a **+0.0197R** baseline: it was
+      // discarding the best cell in the tape, at 2/9 six-month periods positive on shorts and
+      // merely noise on longs. It never passed the bar in either direction.
+      //
+      // The mechanism, confirmed in Part 2: both goodR and the barrier target are ATR-normalised,
+      // and MIXED bars are the un-compressed state where a large move relative to ATR is MORE
+      // available. Blocking them was backwards. The ML_WIN < 50 floor below still applies, so a
+      // genuinely dead tape is still flatted; what is gone is the extra alignment requirement.
+      //
+      // (Kept as history: the 2026-07-06 change already ML-gated this rule after mixed_flat_test
+      // showed non-aligned bars carry ~2x the goodR rate. That was the right direction and did not
+      // go far enough — the correct gate strength turned out to be zero.)
       // Symmetry fix (2026-07-02): the envelope hard-blocked MIXED (no coherent trade) but only
       // WARNED on the opposite bad state — an aligned trend that has already run (CHASE HIGH).
       // Measured (trend_direction_test.py): a MATURE aligned trend has ~0% forward EV — entering
@@ -1270,7 +1284,23 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         }
       }
       const highBlocks: string[] = [];
-      if (envAlignment !== 'ALIGNED_BULLISH' && envAlignment !== 'ALIGNED_BEARISH') highBlocks.push(`alignment_${envAlignment}_not_full`);
+      // SCOPED TO LONG 2026-08-25 — this rule is DIRECTION-DEPENDENT, and the envelope previously
+      // had no way to say so (Part 1):
+      //   SHORT  lift -0.0276R, 3/9 periods — it blocked bars averaging +0.0288R and KEPT bars
+      //          averaging -0.0079R, converting a positive-expectancy set into a negative one.
+      //   LONG   lift +0.0264R, 6/9 periods — the one condition that cleared the pre-declared bar.
+      // Applying one rule to both sides was averaging an inverted gate with a working one.
+      //
+      // HONEST CAVEAT, recorded rather than buried: the LONG pass improves a LOSING proposition to
+      // a less-losing one (kept bars still average -0.0729R), and its likely mechanism is regime —
+      // "only go long in a confirmed uptrend" means simply *fewer longs* across a window in which
+      // the equal-weight basket fell 83%. It is kept because it passed the bar that was declared in
+      // advance, not because the mechanism is understood.
+      const alignmentBlockApplies = alignedDirection !== 'SHORT';
+      if (alignmentBlockApplies
+          && envAlignment !== 'ALIGNED_BULLISH' && envAlignment !== 'ALIGNED_BEARISH') {
+        highBlocks.push(`alignment_${envAlignment}_not_full`);
+      }
       if (envContinuationCount < 3) highBlocks.push(`continuation_${envContinuationCount}/3+_required`);
       if (mlPct != null && mlPct < 70) highBlocks.push(`ML_WIN_${mlPct}<70`);
       if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON') highBlocks.push(`macro_${envMacroRisk}_not_ON_HORIZON`);
@@ -1288,7 +1318,6 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (staleCount >= 2) downgrade.push(`data_stale_${staleCount}_sources`);
       if (oneHOpposes) downgrade.push('counter_trend_pullback_cap_MODERATE');
       if (envCryptoBearRegime) downgrade.push('crypto_bear_regime_LONG_cap_MODERATE_halve_size');
-      if (envConformalNotConfident) moderateBlocks.push('conformal_abstain_not_confident_cap_LOW');
       if (stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs) {
         const days = Math.floor((stockInfo.earningsDate - nowMs) / 86400000);
         if (days <= 2) moderateBlocks.push(`earnings_in_${days}d_cap_LOW`);
@@ -1321,17 +1350,12 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // with no ML value we cannot characterise move likelihood at all.
         const isQualityGateReason = (r: string) => r.startsWith('ML_WIN_') || r.startsWith('biases_MIXED_and_ML_');
         const onlyQualityGate = autoFlat.every(isQualityGateReason);
-        const mixedGated = autoFlat.some(r => r.startsWith('biases_MIXED_and_ML_'));
         if (onlyQualityGate && (envRisk === 'ELEVATED' || envRisk === 'HIGH')) {
-          if (mixedGated) {
-            // Mixed-bias variant: do NOT claim a >=1.5-ATR move is "unlikely" (ML is 50-70 here,
-            // a band the live calibration shows realizing 56-64%) — the honest read is that the
-            // ENTRY gate is unmet while the tape is still moving, and that a daily bias lagging a
-            // running 4H move is the normal early-trend state rather than a stalled market.
-            L(`  FRAMING: the ONLY thing blocking a setup here is the QUALITY gate — timeframes disagree and ML_WIN ${mlPct}% sits below the 70 window, so there is no risk-defined ENTRY edge. That is NOT "nothing happening": Environment Risk is ${envRisk} and the 4H trend (${fourH.bias ?? 'n/a'}) is intact. A daily bias that lags a running 4H move is the ordinary EARLY-trend state, not evidence of a stalled tape, and ML_WIN gauges a SHARP >=1.5-ATR/24h move — a slow multi-day grind is a low-ML state by design and can still carry price a long way. Riding an existing trend is a separate decision this tool does not gate; say that plainly instead of a bare "stand aside". Do NOT imply the tape is safe and do NOT present a setup.`);
-          } else {
-            L(`  FRAMING: this FLAT is "no volatility-edge entry" (ML_WIN gauges a sharp >=1.5-ATR move, unlikely here), NOT "quiet / nothing happening" — Environment Risk is ${envRisk} and the ${trendDir}-trend is intact. Riding an existing trend is a separate decision this tool does not gate; say so plainly instead of a flat "stand aside". Do NOT imply the tape is safe.`);
-          }
+          // The mixed-bias variant of this line was removed 2026-08-25 along with the
+          // `biases_MIXED_and_ML_<70` rule that produced its trigger. `mixedGated` could no longer
+          // be true, so that branch was unreachable — dead code that still compiled, which is the
+          // pattern that has bitten this codebase repeatedly this week.
+          L(`  FRAMING: this FLAT is "no volatility-edge entry" (ML_WIN gauges a sharp >=1.5-ATR move, unlikely here), NOT "quiet / nothing happening" — Environment Risk is ${envRisk} and the ${trendDir}-trend is intact. Riding an existing trend is a separate decision this tool does not gate; say so plainly instead of a flat "stand aside". Do NOT imply the tape is safe.`);
         }
         // Catalyst framing on a CHASE flat (2026-08-22). The chase guard fires on extended +
         // exhaustion, and its evidence is real (trend_direction_test.py: a mature aligned trend

@@ -150,10 +150,12 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(raw.prompt).toContain('auto_FLAT_active: ML_WIN_42%<50');
   });
 
-  it('biases_MIXED auto-FLAT is ML-gated: high-ML mixed bars open the structure-led window', () => {
-    // mixed_flat_test.py (2026-07-06, clean v14 regen): non-aligned bars carry ~2× the goodR
-    // rate of aligned bars. MIXED + ML>=70 must NOT auto-FLAT (counter-trend playbook window);
-    // MIXED + ML<70 keeps the hard block.
+  it('biases_MIXED NEVER auto-FLATs — the rule measured inverted and was removed', () => {
+    // Superseded 2026-08-25 (envelope-rules.md Part 1). The 2026-07-06 change ML-gated this rule
+    // after mixed_flat_test showed non-aligned bars carry ~2x the goodR rate. Right direction,
+    // not far enough: measured as a GATE, it blocked bars averaging +0.0503R against a +0.0197R
+    // baseline at 2/9 periods. The correct gate strength was zero, so it is gone at every ML level.
+    // The ML_WIN < 50 floor still flats a genuinely dead tape.
     const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
     const mirror = (cs: Candle[]) => cs.map(c => ({
       time: c.time, open: 200 - c.open, high: 200 - c.low, low: 200 - c.high, close: 200 - c.close, volume: c.volume,
@@ -171,14 +173,16 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
 
     daily.mlWinProbability = 0.55;   // above the ML<50 auto-FLAT, below the 70 window
     const blocked = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH] });
-    expect(blocked.prompt).toContain('biases_MIXED_and_ML_55<70');
-    expect(blocked.prompt).not.toContain('MIXED_HIGH_ML_WINDOW');
+    // The whole point of the removal: a MIXED bar at LOW ML is no longer flatted for being mixed.
+    expect(blocked.prompt).not.toContain('biases_MIXED');
   });
 
-  it('FRAMING hatch reaches the ML-gated biases_MIXED FLAT, but never a hazard FLAT', () => {
-    // 2026-07-24. The hatch used to require the reason set to be exactly one `ML_WIN_*` entry, so
-    // it could not fire on `biases_MIXED_and_ML_<70` — the most common FLAT reason by a wide
-    // margin. Replaying this builder over BTC 07-13→07-25 (73 real 4H bars): 71 FLATs, 63 from
+  it('FRAMING hatch fires on a quality-gate FLAT, never on a hazard FLAT', () => {
+    // 2026-07-24, and still load-bearing after the 2026-08-25 removal of the biases_MIXED rule.
+    // The hatch used to require exactly one `ML_WIN_*` entry, so it could not fire on
+    // `biases_MIXED_and_ML_<70` — then the most common FLAT reason. That reason no longer exists
+    // (it measured inverted), so the hatch is exercised here on the ML_WIN quality gate itself,
+    // which is what it was widened to cover. Replaying this builder over BTC 07-13→07-25 (73 real 4H bars): 71 FLATs, 63 from
     // biases_MIXED alone, Environment Risk ELEVATED on every bar, zero FRAMING lines emitted.
     // Same fixture as the test above (daily bullish vs mirrored-bearish 4H → MIXED, HIGH env risk).
     const NOW = 1748736000000, DAY = 86400000, H4 = 4 * 3600 * 1000, H1 = 3600 * 1000;
@@ -188,20 +192,24 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     const daily = computeFullIndicators(synthCandles(230, NOW - 230 * DAY, DAY, 100), { timeframe: '1d', label: 'Daily (1D)', isCrypto: true }) as unknown as PromptIndicator;
     const fourH = computeFullIndicators(mirror(synthCandles(230, NOW - 230 * H4, H4, 100)), { timeframe: '4h', label: '4H', isCrypto: true }) as unknown as PromptIndicator;
     const oneH = computeFullIndicators(synthCandles(120, NOW - 120 * H1, H1, 100), { timeframe: '1h', label: '1H', isCrypto: true }) as unknown as PromptIndicator;
-    daily.mlWinProbability = 0.55;   // above the ML<50 FLAT, below the 70 window → quality gate only
+    daily.mlWinProbability = 0.42;   // below the ML<50 floor → a pure quality-gate FLAT
 
     const gated = buildUserPrompt({ symbol: 'BTCUSDT', nowMs: NOW, indicators: [daily, fourH, oneH] });
-    expect(gated.prompt).toContain('auto_FLAT_active: biases_MIXED_and_ML_55<70');
+    expect(gated.prompt).toMatch(/auto_FLAT_active: ML_WIN_42%?<50/);
     expect(gated.prompt).toMatch(/Environment Risk: (ELEVATED|HIGH)/);
     expect(gated.prompt).toContain('FRAMING:');
-    expect(gated.prompt).toContain('ONLY thing blocking a setup here is the QUALITY gate');
-    expect(gated.prompt).toContain('EARLY-trend state');           // names the daily-lag mechanic
+    expect(gated.prompt).toContain('no volatility-edge entry');
     expect(gated.prompt).toContain('does not gate');               // riding a trend is the user's call
     // Must NOT claim a big move is "unlikely" — ML 50-70 realizes 56-64% per the live calibration.
-    expect(gated.prompt).not.toContain('unlikely here');
+    // "unlikely here" is now CORRECT language: the fixture sits below the ML<50 floor, where a
+    // >=1.5-ATR move genuinely is unlikely. The old assertion guarded the mixed-bias variant,
+    // which must not have claimed that at ML 50-70 (a band realising 56-64%) — that variant was
+    // removed 2026-08-25 along with the rule that triggered it.
+    expect(gated.prompt).toContain('unlikely here');
     // Still a hard FLAT: the hatch reframes, it never authorizes a setup.
     expect(gated.prompt).toContain('→ Output NO SETUP regardless of any other reasoning');
-    expect(gated.prompt).toContain('do NOT present a setup');
+    // "do NOT present a setup" lived only in the removed mixed-bias variant. The instruction is
+    // not lost — the auto-FLAT directive asserted on the line above carries it for every FLAT.
 
     // A genuine hazard in the FLAT set suppresses the hatch entirely — "the trend is intact, ride
     // it if you like" would be actively dangerous 1h before a high-impact macro print.
