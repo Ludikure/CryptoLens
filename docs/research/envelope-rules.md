@@ -1202,3 +1202,57 @@ soft cap — reflects the asymmetric cost of being wrong, not a claim that eithe
 `data_stale` is not a market claim). And for the first time, a condition has been **positively
 validated on its own stated mechanism** rather than merely surviving: the earnings gates guard a
 gap that is 5-7× more likely inside their windows, in every period tested.
+
+---
+
+# PART 9 — `continuation`, the last testable condition (PRE-DECLARED)
+
+Part 7 tested `continuation` on a proxy that was wrong (`momentumAlignment`), then reconstructed two
+of its signals and recorded `< 3` as untestable because the reconstruction maxed at 2. Reading the
+actual code closes it: **`envContinuationCount` counts exactly THREE signals**, all reconstructible.
+
+| # | signal | reconstruction |
+|---|---|---|
+| 1 | `volume_confirming_up/down` | last three 4H candles all the same direction AND mean(last 3 vol) / mean(prior 20 vol) > 1.2 |
+| 2 | `ema_stack_bullish/bearish_aligned` | 4H EMA20 > EMA50 > EMA200 (or the reverse) — features `hStackBull` / `hStackBear` |
+| 3 | `funding_negative_supports_long` / `funding_positive_supports_short` | 4H bias + `fundingRatePercent` beyond ∓0.005 (raw ∓0.00005) |
+
+All three key off the **4H** bias, so the count is direction-conditional by construction.
+
+## A structural defect found by reading the list, no backtest required
+
+Signal 3 requires `derivatives`, and `index.ts:492` is
+`isCrypto ? fetchDerivativesEnrichment(...) : Promise.resolve(null)`. **For stocks `derivatives` is
+always null, so the count can never exceed 2, so `continuation_N/3+_required` fires on 100% of stock
+bars.** HIGH conviction has been structurally unreachable for every stock since the rule shipped —
+reachable only through the narrow `transitioningHighOk` hatch (TRANSITIONING + ALIGNED_BULLISH +
+ML ≥ 65), which is LONG-only.
+
+This is the third unreachable-gate defect in this codebase (the 2026-08-22 calibration-ceiling
+mandate, the `conformal_abstain` flag that was declared and never assigned). **The shared
+fingerprint: a threshold compared against a quantity whose attainable RANGE was never checked.** A
+fire rate of 0% or 100% is the tell, and it is cheap to assert.
+
+## Declared before computing
+
+Same harness, same primary metric (`d0.25_{side}_oppR`), same ship bar: **lift ≥ +0.02R, ≥ 6/9
+half-year periods, kept coverage ≥ 20%.** Crypto and stocks reported separately, since only crypto
+can reach a count of 3.
+
+**Plus the Part 8 arithmetic correction, applied to this and retroactively to every sparse
+condition.** Global lift is capped at `fire_rate × (kept − blocked)`, so for anything firing below
+~20% the informative statistics are the **per-blocked-bar penalty** and its **period consistency**.
+Both are reported for every arm. A condition that fails global lift purely on coverage arithmetic is
+NOT recorded as noise — that was the error the earnings gates exposed.
+
+**Retroactive re-examination:** `counter_move_volume_exceeds` (kill) fires on 1.2% of bars and Part 7
+recorded it "noise, near-inert, kept". Under the corrected statistics its maximum achievable global
+lift is ~0.012 × spread — far below the bar it was judged against. Re-tested here on the
+per-blocked-bar penalty, which is the only statistic that can see it.
+
+**Prediction stated in advance, so it cannot be fitted afterwards:** the three signals are momentum
+persistence (volume), trend structure (EMA stack) and positioning (funding). Parts 1-7 found every
+trend-alignment condition either inverted or noise, and Part 2 established the mechanism — goodR and
+the barrier target are both ATR-normalised, so compressed/aligned tape is systematically WORSE. I
+therefore expect `continuation` to be **inverted or noise on LONG**, and I am recording that before
+looking. A pass would be evidence against the mechanism, not for the rule.
