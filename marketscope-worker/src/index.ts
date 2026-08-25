@@ -18,6 +18,10 @@ import { fetchBasisRows, findBasisOpportunities, netAnnualized } from './basis';
 import { computeOpportunities, PROVISIONAL_CAVEAT, type AssetInput } from './trading/service';
 import { excursionModelInfo } from './trading/excursion';
 import { crashModelInfo, crashProbability } from './trading/crash';
+
+/** `forecastVol` needs comp_bars['30d'] = 720 one-hour bars and returns null if any component is
+ *  short. Named so the requirement is visible rather than buried in a magic 800. */
+const VOL_MIN_1H_BARS = 720;
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -2525,12 +2529,19 @@ export default {
           const p = preds[sym];
           if (!p) { unavailable.push({ asset: sym, reasons: ['no cached prediction'] }); continue; }
           try {
-            // fetchAllTimeframesCached, not a bare fetch: it shares the KV candle cache the cron
-            // already fills, so this endpoint costs no extra upstream calls on a warm cache.
             const isC = sym.endsWith('USDT');
-            const tf = await fetchAllTimeframesCached(env, sym, isC);
-            const closes = (tf.oneH ?? []).map((k: any) => k.close).filter((x: number) => x > 0);
-            if (closes.length < 200) { unavailable.push({ asset: sym, reasons: [`insufficient 1h history (${closes.length} bars)`] }); continue; }
+            if (!isC) { unavailable.push({ asset: sym, reasons: ['vol model is crypto-only'] }); continue; }
+
+            // 800 bars, NOT the shared 300-bar cache. `forecastVol` needs comp_bars['30d'] = 720
+            // one-hour bars for its 30-day component and returns null if ANY component is short --
+            // with 300 bars every asset silently reported "no volatility forecast".
+            const oneH = await fetchBinanceKlines(sym, '1h', 800) as Array<{ close: number }>;
+            const closes = (oneH ?? []).map(k => k.close).filter(x => x > 0);
+            if (closes.length < VOL_MIN_1H_BARS) {
+              unavailable.push({ asset: sym,
+                reasons: [`need ${VOL_MIN_1H_BARS} 1h bars for the 30d vol component, got ${closes.length}`] });
+              continue;
+            }
             const price = closes[closes.length - 1];
             const atrPct = p.features?.atrPercent;
             if (!(atrPct > 0)) { unavailable.push({ asset: sym, reasons: ['no ATR in cached features'] }); continue; }
