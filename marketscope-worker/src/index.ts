@@ -102,14 +102,6 @@ export interface Env {
   ALPHAVANTAGE_API_KEY: string;
 }
 
-interface Alert {
-  id: string;
-  symbol: string;
-  targetPrice: number;
-  condition: 'above' | 'below';
-  note: string;
-  triggered: boolean;
-}
 
 interface DeviceRegistration {
   token: string;
@@ -2778,16 +2770,6 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 /** Validate and sanitize an alert object. Returns null if invalid. */
-function validateAlert(raw: any): Alert | null {
-  if (!raw || typeof raw !== 'object') return null;
-  if (typeof raw.id !== 'string' || raw.id.length > 128) return null;
-  if (typeof raw.symbol !== 'string' || raw.symbol.length > 20) return null;
-  if (typeof raw.targetPrice !== 'number' || !isFinite(raw.targetPrice) || raw.targetPrice <= 0) return null;
-  if (raw.condition !== 'above' && raw.condition !== 'below') return null;
-  const note = typeof raw.note === 'string' ? raw.note.substring(0, MAX_NOTE_LENGTH) : '';
-  const triggered = raw.triggered === true;
-  return { id: raw.id, symbol: raw.symbol, targetPrice: raw.targetPrice, condition: raw.condition, note, triggered };
-}
 
 // === Rate Limiting ===
 async function checkRateLimit(env: Env, key: string, limit: number, windowSec: number = 3600): Promise<boolean> {
@@ -2801,100 +2783,6 @@ async function checkRateLimit(env: Env, key: string, limit: number, windowSec: n
 
 // === Alert Checking (Cron — iterates all devices) ===
 
-async function checkDeviceAlerts(env: Env, deviceId: string) {
-  const rows = await env.DB.prepare(
-    'SELECT id, symbol, target_price as targetPrice, condition, note, triggered FROM alerts WHERE device_id = ? AND triggered = 0'
-  ).bind(deviceId).all();
-  const activeAlerts = rows.results as unknown as Alert[];
-  if (activeAlerts.length === 0) return;
-
-  const symbols = [...new Set(activeAlerts.map(a => a.symbol))];
-  const prices: Record<string, number> = {};
-
-  for (const symbol of symbols) {
-    try {
-      // Try Binance for crypto (USDT pairs), fallback to Coinbase
-      if (symbol.endsWith('USDT')) {
-        // Binance
-        try {
-          const resp = await fetch(`${BINANCE_SPOT}/ticker/price?symbol=${symbol}`);
-          if (resp.ok) {
-            const data = await resp.json() as { price: string };
-            prices[symbol] = parseFloat(data.price);
-            continue;
-          }
-        } catch { /* Binance failed */ }
-        // Coinbase fallback (e.g., BTCUSDT → BTC-USD)
-        try {
-          const cbSymbol = symbol.replace('USDT', '-USD');
-          const resp = await fetch(`https://api.exchange.coinbase.com/products/${cbSymbol}/ticker`);
-          if (resp.ok) {
-            const data = await resp.json() as { price: string };
-            prices[symbol] = parseFloat(data.price);
-            continue;
-          }
-        } catch { /* Coinbase failed */ }
-      }
-      // Stocks/ETFs — use Finnhub quote
-      if (env.FINNHUB_API_KEY) {
-        try {
-          const resp = await fetch(`${FINNHUB_BASE}/quote?symbol=${symbol}`, {
-            headers: { 'X-Finnhub-Token': env.FINNHUB_API_KEY },
-          });
-          if (resp.ok) {
-            const data = await resp.json() as { c: number };
-            if (data.c && data.c > 0) { prices[symbol] = data.c; continue; }
-          }
-        } catch { /* Finnhub failed */ }
-      }
-    } catch { /* skip */ }
-  }
-
-  console.log(`[cron] prices: ${JSON.stringify(prices)}`);
-  const triggered: Alert[] = [];
-  for (const alert of activeAlerts) {
-    const price = prices[alert.symbol];
-    if (!price) { console.log(`[cron] no price for ${alert.symbol}`); continue; }
-    const hit = alert.condition === 'above' ? price >= alert.targetPrice : price <= alert.targetPrice;
-    console.log(`[cron] ${alert.symbol} ${alert.condition} ${alert.targetPrice} vs ${price} → ${hit ? 'TRIGGERED' : 'no'}`);
-    if (hit) {
-      alert.triggered = true;
-      triggered.push(alert);
-    }
-  }
-
-  if (triggered.length === 0) return;
-
-  // Mark triggered alerts in D1
-  for (const alert of triggered) {
-    await env.DB.prepare(
-      'UPDATE alerts SET triggered = 1, triggered_at = ? WHERE id = ?'
-    ).bind(new Date().toISOString(), alert.id).run();
-  }
-
-  // Get push token from D1
-  const deviceRow = await env.DB.prepare('SELECT push_token FROM devices WHERE device_id = ?').bind(deviceId).first();
-  let pushToken = deviceRow?.push_token as string | null;
-  if (!pushToken) {
-    const deviceData = await env.ALERTS.get(`device:${deviceId}`);
-    if (!deviceData) return;
-    const device = JSON.parse(deviceData);
-    pushToken = device.pushToken || device.token;
-  }
-  if (!pushToken) return;
-
-  for (const alert of triggered) {
-    const price = prices[alert.symbol];
-    const name = alert.symbol.replace('USDT', '');
-    const title = `${name} Alert`;
-    const body = `${name} hit $${price?.toLocaleString('en-US', { maximumFractionDigits: 2 })} (${alert.condition} $${alert.targetPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })})`;
-    const result = await sendAPNs(env, pushToken, title, body);
-    if (result === 'unregistered') {
-      await deleteDevice(env, deviceId);
-      return;
-    }
-  }
-}
 
 // === APNs ===
 type APNsResult = 'sent' | 'unregistered' | 'failed';
