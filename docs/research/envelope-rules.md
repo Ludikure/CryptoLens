@@ -1159,9 +1159,28 @@ is real even that far ahead.
 ### The global-lift bar cannot validate a low-coverage guard — an arithmetic correction
 
 The earnings arms still score "noise" on global lift (+0.006 / +0.003 / +0.003). That is not a
-verdict about the gate; it is the ceiling of the metric. Maximum achievable lift is
-`fire_rate × (kept − blocked)`, and for LONG 0-2d that is `0.0215 × 0.213 = 0.0046` — against an
-observed **+0.0046**. **The gate is delivering 100% of its theoretical maximum.**
+verdict about the gate; it is the arithmetic of the metric.
+
+**CORRECTED 2026-08-25 (Part 9).** The first version of this section said the gate "delivers 100% of
+its theoretical maximum". True, but **tautologically** so — `lift ≡ fire_rate × penalty` is an
+algebraic identity for every gate, not a property of this one:
+
+> `lift = kept − mean_all = kept − [f·blocked + (1−f)·kept] = f·(kept − blocked)`
+
+The non-trivial statement is what that identity implies about the BAR. A +0.02R lift bar silently
+demands `penalty ≥ 0.02 / fire_rate`:
+
+| coverage | penalty the +0.02R bar demands |
+|---:|---:|
+| 20% | 0.10R |
+| 6.75% | 0.30R |
+| 4.5% | 0.44R |
+| **2.15%** | **0.93R** |
+| 1.2% | 1.67R |
+
+**At 2% coverage the bar requires blocked bars to be nearly a full R worse than kept ones** — a
+standard no realistic guard meets. The Parts 1-7 bar is therefore only meaningful above ~20%
+coverage, which is exactly where it was originally calibrated and never restated.
 
 So the bar declared in Parts 1-7 is only meaningful for conditions firing on ≳20% of bars. For
 anything sparser, the right statistics are the **per-blocked-bar penalty** and its **period
@@ -1256,3 +1275,81 @@ trend-alignment condition either inverted or noise, and Part 2 established the m
 the barrier target are both ATR-normalised, so compressed/aligned tape is systematically WORSE. I
 therefore expect `continuation` to be **inverted or noise on LONG**, and I am recording that before
 looking. A pass would be evidence against the mechanism, not for the rule.
+
+## PART 9 RESULTS — `continuation` is direction-dependent, and `< 3` never fired on a stock
+
+### The structural defect, confirmed empirically
+
+| market | P(count = 3) | `< 3` fire rate | `< 2` fire rate |
+|---|---:|---:|---:|
+| crypto | 0.87% | 99.1% | 77.5% |
+| **stocks** | **0.0000%** | **100.0%** | 97.4% |
+
+Exactly as the code predicted. **`continuation < 3` has fired on every stock bar ever evaluated** —
+HIGH conviction was unreachable for the entire stock universe, and on crypto it leaves 0.87% of bars
+tradeable, far under the declared 20% floor.
+
+Signal fire rates (crypto / stocks): volume confirmation 5.0% / 4.1%, EMA stack 50.5% / 56.6%,
+funding 34.3% / **0.0%**. Requiring all three of a 5%-frequency signal, a 50% signal and a
+crypto-only signal was never going to clear.
+
+### Crypto — the one cell that passes, and the one that inverts
+
+| condition | side | fires | blocked | kept | lift | periods+ | verdict |
+|---|---|---:|---:|---:|---:|---:|---|
+| `< 3` | SHORT | 99.1% | +0.0613 | +0.1970 | +0.1345 | 7/9 | **FAILS coverage** — 0.87% kept |
+| `< 3` | LONG | 99.1% | +0.0219 | −0.0771 | −0.0981 | 3/9 | **INVERTED** |
+| `< 2` | SHORT | 77.5% | +0.0537 | +0.0927 | **+0.0303** | **6/9** | **EARNS IT** (22.5% kept) |
+| `< 2` | LONG | 77.5% | +0.0293 | −0.0074 | −0.0284 | 3/9 | **INVERTED** |
+
+The `< 3` SHORT lift is the largest number in this entire document and is **not** adopted: it rests
+on 2,523 kept bars, 0.87% coverage, against a declared 20% floor. This is the same trap Part 3
+caught — an ADOPT verdict carried by one thin slice — and the floor exists precisely to stop it.
+
+**The pre-declared prediction was confirmed.** Part 9 stated in advance that `continuation` should
+be *"inverted or noise on LONG"* because goodR and the barrier target are both ATR-normalised, so
+trend-confirmed tape is systematically worse. LONG measured −0.0981 and −0.0284, inverted on both
+thresholds, 3/9 on both. That is the fifth condition to behave this way, and the mechanism now has
+predictive rather than merely explanatory standing.
+
+### Stocks — both thresholds fail
+
+`< 3` is degenerate (100%). `< 2` fires on 97.4%, leaving 2.56% coverage: SHORT +0.0139 at 3/9,
+LONG +0.0190 at 7/9 — both under the bar, both far under the coverage floor. **Neither applies.**
+
+### Actions
+
+- **`continuation < 3` removed entirely** — degenerate on stocks, coverage-failing on crypto,
+  inverted on LONG. Its removal makes HIGH conviction reachable on stocks for the first time.
+- **`continuation < 2` scoped to crypto SHORT** — the only cell clearing all three pre-declared
+  criteria. Same treatment as `alignment_not_full` (LONG-only) and for the same reason: one rule
+  averaged across two sides was averaging a working gate with an inverted one.
+
+**Honest caveat, recorded as it was for `alignment_not_full`:** the crypto SHORT pass sits in a
+window where the equal-weight basket fell 83%, so "only short a confirmed downtrend" may be regime
+rather than mechanism. It is kept because it passed a bar declared in advance, across 9 periods
+spanning both directions of that regime — not because the mechanism is understood.
+
+### Retroactive re-check of the sparse conditions — nothing re-opens
+
+Part 9 committed to re-judging every Parts 1-7 condition on coverage-independent statistics. Result:
+
+| condition | fires | penalty (SHORT) | pen+ | penalty (LONG) | pen+ | re-open? |
+|---|---:|---:|---:|---:|---:|---|
+| `counter_move_volume_exceeds` (kill) | 1.2% | +0.0051 | 4/9 | −0.0334 | 2/9 | no |
+| `1H opposes daily` (downgrade) | 18.7% | +0.0148 | 6/9 | −0.0140 | 4/9 | no |
+| `structureAlignment weak` | 82.4% | −0.0119 | 4/9 | +0.0151 | 6/9 | no |
+| `crypto_bear_regime` (downgrade) | 41.0% | +0.0040 | 6/9 | +0.0059 | 4/9 | no |
+| `funding_supports_counter` (REMOVED Part 7) | 29.2% | −0.0405 | 3/9 | +0.0450 | 6/9 | see below |
+
+**`counter_move_volume_exceeds` survives the corrected statistics** — its penalty is small and
+inconsistent on SHORT (4/9) and mildly NEGATIVE on LONG. Part 7's "inert, kept" verdict stands, now
+on a statistic that could actually have overturned it.
+
+**`funding_supports_counter` was flagged by my re-open rule and should not have been.** The rule
+tested `penalty ≥ 0.02 AND consistent AND lift < 0.02` without also requiring the condition to be
+SPARSE — and at 29.2% coverage the lift metric is perfectly capable of expressing its effect
+(+0.0132, below the bar). The Part 8 correction rescues coverage-limited conditions; this one is not
+coverage-limited, it is simply below the bar. It stays removed. Recorded because a re-open criterion
+that fires on a non-sparse condition is a bug in the criterion, and a "finding" produced by it would
+have been an artifact — the fifth near-miss of that shape in this document.

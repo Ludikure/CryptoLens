@@ -1351,18 +1351,41 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
           && envAlignment !== 'ALIGNED_BULLISH' && envAlignment !== 'ALIGNED_BEARISH') {
         highBlocks.push(`alignment_${envAlignment}_not_full`);
       }
-      if (envContinuationCount < 3) highBlocks.push(`continuation_${envContinuationCount}/3+_required`);
+      // `continuation < 3` REMOVED 2026-08-25 (Part 9). It required all THREE continuation signals
+      // — 4H volume confirmation (fires 5%), 4H EMA stack (50%), and funding support — and the
+      // third is crypto-only, because index.ts:492 hard-wires `derivatives` to null for stocks.
+      // Measured: P(count = 3) is 0.87% on crypto and **0.0000% on stocks**, so the rule fired on
+      // 100.0% of stock bars and HIGH conviction was structurally unreachable for the entire stock
+      // universe since it shipped. On crypto it left 0.87% of bars tradeable against a declared 20%
+      // floor, and it measured INVERTED on LONG (−0.0981R, 3/9). Its SHORT lift (+0.1345R) is the
+      // largest number in the research vault and is deliberately NOT adopted — 2,523 kept bars is
+      // exactly the thin-slice trap the coverage floor exists to catch.
       if (mlPct != null && mlPct < 70) highBlocks.push(`ML_WIN_${mlPct}<70`);
       if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON') highBlocks.push(`macro_${envMacroRisk}_not_ON_HORIZON`);
       if (envNewsConflicts) highBlocks.push('news_thesis_conflict');
       const moderateBlocks: string[] = [];
-      if (envContinuationCount < 2) moderateBlocks.push(`continuation_${envContinuationCount}/2+_required`);
+      // SCOPED TO CRYPTO SHORT 2026-08-25 (Part 9) — direction-dependent, like `alignment_not_full`
+      // before it, and one rule averaged across two sides was averaging a working gate with an
+      // inverted one:
+      //   crypto SHORT  +0.0303R lift, 6/9 periods, 22.5% coverage — clears all three criteria.
+      //   crypto LONG   −0.0284R, 3/9 — INVERTED, the fifth condition to behave this way and the
+      //                 first where that behaviour was PREDICTED in advance from the
+      //                 ATR-normalisation mechanism (Part 2) rather than explained afterwards.
+      //   stocks        fires on 97.4% of bars (funding is unreachable, so the count maxes at 2),
+      //                 leaving 2.56% coverage — both sides under the bar and far under the floor.
+      // Caveat kept in view: the SHORT pass sits in a window where the equal-weight crypto basket
+      // fell 83%, so "only short a confirmed downtrend" may be regime rather than mechanism.
+      const continuationBlockApplies = isCryptoSym && alignedDirection === 'SHORT';
+      if (continuationBlockApplies && envContinuationCount < 2) moderateBlocks.push(`continuation_${envContinuationCount}/2+_required`);
       if (mlPct != null && mlPct < 60) moderateBlocks.push(`ML_WIN_${mlPct}<60`);
       if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON' && envMacroRisk !== 'UPCOMING') moderateBlocks.push(`macro_${envMacroRisk}_exceeds_NEARBY`);
       if (isTreatment) {
         if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'PARTIAL') moderateBlocks.push('treatment_long_confirm_PARTIAL_cap_LOW');
         const transitioningHighOk = regime === 'TRANSITIONING' && envAlignment === 'ALIGNED_BULLISH' && (mlPct ?? 0) >= 65 && (treatmentLongConfirmStatus === 'PASS' || treatmentLongConfirmStatus === 'n/a');
-        if (transitioningHighOk) { for (let i = highBlocks.length - 1; i >= 0; i--) if (highBlocks[i].startsWith('continuation_') || highBlocks[i].startsWith('ML_WIN_')) highBlocks.splice(i, 1); }
+        // The `continuation_` clause is gone with the rule it referenced — `highBlocks` can no
+        // longer contain one (Part 9), and a splice pattern matching a prefix nothing emits is the
+        // kind of dead branch that reads as live governance. ML_WIN_ is still stripped.
+        if (transitioningHighOk) { for (let i = highBlocks.length - 1; i >= 0; i--) if (highBlocks[i].startsWith('ML_WIN_')) highBlocks.splice(i, 1); }
       }
       const downgrade: string[] = [];
       if (staleCount >= 2) downgrade.push(`data_stale_${staleCount}_sources`);

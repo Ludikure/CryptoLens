@@ -609,6 +609,67 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25f — Part 9: `continuation` had never once fired satisfiably on a stock
+
+Closes the last testable envelope condition, and finds a defect by reading the code rather than
+running anything. `envContinuationCount` sums exactly **three** 4H signals — volume confirmation
+(fires 5%), EMA stack (50%), and funding support. Signal 3 needs `derivatives`, and `index.ts:492`
+is `isCrypto ? fetchDerivativesEnrichment(...) : Promise.resolve(null)`.
+
+> **P(count = 3) is 0.87% on crypto and 0.0000% on stocks.** `continuation < 3` fired on **100.0% of
+> stock bars** — HIGH conviction has been structurally unreachable for the entire stock universe
+> since the rule shipped.
+
+**Third unreachable-gate defect here** (after the 2026-08-22 calibration-ceiling mandate and the
+`conformal_abstain` flag that was declared and never assigned). The shared fingerprint: **a threshold
+compared against a quantity whose attainable RANGE was never checked.** A 0% or 100% fire rate is the
+tell, and asserting it is cheap.
+
+| condition | side | fires | lift | periods+ | verdict |
+|---|---|---:|---:|---:|---|
+| `< 3` | crypto SHORT | 99.1% | **+0.1345** | 7/9 | **FAILS coverage** — 0.87% kept vs a 20% floor |
+| `< 3` | crypto LONG | 99.1% | −0.0981 | 3/9 | INVERTED |
+| `< 2` | **crypto SHORT** | 77.5% | **+0.0303** | **6/9** | **EARNS IT** (22.5% kept) |
+| `< 2` | crypto LONG | 77.5% | −0.0284 | 3/9 | INVERTED |
+| `< 2` | stocks | 97.4% | +0.014 / +0.019 | 3/9, 7/9 | fails — 2.56% coverage |
+
+**The `< 3` SHORT lift is the largest number in the vault and is deliberately NOT adopted** — 2,523
+kept bars is precisely the thin-slice trap the coverage floor exists to catch, and Part 3 was already
+burned by an ADOPT carried by one fold. Action: **`< 3` removed entirely; `< 2` scoped to crypto
+SHORT**, the same direction-scoping as `alignment_not_full` and for the same reason.
+
+**The Part 9 prediction was stated in advance and held.** Part 9 declared before looking that
+`continuation` should be *"inverted or noise on LONG"* per the Part 2 ATR-normalisation mechanism.
+LONG measured inverted on both thresholds at 3/9. Fifth condition to behave this way, and the first
+where the mechanism **predicted** rather than merely explained.
+
+**A correction to my own Part 8 write-up.** It claimed the earnings gate "delivers 100% of its
+theoretical maximum" lift. True but **tautological** — `lift ≡ fire_rate × penalty` is an algebraic
+identity for every gate. The non-trivial statement is what that implies about the BAR: a +0.02R lift
+bar silently demands `penalty ≥ 0.02 / fire_rate`, i.e. **0.93R at 2% coverage and 1.67R at 1.2%** —
+standards no realistic guard meets. The Parts 1-7 bar is only meaningful above ~20% coverage.
+
+**Retroactive re-check of every sparse condition: nothing re-opens.** `counter_move_volume_exceeds`
+survives on a statistic that could have overturned it (penalty +0.005 SHORT at 4/9, −0.033 LONG).
+`funding_supports_counter` was flagged by my re-open rule and **should not have been** — the rule
+omitted a sparsity requirement, and at 29.2% coverage the lift metric expresses that condition fine
+(+0.0132, simply below the bar). Recorded as a bug in the criterion: a "finding" from it would have
+been the fifth near-miss artifact in this document.
+
+**Notable behaviour change:** removing `continuation < 3` makes HIGH conviction reachable on stocks
+for the first time. Stock conviction is now governed by the remaining blocks (LONG-only alignment,
+ML_WIN, macro, news, earnings) — the intended design, which the unreachable gate had been masking.
+
+**The envelope after nine parts.** *Measured-positive:* ML thresholds, the chase guard,
+`alignment_not_full` (LONG), `continuation < 2` (crypto SHORT), the aligned-bearish stock SHORT ban,
+and all three earnings windows. *Exogenous guards kept on principle:* macro ×3, news conflict, data
+staleness. *Inert but harmless:* the volume kill, the 1H-opposes downgrade, `crypto_bear_regime`,
+`long_confirm PARTIAL`. *Removed across Parts 1-9:* `biases_MIXED`, `alignment_not_full` on SHORT,
+both divergence rules, `funding_supports_counter`, `conformal_abstain`, `treatment_long_confirm_FAIL`,
+the stock short-gate escape hatch, `continuation < 3`, and `continuation < 2` on LONG and stocks.
+
+**17 of ~20 conditions are now directly tested.** 744/744 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-25e — Part 8: the "untestable" stock gates were testable, and earnings is the first condition to PASS
 
 Part 7 filed four conditions as untestable — *"stocks only; no stock intraday paths in
