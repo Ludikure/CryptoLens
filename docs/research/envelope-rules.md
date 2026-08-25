@@ -630,3 +630,56 @@ unrankable and snapping TARGETS to them lowers EV. The same now holds for entrie
 than an LLM's choice — a model might pick a nearer, more relevant level. But the mechanism found
 (fill rate dominates, and shallow wins) does not depend on the proxy's precision, and the mechanical
 0.50 ATR comparison isolates it from depth.
+
+---
+
+# PART 6 — does RSI divergence mean anything? — PRE-DECLARED 2026-08-25
+
+The user's observation: *"Traders use them to predict the move. We say stay put. We do the opposite."*
+
+The envelope has **two** divergence rules, neither ever tested:
+- `divergence_escalated_6+_candles` — a hard AUTO-FLAT
+- `divergence_against_bias` — a kill condition, which feeds `ANY_KILLED` → also a hard AUTO-FLAT
+
+Classical technical analysis says divergence **predicts a reversal**. The app says **stand aside**.
+Those cannot both be right, and there is a third possibility neither side considers.
+
+## The three outcomes, all of which are findings
+
+1. **Divergence predicts REVERSAL** → traders right, the app's rules are backwards, and a divergence
+   should be a setup trigger rather than a FLAT.
+2. **Divergence predicts NOTHING** → both wrong. The rules are noise and should go, and the classical
+   claim joins the graveyard.
+3. **Divergence predicts CONTINUATION** → the app is accidentally right, for the wrong reason. Its
+   rules would then be worth keeping but should be re-described honestly.
+
+## Method
+
+`dDivergence` / `hDivergence` are already computed (+1 bullish, −1 bearish, 0 none; each fires on
+~12% of bars), ported from the iOS peak/trough detector. Two questions, kept separate:
+
+**A — DIRECTION.** P(up over 24h) after bullish divergence vs after bearish vs the unconditional
+base. **Measured against the ACTUAL base rate, not 50%.** On 2026-08-23 two "findings" at p≈e−88
+evaporated when tested against the real 48.18% base instead of a coin flip.
+
+**B — MONEY.** Net R at the app's own geometry, taking the trade classical TA implies — LONG on
+bullish divergence, SHORT on bearish — with the entry discipline Part 4/5 established (shallow
+0.25 ATR pullback, unfilled = 0), so the test is not sabotaged by the market-entry problem that made
+Parts 1-3 uninformative.
+
+**C — THE APP'S RULE.** Does flatting on divergence improve the bars that remain? The same gate
+question as Part 1: a condition can correlate with poor outcomes and still be a bad gate.
+
+## Pre-declared bar
+
+- **Reversal supported** if the implied trade beats no-divergence bars by **≥ 0.02R** and is positive
+  in **≥ 6 of 9** six-month periods by **sign count**.
+- **Continuation supported** if the OPPOSITE trade clears the same bar.
+- **The app's FLAT justified** if blocking divergence bars raises the remainder by **≥ 0.02R**, ≥ 6/9.
+- Anything else is **null**, and both rules should be removed as unsupported.
+
+## Expected outcome, recorded in advance
+
+Null. Every direction primitive tested in this vault has come back a coin flip, and divergence is a
+direction claim. But `alignment_not_full` measured inverted rather than merely useless, so an
+inverted result here would not be unprecedented.
