@@ -22,6 +22,50 @@ import { crashModelInfo, crashProbability } from './trading/crash';
 /** `forecastVol` needs comp_bars['30d'] = 720 one-hour bars and returns null if any component is
  *  short. Named so the requirement is visible rather than buried in a magic 800. */
 const VOL_MIN_1H_BARS = 720;
+
+/**
+ * Pairwise Pearson correlation of 1h LOG RETURNS across the fetched assets.
+ *
+ * Returns, not prices: two assets in a shared uptrend have near-1.0 price correlation regardless of
+ * whether they actually move together, which would overstate concentration everywhere. Series are
+ * truncated to their common length and aligned from the END, so the most recent overlapping window
+ * is compared rather than misaligning a shorter history against a longer one.
+ */
+function pairwiseCorrelations(closes: Record<string, number[]>): Record<string, Record<string, number>> {
+  const syms = Object.keys(closes);
+  const out: Record<string, Record<string, number>> = {};
+  if (syms.length < 2) return out;
+
+  const rets: Record<string, number[]> = {};
+  for (const s of syms) {
+    const c = closes[s];
+    const r: number[] = [];
+    for (let i = 1; i < c.length; i++) {
+      if (c[i] > 0 && c[i - 1] > 0) r.push(Math.log(c[i] / c[i - 1]));
+    }
+    rets[s] = r;
+  }
+
+  const corr = (a: number[], b: number[]): number => {
+    const n = Math.min(a.length, b.length);
+    if (n < 30) return 0;                       // too little overlap to mean anything
+    const x = a.slice(a.length - n), y = b.slice(b.length - n);
+    const mx = x.reduce((p, q) => p + q, 0) / n, my = y.reduce((p, q) => p + q, 0) / n;
+    let sxy = 0, sxx = 0, syy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = x[i] - mx, dy = y[i] - my;
+      sxy += dx * dy; sxx += dx * dx; syy += dy * dy;
+    }
+    const d = Math.sqrt(sxx * syy);
+    return d > 0 ? sxy / d : 0;
+  };
+
+  for (const a of syms) {
+    out[a] = {};
+    for (const b of syms) if (a !== b) out[a][b] = corr(rets[a], rets[b]);
+  }
+  return out;
+}
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -2523,6 +2567,7 @@ export default {
 
         const preds = JSON.parse((await env.ALERTS.get('ml_preds:all')) ?? '{}');
         const assets: AssetInput[] = [];
+        const closesByAsset: Record<string, number[]> = {};
         const unavailable: Array<{ asset: string; reasons: string[] }> = [];
 
         for (const sym of symbols) {
@@ -2535,7 +2580,7 @@ export default {
             // 800 bars, NOT the shared 300-bar cache. `forecastVol` needs comp_bars['30d'] = 720
             // one-hour bars for its 30-day component and returns null if ANY component is short --
             // with 300 bars every asset silently reported "no volatility forecast".
-            const oneH = await fetchBinanceKlines(sym, '1h', 800) as Array<{ close: number }>;
+            const oneH = await fetchBinanceKlines(sym, '1h', 800);
             const closes = (oneH ?? []).map(k => k.close).filter(x => x > 0);
             if (closes.length < VOL_MIN_1H_BARS) {
               unavailable.push({ asset: sym,
@@ -2545,6 +2590,7 @@ export default {
             const price = closes[closes.length - 1];
             const atrPct = p.features?.atrPercent;
             if (!(atrPct > 0)) { unavailable.push({ asset: sym, reasons: ['no ATR in cached features'] }); continue; }
+            closesByAsset[sym] = closes;
             assets.push({
               asset: sym, closes1h: closes, price, atr: (atrPct / 100) * price,
               mlWin: typeof p.probability === 'number' ? p.probability : null,
@@ -2552,7 +2598,10 @@ export default {
               // falls back to measured base rates, whose EV is negative -- i.e. no trade.
               features: p.features && typeof p.features === 'object' ? p.features : undefined,
               crashProbability: null,          // no crash model shipped yet -> no overlay applied
-              liquidityUsd24h: 50_000_000,     // placeholder; real depth wiring is a follow-up
+              // REAL 24h traded notional from the last 24 hourly bars, not a flat 50M placeholder.
+              // With a constant, the liquidity cap was the same generous number for BTC and for a
+              // thin alt, so it could never bind where it actually matters.
+              liquidityUsd24h: oneH.slice(-24).reduce((sum, k) => sum + k.close * k.volume, 0),
               isCrypto: isC,
               dataTimestamp: p.timestamp ?? nowMs,
             });
@@ -2571,8 +2620,15 @@ export default {
           return json({ error: 'opportunity pipeline failed for every asset', detail: threw.slice(0, 3) }, 500);
         }
 
+        // REAL pairwise correlations from the 1h returns already fetched. Passing `{}` here made
+        // `effectiveBets` compute n/(1+(n-1)*0) = n, so a book of five correlated crypto positions
+        // reported "5 independent bets" — the precise opposite of what that number exists to say
+        // (T7 measured crypto rho-bar at 0.62, which makes five positions ~1.5 real bets). It also
+        // made the correlated-exposure limit unable to bind, since every lookup returned 0.
+        const correlations = pairwiseCorrelations(closesByAsset);
+
         const result = computeOpportunities(
-          assets, { equity, openNotionalByAsset: {}, correlations: {} }, nowMs);
+          assets, { equity, openNotionalByAsset: {}, correlations }, nowMs);
 
         return json({
           at: nowMs,
