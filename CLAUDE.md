@@ -629,10 +629,15 @@ null EV test does not refute them. The divergence rules **claim prediction**, an
 prediction must be earned. Same for counter-move volume and funding, which are structural — both
 untouched.
 
-**The divergence finding is the cleanest statistical-vs-economic split in the vault:** 4H divergence
-moves P(up24) by **+2.24pp at p = 3.9e−09** and makes no money; DAILY divergence is **inverted**
-(bearish divergence precedes UP, significantly). One indicator, two timeframes, opposite signs — a
-weak effect sliced two ways. At 290,000 rows almost anything reaches p < 0.001.
+**The divergence finding, after a correction the user's question forced:** divergence PERSISTS, so
+bars are not independent observations — a daily episode lasts **~44 bars**, over a week. At episode
+level the daily result collapses from +1.43pp at p = 4.0e−04 to **+0.73pp at p = 0.32 (noise)**,
+while the 4H cells (~7 bars/episode) survive at p < 0.001 and point exactly where classical TA says.
+So there was never a two-timeframe contradiction to explain — the daily was autocorrelation. **The
+decision is unchanged on the grounds that always carried it**: the 4H reversal trade measured
+−0.0048R at 4/9 periods, and a +2.24pp shift on a 49.3% base is a 51.5% coin against a 0.032R fee.
+A genuine directional signal too small to trade. **Fourth time in three days that dependent
+observations nearly produced a finding** — any claim from this dataset must state its effective n.
 
 Divergence is still computed and surfaced, tagged `CONTEXT_ONLY_does_not_block`, with the reason on
 the line so it is not silently demoted. Removing the mixed rule also orphaned its FRAMING variant

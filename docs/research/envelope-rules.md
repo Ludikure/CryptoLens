@@ -780,3 +780,52 @@ kind:
   nothing (above).
 
 Removing them, so the envelope stops asserting something the data does not support.
+
+## PART 6 CORRECTION — the daily "signal" was autocorrelation; the 4H one is real
+
+Prompted by the user asking the obvious question: *"if daily divergence predicts upside, why not use
+that?"* Checking it properly overturned half of Part 6's reasoning.
+
+**Divergence persists.** It is the same condition re-read every 4h, so BARS are not independent
+observations. The honest unit is the EPISODE — a contiguous run of the condition.
+
+| cell | bars | episodes | bars/ep | per-BAR p | **per-EPISODE p** | verdict |
+|---|---:|---:|---:|---:|---:|---|
+| DAILY bullish | 21,449 | 510 | 42.1 | 0.070 | **0.719** | **NOISE** |
+| DAILY bearish | 15,399 | 352 | 43.7 | **4.0e−04** | **0.324** | **NOISE** |
+| 4H bullish | 17,284 | 2,451 | 7.1 | 3.9e−09 | **<0.001** | **real** |
+| 4H bearish | 16,167 | 2,280 | 7.1 | 4.8e−05 | **<0.001** | **real** |
+
+**A daily divergence episode lasts ~44 bars — over a week.** Counting each bar as an observation
+inflates significance by ~6.6×. Corrected, the daily "bearish divergence precedes UP" result goes
+from +1.43pp at p = 4.0e−04 to **+0.73pp at p = 0.32**: nothing.
+
+The 4H episodes last ~7 bars, so the correction is milder and both cells survive it.
+
+### What this overturns in Part 6
+
+Part 6 concluded: *"The same indicator on two timeframes gives opposite signs. That is not what a
+real mechanism looks like."* **That reasoning was wrong.** There was no contradiction to explain —
+the daily was never a signal, and the apparent inversion was an artifact of treating a week-long
+condition as 44 independent readings. **The 4H effect is real and points exactly where classical TA
+says it should.**
+
+### What it does NOT overturn
+
+The decision stands, on the two grounds that were always the load-bearing ones:
+
+- **The money test.** Part 6B measured the 4H reversal trade directly: lift **−0.0048R at 4/9
+  periods**. A +2.24pp shift on a 49.3% base is a 51.5% coin, and the median fee at a 2-ATR stop is
+  **0.032R** per round trip. Rough ceiling on the gross edge is ~0.05R; most of it is eaten before
+  anything is left.
+- **The gate test.** Twelve variants of the app's actual rules, zero passes, every LONG lift negative.
+
+**So: 4H divergence is a genuine directional signal that is too small to trade, and daily divergence
+is not a signal at all.** Demoting both to context remains correct.
+
+### The methodology lesson, now recorded four times
+
+This is the **fourth** occasion in three days that treating dependent observations as independent
+nearly produced a finding: T3's market-wide features (34,821 rows → 684 timestamps), Control 2's mean
+over five periods, Part 3's gate-selection mean, and now this. **Any claim from this dataset must
+state its effective n.** Bars are almost never the right unit.
