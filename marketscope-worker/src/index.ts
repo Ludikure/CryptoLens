@@ -17,6 +17,7 @@ import { pollNewsFeeds, fetchRecentNews } from './news';
 import { fetchBasisRows, findBasisOpportunities, netAnnualized } from './basis';
 import { computeOpportunities, PROVISIONAL_CAVEAT, type AssetInput } from './trading/service';
 import { excursionModelInfo } from './trading/excursion';
+import { crashModelInfo } from './trading/crash';
 import { fetchDerivativesEnrichment, fetchMacroEnrichment, fetchSpotPressureEnrichment, fetchSentimentEnrichment, fetchCrossAssetEnrichment, fetchFearGreed, fetchEconomicEvents, fetchStockEnrichment, fetchImpliedVol } from './enrichment';
 
 // Drop the most recent candle if it is still in-progress (closeTime > now).
@@ -2567,6 +2568,8 @@ export default {
             bindingConstraints: a.sizing.bindingConstraints,
           })),
           totals: result.allocation.totals,
+          crashWarnings: result.crashWarnings,
+          crashModel: crashModelInfo(),
           skipped: [...result.skipped, ...unavailable],
         });
       } catch (e) {

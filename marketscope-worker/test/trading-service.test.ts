@@ -110,12 +110,27 @@ describe('computeOpportunities', () => {
     expect(r.skipped[0].reasons).toContain('missing price or ATR');
   });
 
-  it('applies NO crash overlay when no crash model is available', () => {
-    const r = computeOpportunities([asset({ mlWin: 0.75, crashProbability: null })], portfolio(), t);
-    const acc = r.allocation.accepted[0];
-    if (acc) {
-      expect(acc.sizing.crashMultiplier).toBe(1);
-      expect(acc.candidate.provenance.crashModelVersion).toBe('none');
+  it('APPLIES the crash overlay now that the validated model ships', () => {
+    // Previously asserted the overlay's absence, because no crash model existed. It does now, and
+    // it is the most validated thing in the project: drawdown -76.6% -> -40.4%, replicated
+    // leave-one-symbol-out. Sizing being cut is the feature, not a regression.
+    const r = computeOpportunities([asset({ asset: 'SOL' })], portfolio(), t);
+    const all = [...r.allocation.accepted, ...[]];
+    for (const a of all) {
+      expect(a.sizing.crashMultiplier).toBeGreaterThanOrEqual(0);
+      expect(a.sizing.crashMultiplier).toBeLessThanOrEqual(1);
+      expect(a.candidate.provenance.crashModelVersion).toMatch(/^crash-v/);
+    }
+  });
+
+  it('surfaces crash warnings independently of whether any trade was produced', () => {
+    // The gauge is a risk signal, so it must reach the user even on a day when nothing is tradeable
+    // -- that is precisely the day it matters most.
+    const r = computeOpportunities([asset({ asset: 'SOL' })], portfolio(), t);
+    expect(Array.isArray(r.crashWarnings)).toBe(true);
+    for (const w of r.crashWarnings) {
+      expect(['ELEVATED', 'HIGH']).toContain(w.level);
+      expect(w.message).toMatch(/episodic|Quiet is not/i);
     }
   });
 

@@ -23,7 +23,8 @@ import { forecastVol } from '../vol';
 import { excursionCurve, baseExcursionCurve, regimeCaveat,
          EXCURSION_MODEL_VERSION } from './excursion';
 import type { CrashRisk, Provenance } from './candidate';
-import { crashRegime, PLACEHOLDER_CURVE } from './crash-risk';
+import { crashRegime } from './crash-risk';
+import { crashProbability, crashWarning, VALIDATED_CURVE, CRASH_MODEL_VERSION } from './crash';
 import { generateCandidate, DEFAULT_STRUCTURE, type StructureConfig } from './generator';
 import { rankCandidates } from './opportunity';
 import { allocatePortfolio, type AllocationResult } from './portfolio';
@@ -48,8 +49,17 @@ export interface AssetInput {
   dataTimestamp: number;
 }
 
+export interface CrashWarning {
+  asset: string;
+  level: 'ELEVATED' | 'HIGH';
+  message: string;
+  probability: number;
+}
+
 export interface OpportunityResult {
   allocation: AllocationResult;
+  /** Drawdown-risk warnings, independent of whether any trade was produced. */
+  crashWarnings: CrashWarning[];
   /** Assets whose structure pays on either side — the validated convex case, not a failure. */
   directionAgnosticAssets: string[];
   /** Assets that produced no candidate, with the reason. */
@@ -76,6 +86,7 @@ export function computeOpportunities(
 ): OpportunityResult {
   const candidates = [];
   const skipped: OpportunityResult['skipped'] = [];
+  const warnings: CrashWarning[] = [];
   const agnostic: string[] = [];
   const liquidityByAsset: Record<string, number> = {};
 
@@ -88,24 +99,31 @@ export function computeOpportunities(
     const sigma = vf?.rv?.h24;
     if (!(sigma && sigma > 0)) { skipped.push({ asset: a.asset, reasons: ['no volatility forecast'] }); continue; }
 
-    const crash: CrashRisk = a.crashProbability == null
-      ? { probability: 0, regime: 'LOW', confidence: 0, horizonDays: 0 }   // no model => no overlay
-      : { probability: a.crashProbability, regime: crashRegime(a.crashProbability, PLACEHOLDER_CURVE),
-          confidence: 0.5, horizonDays: 10 };
+    const hasFeatures = a.features != null && Object.keys(a.features).length > 20;
+
+    // The crash model is the one signal that survived every control, so it runs whenever features
+    // are present. An explicit override is honoured for testing; absent both, no overlay applies.
+    const cp = a.crashProbability ?? (hasFeatures ? crashProbability(a.features!) : null);
+    const crash: CrashRisk = cp == null
+      ? { probability: 0, regime: 'LOW', confidence: 0, horizonDays: 0 }
+      : { probability: cp, regime: crashRegime(cp, VALIDATED_CURVE), confidence: 0.6, horizonDays: 10 };
+    if (cp != null) {
+      const w = crashWarning(cp);
+      if (w) warnings.push({ asset: a.asset, level: w.level, message: w.message, probability: cp });
+    }
 
     const provenance: Provenance = {
       dataTimestamp: a.dataTimestamp,
       featureTimestamp: a.dataTimestamp,
       decisionTimestamp,
       modelVersion: PROVISIONAL_MODEL_VERSION,
-      crashModelVersion: a.crashProbability == null ? 'none' : 'crash-v1',
+      crashModelVersion: cp == null ? 'none' : CRASH_MODEL_VERSION,
       sizingConfigId: structure.id,
     };
 
     // MEASURED curves, one per side. The model predicts the level at 5R; the rest of the curve
     // scales the measured base rates. Without features we fall back to those base rates rather
     // than inventing a number -- a made-up probability flows straight into position size.
-    const hasFeatures = a.features != null && Object.keys(a.features).length > 20;
     const curves = hasFeatures
       ? { LONG: excursionCurve(a.features!, 'LONG', structure.holdingHorizonHours),
           SHORT: excursionCurve(a.features!, 'SHORT', structure.holdingHorizonHours) }
@@ -130,7 +148,9 @@ export function computeOpportunities(
   }
 
   return {
-    allocation: allocatePortfolio({ ranked: rankCandidates(candidates), state: portfolio, liquidityByAsset }),
+    allocation: allocatePortfolio({ ranked: rankCandidates(candidates), state: portfolio,
+                                    liquidityByAsset, curve: VALIDATED_CURVE }),
+    crashWarnings: warnings,
     directionAgnosticAssets: agnostic,
     skipped,
     provisional: true,

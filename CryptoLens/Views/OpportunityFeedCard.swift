@@ -18,6 +18,13 @@ struct OpportunityFeedCard: View {
         VStack(alignment: .leading, spacing: 12) {
             header
 
+            // Drawdown warnings lead, above any trade idea. This is the one signal that survived
+            // every control in the research (drawdown −76.6% → −40.4%, replicated leave-one-symbol-
+            // out), and it is defensive — so it outranks an opportunity list on the page.
+            if let ws = book.crashWarnings, !ws.isEmpty {
+                ForEach(ws) { w in crashRow(w) }
+            }
+
             if book.opportunities.isEmpty {
                 emptyState
             } else {
@@ -46,6 +53,27 @@ struct OpportunityFeedCard: View {
                     .font(Theme.micro).foregroundStyle(.tertiary)
             }
         }
+    }
+
+    private func crashRow(_ w: WorkerOpportunitiesService.CrashWarning) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Image(systemName: w.isHigh ? "exclamationmark.triangle.fill" : "exclamationmark.circle")
+                    .font(.caption)
+                Text("\(w.asset.replacingOccurrences(of: "USDT", with: "")) · DRAWDOWN RISK \(w.level)")
+                    .font(Theme.micro.weight(.bold))
+                Spacer()
+                Text("\(w.probability * 100, specifier: "%.0f")%")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+            }
+            Text(w.message)
+                .font(Theme.micro)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .foregroundStyle(w.isHigh ? Theme.danger : Theme.caution)
+        .padding(8)
+        .background((w.isHigh ? Theme.danger : Theme.caution).opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var emptyState: some View {

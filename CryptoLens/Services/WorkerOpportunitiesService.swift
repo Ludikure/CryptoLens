@@ -49,6 +49,24 @@ enum WorkerOpportunitiesService {
         let shortAuc: Double
     }
 
+    /// Drawdown-risk warning. Arrives independently of whether any trade was produced — the day
+    /// nothing is tradeable is precisely the day this matters most.
+    struct CrashWarning: Decodable, Identifiable {
+        let asset: String
+        let level: String
+        let message: String
+        let probability: Double
+        var id: String { asset }
+        var isHigh: Bool { level == "HIGH" }
+    }
+
+    struct CrashModelInfo: Decodable {
+        let version: String
+        let horizonDays: Int
+        let baseRate: Double
+        let walkForwardAuc: [Double]
+    }
+
     struct Skipped: Decodable {
         let asset: String
         let reasons: [String]
@@ -62,6 +80,8 @@ enum WorkerOpportunitiesService {
         let opportunities: [Opportunity]
         let totals: Totals
         let skipped: [Skipped]
+        let crashWarnings: [CrashWarning]?
+        let crashModel: CrashModelInfo?
     }
 
     /// Fetch the book. `symbols` empty means the worker's default set.

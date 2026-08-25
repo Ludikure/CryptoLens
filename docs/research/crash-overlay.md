@@ -97,3 +97,30 @@ exposed right now?"*
    matters, and the frictionless assumption flatters the result.
 3. **The retention metric needs a denominator that is not near zero** — report absolute CAGR against
    a long-horizon benchmark rather than a ratio.
+
+
+---
+
+## SHIPPED 2026-08-24
+
+This was the most validated finding in the vault and was **not in the product at all** — no model
+file, `crashProbability: null`, and a sizing curve explicitly marked "NOT fitted, NOT validated".
+That gap is now closed.
+
+- **`ml-model-crash-crypto.json`** — 870,093 bars, 77 symbols, the 110 serving features. Target
+  frozen from T2: `P(fall >= 10% within 10 days)`. Base rate 40.9%; walk-forward AUC
+  0.617 / 0.585 / 0.587 (mean 0.596); purge 72 > the 60-bar label horizon, the leak T8 recorded.
+  Calibration is monotone and inspectable: 26.0% → 38.1% → 53.7% realised by bucket.
+- **`VALIDATED_CURVE` replaces `PLACEHOLDER_CURVE`** — T8 arm D exactly (1.00 below 0.30, 0.50 to
+  0.50, 0.00 above). **The zero is deliberate**: T15 measured that adding an exposure floor removes
+  the benefit in proportion, so the "safer-looking" version is the worse one. A test pins the
+  absence of a floor so it cannot be quietly added back.
+- **Warnings lead the card, above any trade idea** — this is defensive, and it reaches the user on
+  days when nothing is tradeable, which is exactly when it matters.
+- **Every warning states the episodic caveat.** A user who sees it fire twice and then sit quiet
+  through a 25% fall would reasonably conclude it was broken; absence of warning is a documented
+  property of this signal, so the message says so on its face ("Quiet is not 'safe'").
+
+The supported-ceiling discipline from the excursion export is applied here too: the calibration is
+capped at the highest rate a 500-sample bucket actually realised (0.614, 1.5x base), so an isotonic
+tail resting on a handful of points cannot cut position size to zero on thin evidence.
