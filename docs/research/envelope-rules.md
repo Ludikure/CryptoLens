@@ -349,3 +349,63 @@ honest configuration is the ML gate alone, or no gate at all, plus the untestabl
 
 Recording that expectation now so a small positive result is not talked up, and a null is not
 quietly reframed as a discovery.
+
+## PART 3 RESULTS — gate selection does NOT generalise, on either side
+
+### The overfitting is visible in one column
+
+| side | fold | selected on train | **train R** | **TEST R** |
+|---|---:|---|---:|---:|
+| SHORT | 2 | ml≥0.70 + crash<0.45 | **+0.2396** | **−0.0586** |
+| SHORT | 3 | ml≥0.70 + atr_low + mixed only | **+0.1322** | **−0.1598** |
+| SHORT | 4 | crash≥0.45 + mixed only + trend mature | +0.1304 | +0.0878 |
+| LONG | 3 | atr_high + crash<0.45 + not full stack | **+0.1136** | **−0.0926** |
+
+Selection reliably finds gate sets worth **+0.13 to +0.24R in-sample** that are **negative
+out-of-sample**. That is the entire finding, and it is what a "best gate set" quoted without
+held-out evaluation would have looked like.
+
+### The selected sets contradict each other
+
+SHORT fold 2 chose `crash < 0.45` (trade when crash risk is LOW). SHORT fold 4 chose
+`crash >= 0.45` (trade when it is HIGH). **Opposite gates on the same signal, two folds apart, each
+justified by its own training data.** That is noise being fitted, not a rule being discovered.
+
+### Against the pre-declared bar
+
+| | SHORT | LONG |
+|---|---|---|
+| 1 beats no-gate (median) | FAIL −0.0032 | PASS +0.0222 |
+| 2 beats coverage-matched random | FAIL −0.0005 | PASS +0.0238 |
+| 3 consistent across six-month periods | FAIL 4/8 | FAIL 4/7 |
+| 4 coverage floor every fold | FAIL 2.7%, 3.5% | FAIL 2.8% |
+| | **DO NOT ADOPT** | **DO NOT ADOPT** |
+
+**A process note.** The first version of this script evaluated only criteria 1 and 2, on the MEAN,
+and printed **ADOPT** for LONG — carried by one fold at +0.1483R on 2.8% coverage. Enforcing the
+criteria that were actually pre-declared (median, period sign count, coverage floor) flips it to DO
+NOT ADOPT. **Third time in two days that a mean over few observations nearly produced a finding**;
+the pre-declaration is what caught it each time.
+
+## Conclusion — the honest gate configuration
+
+**No gate set generalises.** Not the envelope's, and not one selected from evidence with a much
+richer candidate pool that included the validated crash model.
+
+This is the outcome the pre-declaration named in advance, which is the only reason it can be reported
+without suspicion:
+
+> *"the most likely result is that out-of-sample gate lift is near zero and no set is adopted."*
+
+**What follows:**
+
+1. **Adding gates is not the answer.** A larger, better-motivated pool did no better than the
+   envelope's own — and the envelope beats random by +0.0012R.
+2. **The envelope's complexity is unjustified by evidence.** Its ML component is the only part with
+   any positive lift (Part 1), and ML alone beat the full envelope fourfold (Part 2).
+3. **The untestable safety guards still stay.** Kill conditions, macro proximity, earnings, news
+   conflict — never measured here, and they exist to prevent identified harms rather than to raise
+   average EV. "No gate improves EV" is not "no gate should exist".
+4. **The gap that could still overturn this**: every test enters at the BAR CLOSE. Real setups enter
+   at a level the LLM picks. If gating value lives in level selection rather than bar selection, none
+   of these three parts would see it — and that is the one experiment left worth running.
