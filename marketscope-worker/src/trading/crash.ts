@@ -105,24 +105,41 @@ export function crashProbability(features: Record<string, number>): number {
  * fire twice and then sit silent through a 25% drawdown would reasonably conclude it was broken —
  * when in fact absence-of-warning is a documented property, not a malfunction.
  */
+/**
+ * WARNING thresholds are RELATIVE TO THE BASE RATE, and deliberately not the sizing thresholds.
+ *
+ * The sizing curve fires at 0.30/0.50 because that is what T8 validated — those stay. But reusing
+ * them for user-facing warnings was a mistake: the base rate is 41%, so nearly every symbol clears
+ * 0.30 on an ordinary day. The first live screen showed SIX warnings reading 41/41/43/41/50/39%
+ * against a 41% base — five of them were "today is a normal day" dressed as an alert, which trains
+ * the user to ignore the one that matters.
+ *
+ * A warning has to mean "this is unusual", so it fires on the MARGIN over the base rate.
+ */
+const WARN_MARGIN = 0.08;      // ~49% absolute — noticeably above an average day
+const HIGH_MARGIN = 0.18;      // ~59% absolute — rare
+
 export function crashWarning(p: number): { level: 'ELEVATED' | 'HIGH'; message: string } | null {
-  if (p > 0.50) {
+  const base = MODEL.baseRate;
+  const over = Math.round((p - base) * 100);
+  const pct = (p * 100).toFixed(0);
+
+  if (p >= base + HIGH_MARGIN) {
     return {
       level: 'HIGH',
-      message: `Drawdown risk HIGH — ${(p * 100).toFixed(0)}% chance of a 10%+ fall within ${MODEL.horizonDays} days `
-        + `(base rate ${(MODEL.baseRate * 100).toFixed(0)}%). This gauge historically cut drawdowns by about half, `
-        + `but it is episodic: it has stayed quiet through real 20-28% falls. Quiet is not "safe".`,
+      message: `A 10%+ drop in the next ${MODEL.horizonDays} days looks ${pct}% likely — ${over} points above `
+        + `a normal day. Position sizes are cut. Note this gauge misses some big falls entirely, so a `
+        + `quiet reading is never a green light.`,
     };
   }
-  if (p > 0.30) {
+  if (p >= base + WARN_MARGIN) {
     return {
       level: 'ELEVATED',
-      message: `Drawdown risk elevated — ${(p * 100).toFixed(0)}% chance of a 10%+ fall within ${MODEL.horizonDays} days `
-        + `(base rate ${(MODEL.baseRate * 100).toFixed(0)}%). Sizing is reduced. This gauge is episodic and misses `
-        + `some large falls entirely.`,
+      message: `A 10%+ drop in the next ${MODEL.horizonDays} days looks ${pct}% likely — ${over} points above `
+        + `a normal day. Position sizes are reduced.`,
     };
   }
-  return null;
+  return null;    // at or near the base rate there is nothing to say
 }
 
 export function crashModelInfo() {

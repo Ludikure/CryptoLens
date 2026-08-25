@@ -45,18 +45,30 @@ describe('crash model — the one signal that survived every control', () => {
     expect(Math.min(...VALIDATED_CURVE.points.map(p => p.multiplier))).toBe(0);
   });
 
-  it('warns above 0.30 and stays silent below, at the validated thresholds', () => {
-    expect(crashWarning(0.20)).toBeNull();
-    expect(crashWarning(0.40)?.level).toBe('ELEVATED');
-    expect(crashWarning(0.60)?.level).toBe('HIGH');
+  it('stays SILENT at an ordinary day, however high the absolute number looks', () => {
+    // The base rate is 41%. The first live screen showed six warnings reading 41-50% because the
+    // thresholds were copied from the SIZING curve (0.30/0.50) — five of them meant "today is
+    // normal". A warning that fires most days trains the user to ignore the one that matters.
+    for (const p of [0.20, 0.38, 0.41, 0.43, 0.46]) {
+      expect(crashWarning(p)).toBeNull();
+    }
+  });
+
+  it('fires only on a real margin over the base rate', () => {
+    expect(crashWarning(0.50)?.level).toBe('ELEVATED');   // +9pp
+    expect(crashWarning(0.61)?.level).toBe('HIGH');       // +20pp
+  });
+
+  it('keeps the SIZING thresholds at the validated 0.30/0.50 — warnings and sizing are separate', () => {
+    // Sizing is what T8 measured; the warning copy is not. Loosening one must not move the other.
+    expect(crashMultiplier(0.41, VALIDATED_CURVE)).toBeCloseTo(0.5, 2);
+    expect(crashMultiplier(0.29, VALIDATED_CURVE)).toBeCloseTo(1.0, 3);
   });
 
   it('states the EPISODIC caveat in every warning it emits', () => {
     // A user who sees this fire twice then sit quiet through a 25% fall would reasonably think it
     // broken. Absence of warning is a documented property, so every message must say so.
-    for (const p of [0.40, 0.60]) {
-      expect(crashWarning(p)!.message).toMatch(/episodic|Quiet is not/i);
-    }
+    expect(crashWarning(0.61)!.message).toMatch(/misses some big falls|never a green light/i);
   });
 
   it('reports its real walk-forward AUC rather than implying certainty', () => {
