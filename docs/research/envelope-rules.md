@@ -539,3 +539,39 @@ actionable at market invites the user into the −0.125R arm instead of the +0.0
 - **H2 is NOT yet run**: whether gates that failed under market entry pass under level entry. Given
   the entry effect is ~50× the gate effect, it is secondary, but it remains open and is recorded as
   such rather than quietly dropped.
+
+---
+
+# PART 5 — do STRUCTURAL levels beat a mechanical pullback? — PRE-DECLARED 2026-08-25
+
+Part 4 used a synthetic `0.25 x ATR` pullback. The app uses levels the LLM picks — recent swing
+structure, S/R, value-area edges. Nobody has checked which is better, and the answer decides how much
+of the analysis layer is load-bearing.
+
+## Arms (all entered as limit orders, 12h wait, unfilled = 0, R per OPPORTUNITY)
+
+| arm | entry |
+|---|---|
+| market | at the close — the control Part 4 showed is the worst |
+| mechanical 0.25 ATR | fixed depth against the direction |
+| **swing 24h** | recent 24h low (LONG) / high (SHORT) — a real structural level |
+| **swing 72h** | the same over 72h — a more significant level, further away |
+| VP value-area edge | VAL (LONG) / VAH (SHORT), the app's own volume-profile levels |
+
+## Pre-declared bar
+
+A structural arm **beats mechanical** only if it exceeds the 0.25 ATR arm by **≥ 0.02R per
+opportunity** and is positive in **≥ 6 of 9** six-month periods by sign count.
+
+## Why both outcomes are useful
+
+- **Structure wins** → the analysis layer's level-picking is load-bearing and worth its cost.
+- **Mechanical ties or wins** → a fixed-depth limit order captures the entire effect, and the app can
+  be dramatically simpler than it is.
+
+## Expected outcome, recorded in advance
+
+`strategy-levels.md` already found levels are real LOCATIONS (+4.3pp hold vs random lines) but that
+their *strength* is unrankable and snapping TARGETS to them lowers EV. I therefore expect structure
+to be roughly comparable to mechanical on entry, not clearly better — with deeper levels filling less
+often and trading that away.
