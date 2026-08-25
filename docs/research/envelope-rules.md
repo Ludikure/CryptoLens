@@ -292,3 +292,60 @@ in a crypto backtest would be a category error.
   conviction tier is to shape a setup that is then entered elsewhere. This gap is real.
 - **`continuation` is approximated** by momentum alignment.
 - One dataset, 24 symbols, a window in which the equal-weight basket fell 83%.
+
+---
+
+# PART 3 — what SHOULD the gates be? — PRE-DECLARED 2026-08-25, before computing
+
+Part 2 established the envelope is not verified. This asks the constructive question, and the design
+has to survive the obvious objection: **searching combinations and reporting the winner is
+overfitting.** A "best gate set" found in hindsight proves nothing.
+
+## Method: the SELECTION is what gets tested
+
+Greedy forward selection, done **inside each training fold only**, then applied unchanged to the
+held-out fold:
+
+1. On train, start with no gates. Add the single gate that most improves net R per trade.
+2. Repeat while an addition improves train by ≥ 0.005R and coverage stays ≥ 5%.
+3. **Freeze that set. Evaluate on the test fold. Never look at test while choosing.**
+
+So the reported number answers *"does evidence-driven gate selection generalise?"* — not *"what was
+optimal in hindsight?"* If out-of-sample lift is ~0 while in-sample lift is large, the honest answer
+is that gate selection itself does not survive, and the correct gate set is **none**.
+
+## Candidate pool
+
+Beyond the envelope's own conditions, the pool includes signals the research says are real and which
+the envelope never used:
+
+| candidate | why it is in the pool |
+|---|---|
+| `crash prob` low / high | the ONE validated model — replicated leave-one-symbol-out |
+| ML_WIN thresholds (50/60/70) | the only envelope component with positive lift in Part 1 |
+| ATR percentile high / low | volatility regime; the barrier target is ATR-normalised |
+| realised-vol vs ATR | T20 found realised vol captures most of the ML's discrimination |
+| RSI stretched | Part 1 found it **direction-specific**, which the envelope ignores |
+| alignment / mixed / mature | the envelope's own, included so they can be beaten fairly |
+| funding extreme | crowding, cheap to compute, never gated on |
+
+Gates are evaluated **per direction**, because Part 1 showed the same condition can help one side and
+hurt the other — a fact the current envelope has no way to express.
+
+## Pre-declared bar
+
+An evidence-selected gate set is **adopted** only if, on HELD-OUT folds:
+
+1. it beats no-gates by **≥ 0.02R** per trade, AND
+2. it beats a **coverage-matched random gate** by **≥ 0.02R**, AND
+3. it is positive in **≥ 6 of 9** six-month periods by **sign count**, AND
+4. it retains **≥ 5%** coverage.
+
+## The outcome I expect, stated in advance so it cannot be rationalised later
+
+Given that direction has failed 20+ tests and the envelope beats random by +0.0012R, the most likely
+result is that **out-of-sample gate lift is near zero and no set is adopted**. That would mean the
+honest configuration is the ML gate alone, or no gate at all, plus the untestable safety guards.
+
+Recording that expectation now so a small positive result is not talked up, and a null is not
+quietly reframed as a discovery.
