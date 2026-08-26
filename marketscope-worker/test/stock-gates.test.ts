@@ -1,26 +1,71 @@
-// The stock-only envelope conditions, after Part 8 (docs/research/envelope-rules.md).
-//
-// Part 7 filed all four as untestable — "stocks only, no stock intraday paths". That described a
-// directory, not a data gap: the stock hourly bars have been in the box's own candle archive since
-// 2019-01-07. 487,155 opportunities, 159 symbols, the app's own geometry.
-//
-//   treatment_long_confirm_FAIL   4/9 periods, +0.0007R global, −0.0070R on the LONG bars it
-//                                 governs. Hard block, no benefit, mild inversion → REMOVED.
-//   treatment_long_confirm_PARTIAL +0.0074R, 6/9. Soft cap, mildly positive → KEPT.
-//   treatment_short_gate_stocks   the ban is right (−0.1123R blocked vs a −0.0457R stock-SHORT
-//                                 average, 8/9); the three-way escape hatch fired on 7 bars in
-//                                 four years and those averaged −0.2082R → hatch REMOVED.
-//   earnings 0-2d / 3-7d / 8-14d  the FIRST envelope conditions validated on their own stated
-//                                 mechanism: P(overnight gap ≥ 2 ATR) runs 7.1x / 7.0x / 5.0x the
-//                                 away-from-earnings baseline, in 8/8, 9/9, 9/9 periods → KEPT,
-//                                 with the measured numbers now carried into the prompt.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { envelopeFor, BIAS, MIN_STOCK_INFO } from './helpers/envelope';
 
 const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+const NOW_MS = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'btc-rally-2026-08.json'), 'utf-8'))
+  .fourH.slice(-1)[0].time + 14400e3;
+const stock = (o: Record<string, unknown> = {}) => ({ symbol: 'AAPL', ...o });
 
-describe('Part 8 — stock-only envelope conditions', () => {
+// CONVERTED TO BEHAVIOURAL 2026-08-26. EVIDENCE STATUS: Part 8's EV arms are UNSUPPORTED (they
+// scored the retracted lookahead column) AND its LONG_CONFIRMATION reconstruction used quantities
+// the live rule does not use — `relStrengthVsSpy` is a 5-day return where the live gate reads the
+// 1-day `relativeStrength1d`, and the live day-over-day daily-RSI delta is not exported under any
+// name, so those arms cannot be re-run without an export change. The earnings VARIANCE test is
+// independent of the entry simulation and survives. These tests pin CURRENT behaviour so Phase 3
+// re-decides deliberately.
+describe('Part 8 behaviour — stock-only envelope conditions', () => {
+  it('a failing LONG_CONFIRMATION does not auto-FLAT; it caps', () => {
+    const e = envelopeFor(stock({ ml: 0.80, ...BIAS.alignedBullish,
+      stockInfo: { ...MIN_STOCK_INFO, relativeStrength1d: -3 } }) as never);
+    expect(e.autoFlat).toEqual([]);
+    expect(e.moderateBlocks).toContain('treatment_long_confirm_PARTIAL_cap_LOW');
+    expect(e.maxAllowed).toBe('LOW');
+  });
+
+  it('a passing LONG_CONFIRMATION leaves conviction unrestricted', () => {
+    const e = envelopeFor(stock({ ml: 0.80, ...BIAS.alignedBullish,
+      stockInfo: { ...MIN_STOCK_INFO, relativeStrength1d: 5 } }) as never);
+    expect(e.moderateBlocks.filter(r => r.startsWith('treatment_long_confirm'))).toEqual([]);
+    expect(e.maxAllowed).toBe('HIGH');
+  });
+
+  it('aligned-bearish stock SHORTs are blocked, and the label carries no withdrawn number', () => {
+    const e = envelopeFor(stock({ ml: 0.55, ...BIAS.alignedBearish }) as never);
+    expect(e.autoFlat).toContain('aligned_bearish_stock_SHORT_evidence_under_review');
+    expect(e.maxAllowed).toBe('FLAT');
+    expect(e.autoFlat.join()).not.toMatch(/-0\.11R/);
+  });
+
+  it('the same bias on CRYPTO is not blocked by that stock-only rule', () => {
+    const e = envelopeFor({ ml: 0.55, ...BIAS.alignedBearish } as never);
+    expect(e.autoFlat.filter(r => r.startsWith('aligned_bearish_stock_SHORT'))).toEqual([]);
+  });
+
+  it('the earnings windows cap by distance, and the ladder honours them', () => {
+    for (const [days, list, tier] of [
+      [1, 'moderateBlocks', 'LOW'], [5, 'highBlocks', 'MODERATE'], [10, 'downgrade', 'HIGH'],
+    ] as const) {
+      const e = envelopeFor(stock({ ml: 0.80, ...BIAS.alignedBullish,
+        stockInfo: { ...MIN_STOCK_INFO, earningsDate: NOW_MS + days * 86_400_000 } }) as never);
+      const reasons = (e as never as Record<string, string[]>)[list];
+      expect(`${days}d in ${list}: ${reasons.join()}`)
+        .toMatch(new RegExp(`^${days}d in ${list}: earnings_in_${days}d_`));
+      expect(`${days}d tier: ${e.maxAllowed}`).toBe(`${days}d tier: ${tier}`);
+    }
+  });
+
+  it('no earnings date means no earnings gate', () => {
+    const e = envelopeFor(stock({ ml: 0.80, ...BIAS.alignedBullish }) as never);
+    expect([...e.autoFlat, ...e.highBlocks, ...e.moderateBlocks, ...e.downgrade]
+      .filter(r => r.startsWith('earnings_'))).toEqual([]);
+  });
+});
+
+// Source checks kept deliberately: absence of dead code and the exact prompt WORDING are properties
+// of the source, not of the envelope's verdict.
+describe('Part 8 — source-level properties', () => {
   it('treatment_long_confirm_FAIL can no longer auto-FLAT', () => {
     expect(src).not.toMatch(/autoFlat\.push\('treatment_long_confirm_FAIL'\)/);
   });

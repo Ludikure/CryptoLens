@@ -211,10 +211,6 @@ describe('raw vs calibrated ML_WIN cannot contradict the gate', () => {
     expect(src).toMatch(/\(raw \$\{iTrunc\(rawWin \* 100\)\}%, live-calibrated/);
   });
 
-  it('the macro moderate-block label is not self-contradictory', () => {
-    // Asserted on the emitted string, not on the file — the comment above it quotes the old label
-    // by design, and a bare /_exceeds_NEARBY/ would match that prose forever.
-    expect(src).not.toMatch(/moderateBlocks\.push\(`macro_\$\{envMacroRisk\}_exceeds_NEARBY`\)/);
-    expect(src).toMatch(/moderateBlocks\.push\(`macro_\$\{envMacroRisk\}_at_or_inside_NEARBY`\)/);
-  });
+  // The macro label is now asserted BEHAVIOURALLY in test/envelope-ladder.test.ts — it lives
+  // inside the envelope block, so a source regex here would fight the Phase 1.8 extraction.
 });

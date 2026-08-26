@@ -1,60 +1,75 @@
-// Divergence no longer blocks (2026-08-25, envelope-rules.md Part 6 + follow-up).
+// Divergence is context, not a gate (2026-08-25, envelope-rules.md Part 6 + follow-up).
 //
-// Twelve variant tests, zero passes: best SHORT lift +0.0028R against a +0.02R bar, and EVERY LONG
-// lift negative — `against bias (daily)` blocked bars averaging +0.0504R while keeping +0.0186R.
-// The underlying signal is real but worthless: 4H divergence moves P(up24) +2.24pp at p=3.9e-09 and
-// does not convert, while DAILY divergence is INVERTED. One indicator, two timeframes, opposite
-// signs.
+// CONVERTED TO BEHAVIOURAL 2026-08-26. This file used to be regexes over `prompt.ts` source text,
+// which never execute the envelope: they pin an implementation spelling, so they pass when the
+// behaviour is wrong and fail when it is right but written differently.
 //
-// It is still COMPUTED and REPORTED — it is context for the model — but it cannot auto-FLAT.
+// EVIDENCE STATUS, stated plainly: Part 6's measurement is UNSUPPORTED — it scored divergence on
+// `d0.25_{side}_oppR`, a column produced by the retracted 4-hour-lookahead simulation. What survives
+// is Part 6's PRINCIPLE (a rule claiming predictive power must earn it), which is a prior rather
+// than a measurement, plus the episode-level correction (a daily divergence episode runs ~44 bars,
+// so the per-bar significance was autocorrelation). These tests therefore pin the CURRENT
+// behaviour so a re-decision in Phase 3 is deliberate rather than accidental — not a claim the
+// removal was proven right.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
-import { systemPrompt } from '../src/prompt';
 import { join } from 'path';
+import { systemPrompt } from '../src/prompt';
+import { envelopeFor, BIAS } from './helpers/envelope';
 
-const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+const STATES = [
+  { name: 'aligned bullish', o: { ml: 0.80, ...BIAS.alignedBullish } },
+  { name: 'aligned bearish', o: { ml: 0.62, ...BIAS.alignedBearish } },
+  { name: 'higher-TF only', o: { ml: 0.55, ...BIAS.higherTfOnly } },
+  { name: 'mixed', o: { ml: 0.55, ...BIAS.mixed } },
+  { name: 'counter-trend pullback', o: { ml: 0.62, ...BIAS.counterTrendPullback } },
+  { name: 'stock aligned bullish', o: { ml: 0.80, symbol: 'AAPL', ...BIAS.alignedBullish } },
+];
 
-describe('divergence is context, not a gate', () => {
-  it('divergence_escalated_6+_candles can no longer auto-FLAT', () => {
-    expect(src).not.toMatch(/autoFlat\.push\('divergence_escalated/);
+describe('divergence never gates, in any envelope state', () => {
+  it('no state produces a divergence auto-FLAT', () => {
+    for (const { name, o } of STATES) {
+      const e = envelopeFor(o as never);
+      expect(`${name}: ${e.autoFlat.filter(r => /diverg/i.test(r)).join()}`).toBe(`${name}: `);
+    }
   });
 
-  it('killDivergence no longer contributes to ANY_KILLED', () => {
-    expect(src).toMatch(/const anyKilled = killVolume \|\| killMacro;/);
-    expect(src).not.toMatch(/const anyKilled = killDivergence/);
+  it('no state produces a divergence conviction block either', () => {
+    for (const { name, o } of STATES) {
+      const e = envelopeFor(o as never);
+      const hits = [...e.highBlocks, ...e.moderateBlocks, ...e.downgrade].filter(r => /diverg/i.test(r));
+      expect(`${name}: ${hits.join()}`).toBe(`${name}: `);
+    }
   });
 
-  it('ANY_KILLED now contains only the conditions that survived testing', () => {
-    // Part 7 removed killFunding too: it blocked bars averaging +0.0911R against a +0.0624R
-    // baseline on shorts. Like divergence, it CLAIMED prediction (funding paying the counter side
-    // makes the counter move likelier) and did not deliver.
-    // killVolume stays — noise rather than inverted, firing on 1.2% of bars.
-    // killMacro stays — it guards an exogenous scheduled event and never claimed prediction, so a
-    // null EV test could not refute it. It was also never testable here (no economic calendar).
-    expect(src).toMatch(/const anyKilled = killVolume \|\| killMacro;/);
-    expect(src).not.toMatch(/const anyKilled = .*killDivergence/);
-    expect(src).not.toMatch(/const anyKilled = .*killFunding/);
-  });
-
-  it('is absent from EVERY gating structure, not merely tagged inside one', () => {
-    // A "does not block" tag under a heading called "Kill Conditions" is weaker governance than
-    // not being there. Both the kill-list entry and the `Divergence Escalated` line are gone, and
-    // `envDivergenceEscalated` with them — nothing read it once the auto-FLAT was deleted.
-    expect(src).not.toMatch(/killParts\.push\(`divergence_against_bias/);
-    expect(src).not.toMatch(/L\(`Divergence Escalated/);
-    expect(src).not.toMatch(/envDivergenceEscalated =/);
+  it('the Kill Conditions line does not list divergence where it renders at all', () => {
+    // The kill block is wrapped in `if (oneHOpposes && oneH)`, so counter-trend-pullback is the
+    // ONLY state in which it appears. Anything measuring a kill rule on every bar is mis-scoped.
+    const p = envelopeFor({ ml: 0.62, ...BIAS.counterTrendPullback } as never).prompt;
+    const line = /Kill Conditions:[^\n]*/.exec(p);
+    expect(line, 'Kill Conditions line should render on a counter-trend bar').not.toBeNull();
+    expect(line![0]).not.toMatch(/diverg/i);
   });
 
   it('the raw per-timeframe reading STAYS — the indicator block is descriptive', () => {
-    // Removing one indicator from a descriptive block because it happens to have been tested,
-    // while RSI/MACD/ADX sit there equally untested, would be inconsistent. The prior is governed
-    // in the system prompt instead, which addresses the actual risk directly.
+    // Legitimately a SOURCE check: this asserts a line exists in the descriptive block, and the
+    // fixture happens not to produce a divergence reading, so behaviour cannot show it. Removing
+    // one indicator because it was tested, while RSI/MACD/ADX sit there equally untested, would be
+    // inconsistent — the prior is governed in the system prompt instead.
+    const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
     expect(src).toMatch(/Divergence: \$\{ind\.divergence\}/);
   });
 
+  it('no dead references survive the removal', () => {
+    // Also legitimately a SOURCE check: absence of dead code is a property of the source, not of
+    // behaviour. A splice or flag nothing reads still reads as live governance to the next author.
+    const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+    expect(src).not.toMatch(/envDivergenceEscalated =/);
+    expect(src).not.toMatch(/killParts\.push\(`divergence_against_bias/);
+  });
+
   it('the SYSTEM prompt governs the model\'s prior, since the literature disagrees with the data', () => {
-    const c = systemPrompt(true), st = systemPrompt(false);
-    for (const p of [c, st]) {
+    for (const p of [systemPrompt(true), systemPrompt(false)]) {
       expect(p).toMatch(/RSI DIVERGENCE — CALIBRATION NOTE/);
       expect(p).toMatch(/do NOT cite it as evidence for a direction/i);
       expect(p).toMatch(/~44 bars/);                       // the episode correction, not the bar count

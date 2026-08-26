@@ -609,6 +609,36 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-26c — Envelope tests converted from source regexes to behaviour (Phase 0.4)
+
+The four files that asserted on `prompt.ts` SOURCE TEXT — `continuation-gate`, `stock-gates`,
+`divergence-demoted`, `entry-discipline` — now execute the envelope through
+`test/helpers/envelope.ts` instead. Blocking work: those regexes pin an implementation spelling, so
+they pass when behaviour is wrong, fail when it is right but written differently, and would fight
+both the Phase 3 gate re-decisions and the Phase 1.8 `evaluateEnvelope` extraction.
+
+**What behavioural coverage bought immediately:** the ladder bug (2026-08-26b) surfaced on the
+helper's first run, and writing the macro tests turned up that **`NEARBY` is a 2-hour band**
+(`hoursUntil <= 2 ? IMMINENT : <= 4 ? NEARBY : <= 12 ? UPCOMING`) — narrow enough that a probe at
+2h and 5h misses it entirely, which is how it stayed untested. All four macro tiers are now pinned.
+
+**`BIAS.counterTrendPullback` is the one that matters for future work.** The Kill Conditions block is
+wrapped in `if (oneHOpposes && oneH)`, so `ANY_KILLED` — and therefore *every* kill condition — only
+exists on counter-trend-pullback bars. Nothing renders it otherwise; `Kill Conditions:` is simply
+absent from an aligned prompt. **Any measurement of a kill rule that evaluates it on every bar is
+scoped to a population an order of magnitude larger than the rule's own domain**, which is exactly
+what Part 7 did to both of its kill rows.
+
+**Evidence status is now stated in each file** rather than implied: Part 6's and Part 8's EV arms are
+UNSUPPORTED (retracted column), Part 8's LONG_CONFIRMATION arms are **not re-runnable at all** without
+an export change (the live day-over-day daily-RSI delta is exported under no name), and Part 9's
+stock degeneracy + crypto coverage facts survive because they are code and distribution facts rather
+than payoff claims. The tests pin CURRENT behaviour so Phase 3 re-decides deliberately — they are not
+a claim any removal was proven right.
+
+Source-level assertions are kept only where the property genuinely is source: absence of dead code,
+and exact prompt WORDING. 776/776 green.
+
 ### 2026-08-26b — The conviction ladder skipped a rung: every moderateBlock was inert at high ML
 
 Found on the FIRST run of the new behavioural test helper, which is the argument for the helper.

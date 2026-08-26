@@ -86,3 +86,48 @@ describe('max_allowed is monotone with the block lists', () => {
     }
   });
 });
+
+// Macro proximity, exercised behaviourally. Converted from a source regex on the reason LABEL
+// (`macro_${risk}_at_or_inside_NEARBY`), which sits inside the envelope block and would fight the
+// Phase 1.8 extraction. Tiers are `hoursUntil <= 2 ? IMMINENT : <= 4 ? NEARBY : <= 12 ? UPCOMING
+// : ON_HORIZON` (prompt.ts:923). NEARBY is a 2h-wide band and is easy to miss when probing.
+//
+// These are NOT a claim the macro gates are validated — they guard an exogenous scheduled event and
+// were never testable against price (there is no historical economic-calendar archive). They are
+// pinned so a refactor cannot silently drop them.
+describe('macro proximity gates by distance', () => {
+  const NOW_MS2 = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'btc-rally-2026-08.json'), 'utf-8'))
+    .fourH.slice(-1)[0].time + 14400e3;
+  const evAt = (hours: number) => [{
+    title: 'FOMC Rate Decision', country: 'US', isHighImpact: true,
+    isUpcoming: true, isRecentlyReleased: false, date: NOW_MS2 + hours * 3600e3,
+  }];
+
+  it('IMMINENT (<=2h) auto-FLATs', () => {
+    const e = envelopeFor({ ml: 0.80, ...BIAS.alignedBullish, economicEvents: evAt(1) } as never);
+    expect(e.autoFlat).toContain('macro_IMMINENT');
+    expect(e.maxAllowed).toBe('FLAT');
+  });
+
+  it('NEARBY (2-4h) caps at LOW, and the label is not self-contradictory', () => {
+    const e = envelopeFor({ ml: 0.80, ...BIAS.alignedBullish, economicEvents: evAt(3) } as never);
+    expect(e.autoFlat).toEqual([]);
+    expect(e.moderateBlocks).toContain('macro_NEARBY_at_or_inside_NEARBY');
+    expect(e.moderateBlocks.join()).not.toMatch(/NEARBY_exceeds_NEARBY/);   // fixed 2026-08-25
+    expect(e.maxAllowed).toBe('LOW');
+  });
+
+  it('UPCOMING (4-12h) caps at MODERATE only', () => {
+    const e = envelopeFor({ ml: 0.80, ...BIAS.alignedBullish, economicEvents: evAt(8) } as never);
+    expect(e.highBlocks).toContain('macro_UPCOMING_not_ON_HORIZON');
+    expect(e.moderateBlocks).toEqual([]);
+    expect(e.maxAllowed).toBe('MODERATE');
+  });
+
+  it('ON_HORIZON (>12h) does not gate at all', () => {
+    const e = envelopeFor({ ml: 0.80, ...BIAS.alignedBullish, economicEvents: evAt(30) } as never);
+    expect([...e.autoFlat, ...e.highBlocks, ...e.moderateBlocks].filter(r => r.startsWith('macro_')))
+      .toEqual([]);
+    expect(e.maxAllowed).toBe('HIGH');
+  });
+});

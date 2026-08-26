@@ -112,4 +112,11 @@ export const BIAS = {
   alignedBearish: { dailyBias: 'Bearish', fourHBias: 'Bearish', oneHBias: 'Bearish' },
   higherTfOnly: { dailyBias: 'Bullish', fourHBias: 'Bullish', oneHBias: 'Neutral' },
   mixed: { dailyBias: 'Bullish', fourHBias: 'Bearish', oneHBias: 'Neutral' },
+  // The ONLY state in which the Kill Conditions block renders at all: `prompt.ts` wraps the whole
+  // kill evaluation in `if (oneHOpposes && oneH)`, and `oneHOpposes` requires daily and 4H to agree
+  // while 1H opposes them. So `ANY_KILLED` — and therefore every kill condition — is scoped to
+  // counter-trend-pullback bars. Worth knowing before reading any measurement of a kill rule: a
+  // reconstruction that evaluates one on every bar is scoped to a population an order of magnitude
+  // larger than the rule's own domain.
+  counterTrendPullback: { dailyBias: 'Bullish', fourHBias: 'Bullish', oneHBias: 'Bearish' },
 } as const;
