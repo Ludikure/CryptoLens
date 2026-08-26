@@ -2202,3 +2202,82 @@ with Part 1's removal even though Part 1's reasoning was measured on a broken ma
 were removed from the code and so are no longer computed. Testing them needs the exporter extended to
 emit them as diagnostics from the real implementation — the alternative is a reconstruction, which is
 the thing this phase exists to stop. Carried to Phase 3 as an explicit gap, not silently dropped.
+
+---
+
+# PHASE 2 — C4: THE ML GATE IS DIRECTION-DEPENDENT, AND STRONGLY (2026-08-26)
+
+C3 asked whether the removals were right. C4 asks the more urgent question: **are the gates still
+standing earning their place?** The cost of error here is an over-restrictive app — the complaint that
+started this programme.
+
+Conditions read from `envelope_exports/`. ML from `phase2_oof.py`: walk-forward, **production target**
+(`goodR = fwdMaxFavR >= 1.5`), **production 110-feature list read from the shipped model JSON**,
+3 folds, 48-bar purge, provenance recorded. Mean OOF AUC **0.6767** against production v14's 0.674 —
+the OOF reproduces the shipped model's discrimination.
+
+Thresholds are swept on the **raw** scale. Production gates on a live-calibrated value, but the PAV
+layer refits from forward data a historical bar does not have, and calibrating on the same rows being
+scored would be circular. 154,348 joined rows, 24 symbols.
+
+*(`oof_24h.csv` was already on disk and is NOT used: its producer targets a forward max over feature-row
+CLOSES, never seeing an intrabar high, on "everything numeric not in DROP" rather than the shipped
+110. A file whose semantics differ from production cannot re-decide a production threshold.)*
+
+| side | gate | blocks | coverage | blocked R | kept R | lift | block 95% CI | periods |
+|---|---|---:|---:|---:|---:|---:|---|---:|
+| SHORT | ML < 0.50 | 65.6% | 34% | −0.0298 | +0.0336 | **+0.0416** | [+0.0036, +0.0812] | 5/7 |
+| SHORT | ML < 0.55 | 77.9% | 22% | −0.0264 | +0.0571 | **+0.0650** | [+0.0199, +0.1109] | 5/7 |
+| SHORT | ML < 0.60 | 87.6% | 12% | −0.0192 | +0.0712 | +0.0792 | [+0.0231, +0.1373] | 5/7 |
+| **LONG** | ML < 0.50 | 71.8% | 28% | **+0.0022** | **−0.1378** | **−0.1005** | [−0.1549, −0.0483] | **1/5** |
+| **LONG** | ML < 0.55 | 84.7% | 15% | −0.0141 | −0.1667 | **−0.1293** | [−0.2020, −0.0597] | **0/5** |
+| **LONG** | ML < 0.60 | 94.5% | 5% | −0.0259 | −0.2349 | **−0.1976** | [−0.3087, −0.0871] | **0/5** |
+| SHORT | `crypto_bear_regime` | 86.1% | 14% | +0.0035 | −0.0789 | **−0.0709** | [−0.1338, −0.0086] | 2/7 |
+| SHORT | `ANY_KILLED` | 5.8% | 94% | −0.0354 | −0.0063 | +0.0017 | [−0.0246, +0.0282] | 4/7 |
+| SHORT | 1H opposes | 14.1% | 86% | −0.0414 | −0.0025 | +0.0055 | [−0.0208, +0.0321] | 6/7 |
+
+The pullback-entry table has the same shape throughout: SHORT lifts positive but smaller
+(+0.0276 / +0.0394), LONG lifts inverted (−0.0881 / −0.1173 / −0.1926).
+
+## The ML gate helps SHORT and actively harms LONG
+
+**On LONG, filtering by ML makes the kept set dramatically worse, monotonically in the threshold.**
+At ML < 0.50 the BLOCKED bars average **+0.0022R** while the KEPT bars average **−0.1378R**. Both
+bootstraps exclude zero. 0-1 of 5 periods positive.
+
+The mechanism is not a broken model. `goodR` is **direction-agnostic** — it predicts a large
+excursion *either way*. In a window where the equal-weight crypto basket fell 83%, a bar flagged
+"big move likely" is disproportionately a big move DOWN. That pays a SHORT and stops a LONG. This is
+the same regime caveat the vault already records for `alignment_not_full` and `continuation`, now
+visible in the component Part 2 called *"the only one with positive lift"* — a claim measured
+without splitting by side.
+
+**Nothing is changed on this basis.** The ML floor is the last thing standing between the app and
+trading every bar, the effect is plausibly regime rather than mechanism, and 5 periods is thin. It
+goes to Phase 3 with the rest, flagged as the largest open question in the envelope.
+
+## `crypto_bear_regime` measures inverted where it fires
+
+It is live as a LONG-side downgrade. On SHORT bars it blocks bars averaging **+0.0035R** and keeps
+**−0.0789R** — lift **−0.0709**, CI [−0.1338, −0.0086], 2/7. Its own side (LONG) is a null
+(−0.0062, CI spanning zero). Recorded; not acted on.
+
+## Confirmed inert
+
+`ANY_KILLED` (5-6% fire rate, lift ±0.002, CI spanning zero on both sides) and the 1H-opposes
+downgrade (±0.005, spanning zero). Part 7 reached the same conclusion on a population **15× too
+large**; on the true 6.6% domain it is inert for real. Harmless, and cheap to keep.
+
+## Not tested, and not testable
+
+`macro_IMMINENT` / `macro_NEARBY` / `macro_UPCOMING`, `news_thesis_conflict`, `data_stale`. No
+historical economic-calendar or feed archive exists to replay against. Under the Part 6 principle
+they guard **exogenous events** and never claimed predictive power, so an EV null could not refute
+them. They stay, untested, and this is stated rather than glossed.
+
+## The honest limit on every row above
+
+The OOF window starts where the first walk-forward fold ends, so these arms have **5-7 half-year
+periods, not 9**. The pre-declared bar wants 6, which several SHORT arms miss on period count alone
+despite large lifts and intervals clear of zero. That is a real limitation of the design, not a
+verdict, and it is why C4 changes nothing by itself.
