@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeOpportunities, PROVISIONAL_MODEL_VERSION, PROVISIONAL_CAVEAT,
          type AssetInput } from '../src/trading/service';
-import { excursionCurve, baseExcursionCurve, excursionProbability,
+import { excursionCurve, baseExcursionCurve, excursionProbability, headIsShippable,
          excursionModelInfo } from '../src/trading/excursion';
 import { validate, probabilityOfReaching } from '../src/trading/payoff';
 import type { PortfolioState } from '../src/trading/sizing';
@@ -34,10 +34,38 @@ const asset = (o: Partial<AssetInput> = {}): AssetInput => ({
 });
 const portfolio = (): PortfolioState => ({ equity: 25000, openNotionalByAsset: {}, correlations: {} });
 
+// PER-HEAD SHIP VERDICT (2026-08-26, Phase 3). The blanket quarantine is lifted — labels were
+// rebuilt at `anchor='bar_close'` and the 4-hour lookahead is gone — but the retrain SPLIT BY SIDE:
+// SHORT clears all five pre-declared criteria, LONG fails three of five (cross-sectional AUC 0.5421
+// under the 0.55 floor, two calibration inversions, and a 30-bar-lagged model matching it on that
+// axis). A non-shippable head THROWS rather than returning a degraded number.
 describe('measured excursion curve', () => {
-  it('always produces a valid monotone distribution', () => {
+  it('always produces a valid monotone distribution, on both sides', () => {
     for (const side of ['LONG', 'SHORT'] as const) {
       expect(() => validate(excursionCurve(feats(), side))).not.toThrow();
+    }
+  });
+
+  it('the LONG head is refused, so its curve degrades to the MEASURED one', () => {
+    // Not a throw: the only consumer is a read-only research endpoint, and taking it down for one
+    // side would trade a small wrong number for a large outage. The model simply stops contributing.
+    const long = excursionCurve(feats({ dRsi: 68, vix: 13, atrPercent: 1.1 }), 'LONG');
+    expect(long).toEqual(baseExcursionCurve('LONG'));
+  });
+
+  it('the SHORT head DOES contribute — it is not silently degraded too', () => {
+    // Without this, the test above would pass equally if the whole model were switched off.
+    const short = excursionCurve(feats({ dRsi: 68, vix: 13, atrPercent: 1.1 }), 'SHORT');
+    expect(short).not.toEqual(baseExcursionCurve('SHORT'));
+  });
+
+  it('the ship verdict is queryable, so a caller can tell which it got', () => {
+    expect(headIsShippable('SHORT')).toBe(true);
+    expect(headIsShippable('LONG')).toBe(false);
+  });
+
+  it('the base curve stays available for BOTH sides — it is measured, not modelled', () => {
+    for (const side of ['LONG', 'SHORT'] as const) {
       expect(() => validate(baseExcursionCurve(side))).not.toThrow();
     }
   });
@@ -62,9 +90,12 @@ describe('measured excursion curve', () => {
   });
 
   it('falls back to measured base rates when features are missing, not to a guess', () => {
+    // Re-measured on the corrected anchor. The leak was PESSIMISTIC: at 5R the LONG base rate went
+    // 0.0664 -> 0.0762, a 15% relative increase, because the old window began three hours before the
+    // entry price existed and gave the stop that much longer to fire.
     const b = baseExcursionCurve('LONG');
-    expect(probabilityOfReaching(b, 1)).toBeCloseTo(0.4661, 3);
-    expect(probabilityOfReaching(b, 5)).toBeCloseTo(0.0664, 3);
+    expect(probabilityOfReaching(b, 1)).toBeCloseTo(0.4693, 3);
+    expect(probabilityOfReaching(b, 5)).toBeCloseTo(0.0762, 3);
   });
 
   it('reports real holdout AUC, so the ceiling on the claim is visible in the model itself', () => {

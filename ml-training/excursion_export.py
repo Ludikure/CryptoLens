@@ -45,6 +45,35 @@ def lgb_node(node, names, ctr):
             'missing': left['nodeid'], 'children': [left, right]}
 
 
+# PER-HEAD SHIP VERDICT, from `excursion_train.py` against the bar pre-declared at 3238cde. Recorded
+# here rather than decided here: the exporter must not be able to talk itself into shipping.
+#
+# Re-run 2026-08-26 on labels rebuilt at `anchor='bar_close'` (the leak fixed in Phase 1.4). The
+# result splits by SIDE, which is the same direction-dependence that runs through the whole envelope
+# programme — C3, C4 and C5 all found it, and it appears here independently.
+VERDICTS = {
+    'long': {
+        'shippable': False,
+        'reason': ('cross-sectional AUC 0.5421 is below the 0.55 floor, a 30-bar-LAGGED model scores '
+                   '0.5427 cross-sectionally (delta -0.0006, so the head adds nothing over stale '
+                   'information on that axis), and calibration has 2 inversions. Criteria 1, 2 and 4 '
+                   'of 5 fail. It beats the incumbent in all folds (criterion 5) — necessary, not '
+                   'sufficient.'),
+        'criteria': {'1_auc_both_axes': False, '2_beats_controls': False, '3_random_label_null': True,
+                     '4_monotonic_calibration': False, '5_beats_incumbent': True},
+    },
+    'short': {
+        'shippable': True,
+        'reason': ('all five criteria pass: AUC 0.6302 per-symbol / 0.6220 cross-sectional, beats '
+                   'shuffled-timing and random-label controls by ~+0.13 and lag-30 by +0.047, '
+                   'random-label null at 0.4929, calibration monotone with 0 inversions, and beats '
+                   'the incumbent in all three folds (+0.0413 / +0.0455 / +0.1625).'),
+        'criteria': {'1_auc_both_axes': True, '2_beats_controls': True, '3_random_label_null': True,
+                     '4_monotonic_calibration': True, '5_beats_incumbent': True},
+    },
+}
+
+
 def main():
     df = pd.read_pickle('excursion_dataset.pkl.gz').sort_values('timestamp').reset_index(drop=True)
 
@@ -116,6 +145,7 @@ def main():
             'baseCurve': {f'{R:g}': base[side][R] for R in R_GRID},
             'holdoutAuc': float(auc),
             'supportedCeiling': ceiling,
+            **VERDICTS[side.lower()],
         }
         print(f'  {side}: holdout AUC {auc:.4f}, {len(trees)} trees, '
               f'calibrated [{ys.min():.4f}, {ys.max():.4f}]  '
@@ -136,6 +166,8 @@ def main():
         'n_samples': int(len(df)),
         'symbols': int(df.symbol.nunique()),
         'heads': heads,
+        'labelAnchor': 'bar_close',
+        'labelProvenance': pd.read_pickle('excursion_dataset.pkl.gz').attrs.get('provenance'),
         'description': (
             'Excursion/barrier model v1. MEASURED, not extrapolated: base rates sit ~10pp BELOW the '
             'driftless random-walk benchmark 1/(1+R) at every R because a 72h horizon truncates. '

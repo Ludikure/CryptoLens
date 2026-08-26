@@ -238,3 +238,62 @@ nothing about either measurement — rejects the 1 ATR stop on 4 of 6 live asset
 **`DEFAULT_STRUCTURE.stopAtrMultiple = 1.0` is the binding constraint on the whole product.** With it,
 the feed is structurally almost always empty. That is honest behaviour, not a bug — but it means the
 stop-width test is now the highest-value open question, not a nice-to-have.
+
+---
+
+# RETRAINED ON CORRECTED LABELS — 2026-08-26 (Phase 3)
+
+The model was quarantined on 2026-08-26 because its barrier labels came from `base+1`, one hour after
+the row's timestamp, while the row is evaluated at the 4H bar's CLOSE (T+4h). Labels were rebuilt at
+`anchor='bar_close'` during the Phase 1.4 migration and the model retrained against the bar
+pre-declared at 3238cde.
+
+## The leak was PESSIMISTIC, not optimistic
+
+The quarantine note predicted "probabilities are optimistically biased". **That was wrong, and in a
+useful direction.** The old window began three hours before the entry price existed, which gave the
+stop that much longer to fire against a price it was not measured from:
+
+| R | 1 | 1.5 | 2 | 3 | 5 | 8 |
+|---|---:|---:|---:|---:|---:|---:|
+| LONG delta | +0.0032 | +0.0199 | +0.0223 | +0.0181 | +0.0098 | +0.0041 |
+
+At 5R the LONG base rate goes **0.0664 → 0.0762**, a 15% relative increase. The vault's central
+finding survives — real barrier rates still sit ~9pp BELOW the driftless `1/(1+R)` benchmark at every
+R — but every magnitude moves.
+
+## The retrain SPLITS BY SIDE
+
+| criterion | LONG | SHORT |
+|---|---|---|
+| 1 · AUC ≥ 0.55 both axes | **FAIL** — 0.6249 per-sym / **0.5421** xs | PASS — 0.6302 / 0.6220 |
+| 2 · beats controls by +0.02 | **FAIL** | PASS — ~+0.13 vs shuffled and random-label |
+| 3 · random-label null ≈ 0.50 | PASS — 0.5000 | PASS — 0.4929 |
+| 4 · monotone calibration | **FAIL** — 2 inversions | PASS — 0 inversions |
+| 5 · beats incumbent all folds | PASS — +0.0423 / +0.0134 / +0.0241 | PASS — +0.0413 / +0.0455 / +0.1625 |
+| **verdict** | **DO NOT SHIP** | **SHIP** |
+
+**The disqualifying result on LONG is control 3, not the AUC**: a **30-bar-LAGGED** model scores
+**0.5427** cross-sectionally against the real model's 0.5421 — a delta of **−0.0006**. On the axis
+that matters for asset selection, the LONG head adds nothing over stale information. Criterion 5
+(beats the incumbent in all folds) passes, which is necessary and nowhere near sufficient.
+
+## What ships
+
+**Per-head, not per-model.** `headIsShippable(side)` gates: SHORT serves, LONG **degrades to the
+measured base curve** — the observed hit rate, which makes no model claim and has no bar to clear.
+It does not throw: the only consumer is a read-only research endpoint, and taking it down for one
+side would trade a small wrong number for a large outage. `excursionModelInfo()` reports the verdict
+and the reason per head, so a caller can tell which it got.
+
+The blanket `contaminated: true` flag is gone, replaced by `labelAnchor: 'bar_close'` and the
+per-head verdicts. The regime caveat is untouched and still governs: **ranking is measured,
+profitability is not** — 1 of 5 rising-market periods profitable, corr(EV, BTC return) −0.509.
+
+## The direction split is now the fourth independent sighting
+
+C3 found it in `alignment_not_full`, C4 in the ML floor, C5 in the envelope as a whole — and this
+model finds it on a **different target** (barrier-before-stop, not `goodR`) with a **different
+training set**. That makes it the closest thing to a replication this project has produced, and it
+sharpens the standing regime caveat rather than resolving it: every sighting is in the same
+83%-drawdown window, where SHORT is the better side ungated.

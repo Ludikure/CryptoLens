@@ -8,6 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { effectiveBets } from '../src/trading/portfolio';
 import { correlatedExposure, DEFAULT_LIMITS } from '../src/trading/sizing';
+import { excursionModelInfo } from '../src/trading/excursion';
 
 const uncorrelated = { A: { B: 0.1, C: 0.1 }, B: { A: 0.1, C: 0.1 }, C: { A: 0.1, B: 0.1 } };
 const crypto = { A: { B: 0.62, C: 0.62 }, B: { A: 0.62, C: 0.62 }, C: { A: 0.62, B: 0.62 } };
@@ -57,18 +58,32 @@ describe('correlation must not be inert', () => {
 // `excursion_dataset.pkl.gz`, built on the retracted 4h-lookahead anchor. It reaches neither the
 // prompt nor the app — only `/opportunities` — so it is flagged rather than removed, and the flag
 // must survive until the retrain.
-describe('the excursion model declares its contamination', () => {
-  it('excursionModelInfo carries the quarantine flag and a usable note', async () => {
-    const { excursionModelInfo } = await import('../src/trading/excursion');
-    const info = excursionModelInfo() as Record<string, unknown>;
-    expect(info.contaminated).toBe(true);
-    expect(String(info.contaminationNote)).toMatch(/4h-lookahead anchor/);
-    expect(String(info.contaminationNote)).toMatch(/Do not use for sizing or EV until retrained/);
+describe('the excursion model declares its per-head ship verdict', () => {
+  // The 2026-08-26 blanket quarantine is LIFTED: labels were rebuilt at `anchor='bar_close'` and the
+  // 4-hour lookahead is gone. The leak was measurably PESSIMISTIC — at 5R the LONG hit rate went
+  // 0.0664 -> 0.0762, a 15% relative increase, because the old window began three hours before the
+  // entry price existed and gave the stop that much longer to fire.
+  //
+  // What replaced it is narrower, because the retrain SPLIT BY SIDE against the bar pre-declared at
+  // 3238cde: SHORT clears all five criteria, LONG fails three. A refused head degrades to the
+  // measured base curve rather than throwing.
+  it('reports the verdict per head, not one flag for the model', () => {
+    const info = excursionModelInfo() as unknown as {
+      contaminated: boolean; labelAnchor: string;
+      heads: { long: { shippable: boolean | null; reason: string | null };
+               short: { shippable: boolean | null } };
+    };
+    expect(info.contaminated).toBe(false);
+    expect(info.labelAnchor).toBe('bar_close');
+    expect(info.heads.short.shippable).toBe(true);
+    expect(info.heads.long.shippable).toBe(false);
   });
 
-  it('names the base curve as sharing the defect, so it is not treated as a clean fallback', async () => {
-    const { excursionModelInfo } = await import('../src/trading/excursion');
-    expect(String((excursionModelInfo() as Record<string, unknown>).contaminationNote))
-      .toMatch(/base curve shares the defect/);
+  it('the refused head says WHY, in terms a reader can check', () => {
+    const info = excursionModelInfo() as unknown as { heads: { long: { reason: string } } };
+    // The disqualifying control, not just the failing number: a 30-bar-LAGGED model matches it
+    // cross-sectionally, so the head adds nothing over stale information on that axis.
+    expect(info.heads.long.reason).toMatch(/30-bar-LAGGED/);
+    expect(info.heads.long.reason).toMatch(/0\.5421/);
   });
 });

@@ -86,6 +86,8 @@ function applyCal(raw: number, head: Head): number {
 /** Calibrated P(reach the primary target before the stop) for one side. */
 export function excursionProbability(features: Record<string, number>, side: 'LONG' | 'SHORT'): number {
   const head = side === 'LONG' ? MODEL.heads.long : MODEL.heads.short;
+  // A head that failed its pre-declared bar contributes nothing: return the measured base rate.
+  if (!headIsShippable(side)) return head.baseCurve[String(MODEL.primaryR)] ?? head.baseCurve['5'];
   const margin = head.trees.reduce((sum, t) => sum + evaluateTree(t, features), 0);
   return applyCal(sigmoid(margin), head);
 }
@@ -101,11 +103,47 @@ export function excursionProbability(features: Record<string, number>, side: 'LO
  * Ratios are capped at 3x so a single confident prediction cannot imply an implausible 1R rate, and
  * every point is clamped below 1.
  */
+/**
+ * The head for a side, or a throw if that head did not clear its pre-declared bar.
+ *
+ * The 2026-08-26 blanket quarantine is LIFTED: labels were rebuilt at `anchor='bar_close'` in Phase
+ * 1.4, so the 4-hour lookahead is gone and the leak was measurably PESSIMISTIC (the 5R hit rate went
+ * 6.64% -> 7.62% once corrected).
+ *
+ * What replaced it is narrower and per-head, because the retrain SPLIT BY SIDE:
+ *
+ *   SHORT  ships. All five criteria pass — AUC 0.6302 per-symbol / 0.6220 cross-sectional, controls
+ *          beaten by ~+0.13, calibration monotone, incumbent beaten in all three folds.
+ *   LONG   does NOT ship. Cross-sectional AUC 0.5421 is under the 0.55 floor, calibration has two
+ *          inversions, and — the disqualifying one — a 30-bar-LAGGED model scores 0.5427 on that
+ *          axis, so the head adds nothing over stale information cross-sectionally.
+ *
+ * A refused head falls back to `baseExcursionCurve` — the MEASURED hit rate, which carries no model
+ * claim and has no bar to clear. That is the same fallback the service already uses when features
+ * are missing, and it is the honest answer here: the model has nothing trustworthy to add on this
+ * side, so report what was observed and no more. It does NOT throw, because the only consumer is a
+ * read-only research endpoint and taking it down for one side would trade a small wrong number for a
+ * large outage. `excursionModelInfo()` reports the verdict per head so a caller can tell which it
+ * got.
+ *
+ * This is the same direction-dependence the envelope programme found in `alignment_not_full` (C3),
+ * the ML floor (C4) and the envelope as a whole (C5). It shows up here independently, on a different
+ * target, which is the closest thing to a replication this project has produced.
+ */
+export function headIsShippable(side: 'LONG' | 'SHORT'): boolean {
+  const h = (side === 'LONG' ? MODEL.heads.long : MODEL.heads.short) as { shippable?: boolean };
+  return h.shippable !== false;
+}
+
 export function excursionCurve(
   features: Record<string, number>,
   side: 'LONG' | 'SHORT',
   horizonHours = 72,
 ): ExcursionCurve {
+  // A refused head degrades to the measured curve — see `headIsShippable`. `ratio` would be 1.0
+  // anyway once `excursionProbability` returns the base rate, but saying it here keeps the intent
+  // legible rather than relying on an arithmetic coincidence.
+  if (!headIsShippable(side)) return baseExcursionCurve(side, horizonHours);
   const head = side === 'LONG' ? MODEL.heads.long : MODEL.heads.short;
   const baseAtPrimary = head.baseCurve[String(MODEL.primaryR)] ?? 0.066;
   const predicted = excursionProbability(features, side);
@@ -124,6 +162,8 @@ export function excursionCurve(
 
 /** The measured base curve, with no model applied — the honest fallback when features are missing. */
 export function baseExcursionCurve(side: 'LONG' | 'SHORT', horizonHours = 72): ExcursionCurve {
+  // Deliberately NOT gated on the ship verdict: this is the observed hit rate, so it makes no model
+  // claim and has no bar to clear. It is what a refused head falls back TO.
   const head = side === 'LONG' ? MODEL.heads.long : MODEL.heads.short;
   return {
     horizonHours,
@@ -144,6 +184,12 @@ export function regimeCaveat(): string {
     + 'edge is +0.109R gross with a median of zero — mostly nothing, occasionally a large hit.';
 }
 
+/** The ship verdict a head carries, so a caller can ask before it calls. */
+function pick(head: unknown) {
+  const h = head as { shippable?: boolean; reason?: string; holdoutAuc?: number };
+  return { shippable: h.shippable ?? null, holdoutAuc: h.holdoutAuc, reason: h.reason ?? null };
+}
+
 export function excursionModelInfo() {
   return {
     version: EXCURSION_MODEL_VERSION,
@@ -152,7 +198,12 @@ export function excursionModelInfo() {
     longAuc: MODEL.heads.long.holdoutAuc,
     shortAuc: MODEL.heads.short.holdoutAuc,
     description: MODEL.description,
-    // QUARANTINED 2026-08-26. Both the trained head AND the measured base curve come from
+    // QUARANTINE LIFTED 2026-08-26 (Phase 3). Retrained on labels rebuilt at `anchor='bar_close'`;
+    // the 4-hour lookahead below is gone. It is replaced by a PER-HEAD verdict — see
+    // `headIsShippable`: SHORT clears all five pre-declared criteria and serves, LONG fails
+    // three of five and throws. Historical note on what the quarantine was for:
+    //
+    // ORIGINAL DEFECT. Both the trained head AND the measured base curve came from
     // `excursion_dataset.pkl.gz`, whose barrier labels (`excursion_labels.py:64-92`) were built
     // from `base+1` — one hour after the row's timestamp — while the row is actually evaluated at
     // the 4H bar's CLOSE, T+4h. So the label span includes up to 3h of price that had already
@@ -167,8 +218,11 @@ export function excursionModelInfo() {
     // is `/opportunities`, a read-only research endpoint with no client since OpportunityFeedCard
     // was deleted. The flag is here so nobody reads those numbers as valid in the meantime.
     // Retrain on corrected labels is Phase 3 of ~/.claude/plans/jolly-crunching-crown.md.
-    contaminated: true,
-    contaminationNote: 'Labels built on a 4h-lookahead anchor; probabilities are optimistically '
-      + 'biased and the base curve shares the defect. Do not use for sizing or EV until retrained.',
+    contaminated: false,
+    labelAnchor: (MODEL as unknown as { labelAnchor?: string }).labelAnchor ?? 'unknown',
+    heads: {
+      long: pick(MODEL.heads.long),
+      short: pick(MODEL.heads.short),
+    },
   };
 }
