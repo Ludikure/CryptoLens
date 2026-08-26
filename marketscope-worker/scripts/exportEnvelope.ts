@@ -63,9 +63,19 @@ function countUpTo(candles: Bar[], t: number): number {
  * daily slice, `hRsi` from the 4H slice and `atrPercentile` from the daily population, so a shift in
  * any window moves at least one of them.
  */
-const V14_COL = { ts: 1, price: 2, atrPercentile: 13, dRsi: 14, hRsi: 33 } as const;
+const V14_COL = { ts: 1, price: 2, atrPercentile: 13, dRsi: 14, hRsi: 33, fundingRateRaw: 61 } as const;
 
-export interface V14Row { ts: number; price: number; atrPercentile: number; dRsi: number; hRsi: number; }
+export interface V14Row {
+    ts: number; price: number; atrPercentile: number; dRsi: number; hRsi: number;
+    /**
+     * v14's `fundingRateRaw`, which despite the name is ALREADY IN PERCENT — `scripts/derivatives.ts`
+     * documents the column as "% (already x 100)", and the values bear it out (0.01 is the classic
+     * 0.01% baseline, not a 1% one). It maps DIRECTLY onto `DerivativesData.fundingRatePercent`;
+     * multiplying by 100 "to convert" would be a 100x error, which is precisely the unit trap the
+     * name invites.
+     */
+    fundingPct: number;
+}
 function loadV14(symbol: string): V14Row[] | null {
     const p = join(V14_DIR, `${symbol}.csv`);
     if (!existsSync(p)) return null;
@@ -76,6 +86,7 @@ function loadV14(symbol: string): V14Row[] | null {
             ts: Number(c[V14_COL.ts]), price: Number(c[V14_COL.price]),
             atrPercentile: Number(c[V14_COL.atrPercentile]),
             dRsi: Number(c[V14_COL.dRsi]), hRsi: Number(c[V14_COL.hRsi]),
+            fundingPct: Number(c[V14_COL.fundingRateRaw]),
         };
     });
 }
@@ -121,6 +132,13 @@ export function exportEnvelope(db: Database.Database, symbol: string, opts: {
     // authority on where v14 actually began is v14. The `>= 210` floor is runBacktest.ts:399.
     const v14Rows = loadV14(symbol);
     if (!v14Rows?.length) throw new Error(`${symbol}: no csv_exports_v14/${symbol}.csv to align to`);
+    // FUNDING IS NOT OPTIONAL DRESSING — it is the third continuation signal (`prompt.ts:1038`), and
+    // without it `continuationCount` cannot exceed 2. Measured on ADAUSDT before this was wired in:
+    // 34.9% / 61.8% / 3.2% / 0.0% across counts 0-3, i.e. an export that silently reproduced the
+    // STOCK degeneracy Part 9 found, on a crypto symbol, for the same structural reason. Taking it
+    // from the v14 row rather than a second source means the export sees exactly what the training
+    // row saw. A stored 0 means "no derivatives data" in this dataset, not "funding was flat".
+    const fundingByTs = new Map(v14Rows.filter(r => r.fundingPct !== 0).map(r => [r.ts, r.fundingPct]));
     const startMs = v14Rows[0].ts * 1000;
     let evalStartIndex = fourHAll.findIndex(c => c.time >= startMs);
     if (evalStartIndex < 210) evalStartIndex = 210;
@@ -141,7 +159,15 @@ export function exportEnvelope(db: Database.Database, symbol: string, opts: {
         const fourHSlice = fourHAll.slice(Math.max(0, i + 1 - 300), i + 1);
         const hEnd = countUpTo(oneHAll, evalTime);
         const oneHSlice = oneHAll.slice(Math.max(0, hEnd - 300), hEnd);
-        if (dailySlice.length < 250 || fourHSlice.length < 210) { skipped++; continue; }
+        // runBacktest's own guard is `daily < 250 || fourH < 210`, but it slices the last 300 of
+        // each. That gap is harmless when both runs read the same archive and fatal when they do
+        // not: the local snapshot's daily history starts LATER than Vision's for several symbols
+        // (ATOM 2019-05-28), so a 250-bar population is ranked against a different set than v14's
+        // 300-bar one and `atrPercentile` lands a few points off — measured 10 vs 11 on ATOM, 77 vs
+        // 82 on DASH. Requiring the FULL window on all three timeframes makes the slice "the last
+        // 300 bars" in both runs regardless of how deep either archive goes, so the join is exact by
+        // construction rather than by luck. It costs the warm-up bars, which the 80% floor absorbs.
+        if (dailySlice.length < 300 || fourHSlice.length < 300 || oneHSlice.length < 300) { skipped++; continue; }
 
         const indicators: PromptIndicator[] = [
             computeFullIndicators(dailySlice, { timeframe: '1d', label: 'Daily', isCrypto }) as unknown as PromptIndicator,
@@ -152,9 +178,24 @@ export function exportEnvelope(db: Database.Database, symbol: string, opts: {
         const ml = opts.ml?.get(`${symbol}:${tsSec}`);
         if (ml != null) (indicators[0] as unknown as { mlWinProbability: number }).mlWinProbability = ml;
 
+        const fundingPct = fundingByTs.get(tsSec);
         const r = buildUserPrompt({
             symbol, nowMs: evalTime + 14_400_000, indicators, prevState: state,
             economicEvents: [], calibratedMlWin: ml ?? null,
+            // Only `fundingRatePercent` is real. The rest of `DerivativesData` is left at neutral
+            // values because nothing the ENVELOPE reads touches them: `derivatives` is used in
+            // exactly three places (`prompt.ts` 884 / 1038 / 1120), and of those only the
+            // continuation signal feeds an envelope input. Verified by diffing ADAUSDT's export with
+            // and without funding: `continuationCount` is the only INPUT that moves (29.1% of rows),
+            // and it carries through to `moderateBlocks` (10.4%) and `maxAllowed` (8.7%). That last
+            // number is the reason this is wired in rather than waved off — an envelope study run
+            // without derivatives has the wrong conviction tier on about one bar in eleven.
+            derivatives: fundingPct == null ? null : {
+                fundingRatePercent: fundingPct, avgFundingRate: fundingPct,
+                openInterestUSD: 0, globalLongPercent: 50, globalShortPercent: 50,
+                topTraderLongPercent: 50, topTraderShortPercent: 50,
+                takerBuySellRatio: 1, takerBuyVolume: 0,
+            },
         } as never);
         state = r.newState;
         const v = r.envelope as EnvelopeVerdict | null;
@@ -181,27 +222,34 @@ export function exportEnvelope(db: Database.Database, symbol: string, opts: {
  * off by one bar; the price series is what pins the alignment.
  */
 export interface JoinReport {
-    matched: number;        // rows that agreed with v14 on every checked column, from the start
-    total: number;          // rows this run produced
-    v14Rows: number;        // rows v14 has for this symbol
-    firstBadTs: number | null;
-    reason: string | null;
+    kept: number;             // rows retained after truncation and row drops
+    total: number;            // rows this run produced
+    v14Rows: number;
+    keepMask: boolean[];      // per produced row
+    dropped: Array<{ ts: number; reason: string }>;
+    truncatedAt: number | null;   // first ts of the trailing dirty run, if any
+    truncationReason: string | null;
+    longestBadRun: number;
 }
 
 /**
- * Compare an export against `csv_exports_v14` and return the length of the longest agreeing PREFIX.
+ * Compare an export against `csv_exports_v14` row by row, and separate the two failure modes the
+ * real archive actually produces. They need opposite treatment, and telling them apart by DENSITY is
+ * what makes that possible:
  *
- * Prefix rather than all-or-nothing because of a real property of the local archive: the box's D1
- * snapshot contains mid-bar cron writes near its recent end. Measured on ADAUSDT, the 4H bar at
- * 2026-04-14 00:00 is stored with close 0.2461 on 5.9M volume where the settled bar closed 0.2447 —
- * and that settled close then appears as the OPEN of the following bar. So the archive is faithful
- * for years and then quietly stops being, at a date that differs per symbol.
+ *  - ISOLATED BLIPS. One bar disagrees while its neighbours match. Measured on ATOMUSDT
+ *    2021-10-29 04:00: local close 38.17 against v14's 38.14, normal volume, both adjacent bars
+ *    exact. A single bad bar should cost that bar, not the 75% of history that follows it.
+ *  - A DIRTY TAIL. The box snapshot carries mid-bar cron writes near its recent end, so rows go bad
+ *    and stay bad. On ADAUSDT the 4H bar at 2026-04-14 00:00 is stored closing 0.2461 on 5.9M volume
+ *    where the settled bar closed 0.2447 — and that settled close appears as the NEXT bar's open.
+ *    Everything from there on is suspect and should be truncated away.
  *
- * Failing the whole symbol would throw away five clean years to avoid two dirty months; accepting it
- * silently would put partial candles into a gate study. Reporting where it goes bad, truncating
- * there, and recording the date is the only honest third option.
+ * A genuine SLICE error looks like neither: it is wrong on essentially every row, so it produces a
+ * long bad run starting at the top, which truncates the export to nothing and trips the caller's
+ * coverage floor. That is the intended outcome — the mutation tests cover it.
  */
-export function joinToV14(symbol: string, csv: string, rows?: V14Row[]): JoinReport {
+export function joinToV14(symbol: string, csv: string, rows?: V14Row[], opts: { dirtyRun?: number } = {}): JoinReport {
     const v14 = rows ?? loadV14(symbol);
     if (!v14) throw new Error(`${symbol}: no csv_exports_v14/${symbol}.csv to join against`);
     const head = csv.trim().split('\n')[0].split(',');
@@ -209,45 +257,75 @@ export function joinToV14(symbol: string, csv: string, rows?: V14Row[]): JoinRep
     const [cTs, cPx, cDRsi, cHRsi, cAtr] = ['timestamp', 'price', 'dRsi', 'hRsi', 'atrPct'].map(ix);
     const mine = csv.trim().split('\n').slice(1).map(l => l.split(','));
     if (!mine.length) throw new Error(
-        `${symbol}: exported 0 rows. Every bar hit the warm-up guard (daily < 250 or 4H < 210), which `
-        + `means the eval window starts before the local archive has enough history.`);
+        `${symbol}: exported 0 rows. Every bar hit the warm-up guard (full 300-bar windows on all `
+        + `three timeframes), which means the eval window starts before the local archive warms up.`);
 
     const byTs = new Map(v14.map(r => [r.ts, r]));
-    // v14 rounds the indicator columns to 1 dp, so the comparison is at that resolution. It is still
-    // a sharp test: a one-bar slice shift moves 4H RSI by whole points, not hundredths.
+    // v14 rounds the indicator columns to 1 dp, so 0.051 is the quantisation floor. It is NOT widened
+    // past that: the daily-leak mutation — restoring the in-progress day, the 2026-06-02 defect —
+    // shows up as only a 0.15 dRsi difference, so a "generous" tolerance would let the single most
+    // expensive mistake available here pass unnoticed.
     const TOL = 0.051;
-    for (let k = 0; k < mine.length; k++) {
-        const row = mine[k];
-        const ts = Number(row[cTs]);
-        const r = byTs.get(ts);
-        const bad = (reason: string): JoinReport =>
-            ({ matched: k, total: mine.length, v14Rows: v14.length, firstBadTs: ts, reason });
-        if (!r) return bad('bar absent from csv_exports_v14 (eval window or warm-up guard differs)');
-        const rel = Math.abs(r.price - Number(row[cPx])) / Math.max(1e-12, Math.abs(r.price));
-        if (rel > 1e-6) return bad(`price ${r.price} vs ${row[cPx]} (rel ${rel.toExponential(2)}) — local candle archive disagrees`);
+    const bad: Array<string | null> = mine.map(row => {
+        const r = byTs.get(Number(row[cTs]));
+        if (!r) return 'bar absent from csv_exports_v14 (eval window or warm-up guard differs)';
+        // Both files store price at 4 decimals, so on a sub-dollar symbol that is 4 significant
+        // digits: DOGE at 0.2998 quantises to 3.3e-4 relative. Accept one unit in the last stored
+        // decimal OR 1e-6 relative, whichever is looser.
+        const dPx = Math.abs(r.price - Number(row[cPx]));
+        if (dPx > 1.01e-4 && dPx / Math.max(1e-12, Math.abs(r.price)) > 1e-6)
+            return `price ${r.price} vs ${row[cPx]} — local candle archive disagrees`;
         for (const [name, mineV, v14V] of [
             ['dRsi', Number(row[cDRsi]), r.dRsi],
             ['hRsi', Number(row[cHRsi]), r.hRsi],
             ['atrPercentile', Number(row[cAtr]), r.atrPercentile],
         ] as Array<[string, number, number]>) {
             if (!Number.isFinite(mineV) || !Number.isFinite(v14V)) continue;
-            if (Math.abs(mineV - v14V) > TOL) return bad(`${name} ${v14V} vs ${mineV.toFixed(4)} — indicator window differs`);
+            if (Math.abs(mineV - v14V) > TOL) return `${name} ${v14V} vs ${mineV.toFixed(4)} — indicator window differs`;
         }
+        return null;
+    });
+
+    // Longest run of consecutive bad rows, and where the FIRST run long enough to count as a dirty
+    // region begins. Everything from there on is discarded rather than cherry-picked.
+    const DIRTY_RUN = opts.dirtyRun ?? 20;
+    let longestBadRun = 0, run = 0, dirtyStart: number | null = null;
+    for (let k = 0; k < bad.length; k++) {
+        if (bad[k]) {
+            run++;
+            if (run > longestBadRun) longestBadRun = run;
+            if (run >= DIRTY_RUN && dirtyStart === null) dirtyStart = k - run + 1;
+        } else run = 0;
     }
-    return { matched: mine.length, total: mine.length, v14Rows: v14.length, firstBadTs: null, reason: null };
+
+    const cutoff = dirtyStart ?? bad.length;
+    const keepMask = mine.map((_, k) => k < cutoff && !bad[k]);
+    const dropped = mine.map((row, k) => ({ k, ts: Number(row[cTs]), reason: bad[k] }))
+        .filter(d => d.reason && d.k < cutoff)
+        .map(d => ({ ts: d.ts, reason: d.reason as string }));
+
+    return {
+        kept: keepMask.filter(Boolean).length, total: mine.length, v14Rows: v14.length,
+        keepMask, dropped, longestBadRun,
+        truncatedAt: dirtyStart === null ? null : Number(mine[dirtyStart][cTs]),
+        truncationReason: dirtyStart === null ? null : bad[dirtyStart],
+    };
 }
 
-/** Strict form: the whole export must agree. Used by tests and by anything that cannot truncate. */
+/** Strict form: every produced row must agree. Used by tests and anything that cannot drop rows. */
 export function assertJoinsV14(symbol: string, csv: string, rows?: V14Row[]): { matched: number; v14Only: number } {
-    const j = joinToV14(symbol, csv, rows);
-    if (j.reason) throw new Error(`${symbol}: join failed at ${j.firstBadTs} after ${j.matched} rows — ${j.reason}`);
-    return { matched: j.matched, v14Only: j.v14Rows - j.matched };
+    const j = joinToV14(symbol, csv, rows, { dirtyRun: 1 });
+    if (j.kept !== j.total) {
+        const first = j.dropped[0] ?? { ts: j.truncatedAt, reason: j.truncationReason ?? 'trailing dirty region' };
+        throw new Error(`${symbol}: join failed at ${first.ts} — ${first.reason}`);
+    }
+    return { matched: j.kept, v14Only: j.v14Rows - j.kept };
 }
 
-/** Keep only the agreeing prefix. */
-export function truncateTo(csv: string, rows: number): string {
+/** Keep the rows the join retained. */
+export function applyKeepMask(csv: string, keepMask: boolean[]): string {
     const lines = csv.trim().split('\n');
-    return [lines[0], ...lines.slice(1, rows + 1)].join('\n') + '\n';
+    return [lines[0], ...lines.slice(1).filter((_, k) => keepMask[k])].join('\n') + '\n';
 }
 
 function main() {
@@ -269,10 +347,10 @@ function main() {
     if (!symbols.length) { console.error('usage: exportEnvelope.ts <SYMBOL...> | --all'); process.exit(1); }
 
     mkdirSync(outDir, { recursive: true });
-    // A symbol is only usable if most of its history survives the join. 0.80 is a judgment call and
-    // is stated as one: it admits the ~2 dirty months at the end of the local snapshot and rejects a
-    // symbol whose archive diverges early, which would mean something other than mid-bar writes.
-    const MIN_PREFIX_FRAC = 0.80;
+    // Both floors are judgment calls and are stated as such. 0.80 admits the ~2 dirty months at the
+    // end of the local snapshot; 2% admits the handful of isolated bad bars the archive contains
+    // (ATOM has one at 2021-10-29) while rejecting a symbol that disagrees pervasively.
+    const MIN_KEPT_FRAC = 0.80, MAX_DROP_RATE = 0.02;
     const provenance: Record<string, unknown> = {
         generatedFromDb: DB_PATH, joinedAgainst: V14_DIR,
         module: 'exportEnvelope.ts', gitSha: process.env.GIT_SHA ?? null,
@@ -284,21 +362,39 @@ function main() {
         try {
             const res = exportEnvelope(db, symbol, { ml, limit });
             const j = joinToV14(symbol, res.csv);
-            const frac = j.matched / Math.max(1, j.total);
-            if (frac < MIN_PREFIX_FRAC || j.matched < 500) {
-                throw new Error(`only ${j.matched}/${j.total} rows join (${(frac * 100).toFixed(1)}%) `
-                    + `— first divergence ${j.firstBadTs}: ${j.reason}`);
+            const frac = j.kept / Math.max(1, j.total);
+            // Two independent floors. Coverage rejects a symbol whose archive is broadly unusable —
+            // including a genuine slice error, which is bad on every row and so truncates to nothing.
+            // The drop RATE rejects one that is riddled with blips even if the tail is clean: a few
+            // scattered bad bars is an archive artefact, hundreds is a systematic disagreement
+            // wearing an isolated-looking mask.
+            if (frac < MIN_KEPT_FRAC || j.kept < 500) {
+                throw new Error(`only ${j.kept}/${j.total} rows usable (${(frac * 100).toFixed(1)}%) `
+                    + `— longest bad run ${j.longestBadRun}`
+                    + (j.truncatedAt ? `, dirty from ${j.truncatedAt}` : '')
+                    + (j.dropped[0] ? `, first blip ${j.dropped[0].ts}: ${j.dropped[0].reason}` : ''));
             }
-            writeFileSync(join(outDir, `${symbol}.csv`), truncateTo(res.csv, j.matched));
-            const lastTs = Number(truncateTo(res.csv, j.matched).trim().split('\n').pop()!.split(',')[1]);
+            const dropRate = j.dropped.length / Math.max(1, j.total);
+            if (dropRate > MAX_DROP_RATE) {
+                throw new Error(`${j.dropped.length} scattered mismatches (${(dropRate * 100).toFixed(2)}%) `
+                    + `exceed the ${(MAX_DROP_RATE * 100).toFixed(1)}% blip budget — first ${j.dropped[0].ts}: ${j.dropped[0].reason}`);
+            }
+            const outCsv = applyKeepMask(res.csv, j.keepMask);
+            writeFileSync(join(outDir, `${symbol}.csv`), outCsv);
+            const lastTs = Number(outCsv.trim().split('\n').pop()!.split(',')[1]);
             (provenance.symbols as Record<string, unknown>)[symbol] = {
-                rows: j.matched, produced: j.total, v14Rows: j.v14Rows,
-                lastTs, truncatedAt: j.firstBadTs, truncationReason: j.reason,
+                rows: j.kept, produced: j.total, v14Rows: j.v14Rows, lastTs,
+                truncatedAt: j.truncatedAt, truncationReason: j.truncationReason, longestBadRun: j.longestBadRun,
+                droppedBlips: j.dropped.length,
+                droppedSample: j.dropped.slice(0, 20),
             };
             const ms = Date.now() - t0;
-            const note = j.reason ? `TRUNCATED at ${j.firstBadTs} (${j.reason.slice(0, 40)})` : 'full';
-            console.log(`${symbol.padEnd(12)} ${String(j.matched).padStart(6)}/${String(j.total).padEnd(6)} rows  ${(ms / 1000).toFixed(1)}s  ${note}`);
-            if (j.reason) truncated++;
+            const note = [
+                j.truncatedAt ? `tail-truncated at ${j.truncatedAt}` : null,
+                j.dropped.length ? `${j.dropped.length} blips dropped` : null,
+            ].filter(Boolean).join(', ') || 'clean';
+            console.log(`${symbol.padEnd(12)} ${String(j.kept).padStart(6)}/${String(j.total).padEnd(6)} rows  ${(ms / 1000).toFixed(1)}s  ${note}`);
+            if (j.truncatedAt || j.dropped.length) truncated++;
             ok++;
         } catch (e) {
             console.error(`${symbol.padEnd(12)} FAILED — ${e instanceof Error ? e.message : e}`);
@@ -306,7 +402,7 @@ function main() {
         }
     }
     writeFileSync(join(outDir, '_provenance.json'), JSON.stringify(provenance, null, 2));
-    console.log(`\n${ok} exported (${truncated} truncated at the archive's dirty tail), ${failed} failed → ${outDir}`);
+    console.log(`\n${ok} exported (${truncated} needed truncation or blip drops), ${failed} failed → ${outDir}`);
     if (failed) process.exitCode = 1;
 }
 

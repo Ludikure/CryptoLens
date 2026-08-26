@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { assertJoinsV14, joinToV14, exportEnvelope, type V14Row } from '../scripts/exportEnvelope';
+import { assertJoinsV14, joinToV14, applyKeepMask, exportEnvelope, type V14Row } from '../scripts/exportEnvelope';
 
 // The exporter's join gate. It is what makes a per-bar envelope verdict usable as research data:
 // unless this run's bars line up with the rows the model was trained on, any statistic computed
@@ -66,32 +66,51 @@ describe('the v14 join gate', () => {
   });
 });
 
-describe('the prefix report, which is how a dirty archive tail is handled honestly', () => {
-  // The box's D1 snapshot carries mid-bar cron writes near its recent end, so a symbol is clean for
-  // years and then is not. All-or-nothing would discard five good years to avoid two bad months.
-  const three = [v14(100, 10, 50, 50, 20), v14(200, 20, 50, 50, 20), v14(300, 30, 50, 50, 20)];
+describe('separating an archive blip from a dirty tail', () => {
+  // The two failure modes the real archive produces need opposite treatment, and DENSITY is what
+  // tells them apart. A single bad bar should cost that bar; a region that goes bad and stays bad
+  // should be truncated away; a slice error is bad everywhere and must fail the symbol outright.
+  const clean = (n: number) => Array.from({ length: n }, (_, k) => v14(100 * (k + 1), 10 + k, 50, 50, 20));
+  const mineRows = (n: number, bad: Record<number, number> = {}) =>
+    csv(...Array.from({ length: n }, (_, k) => row(100 * (k + 1), bad[k] ?? (10 + k), 50, 50, 20)));
 
-  it('reports how many rows agreed before the first divergence', () => {
-    const j = joinToV14('BTCUSDT', csv(
-      row(100, 10, 50, 50, 20),
-      row(200, 20, 50, 50, 20),
-      row(300, 33, 50, 50, 20),        // a partial bar, as the real archive produces
-    ), three);
-    expect(j.matched).toBe(2);
-    expect(j.firstBadTs).toBe(300);
-    expect(j.reason).toMatch(/local candle archive disagrees/);
+  it('drops one blip and keeps everything around it', () => {
+    const j = joinToV14('BTCUSDT', mineRows(40, { 12: 99 }), clean(40));
+    expect(j.kept).toBe(39);
+    expect(j.dropped.map(d => d.ts)).toEqual([1300]);
+    expect(j.truncatedAt).toBeNull();
+    expect(j.longestBadRun).toBe(1);
   });
 
-  it('reports a clean join with no truncation point', () => {
-    const j = joinToV14('BTCUSDT', csv(row(100, 10, 50, 50, 20), row(200, 20, 50, 50, 20)), three);
-    expect(j.matched).toBe(2);
-    expect(j.firstBadTs).toBeNull();
-    expect(j.reason).toBeNull();
+  it('truncates a run that goes bad and stays bad, rather than cherry-picking through it', () => {
+    const bad: Record<number, number> = {};
+    for (let k = 20; k < 40; k++) bad[k] = 99;         // 20 consecutive = the dirty-tail signature
+    const j = joinToV14('BTCUSDT', mineRows(40, bad), clean(40));
+    expect(j.truncatedAt).toBe(2100);
+    expect(j.kept).toBe(20);
+    expect(j.dropped).toEqual([]);                      // truncated, not counted as blips
   });
 
-  it('a divergence on the FIRST row yields a zero-length prefix, not a pass', () => {
-    const j = joinToV14('BTCUSDT', csv(row(100, 99, 50, 50, 20)), three);
-    expect(j.matched).toBe(0);
+  it('a slice error is bad on every row, so it truncates to nothing', () => {
+    const bad: Record<number, number> = {};
+    for (let k = 0; k < 40; k++) bad[k] = 99;
+    const j = joinToV14('BTCUSDT', mineRows(40, bad), clean(40));
+    expect(j.kept).toBe(0);
+    expect(j.truncatedAt).toBe(100);
+  });
+
+  it('reports a fully clean join', () => {
+    const j = joinToV14('BTCUSDT', mineRows(40), clean(40));
+    expect(j.kept).toBe(40);
+    expect(j.truncatedAt).toBeNull();
+    expect(j.dropped).toEqual([]);
+  });
+
+  it('keeps the mask aligned with the rows it describes', () => {
+    const j = joinToV14('BTCUSDT', mineRows(10, { 3: 99 }), clean(10));
+    const out = applyKeepMask(mineRows(10, { 3: 99 }), j.keepMask).trim().split('\n').slice(1);
+    expect(out).toHaveLength(9);
+    expect(out.some(l => l.split(',')[1] === '400')).toBe(false);
   });
 });
 
