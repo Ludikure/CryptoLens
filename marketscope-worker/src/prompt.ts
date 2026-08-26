@@ -15,7 +15,7 @@
 import systemPrompts from './prompt-system.json';
 import { stopQuality } from './risk-engine';
 import { tailRiskInfo } from './ml-predict';
-import { evaluateEnvelope } from './envelope';
+import { evaluateEnvelope, type EnvelopeInput, type EnvelopeVerdict } from './envelope';
 
 export function systemPrompt(isCrypto: boolean): string {
   return isCrypto ? (systemPrompts as { crypto: string }).crypto : (systemPrompts as { stock: string }).stock;
@@ -504,7 +504,17 @@ export interface BuildPromptInput {
 // Stateful: reads prevState (regime/kill-duration/nakedPOC), returns the new state for the
 // caller to persist (KV on the worker, UserDefaults on iOS Phase 4).
 // ═══════════════════════════════════════════════════════════════════════════════════════════
-export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newState: PromptState } {
+export function buildUserPrompt(input: BuildPromptInput): {
+  prompt: string;
+  newState: PromptState;
+  /// The Conviction Envelope's actual verdict, not a re-parse of the rendered text. Null only if
+  /// the envelope block did not run at all. Returned because `HIGH_blocked_because` and friends are
+  /// rendered ONLY on non-FLAT bars — a replay that reads the prompt is blind on FLAT bars, which
+  /// are the majority and the interesting ones.
+  envelope: EnvelopeVerdict | null;
+  /// The inputs that produced it, so an export can record WHY without re-deriving anything.
+  envelopeInput: EnvelopeInput | null;
+} {
   const {
     symbol, nowMs, indicators, sentiment, stockInfo, derivatives, positioning, stockSentiment,
     economicEvents = [], macro, weeklyContext, spyContext, spotPressure, dataQuality, crossAsset,
@@ -532,6 +542,11 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       + 'If a level or trigger is already past at the live price, say so explicitly — never present it as pending.');
   }
   const newState: PromptState = { regime: prevState.regime ?? null, killDur: { ...(prevState.killDur ?? {}) }, killDurCandleMs: prevState.killDurCandleMs ?? null, nakedPOC: prevState.nakedPOC ?? null };
+  // Hoisted so the envelope's verdict can be RETURNED rather than only rendered (2026-08-26).
+  // Three of the four lists are printed only on non-FLAT bars, so a caller that reads the prompt
+  // text sees nothing on exactly the bars a research replay cares most about.
+  let envelopeVerdict: EnvelopeVerdict | null = null;
+  let envelopeInput: EnvelopeInput | null = null;
 
   // #6 — SINCE LAST ANALYSIS: a snapshot of the previous run for this symbol so the LLM can lead
   // with what CHANGED (the antidote to same-y serial reads). Emitted only when the prior state is
@@ -1303,7 +1318,7 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       // why every measurement of them so far reconstructed the rules in Python instead. The
       // exporter and the research layer now call the same function this does.
       const staleCount = dataQuality?.missingEnrichments.length ?? 0;
-      const env = evaluateEnvelope({
+      const envIn: EnvelopeInput = {
         rawMlWin: daily.mlWinProbability ?? null,
         calibratedMlWin: input.calibratedMlWin ?? null,
         staleCount,
@@ -1324,7 +1339,9 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // makes a historical replay honest.
         daysToEarnings: stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs
           ? Math.floor((stockInfo.earningsDate - nowMs) / 86400000) : null,
-      });
+      };
+      const env = evaluateEnvelope(envIn);
+      envelopeInput = envIn; envelopeVerdict = env;
       const { rawMlPct, mlPct, calibLifted, autoFlat, highBlocks, moderateBlocks, downgrade, maxAllowed } = env;
       L('Conviction Envelope:');
       L(`  max_allowed: ${maxAllowed}`);
@@ -2257,6 +2274,6 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     }
   }
 
-  return { prompt: lines.join('\n'), newState };
+  return { prompt: lines.join('\n'), newState, envelope: envelopeVerdict, envelopeInput };
 }
 
