@@ -52,6 +52,9 @@ export interface BarOutput {
     /// 24h direction matches 48h/72h direction.
     fwdReturn48H: number;
     fwdReturn72H: number;
+    /// Actual elapsed clock hours of the fwd*24H window. 24 on crypto; a median of 120 on stocks,
+    /// because the forward columns count BARS and a stock 4H bar is ET-session aggregated.
+    fwdSpanHours: number;
 }
 
 export const CSV_HEADER = [
@@ -114,6 +117,12 @@ export const CSV_HEADER = [
     // THIS column, not on `timestamp`. Appended at the END per the convention established by
     // basisPct above, so index-based readers of the existing columns are unaffected.
     'barCloseTimestampMs',
+    // The ACTUAL elapsed clock hours of the `fwd*24H` window on this row. The forward columns are
+    // counted in BARS, and a stock "4H" bar is ET-session aggregated, so six of them is a median of
+    // 120 HOURS on stocks against exactly 24 on crypto. See `computeFwdWindow24H` for the measured
+    // table. Recording the span makes the units a fact rather than an inference from a column name,
+    // and makes the end-of-series truncation self-describing.
+    'fwdSpanHours',
 ].join(',');
 
 const f1 = (v: number) => v.toFixed(1);
@@ -243,5 +252,6 @@ export function rowToCSV(o: BarOutput): string {
         f4(v('basisPct', 0)),
         String(v('basisExtreme', 0)),
         String(o.barCloseTimestampMs),
+        f1(o.fwdSpanHours),
     ].join(',');
 }

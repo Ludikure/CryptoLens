@@ -342,9 +342,35 @@ function fwdReturnAtBars(fourHCandles: Candle[], i: number, bars: number): numbe
 /// 24h-specific maxUp / maxDown / fwd return helper. Returns the same metrics that
 /// BacktestEngine columns expose: maxHigh-price (%), price-maxLow (%), and the close-
 /// to-close fwd return at the lookahead horizon.
+/**
+ * Forward windows, counted in BARS — which is not the same thing as the hours in their names.
+ *
+ * MEASURED (2026-08-26, plan step 4.4) on the box archive, span from bar i to bar i+6:
+ *
+ *     BTCUSDT   median  24h   (p10  24h, p90  24h)   6 x 4h, exactly as the name says
+ *     AAPL      median 120h   (p10  72h, p90 144h)   5 DAYS
+ *     MSFT / JPM / XOM / SPY   identical to AAPL
+ *
+ * A stock "4H" bar is ET-session aggregated — two per 6.5h session — so six of them is three
+ * TRADING sessions, which is 72-240 clock hours depending on weekends and holidays. `fwdReturn24H`
+ * therefore measures a one-day return on crypto and a FIVE-day return on stocks, under one name and
+ * one column index.
+ *
+ * Two consequences, both of which had already caused damage:
+ *   - No crypto-vs-stock comparison of any forward metric is valid. Part 8's "the only finding that
+ *     replicates across markets" compared a 24h crypto number against a 120h stock one.
+ *   - `goodR = fwdMaxFavR >= 1.5` is the stock model's TARGET, so that model predicts a 1.5-ATR
+ *     excursion within ~5 days, not within 24 hours as the docs and the prompt both said.
+ *
+ * NOT converted here. Changing the window would change every stock label and force a retrain, which
+ * is a decision with its own evidence requirements. What ships instead is `fwdSpanHours`: the actual
+ * elapsed clock time of each row's window, so the units are a recorded FACT rather than an inference
+ * from a column name. That also makes the end-of-series truncation below self-describing — those
+ * rows carry a visibly short span instead of silently reporting a clamped return.
+ */
 function computeFwdWindow24H(
     fourHCandles: Candle[], i: number,
-): { maxUpPct: number; maxDownPct: number; r4H: number; r12H: number; r24H: number } {
+): { maxUpPct: number; maxDownPct: number; r4H: number; r12H: number; r24H: number; spanHours: number } {
     const last = fourHCandles.length - 1;
     const price = fourHCandles[i].close;
     const r = (j: number) => {
@@ -361,6 +387,7 @@ function computeFwdWindow24H(
         maxUpPct: ((maxHigh - price) / price) * 100,
         maxDownPct: ((price - minLow) / price) * 100,
         r4H: r(1), r12H: r(3), r24H: r(6),
+        spanHours: (fourHCandles[Math.min(i + 6, last)].time - fourHCandles[i].time) / 3_600_000,
     };
 }
 
@@ -563,6 +590,7 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
             fwdMaxFavR72H: fwdMaxFavR72,
             fwdReturn48H: fwdR48H,
             fwdReturn72H: fwdR72H,
+            fwdSpanHours: w24.spanHours,
         };
         lines.push(rowToCSV(out));
         updateState(state, features);

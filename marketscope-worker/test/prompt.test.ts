@@ -224,12 +224,26 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
   it('systemPrompt no longer discounts the retrained 72h persistence model', () => {
     // The h72t25 head was retrained on clean data (2026-06-05) and again for v14 (2026-07-06,
     // monotone reliability, crypto top bucket 75.5% / stock 78.1%), but both system prompts still
-    // told the LLM it was "not retrained on fresh data — treat as soft", discounting the ONE model
-    // whose 72h horizon matches a multi-day hold. ML_WIN's 24h window cannot see a slow grind.
+    // told the LLM it was "not retrained on fresh data — treat as soft".
     for (const p of [systemPrompt(true), systemPrompt(false)]) {
       expect(p).not.toContain('Not retrained on fresh data');
-      expect(p).toContain('horizon closest to a multi-day hold');
     }
+  });
+
+  it('each market is told its OWN horizon, because they are not the same (plan step 4.4)', () => {
+    // The forward windows count BARS. A stock "4H" bar is ET-session aggregated, so six of them is a
+    // median of 120 clock hours and eighteen is 312 — measured on the archive, per symbol, against
+    // exactly 24h and 72h on crypto. Telling the stock model that ML_WIN is a 24h gauge that "cannot
+    // see a slow grind" was simply false: on stocks it already spans five days.
+    const crypto = systemPrompt(true), stock = systemPrompt(false);
+    expect(crypto).toContain('horizon closest to a multi-day hold');
+    expect(crypto).toContain("ML_WIN's 24h window cannot see");
+
+    expect(stock).toMatch(/HORIZONS ON STOCKS ARE NOT WHAT THEIR NAMES SAY/);
+    expect(stock).toMatch(/~5 DAYS \(not 24h\)/);
+    expect(stock).toMatch(/~13 DAYS \(not 72h\)/);
+    // The crypto-only framing must NOT survive into the stock prompt.
+    expect(stock).not.toContain("ML_WIN's 24h window cannot see");
   });
 
   it('buildUserPrompt runs end-to-end over real computeFullIndicators output (crypto)', () => {
