@@ -29,17 +29,19 @@ for (const [label, isCrypto] of [['crypto', true], ['stock', false]] as const) {
       expect(p).not.toMatch(/NEVER place an entry at the current price/);
       expect(p).not.toMatch(/0\.062R/);
       expect(p).not.toMatch(/40-60x/);
+      expect(p).not.toMatch(/vanishes on longs/);   // the retraction's OWN false claim, corrected 2026-08-26
     });
 
     it('says plainly that the numbers were withdrawn, and why', () => {
       expect(p).toMatch(/ENTRY METHOD — RETRACTED/);
       expect(p).toMatch(/4-hour lookahead/);
-      expect(p).toMatch(/INVERTS on shorts/);
+      expect(p).toMatch(/on SHORTS the effect inverts/);
+      expect(p).toMatch(/hand-computed three times with three different answers/);
     });
 
     it('forbids the model citing entry numbers that no longer exist', () => {
-      expect(p).toMatch(/NO validated entry-method rule in this system right now/);
-      expect(p).toMatch(/do NOT cite pullback-vs-market numbers/);
+      expect(p).toMatch(/NO ENTRY-METHOD RULE IS IN FORCE/);
+      expect(p).toMatch(/do NOT cite pullback-vs-market numbers as support/);
     });
   });
 }

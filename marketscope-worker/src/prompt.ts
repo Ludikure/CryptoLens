@@ -1283,7 +1283,12 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // 8/8, 9/9 and 9/9 half-year periods. The numbers are in the prompt because "gap risk" as a
         // bare phrase invites the model to weigh it against a chart pattern; "42% of stops gap
         // straight through" does not.
-        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW. MEASURED: 52% of bars see an overnight gap >= 2 ATR (7.1x baseline) and 43% of stops fill BEYOND the stop, averaging 1.4R lost on a 1R budget — the stop does not hold. This is a variance fact, not a direction call.`);
+        // The "43% of stops fill beyond the stop, averaging 1.4R lost" clause was removed
+        // 2026-08-26: it came from `stock_gap_fill.py`, which re-prices stops on the retracted
+        // lookahead anchor. The GAP RATES below survive that retraction — they are computed from
+        // `maxGapATR`, a window-shift-robust comparison of gap frequency near vs far from earnings,
+        // not from any entry simulation — but they are re-run in Phase 2 C2 regardless.
+        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW. MEASURED: 52% of bars see an overnight gap >= 2 ATR against a 7.4% baseline (7.1x). A gap that size jumps clean over a 2 ATR stop, so the stop cannot be relied on through the report. This is a variance fact, not a direction call.`);
         else if (days <= 7) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_MODERATE. MEASURED: gap >= 2 ATR on 52% of bars (7.0x baseline); ~31% of stops gap through. Skip if 4H momentum opposes thesis.`);
         else if (days <= 14) L(`Earnings Proximity: ${days}d to earnings — flag in Risk Factors, no conviction cap. MEASURED: still 5.0x the baseline gap rate, because a multi-day hold opened this far out often straddles the report anyway.`);
       }
@@ -1387,7 +1392,14 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // shorts generally. See docs/research/envelope-rules.md Part 8.
         const isStock = !!stockInfo;
         if (isStock && alignedDirection === 'SHORT' && envAlignment === 'ALIGNED_BEARISH') {
-          autoFlat.push('aligned_bearish_stock_SHORT_measured_-0.11R');
+          // The label carried `_measured_-0.11R` until 2026-08-26. That figure came from
+          // `stock_gates.py` scoring `d0.25_{side}_oppR`, a column produced by the retracted
+          // 4-hour-lookahead simulation, so the NUMBER is withdrawn and must not be quoted.
+          // The GATE stands on a separate, anchor-independent fact: the three-way escape hatch it
+          // replaced fired on 7 bars in four years (0.02% of applicable bars), so simplifying it to
+          // a ban changed almost nothing. Whether aligned-bearish stock SHORTs should be blocked at
+          // all is re-tested in Phase 3 (docs/research/envelope-rules.md).
+          autoFlat.push('aligned_bearish_stock_SHORT_evidence_under_review');
         }
       }
       const highBlocks: string[] = [];

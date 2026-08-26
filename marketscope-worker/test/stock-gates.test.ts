@@ -38,7 +38,10 @@ describe('Part 8 — stock-only envelope conditions', () => {
 
   it('aligned-bearish stock SHORTs are still blocked', () => {
     expect(src).toMatch(/isStock && alignedDirection === 'SHORT' && envAlignment === 'ALIGNED_BEARISH'/);
-    expect(src).toMatch(/autoFlat\.push\('aligned_bearish_stock_SHORT_measured_-0\.11R'\)/);
+    // The -0.11R came from the retracted lookahead column and is withdrawn; the gate stands on the
+    // anchor-independent coverage fact that its escape hatch fired 7 times in four years.
+    expect(src).not.toMatch(/aligned_bearish_stock_SHORT_measured_-0\.11R/);
+    expect(src).toMatch(/autoFlat\.push\('aligned_bearish_stock_SHORT_evidence_under_review'\)/);
   });
 
   it('drops the inert three-way escape hatch rather than leaving a rule that never fires', () => {
@@ -51,7 +54,11 @@ describe('Part 8 — stock-only envelope conditions', () => {
   it('carries the measured gap numbers into all three earnings windows', () => {
     // "gap risk" as a bare phrase invites the model to weigh it against a chart pattern.
     // "43% of stops fill BEYOND the stop" does not.
-    expect(src).toMatch(/CONVICTION_CAP_LOW\. MEASURED: 52% of bars see an overnight gap >= 2 ATR \(7\.1x baseline\)/);
+    // The stop-fill clause was withdrawn 2026-08-26 (it came from stock_gap_fill.py on the
+    // retracted anchor). The GAP RATES survive — they compare gap frequency near vs far from
+    // earnings, which a window shift of a few bars does not move — and are re-run in Phase 2.
+    expect(src).toMatch(/52% of bars see an overnight gap >= 2 ATR against a 7\.4% baseline \(7\.1x\)/);
+    expect(src).not.toMatch(/43% of stops fill BEYOND the stop/);
     expect(src).toMatch(/CONVICTION_CAP_MODERATE\. MEASURED: gap >= 2 ATR on 52% of bars \(7\.0x baseline\)/);
     expect(src).toMatch(/MEASURED: still 5\.0x the baseline gap rate/);
   });

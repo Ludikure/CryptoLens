@@ -20,7 +20,27 @@ on:
   workflow_dispatch: {}   # adds a "Run workflow" button for manual rebuilds
 
 jobs:
+  # Added 2026-08-26. Until now this workflow checked out, built and pushed to `latest` with NO
+  # test step: the suite only ever ran on a developer machine, by choice. That made this the
+  # channel through which several broken prompts reached production on 2026-08-25 — CLAUDE.md
+  # documents a `predeploy` hook, but that belongs to `wrangler deploy`, which this box does not
+  # use. A red suite must now mean no image, so the box cannot pull a build that never passed.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: marketscope-worker/package-lock.json
+      - run: npm ci
+        working-directory: marketscope-worker
+      - run: npm test
+        working-directory: marketscope-worker
+
   build-and-push:
+    needs: test           # no image is published unless the suite is green
     runs-on: ubuntu-latest
     permissions:
       contents: read

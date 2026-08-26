@@ -609,6 +609,44 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-26 — Phase 0: my retraction was wrong too; and the image build never ran the tests
+
+An adversarial design review of the remediation plan caught the retraction committing the same class
+of error it was written to fix. **`close[base+3]` and `open[base+4]` are the same instant** (verified
+at 2.79e-07), so the first future bar is `base+4` and scans must run `arange(0, H)` from it. My
+re-run used `arange(1, …)` — an hour late, discarding the highest-hazard bar of every trade.
+
+| | as shipped (leaky) | my retraction | **true** |
+|---|---:|---:|---:|
+| SHORT gain | +0.0660 (9/9) | −0.0296 (0/9) | **−0.0123 (2/9)** |
+| LONG gain | +0.0919 (9/9) | +0.0009 (7/9) | **+0.0216 (8/9)** |
+
+**Entry discipline is direction-dependent**: it inverts on SHORT and survives on LONG at 8/9 periods.
+Two caveats keep it un-shipped — both LONG arms are NEGATIVE in absolute terms (a pullback makes a
+losing proposition less bad), and the period count is on non-independent samples (72h hold at 4h
+spacing ⇒ ~18 rows share each outcome). The prompt now states the corrected numbers and that **no
+entry-method rule is in force**.
+
+**The number has now been hand-computed three times and produced three answers** — +0.0919, +0.0009,
++0.0216 — each reported confidently. The defect is not any one calculation; it is that a load-bearing
+number was computed in a throwaway script at all. **No further one-off simulation may justify a
+production change.**
+
+**The real hole, and it is the important part of this entry:
+`.github/workflows/build-box-image.yml` had NO test step.** It checked out, built and pushed to
+`:latest`; the 758-test suite only ever ran on a developer machine, by choice. `CLAUDE.md` documents
+a `predeploy` hook, but that belongs to `wrangler deploy`, which this box does not use. **That is the
+channel through which every broken prompt reached production this week.** A `test` job now gates
+`build-and-push` via `needs:` — a red suite means no image.
+
+Also swept from live prompt text: the reason string `aligned_bearish_stock_SHORT_measured_-0.11R`
+(the number came from the retracted column; the gate stands for now on the anchor-independent fact
+that its escape hatch fired 7 times in four years) and the earnings claim "43% of stops fill BEYOND
+the stop" (same anchor). The earnings **gap rates** survive — they compare gap frequency near vs far
+from earnings, which a few bars of window shift does not move.
+
+Full remediation plan: `~/.claude/plans/jolly-crunching-crown.md`. 758/758 green.
+
 ### 2026-08-25j — PARTS 4-5 RETRACTED: entry discipline was a 4-hour lookahead
 
 A second max-effort review attacked the MEASUREMENT code rather than the shipped code. Six findings,

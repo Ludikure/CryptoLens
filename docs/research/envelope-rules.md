@@ -1852,3 +1852,52 @@ Neither was automated.
 **The concrete rule this earns:** any reconstruction of a live rule must be asserted against the live
 rule on shared inputs before its result is used — and any simulation that indexes price paths from a
 feature timestamp must state, and test, which bar that timestamp denotes.
+
+## CORRECTION TO THE RETRACTION (2026-08-26) — my fix was wrong too, and the finding half-survives
+
+An adversarial design review caught the retraction making the same class of error it was written to
+fix. **`close[base+3]` and `open[base+4]` are the same instant** — verified at **2.79e-07** relative
+difference. The first legitimately-future bar is `base+4`, and its OPEN is the entry price, so the
+scan must run `base+4 + arange(0, H)` — **offsets from zero**. My re-run used `arange(1, …)`, which
+starts an hour late and discards the highest-hazard bar of every trade.
+
+Re-measured properly on the same 290,791 opportunities:
+
+| | as shipped (leaky) | my retraction (an hour late) | **true** |
+|---|---:|---:|---:|
+| SHORT gain | +0.0660 (9/9) | −0.0296 (0/9) | **−0.0123 (2/9)** |
+| LONG gain | +0.0919 (9/9) | +0.0009 (7/9) | **+0.0216 (8/9)** |
+| SHORT fill / LONG fill | 88.3% / 92.2% | 76.5% / 79.6% | **78.3% / 82.2%** |
+
+**So entry discipline is direction-dependent, like almost every other condition here.** On SHORT it
+inverts. On LONG it survives at +0.0216R across 8 of 9 periods, which clears the standing bar.
+
+**Two caveats that stop this being a finding yet.** Both LONG arms are NEGATIVE in absolute terms
+(market −0.0675R, pullback −0.0459R) — a pullback makes a losing proposition less bad, it does not
+make it good. And the 8/9 period count is computed on non-independent samples: the hold is 72h at 4h
+spacing, so each outcome is shared across ~18 consecutive rows. No `eff_n`, no block bootstrap.
+
+**Nothing is shipped from this.** The prompt says explicitly that no entry-method rule is in force
+and that the surviving LONG number is being re-measured under a verified harness.
+
+**The lesson, and the reason the plan changed shape because of it:** this number has now been
+hand-computed three times, in three throwaway scripts, producing three different answers — +0.0919,
++0.0009, +0.0216. Each was reported with confidence. The defect is not any one of the three
+calculations; it is that a load-bearing number was computed in a heredoc at all. **The shared payoff
+module is the fix, and no further one-off simulation may be used to justify a production change.**
+
+### Also corrected in the same pass
+
+- **`prompt.ts:1390`** emitted the reason string `aligned_bearish_stock_SHORT_measured_-0.11R` into
+  live prompt text. That −0.11R came from `stock_gates.py` scoring the retracted column. **The number
+  is withdrawn**; the gate stands for now on an anchor-independent fact — the escape hatch it
+  replaced fired on 7 bars in four years — and is re-tested in Phase 3.
+- **The earnings 0-2d line** claimed "43% of stops fill BEYOND the stop, averaging 1.4R lost".
+  That came from `stock_gap_fill.py` on the same anchor and is **removed**. The gap RATES survive the
+  retraction — they compare gap frequency near vs far from earnings, which a few bars of window shift
+  does not move — and are re-run in Phase 2 regardless.
+- **The image build had no test gate.** `.github/workflows/build-box-image.yml` checked out, built and
+  pushed to `:latest` with no test step; the 758-test suite only ever ran on a developer machine by
+  choice. `CLAUDE.md` documents a `predeploy` hook, but that belongs to `wrangler deploy`, which this
+  box does not use. **This was the channel through which every broken prompt reached production.** A
+  `test` job now gates `build-and-push` via `needs:`.
