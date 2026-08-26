@@ -1773,3 +1773,82 @@ parameterization?" and then shipped an artifact that no arm of the test had eval
 subpopulation no arm had measured, using a gate class (`autoFlat`) whose blast radius I did not
 check. Fifteen findings is not a set of patches — it is a change that was not ready, and the six
 prior parts of this document exist precisely to stop rules like it from shipping.
+
+---
+
+# PARTS 4-5 RETRACTED — entry discipline was a 4-hour lookahead
+
+A second max-effort review attacked the MEASUREMENT code rather than the shipped code. Six findings;
+**five confirmed by re-running, and one of them invalidates the headline finding of this entire
+document.**
+
+## The defect
+
+`level_entry.py` starts its fill window at `base + 1` where `base` is the hourly bar opening at the
+feature row's timestamp T. But the feature row's `price` is the **CLOSE of the bar spanning
+T..T+4h** — verified by nearest-match against the hourly klines, where offset **+3** fits at
+4.6e-04 relative error against 2.4e-03 for the next best. So the row is evaluated at T+4h while the
+simulation began filling at T+1h: **a pullback that had already happened inside the signal bar
+counted as a fill.**
+
+## Re-run on the same 290,791 opportunities, one offset changed
+
+| | market | pullback | gain | fill | periods+ |
+|---|---:|---:|---:|---:|---:|
+| **as shipped** SHORT | −0.0036 | +0.0624 | **+0.0660** | 88.3% | **9/9** |
+| **corrected** SHORT | −0.0001 | −0.0297 | **−0.0296** | 76.5% | **0/9** |
+| **as shipped** LONG | −0.0709 | +0.0210 | **+0.0919** | 92.2% | **9/9** |
+| **corrected** LONG | −0.0670 | −0.0661 | **+0.0009** | 79.6% | 7/9 |
+
+**It fully inverts on SHORT (9/9 → 0/9) and vanishes on LONG.** The fill rate drop (88% → 76%) is
+the leak's fingerprint: a tenth of all "fills" were prices the strategy could not have traded.
+
+## Everything that rested on it
+
+- The `ENTRY DISCIPLINE` block in **both** markets' `prompt-system.json` — **removed**, replaced by
+  an explicit retraction that forbids the model citing the withdrawn numbers.
+- The computed `SHALLOW PULLBACK BAND` — **removed**; it enforced a rule that measures negative.
+- **Part 10's chase-guard removal**, argued partly as "ENTRY DISCIPLINE forbids chasing, so the
+  guard is moot". That premise is gone → **UNSUPPORTED**.
+- **Part 8's stock replication** (+0.046 / +0.025) — same script, same bug → **UNSUPPORTED**.
+- Every "40-60× the gating layer" and "the only finding that replicates across markets" claim.
+
+## The other four confirmed defects, each of which drove a live change
+
+| script | defect | what it drove |
+|---|---|---|
+| `chase_stop_test.py:55` | `searchsorted(...)-1` selects the day CONTAINING t — **83.3% of bars read their own in-progress day** (0% at 00:00, 100% at every other 4H boundary) | Part 10 removing `chase_into_extended_aligned_trend` |
+| `envelope_sweep.py:25` | `funding_supports_counter` reconstructed as `sign(funding) == −bias`; the live rule (`prompt.ts:868`) is `sign(funding) == sign(bias)` — the **exact complement, disjoint sets** — and the magnitude threshold was dropped | Part 7 deleting `killFunding` from `ANY_KILLED` |
+| `envelope_whole.py:53` | `cont = \|momentumAlignment\|` ∈ {0,1}, so `<2` and `<3` fire on **100.0000%** of rows; arms B/C collapse to {LOW, FLAT} | **Part 2's "envelope NOT VERIFIED"** — the verdict that motivated Parts 6-10 and deleted `OpportunityFeedCard.swift` |
+| `level_entry_controls.py:24` | the "CHASE" arm sets entry ABOVE price but keeps the pullback fill test `low <= entry`, so it fills instantly — a market entry charged 0.25 ATR of forced slippage, not a chase | the `−0.129R / −0.195R` numbers shipped in both prompts |
+
+**Part 7 had already recorded that `momentumAlignment` is the wrong variable** ("PROXY BROKEN — not
+tested", with the note that a 100% fire rate is the tell). That correction was never propagated back
+to Part 2, whose verdict the rest of the programme was built on.
+
+## Fixed now
+
+Only one thing was both certain and shipped-and-false: the ML Persistence ladder hardcoded a **54%**
+base — the crypto figure — in a block with no market gate, while a stock h72t25 model ships.
+Measured: **54.1% crypto, 60.8% stocks**. A stock reading of 60-69% printed "ABOVE AVERAGE" while
+sitting at or below its real base, telling the model to hold longer on a sub-par bar. Now derived
+per market.
+
+## What is NOT being done, and why
+
+**The gate removals are not reverted.** They are *unsupported*, not *proven wrong* — and re-adding
+gates whose own evidence is equally broken would not be an improvement, it would be a second
+unvalidated change. Each needs re-running against a corrected harness.
+
+## The lesson
+
+Five defects, all in measurement code, all of which reached production. Not one was caught by the
+test suite, because **the worker tests are source-text regexes over `prompt.ts` and the research
+scripts have no parity harness at all** — the ML pipeline has one asserting worker↔backtest agreement
+at 1e-7, and the research layer that decides what ships has nothing equivalent. Every defect here was
+found by re-running a script or diffing a reconstruction against `prompt.ts` by hand. Both are cheap.
+Neither was automated.
+
+**The concrete rule this earns:** any reconstruction of a live rule must be asserted against the live
+rule on shared inputs before its result is used — and any simulation that indexes price paths from a
+feature timestamp must state, and test, which bar that timestamp denotes.

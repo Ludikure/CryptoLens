@@ -93,25 +93,36 @@ describe('crash risk reaches the model — input AND output contract', () => {
 // rate is 53.9% (measured over 352,972 bars in csv_exports_v14), so the old "WEAK (50-59%)" band
 // straddled the average and called an entirely ordinary reading sub-par. Guidance unchanged; only
 // the words describing the number moved.
-describe('ML Persistence labels are stated against the 54% base rate, not 50%', () => {
+// The same defect class as the crash band: absolute thresholds applied to a probability whose base
+// rate is not 50%. FIXED AGAIN 2026-08-25 (second review) — the first fix hardcoded 54%, the CRYPTO
+// figure, in a block with no market gate, while a stock h72t25 model ships. Measured on the v14
+// regens: P(fwdMaxFavR72H >= 2.5) is 54.1% crypto and 60.8% stocks, so a stock reading of 60-69%
+// printed "ABOVE AVERAGE" while sitting at or below its real base.
+describe('ML Persistence labels are stated against EACH MARKET\'s own base rate', () => {
   const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
 
-  it('no longer calls the band containing the base rate "WEAK"', () => {
-    expect(src).not.toMatch(/WEAK \(50-59%\)/);
-    expect(src).toMatch(/AVERAGE \(50-59% — the base rate is 54%, so this is an ORDINARY reading/);
+  it('picks the base rate from the market rather than hardcoding crypto\'s', () => {
+    expect(src).toMatch(/const p72Base = stockInfo \? 61 : 54;/);
+    expect(src).not.toMatch(/vs a 54% base\)/);      // no baked-in literal in the emitted strings
   });
 
-  it('names the base rate in every band so the number is interpretable', () => {
-    for (const band of [/WELL ABOVE AVERAGE \(≥70% vs a 54% base\)/,
-                        /ABOVE AVERAGE \(60-69% vs a 54% base\)/,
-                        /BELOW AVERAGE \(<50% vs a 54% base\)/]) {
-      expect(src).toMatch(band);
-    }
+  it('bands are expressed as offsets from that base, not as fixed numbers', () => {
+    expect(src).toMatch(/p72Pct >= p72Base \+ 16/);
+    expect(src).toMatch(/p72Pct >= p72Base \+ 6/);
+    expect(src).toMatch(/p72Pct >= p72Base - 4/);
+  });
+
+  it('still refuses to call the band containing the base rate "WEAK"', () => {
+    expect(src).not.toMatch(/WEAK \(50-59%\)/);
+    expect(src).toMatch(/an ORDINARY reading, not a weak one/);
+  });
+
+  it('names the market\'s base rate in every band so the number is interpretable', () => {
+    expect(src).toMatch(/vs a \$\{p72Base\}% base for this market/);
   });
 
   it('leaves the trade-management ladder byte-identical', () => {
-    // The thresholds were tuned for TP2 distance and hold time, and that tuning was never in
-    // question — relabelling must not quietly retune it.
+    // Those thresholds were tuned for TP2 distance and hold time; relabelling must not retune them.
     expect(src).toMatch(/TP2 at 4-5× ATR\(4H\), runner targets the upper multiplier, trail 1-1\.5× ATR after TP1/);
     expect(src).toMatch(/TP2 at 3-4× ATR\(4H\), 48h hold target, take partial 50% at TP1 \+ trail the runner 1× ATR/);
     expect(src).toMatch(/TP2 at 2-3× ATR\(4H\) max, 24h hold, take TP1 at \+1R-1\.5R/);

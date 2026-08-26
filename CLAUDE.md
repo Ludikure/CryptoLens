@@ -609,6 +609,63 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25j — PARTS 4-5 RETRACTED: entry discipline was a 4-hour lookahead
+
+A second max-effort review attacked the MEASUREMENT code rather than the shipped code. Six findings,
+**five confirmed by re-running — and one invalidates the headline finding of the whole programme.**
+
+**The defect.** `level_entry.py` starts its fill window at `base + 1`, where `base` is the hourly bar
+opening at the feature row's timestamp T. But that row's `price` is the **CLOSE of the bar spanning
+T..T+4h** — verified by nearest-match against the klines, offset **+3** fitting at 4.6e-04 against
+2.4e-03 for the next best. The row is evaluated at T+4h; the simulation filled from T+1h. **A
+pullback that had already happened inside the signal bar counted as a fill.**
+
+| | market | pullback | gain | fill | periods+ |
+|---|---:|---:|---:|---:|---:|
+| **as shipped** SHORT | −0.0036 | +0.0624 | **+0.0660** | 88.3% | **9/9** |
+| **corrected** SHORT | −0.0001 | −0.0297 | **−0.0296** | 76.5% | **0/9** |
+| **as shipped** LONG | −0.0709 | +0.0210 | **+0.0919** | 92.2% | **9/9** |
+| **corrected** LONG | −0.0670 | −0.0661 | **+0.0009** | 79.6% | 7/9 |
+
+**It fully inverts on SHORT and vanishes on LONG.** The fill-rate drop 88%→76% is the leak's
+fingerprint — a tenth of all "fills" were prices the strategy could never have traded.
+
+**Removed from production:** the `ENTRY DISCIPLINE` block in BOTH markets' `prompt-system.json`
+(replaced by an explicit retraction forbidding the model from citing the withdrawn numbers), and the
+computed `SHALLOW PULLBACK BAND`. **Now unsupported:** Part 10's chase removal (argued partly as
+"ENTRY DISCIPLINE forbids chasing, so the guard is moot"), Part 8's stock replication (same script),
+and every "40-60× the gating layer" claim.
+
+**Four other confirmed measurement defects, each of which drove a live change:**
+`chase_stop_test.py` selects the day CONTAINING t — **83.3% of bars read their own in-progress day**
+(0% at 00:00, 100% at every other 4H boundary), which is what removed the chase auto-FLAT;
+`envelope_sweep.py` reconstructed `funding_supports_counter` as the **exact logical complement** of
+the live rule (`sign(funding) == −bias` vs `prompt.ts:868`'s `== sign(bias)`, disjoint sets), which
+is what deleted `killFunding` from `ANY_KILLED`; `envelope_whole.py` used
+`cont = |momentumAlignment| ∈ {0,1}`, so both tier gates fire on **100.0000%** of rows and Part 2's
+arms collapse to {LOW, FLAT} — **that is the "envelope NOT VERIFIED" verdict the entire Parts 6-10
+programme was built on**; and `level_entry_controls.py`'s "CHASE" arm keeps the pullback fill test
+(`low <= entry`) with the entry ABOVE price, so it fills instantly — a market entry with forced
+slippage, which produced the −0.129R/−0.195R numbers shipped in both prompts.
+
+**Part 7 had already flagged `momentumAlignment` as the wrong variable** ("PROXY BROKEN — not
+tested"). That correction was never propagated back to Part 2.
+
+**Fixed (certain, shipped-and-false):** the ML Persistence ladder hardcoded a **54%** base — crypto's
+— in a block with no market gate, while a stock h72t25 model ships. Real base: **54.1% crypto, 60.8%
+stocks**, so a stock at 60-69% printed "ABOVE AVERAGE" while at or below its base. Now per-market.
+
+**Deliberately NOT reverted:** the gate removals are *unsupported*, not *proven wrong*, and
+re-adding gates whose own evidence is equally broken would be a second unvalidated change.
+
+**The lesson.** Five measurement defects, all reaching production, none caught by tests — because the
+worker tests are source-text regexes over `prompt.ts` and **the research layer has no parity harness
+at all**, while the ML pipeline has one asserting worker↔backtest agreement at 1e-7. Every defect was
+found by re-running a script or hand-diffing a reconstruction against `prompt.ts`. **New rule: any
+reconstruction of a live rule must be asserted against that rule on shared inputs before its result
+is used, and any simulation indexing price paths from a feature timestamp must state and test which
+bar that timestamp denotes.** 758/758 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-25i — Part 11 RETRACTED same day: the shipped gate did not follow from the measurement
 
 A max-effort review of `83e56a5` returned **15 findings**; three are disqualifying. I verified each

@@ -1208,26 +1208,14 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L(`Vol Regime: ATR_PERCENTILE_${pctInt} → ${implication}`);
     }
 
-    // The ENTRY DISCIPLINE rule is stated in ATR ("a shallow 0.2-0.5 ATR pullback"), but every entry
-    // the model writes is a PRICE, so it has to do the conversion — and a live BTC analysis showed
-    // it skipping the conversion and reaching for named 1H supports instead: one at 0.37 ATR (fine)
-    // and one at 0.99 ATR, twice the measured maximum and exactly the "deep significant level" the
-    // rule forbids (structural entries returned +0.007R against +0.062R, filling a quarter as
-    // often). Doing the arithmetic here removes the step where it goes wrong — the same reasoning
-    // as putting the measured gap numbers in the earnings line rather than the phrase "gap risk".
-    {
-      const entryAtr = fourH.atr?.atr ?? 0;
-      const entryPx = (input.livePrice != null && input.livePrice > 0) ? input.livePrice : fourH.price;
-      if (entryAtr > 0 && entryPx > 0) {
-        L(`SHALLOW PULLBACK BAND (the measured entry zone, computed — do not re-derive):`);
-        L(`  LONG entries: ${formatPrice(entryPx - 0.5 * entryAtr)} to ${formatPrice(entryPx - 0.2 * entryAtr)}  `
-          + `| SHORT entries: ${formatPrice(entryPx + 0.2 * entryAtr)} to ${formatPrice(entryPx + 0.5 * entryAtr)}  `
-          + `(4H ATR ${formatPrice(entryAtr)})`);
-        L(`  An entry OUTSIDE this band is outside the measured evidence. Deeper is NOT safer — it is `
-          + `mostly not filled. If a named level sits inside the band, prefer it; if the nearest `
-          + `"significant" level sits well beyond it, use the band, not the level.`);
-      }
-    }
+    // SHALLOW PULLBACK BAND — REMOVED 2026-08-25. It computed the 0.2-0.5 ATR entry band in prices
+    // to enforce the ENTRY DISCIPLINE rule. That rule was retracted the same day: `level_entry.py`
+    // began its fill window at T+1h while the feature row's `price` is the CLOSE of the bar
+    // spanning T..T+4h, so a pullback that had already happened inside the signal bar counted as a
+    // fill. Corrected on the same 290,791 opportunities the effect INVERTS on shorts
+    // (+0.0660R -> -0.0296R, 9/9 periods -> 0/9) and vanishes on longs (+0.0919R -> +0.0009R).
+    // Emitting a band that enforces a rule which measures negative is worse than emitting nothing.
+    // See docs/research/envelope-rules.md, "PARTS 4-5 RETRACTED".
 
     // Phase E3 — Structure levels (neutral)
     if (fourH.marketStructure && fourH.marketStructure.levelTests.length && daily.price > 0 && fourH.atr?.atr && fourH.atr.atr > 0) {
@@ -1680,18 +1668,26 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     // ML Persistence (72h)
     if (daily.mlPersistenceProbability != null) {
       const p72Pct = iTrunc(daily.mlPersistenceProbability * 100);
-      // Labels are stated against the TARGET'S OWN BASE RATE (53.9%, measured over 352,972 crypto
-      // bars in csv_exports_v14), not against 50%. The old ladder called 50-59% "WEAK" — a band
-      // that straddles the base rate, so an entirely average bar read as sub-par and biased the
-      // model toward shorter holds and tighter trails on the most common reading there is. Same
-      // defect class as the crash band fixed earlier today: absolute thresholds applied to a
+      // Labels are stated against the TARGET'S OWN BASE RATE, not against 50%. The old ladder called
+      // 50-59% "WEAK" — a band that straddles the base rate, so an entirely average bar read as
+      // sub-par and biased the model toward shorter holds and tighter trails on the most common
+      // reading there is. Same defect class as the crash band: absolute thresholds applied to a
       // probability whose base is not 50%. **The management guidance is unchanged** — only the
-      // words describing the number moved, because the ladder was tuned for trade management and
-      // that tuning was never the thing in question.
-      const guidance = p72Pct >= 70 ? 'WELL ABOVE AVERAGE (≥70% vs a 54% base) — full 72h hold viable, TP2 at 4-5× ATR(4H), runner targets the upper multiplier, trail 1-1.5× ATR after TP1'
-        : p72Pct >= 60 ? 'ABOVE AVERAGE (60-69% vs a 54% base) — TP2 at 3-4× ATR(4H), 48h hold target, take partial 50% at TP1 + trail the runner 1× ATR'
-        : p72Pct >= 50 ? 'AVERAGE (50-59% — the base rate is 54%, so this is an ORDINARY reading, not a weak one) — TP2 at 2-3× ATR(4H) max, 24h hold, take TP1 at +1R-1.5R and trail tightly (0.7× ATR) or exit at BE after TP1'
-        : 'BELOW AVERAGE (<50% vs a 54% base) — do NOT hold for TP2. Take TP1 fast (+1R-1.5R) or pass the setup if TP1 < 1.5R. Persistence model expects mean-reversion before 2.5 ATR.';
+      // words describing the number moved; the ladder was tuned for trade management and that
+      // tuning was never in question.
+      //
+      // FIXED 2026-08-25 (second review): the base rate was hardcoded at 54% — the CRYPTO figure —
+      // in a block guarded only on `mlPersistenceProbability != null`, and a stock h72t25 model
+      // ships. Measured on the v14 regens: P(fwdMaxFavR72H >= 2.5) is **54.1% crypto** but **60.8%
+      // stocks**. So on a stock a 60-69% reading printed "ABOVE AVERAGE vs a 54% base" while
+      // sitting AT OR BELOW its real base, telling the model to hold longer and trail wider on a
+      // sub-par bar — reintroducing on stocks the exact defect this change fixed on crypto.
+      const p72Base = stockInfo ? 61 : 54;
+      const vs = (band: string) => `${band} (vs a ${p72Base}% base for this market)`;
+      const guidance = p72Pct >= p72Base + 16 ? vs('WELL ABOVE AVERAGE') + ' — full 72h hold viable, TP2 at 4-5× ATR(4H), runner targets the upper multiplier, trail 1-1.5× ATR after TP1'
+        : p72Pct >= p72Base + 6 ? vs('ABOVE AVERAGE') + ' — TP2 at 3-4× ATR(4H), 48h hold target, take partial 50% at TP1 + trail the runner 1× ATR'
+        : p72Pct >= p72Base - 4 ? vs('AVERAGE') + ' — an ORDINARY reading, not a weak one — TP2 at 2-3× ATR(4H) max, 24h hold, take TP1 at +1R-1.5R and trail tightly (0.7× ATR) or exit at BE after TP1'
+        : vs('BELOW AVERAGE') + ' — do NOT hold for TP2. Take TP1 fast (+1R-1.5R) or pass the setup if TP1 < 1.5R. Persistence model expects mean-reversion before 2.5 ATR.';
       L(`ML Persistence (72h ≥2.5 ATR): ${p72Pct}% — ${guidance}`);
     }
 
