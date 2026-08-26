@@ -2008,3 +2008,77 @@ plan step 1a. Mixing the two is how the original numbers got their credibility.
 **Unsupported is still not the same as proven wrong.** Every removal made in Parts 1-11 remains in
 force pending Phase 3, and re-adding a gate whose evidence is equally broken would be a second
 unvalidated change.
+
+---
+
+# PHASE 2 — C1: ENTRY DISCIPLINE, RE-RUN WITH CONTROLS (2026-08-26)
+
+C1 runs first because its answer is already known, which makes it a **free oracle** on the rebuilt
+stack (`_payoff` at `anchor='bar_close'`, `_report`'s intervals, `_guards`). It reproduces
+**−0.0125 / +0.0211 exactly**, so nothing moved underneath the migration.
+
+It also does something the original Part 4/5 did not: it asks what the gain is actually made of.
+
+## The arms, with intervals that account for dependence
+
+290,373 opportunities, 24 symbols — **~16,131 independent**, because a 72h hold at 4h spacing means
+~18 consecutive rows resolve against overlapping paths. Bar: **lift ≥ +0.02R and ≥ 6/9 periods.**
+
+| side | depth | gain | block 95% CI | cluster 95% CI | periods | verdict |
+|---|---:|---:|---|---|---:|---|
+| SHORT | 0.25 | −0.0125 | [−0.0160, −0.0092] | [−0.0192, −0.0064] | 2/9 | fails |
+| SHORT | 0.50 | −0.0157 | [−0.0213, −0.0102] | [−0.0264, −0.0061] | 1/9 | fails |
+| SHORT | 1.00 | −0.0138 | [−0.0226, −0.0054] | [−0.0281, −0.0009] | 2/9 | fails |
+| LONG | 0.25 | +0.0211 | [+0.0182, +0.0241] | [+0.0174, +0.0249] | 8/9 | passes |
+| LONG | 0.50 | +0.0337 | [+0.0287, +0.0388] | [+0.0274, +0.0400] | 8/9 | passes |
+| LONG | 1.00 | +0.0523 | [+0.0443, +0.0606] | [+0.0424, +0.0626] | 8/9 | passes |
+
+Both bootstraps exclude zero on every row, in both directions. On SHORT the rule is not merely
+unsupported — it is confidently harmful.
+
+## The LONG dose-response is abstention, not entry quality
+
+Deeper pullback, bigger gain, monotone — which reads as a mechanism until you notice that an
+unfilled setup scores **exactly 0**, and 0 beats a **−0.0673R** market baseline. So a rule that fills
+less often looks better without entering anywhere better.
+
+    gain = (1 − fill) × (0 − market)     ABSTENTION
+         + fill × (fillR − market)       SELECTION
+
+| depth | fill | gain | abstention | **selection** | selection share |
+|---:|---:|---:|---:|---:|---:|
+| 0.25 | 82.2% | +0.0211 | +0.0120 | **+0.0091** | 43% |
+| 0.50 | 63.6% | +0.0337 | +0.0245 | **+0.0092** | 27% |
+| 1.00 | 34.6% | +0.0523 | +0.0440 | **+0.0083** | 16% |
+
+**Selection is FLAT at ~+0.009R.** The entire dose-response is abstention.
+
+## The control: a coin flip reproduces it
+
+Abstain at random on the same fraction of bars the rule misses:
+
+| side | depth | rule | random | **rule − random** | block 95% CI |
+|---|---:|---:|---:|---:|---|
+| SHORT | 0.25 | −0.0125 | +0.0000 | **−0.0125** | [−0.0157, −0.0100] |
+| SHORT | 1.00 | −0.0138 | −0.0001 | **−0.0138** | [−0.0156, −0.0091] |
+| LONG | 0.25 | +0.0211 | +0.0120 | **+0.0091** | [+0.0068, +0.0119] |
+| LONG | 0.50 | +0.0337 | +0.0243 | **+0.0093** | [+0.0063, +0.0130] |
+| LONG | 1.00 | +0.0523 | +0.0441 | **+0.0082** | [+0.0063, +0.0131] |
+
+## C1 verdict
+
+**Entry discipline has a real but small selection edge on LONG: ~+0.009R, CI ≈ [+0.006, +0.013],
+flat in depth — below the pre-declared +0.02 bar. On SHORT it is worse than random abstention at
+every depth. The headline +0.0211 (and +0.0523 at 1 ATR) is dominated by abstention, which a coin
+flip reproduces.**
+
+This corrects Parts 4-5 a second time. The anchor retraction already removed the SHORT arm; this
+removes the *interpretation* of the LONG arm. "The value was in the ENTRY LEVEL all along" and
+"roughly 40-60× the entire gating apparatus" both compared a number that is mostly abstention against
+a gating layer measured on coverage-matched controls. Against its own proper control the entry rule
+is worth **+0.009R**, not +0.066R.
+
+**What survives:** entering at a level is mildly better than entering at market on LONG, and clearly
+worse on SHORT. **What does not:** that this is a large effect, that deeper is better, or that it is
+the biggest thing in the system. And all LONG arms remain **negative in absolute terms** — the best
+of them is −0.0150R. A pullback makes a losing proposition less bad.
