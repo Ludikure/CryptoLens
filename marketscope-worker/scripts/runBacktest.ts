@@ -535,6 +535,13 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
         const out: BarOutput = {
             symbol,
             timestampMs: evalTime,
+            // The 4H bar closes where the NEXT one opens. Taken from the series rather than computed
+            // as `evalTime + 4h` because a stock "4H" bar is ET-session aggregated and is not four
+            // clock hours long — assuming it is would reintroduce the very inference this column
+            // exists to remove.
+            barCloseTimestampMs: i + 1 < fourHAll.length
+                ? fourHAll[i + 1].time
+                : evalTime + FOUR_H_MS,
             price,
             dailyScore: dailyBR.score, fourHScore: fourHBR.score, oneHScore: oneHBR.score,
             dailyBias: dailyBR.bias, fourHBias: fourHBR.bias, oneHBias: oneHBR.bias,
