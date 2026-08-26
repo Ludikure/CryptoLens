@@ -2488,3 +2488,61 @@ envelope implementation that production and research share, a join gate that has
 data defect, guards that each reproduce a defect that shipped, and provenance on every artifact. The
 five defects the reviews found are structurally unable to recur, and the numbers above are the first
 in this vault that were measured rather than reconstructed.
+
+---
+
+# THE LONG INVERSION IS NOT THE BEAR MARKET — 2026-08-26
+
+Phase 2 deferred this: the ML floor lifts SHORT and inverts LONG, and every arm sat in one window, so
+mechanism and regime could not be separated. **That deferral was too quick.** The OOF window is not
+uniformly bearish — BTC ran **+49% in 2023 and +112% in 2024** before **−7% in 2025 and −28% in
+2026**. There is regime variation to condition on.
+
+Regime = **BTC's trailing 90-day return at the bar**, which uses only closed history, so conditioning
+on it introduces no lookahead. RISING > +10%, FALLING < −10%. Pre-declared before computing:
+
+> **regime** → LONG lift ≥ 0 in RISING, and SHORT weakens or inverts there too
+> **mechanism** → LONG stays negative in both, and the sides do not swap
+
+## Result: both regime predictions came out backwards
+
+Market entry, ML ≥ 0.50:
+
+| regime | side | n | blocked R | kept R | lift | block 95% CI |
+|---|---|---:|---:|---:|---:|---|
+| **RISING** | SHORT | 9,351 | −0.1796 | −0.0457 | **+0.0842** | [+0.0157, +0.1641] |
+| **RISING** | **LONG** | 22,033 | **+0.0677** | **−0.0986** | **−0.1221** | **[−0.1846, −0.0592]** |
+| NEUTRAL | SHORT | 15,667 | +0.0030 | +0.1069 | +0.0700 | [+0.0020, +0.1357] |
+| NEUTRAL | LONG | 4,796 | −0.2922 | −0.2552 | +0.0238 | [−0.0808, +0.1351] |
+| FALLING | SHORT | 21,764 | +0.0078 | +0.0202 | +0.0082 | [−0.0452, +0.0633] |
+| FALLING | LONG | 715 | — | — | — | too thin |
+
+**The LONG inversion is STRONGEST in a rising market** — −0.1221 with the interval clear of zero,
+against −0.1005 overall. And **SHORT works BEST in a rising market** (+0.0842) and is a null in a
+falling one (+0.0082, spanning zero).
+
+Both of those are the opposite of the regime story. The pre-declaration makes that readable rather
+than something to explain away: the regime branch predicted LONG ≥ 0 in RISING and SHORT weakening
+there, and the data delivered LONG at its worst and SHORT at its best.
+
+## What this rules in and out
+
+**Ruled out:** "the gate only looks direction-dependent because the basket fell 83%." It does not.
+The direction split survives conditioning on regime, and inverts the regime hypothesis' own
+predictions.
+
+**Ruled out:** a bull-model / bear-model split as a fix for this. Regime is not the axis the failure
+runs along — the failure is present, and worse, inside the rising regime.
+
+**Not explained:** why. `fwdMaxFavR` is direction-AWARE in the training export (`runBacktest.ts`
+selects up-move for bullish-aligned bars, down-move for bearish), so a high ML on a LONG-biased bar
+is a prediction that a favourable UP move is coming — and gating LONG on it still measures inverted.
+That is stranger than the regime story it replaces, and no mechanism is offered here.
+
+**Limitation that matters:** FALLING/LONG has 715 rows and cannot be measured, because LONG-biased
+bars are rare in a falling market. So "LONG is negative in BOTH regimes" is NOT established — what is
+established is that it is strongly negative in RISING, which is the cell the regime hypothesis needed
+to be positive.
+
+Still no gate change. One measurement on a split of thin data does not move a live gate, and the
+forward logger now accumulates the independent evidence.
