@@ -152,5 +152,23 @@ export function excursionModelInfo() {
     longAuc: MODEL.heads.long.holdoutAuc,
     shortAuc: MODEL.heads.short.holdoutAuc,
     description: MODEL.description,
+    // QUARANTINED 2026-08-26. Both the trained head AND the measured base curve come from
+    // `excursion_dataset.pkl.gz`, whose barrier labels (`excursion_labels.py:64-92`) were built
+    // from `base+1` — one hour after the row's timestamp — while the row is actually evaluated at
+    // the 4H bar's CLOSE, T+4h. So the label span includes up to 3h of price that had already
+    // happened when the entry price was set. Worse than a shifted window: that pre-entry span sits
+    // inside the very 4H bar whose OHLC is in the feature vector, so the leak has a feature-side
+    // handle (`atrPercent`, `bodyWickRatio`, `hBBPercentB`) and is learnable.
+    //
+    // `baseExcursionCurve` is NOT a clean fallback — `excursion_export.py:62` computes it as the
+    // mean of the same leaked labels.
+    //
+    // Not ripped out because it reaches neither the LLM prompt nor the iOS app: its only consumer
+    // is `/opportunities`, a read-only research endpoint with no client since OpportunityFeedCard
+    // was deleted. The flag is here so nobody reads those numbers as valid in the meantime.
+    // Retrain on corrected labels is Phase 3 of ~/.claude/plans/jolly-crunching-crown.md.
+    contaminated: true,
+    contaminationNote: 'Labels built on a 4h-lookahead anchor; probabilities are optimistically '
+      + 'biased and the base curve shares the defect. Do not use for sizing or EV until retrained.',
   };
 }

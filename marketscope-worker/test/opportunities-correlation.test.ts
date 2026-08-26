@@ -52,3 +52,23 @@ describe('correlation must not be inert', () => {
     expect(effectiveBets(['A', 'B', 'C'], crypto)).toBeLessThan(1.5);  // but the warning still fires
   });
 });
+
+// QUARANTINE (2026-08-26). The excursion model's labels and base curve both come from
+// `excursion_dataset.pkl.gz`, built on the retracted 4h-lookahead anchor. It reaches neither the
+// prompt nor the app — only `/opportunities` — so it is flagged rather than removed, and the flag
+// must survive until the retrain.
+describe('the excursion model declares its contamination', () => {
+  it('excursionModelInfo carries the quarantine flag and a usable note', async () => {
+    const { excursionModelInfo } = await import('../src/trading/excursion');
+    const info = excursionModelInfo() as Record<string, unknown>;
+    expect(info.contaminated).toBe(true);
+    expect(String(info.contaminationNote)).toMatch(/4h-lookahead anchor/);
+    expect(String(info.contaminationNote)).toMatch(/Do not use for sizing or EV until retrained/);
+  });
+
+  it('names the base curve as sharing the defect, so it is not treated as a clean fallback', async () => {
+    const { excursionModelInfo } = await import('../src/trading/excursion');
+    expect(String((excursionModelInfo() as Record<string, unknown>).contaminationNote))
+      .toMatch(/base curve shares the defect/);
+  });
+});
