@@ -1,4 +1,33 @@
 #!/usr/bin/env python3
+"""RETRACTED 2026-08-26 — this script RECONSTRUCTS the Conviction Envelope, and the reconstruction
+is measurably wrong. Do not run it, and do not cite any number it produced.
+
+Measured against `envelope_exports/`, which records the REAL verdict from the real
+`buildUserPrompt` (`marketscope-worker/scripts/exportEnvelope.ts`). Run
+`envelope_reconstruction_audit.py` to reproduce:
+
+  |momentumAlignment| takes values {0, 1}, so `cont < 2` and `cont < 3` fire on 100% of rows
+      against a true 76.8% and 99.2%. The reconstructed tier collapses to {FLAT, LOW} and never
+      emits MODERATE or HIGH at all. Whole-tier agreement with the real envelope: 11.8%.
+  funding_supports_counter is reconstructed as sign(funding) == -bias where the live rule
+      (prompt.ts:884) is == sign(bias). Jaccard 0.0000 — the two masks are disjoint by
+      construction.
+  ANY_KILLED exists only inside `if (oneHOpposes && oneH)`, so every kill rule lives on 6.8% of
+      bars. Part 7 scored them on 100% — a 14.7x population inflation.
+  biases_MIXED as `tfAlignment == 0` fires on 27.7% where the real MIXED state is 62.0%.
+
+The replacement is a JOIN, not a better reconstruction: read `envelope_exports/<SYM>.csv` and merge
+on (symbol, timestamp). The payoff half of these scripts is separately retracted — it indexes price
+paths from a feature timestamp that is four hours later than assumed (see the 2026-08-25j entry in
+CLAUDE.md), and the shared module that replaces it is plan step 1a.
+"""
+
+import sys as _sys
+if __name__ == '__main__':
+    _sys.exit('RETRACTED — see this file\'s docstring and envelope_reconstruction_audit.py. '
+              'The envelope reconstruction disagrees with the real envelope on 88% of bars.')
+
+
 """Part 10: the chase guard under the app's own entry rule, and the stop it actually ships.
 
 Pre-declared in docs/research/envelope-rules.md (frozen at ce81648).
