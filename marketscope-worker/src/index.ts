@@ -2,7 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { type Candle as ScoreCandle } from './scoring';
-import { fitCalibrationCurve, applyCalibration, coverageCut, ML_SHORT_GATE_COVERAGE, type CalBucket, type CalPoint } from './calibration';
+import { fitCalibrationCurve, applyCalibration, type CalBucket, type CalPoint } from './calibration';
 import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket, tailRiskInfo, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
@@ -295,8 +295,8 @@ async function fetchLiveCalBuckets(env: Env, isCrypto: boolean): Promise<CalBuck
 }
 
 async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boolean):
-  Promise<{ mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null; calibratedMlWin: number | null; calibrationCeiling: number | null; mlShortGateCut: number | null }> {
-  if (curWin == null) return { mlCalibration: null, calibratedMlWin: null, calibrationCeiling: null, mlShortGateCut: null };
+  Promise<{ mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null; calibratedMlWin: number | null }> {
+  if (curWin == null) return { mlCalibration: null, calibratedMlWin: null };
   const buckets = await fetchLiveCalBuckets(env, isCrypto);
   // Display metadata for the prompt's "ML Calibration (live, audited)" line: the raw realized
   // rate of the coarse bucket containing this prediction (pre-PAV — the audit, not the fit).
@@ -316,11 +316,7 @@ async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boo
   // the notify gate itself unreachable — surfaced by the cron guard log rather than used by the
   // prompt (the mandate tier reads the RAW scale, so it cannot be killed by curve compression).
   const calibrationCeiling = curve ? curve[curve.length - 1].y : null;
-  // Part 11: the ML gate as SELECTIVITY, derived from the live prediction distribution rather than
-  // from a fixed number. `buckets` already carries that distribution (n per predicted_prob bucket),
-  // so this costs no extra query.
-  const mlShortGateCut = coverageCut(buckets, ML_SHORT_GATE_COVERAGE);
-  return { mlCalibration, calibratedMlWin, calibrationCeiling, mlShortGateCut };
+  return { mlCalibration, calibratedMlWin, calibrationCeiling };
 }
 
 // ── Notification envelope precheck (2026-07-11) ────────────────────────────────────────────
@@ -441,7 +437,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   // (b) ML_WIN trajectory — the last-24h path from this device's score_history (cron writes a row
   //     per minute for watchlisted symbols), downsampled to ~6 points.
   const curWin = indicators[0].mlWinProbability;
-  const { mlCalibration, calibratedMlWin, mlShortGateCut } = await fetchMlCalibration(env, curWin ?? null, isCrypto);
+  const { mlCalibration, calibratedMlWin } = await fetchMlCalibration(env, curWin ?? null, isCrypto);
   let mlTrajectory: { points: number[]; hours: number } | null = null;
   try {
     const res = await env.DB.prepare(
@@ -539,7 +535,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   });
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, livePrice, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
-    mlCalibration, calibratedMlWin, mlShortGateCut, mlTrajectory, btcContext, volPricing, liquidations, news,
+    mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing, liquidations, news,
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });

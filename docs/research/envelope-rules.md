@@ -1688,3 +1688,88 @@ loosened the ML floor 5× in the first place, running the other way.
 crypto bear (equal-weight basket −83%), and SHORT is the better side ungated (+0.1028 vs +0.0139).
 7/8 period consistency spanning both directions of that regime is strong evidence, but the mechanism
 may be regime rather than skill, and it is kept because it passed a bar declared in advance.
+
+## PART 11 RETRACTED (same day) — the shipped gate did not follow from the measurement
+
+A max-effort review of `83e56a5` returned 15 findings. Three are disqualifying, and I verified each
+myself before acting rather than taking the report on trust. **The code is reverted. The
+measurements below stand; the implementation built on them did not follow from them.**
+
+### 1. The measurement was UNCONDITIONAL; the implementation was CONDITIONAL
+
+Control 2 gates every bar and reads the SHORT payoff column — `m = w & (d.ml >= t)`, no bias filter
+anywhere in `ml_gate_param.py`. So "41.3% coverage" is 41.3% **of all bars**. Production applied the
+cut only where `alignedDirection === 'SHORT'`, a subpopulation whose ML runs materially lower — the
+reviewer measured the realised selectivity at **~24%**, which lands inside the band this very
+document declares *worse than no gate* (ML ≥ 0.65, 20.1% coverage, −0.0044R at 3/8).
+
+**I measured one thing and shipped another.**
+
+### 2. The transfer argument was a cross-model artifact, and my stated mechanism was backwards
+
+I justified shipping COVERAGE rather than an absolute threshold on this: `0.55` admits 41.3% of
+backtest bars but only 36.3% of live ones, therefore the base rate moved and coverage transfers
+where a number does not.
+
+`ml_gate_param.py:90` fits a **local LightGBM**. Production's `predicted_prob` is **shipped v14 with
+its embedded isotonic** (floor 0.2498, cap 0.85). Two different models with different output
+distributions — the 41.3 vs 36.3 gap says nothing about base rates. And the mechanism as stated is
+backwards on its own terms: **a higher base rate pushes predictions UP, admitting MORE above 0.55,
+not fewer.** Coverage selection is invariant under monotone rescaling only if the two models RANK
+identically, which was never tested.
+
+The coverage form rested entirely on this argument, so the shipped artifact was **never the tested
+artifact** — Control 2 swept fixed ABSOLUTE thresholds, and the pre-declared decision rule had
+returned ABSOLUTE.
+
+### 3. It blocked LONG on the bars that measure as the best LONG bars
+
+The gate was scoped to `alignedDirection === 'SHORT'` but pushed to `autoFlat`, which emits
+**"Output NO SETUP regardless of any other reasoning"** — killing any counter-trend LONG on a
+daily-bearish bar. On the commit's own dataset those blocked bars average **+0.0725R on LONG against
+a +0.0107R all-bar mean, 6/8 periods**.
+
+That is the block-the-best-bars signature used four days earlier to kill `biases_MIXED` (+0.0503R
+blocked vs +0.0197R kept) and SHORT-side `alignment_not_full`. **I shipped the exact defect this
+document was written to eliminate.** It also re-FLATs the counter-trend reversal playbook that
+2026-07-06 deliberately unblocked.
+
+### Also real, and each independently sufficient to hold the ship
+
+- **The three-verdict contradiction, re-created one commit after fixing it.** The new auto-FLAT keys
+  on the RAW scale, so at raw 44 / calibrated 60 the prompt emits `NOT auto-FLAT on ML alone`, then
+  `auto_FLAT_active: ML_SHORT_selectivity_raw_44%`, then `POSITION SIZING: 0.5x base risk` — sizing a
+  trade the envelope just forbade. Verbatim the failure `4c3ece8` was written to eliminate.
+- **The FRAMING hatch dies silently.** `isQualityGateReason` prefix-matches only `ML_WIN_` /
+  `biases_MIXED_and_ML_`, so `ML_SHORT_selectivity_…` classifies as a HAZARD and suppresses the
+  hatch — including on bars that previously earned it from an `ML_WIN_*` reason alone. The 2026-07-24
+  "week of silence through a +7.5% advance" failure, reintroduced.
+- **The notify precheck never saw the gate.** `calForPrecheck` returns only `{ calibratedMlWin }`, so
+  the precheck builds a prompt where this FLAT cannot appear — destroying the "zero drift with the
+  actual analysis by construction" property that is the precheck's entire justification, and paging
+  the user into auto-FLAT analyses that then burn a Sonnet-5 run.
+- **No `isCryptoSym` guard.** Measured on 24 crypto symbols, shipped active for 159 stocks whose
+  `ml_calibration` rows are so thin that `fitCalibrationCurve` returns null while `coverageCut` still
+  returns a cut — the gate most active exactly where the calibration layer declares the data
+  untrustworthy. Part 9 records what happened last time a crypto-measured rule reached stocks.
+- **`coverageCut` skipped the trust filters** `fitCalibrationCurve` applies to the same array, so one
+  D1 result set got two opposite verdicts and the permissive one blocked trades. A non-finite
+  `predMean` returned NaN, which passes a `!= null` check and silently disables the gate.
+- **Provenance error in the shipped comment:** it cites "274,079 opportunities", which is Part 10's
+  figure. `ml_gate_rows.pkl.gz` holds **191,935 rows** — the comment overstates its evidence base by
+  ~43%. The script's folds also silently differ from `envelope_test.py` (`range(6)` @ 0.30/0.10 vs
+  `range(4)` @ 0.35/0.15) while commented "same recipe", so Part 11's ML column is not the one Parts
+  1-10 were measured against.
+
+### What survives
+
+The Control 2 table is a real measurement and is retained above: **a fixed absolute ML ≥ 0.55,
+applied to all bars, beats no-gate on the SHORT payoff by +0.0257R at 7/8 periods.** That is worth
+re-testing properly. What does not survive is every step between that number and the code:
+the conditioning, the parameterization, the gate class, and the market scope.
+
+**The lesson, which is the reason this is a retraction rather than a patch:** I answered "which
+parameterization?" and then shipped an artifact that no arm of the test had evaluated, on a
+subpopulation no arm had measured, using a gate class (`autoFlat`) whose blast radius I did not
+check. Fifteen findings is not a set of patches — it is a change that was not ready, and the six
+prior parts of this document exist precisely to stop rules like it from shipping.

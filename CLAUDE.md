@@ -609,6 +609,45 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-25i — Part 11 RETRACTED same day: the shipped gate did not follow from the measurement
+
+A max-effort review of `83e56a5` returned **15 findings**; three are disqualifying. I verified each
+myself before acting. **Code reverted (765/765 green); the measurements stand, the implementation
+built on them did not follow from them.**
+
+1. **Measured unconditional, shipped conditional.** Control 2 gates EVERY bar and reads the SHORT
+   payoff — `m = w & (d.ml >= t)`, no bias filter anywhere. So 41.3% is 41.3% *of all bars*.
+   Production applied the cut only where `alignedDirection === 'SHORT'`, whose ML runs lower —
+   realised selectivity **~24%**, inside the band this same research calls *worse than no gate*.
+2. **The transfer argument was a cross-model artifact and its mechanism was backwards.** I justified
+   coverage-over-absolute with "0.55 admits 41.3% of backtest bars but 36.3% of live ones". The
+   script fits a **local LightGBM**; production is **v14 with its embedded isotonic** — different
+   models, so the gap says nothing about base rates. And a higher base rate pushes predictions UP,
+   admitting MORE above 0.55, not fewer. **The shipped artifact was never the tested artifact:**
+   Control 2 swept ABSOLUTE thresholds, and the pre-declared rule had returned ABSOLUTE.
+3. **It blocked LONG on the best LONG bars.** Scoped to SHORT but pushed to `autoFlat`, which emits
+   "Output NO SETUP regardless of any other reasoning". Blocked bars average **+0.0725R on LONG vs a
+   +0.0107R all-bar mean, 6/8 periods** — the block-the-best-bars signature used four days earlier
+   to kill `biases_MIXED`. I shipped the exact defect this research was written to eliminate.
+
+Each of these was independently sufficient: the **three-verdict contradiction re-created one commit
+after fixing it** (raw-scale auto-FLAT beside "NOT auto-FLAT on ML alone" beside "POSITION SIZING:
+0.5x"); the **FRAMING hatch silently killed** (`isQualityGateReason` doesn't match the new prefix —
+the 2026-07-24 week-of-silence failure); the **notify precheck never receiving the cut**, destroying
+its zero-drift-by-construction property; **no `isCryptoSym` guard**, so a 24-crypto-symbol
+measurement gated 159 stocks whose calibration data is too thin to fit a curve at all; and a shipped
+comment citing **274,079** opportunities when the run held **191,935**.
+
+**The lesson:** I answered "which parameterization?" and then shipped an artifact no arm had
+evaluated, on a subpopulation no arm had measured, using a gate class (`autoFlat`) whose blast radius
+I never checked. Fifteen findings is not a patch list — it is a change that was not ready, and the
+ten prior parts of `envelope-rules.md` exist precisely to stop rules like it from shipping.
+
+**What survives and is worth redoing properly:** a fixed ABSOLUTE `ML >= 0.55` applied to ALL bars
+beats no-gate on the SHORT payoff by **+0.0257R at 7/8 periods**. Re-testing must condition the
+measurement on the population the gate would actually govern, use `highBlocks` rather than
+`autoFlat`, scope to crypto, and pass the value through the precheck.
+
 ### 2026-08-25h — Part 11: no, don't recalibrate — the live layer already does. The THRESHOLDS were the bug
 
 User asked "do we need to recalibrate?" after seeing the app show ML 45 while the analysis reasoned
