@@ -2281,3 +2281,66 @@ The OOF window starts where the first walk-forward fold ends, so these arms have
 periods, not 9**. The pre-declared bar wants 6, which several SHORT arms miss on period count alone
 despite large lifts and intervals clear of zero. That is a real limitation of the design, not a
 verdict, and it is why C4 changes nothing by itself.
+
+---
+
+# PHASE 2 — C5: PART 2 WAS HALF RIGHT, AND THE HALF THAT WAS RIGHT WAS LONG (2026-08-26)
+
+**This is the premise check.** Part 2 concluded *"the envelope is NOT VERIFIED"*, and every removal
+and rescoping in Parts 6-10 was built on that verdict. The audit then measured Part 2's
+implementation against the real envelope at **11.3% agreement**, and showed its reconstructed tier
+**never emitted MODERATE or HIGH across 799,193 bars** — `cont = |momentumAlignment|` takes values
+{0,1}, so both continuation thresholds fired on every row and the tier collapsed to {FLAT, LOW}.
+
+The real envelope, with walk-forward OOF ML injected via `exportEnvelope.ts --ml`:
+
+| tier | share |
+|---|---:|
+| MODERATE | 40.7% |
+| FLAT | 27.6% |
+| LOW | 22.7% |
+| HIGH | 9.0% |
+
+Part 2 cut exposure to **8.5%** of bars. The real envelope FLATs 27.6% and reaches HIGH on 9%. It was
+measuring a different function.
+
+## The result, per unit of exposure
+
+Scored as the sizing function it is — R per unit of exposure, so a gate cannot look good merely by
+trading less. The control is trade-everything, which is a coverage-matched random gate's
+*expectation*: random allocation is independent of the payoff, and the measured random arms confirm
+it (SHORT −0.0219 vs −0.0147, LONG −0.0326 vs −0.0342).
+
+| entry | side | envelope | control | **difference** | block 95% CI | cluster 95% CI |
+|---|---|---:|---:|---:|---|---|
+| market | **SHORT** | +0.0072 | −0.0147 | **+0.0219** | [+0.0052, +0.0386] | [+0.0099, +0.0333] |
+| market | **LONG** | −0.0531 | −0.0342 | **−0.0189** | [−0.0355, −0.0013] | [−0.0337, −0.0062] |
+| pullback | **SHORT** | −0.0092 | −0.0319 | **+0.0227** | [+0.0093, +0.0352] | [+0.0131, +0.0320] |
+| pullback | **LONG** | −0.0455 | −0.0295 | **−0.0161** | [−0.0298, −0.0018] | [−0.0277, −0.0054] |
+
+**Every interval excludes zero, in both directions, under both entry styles and both size mappings.**
+
+## What this does to Part 2
+
+**On SHORT, Part 2 is overturned.** It reported the envelope beating a coverage-matched random gate
+by **+0.0012R**; the real envelope beats it by **+0.0219R** — roughly eighteen times larger, with
+intervals clear of zero. The envelope is a working SHORT-side risk gate.
+
+**On LONG, Part 2 is confirmed, twice over.** The envelope is **worse than random** (−0.0189), and
+its own **inversion beats it** (−0.0214 against the envelope's −0.0531). Both were Part 2's claims,
+and both survive measurement on the real verdicts.
+
+**"The ML component alone beats the full envelope" survives on SHORT** (+0.0336 against +0.0072 at
+lower exposure, ~4.7×) and inverts on LONG (−0.1378 against −0.0531), exactly as C4 predicted.
+
+## The shape of the whole thing
+
+C3 found direction-dependence in `alignment_not_full`, C4 found it in the ML floor, and C5 now finds
+it **in the aggregate**: the Conviction Envelope is a **working gate on SHORT and an inverted one on
+LONG**. Part 2 averaged the two into "NOT VERIFIED" and Parts 6-10 then removed conditions on that
+average — which is the same error, one level up, that made a single rule averaged across two sides
+hide an inverted gate inside a working one.
+
+**Regime caveat, unchanged and load-bearing:** the window is a crypto bear in which the equal-weight
+basket fell 83%, and SHORT is the better side ungated. A gate that "works on SHORT" in that window
+may be reading the regime rather than the bar. This is why C5 changes nothing on its own.
