@@ -609,6 +609,39 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-26b — The conviction ladder skipped a rung: every moderateBlock was inert at high ML
+
+Found on the FIRST run of the new behavioural test helper, which is the argument for the helper.
+
+```ts
+// before
+autoFlat.length ? 'FLAT' : highBlocks.length === 0 ? 'HIGH' : moderateBlocks.length === 0 ? 'MODERATE' : 'LOW'
+```
+
+`highBlocks` cap conviction at MODERATE and `moderateBlocks` cap it at LOW — their own labels say so
+(`earnings_in_5d_cap_MODERATE` vs `earnings_in_1d_cap_LOW`). But the expression tests `highBlocks`
+FIRST, so **any moderateBlock was silently ignored whenever no highBlock fired** — precisely the
+high-ML case where a cap matters most.
+
+Measured on the real fixture: a stock **one day from earnings** reported `max_allowed: HIGH`
+alongside its own `earnings_in_1d_cap_LOW`. The model is instructed *"You may NOT output a tier above
+max_allowed"*, so the operative half was the wrong one — and **the earnings 0-2d gate is the single
+condition in this system validated on its own stated mechanism** (7.08× the baseline gap rate, 8/8
+periods). It was being overridden to the TOP tier. `continuation<2` (crypto SHORT) and
+`treatment_long_confirm_PARTIAL` were equally inert.
+
+Fixed to a monotone ladder: `FLAT → LOW → MODERATE → HIGH`, checking `moderateBlocks` before
+`highBlocks`. If MODERATE is disallowed, HIGH cannot be allowed.
+
+**`test/helpers/envelope.ts` is the new behavioural seam.** It builds a REAL prompt from the real BTC
+tape and parses the envelope's actual verdict — all four block lists plus `max_allowed`, where the
+old tests were regexes over `prompt.ts` SOURCE TEXT that never executed the envelope at all. Those
+regexes pin an implementation spelling: they pass when behaviour is wrong, fail when behaviour is
+right but written differently, and during the 2026-08-25 corrections they fought every change six at
+a time. The parser throws if the envelope block is missing, so a rename fails loudly instead of
+turning every assertion vacuous. `test/envelope-ladder.test.ts` pins the monotonicity invariant as a
+property across seven states rather than as one example. 767/767 green.
+
 ### 2026-08-26 — Phase 0: my retraction was wrong too; and the image build never ran the tests
 
 An adversarial design review of the remediation plan caught the retraction committing the same class

@@ -1468,7 +1468,25 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         else if (days <= 7) highBlocks.push(`earnings_in_${days}d_cap_MODERATE`);
         else if (days <= 14) downgrade.push(`earnings_in_${days}d_downgrade_one_tier`);
       }
-      const maxAllowed = autoFlat.length ? 'FLAT' : highBlocks.length === 0 ? 'HIGH' : moderateBlocks.length === 0 ? 'MODERATE' : 'LOW';
+      // FIXED 2026-08-26 — the ladder skipped a rung. `highBlocks` cap conviction at MODERATE and
+      // `moderateBlocks` cap it at LOW (see their own labels: `earnings_in_5d_cap_MODERATE` vs
+      // `earnings_in_1d_cap_LOW`). The old expression tested `highBlocks.length === 0 ? 'HIGH'`
+      // FIRST, so **any moderateBlock was silently ignored whenever no highBlock fired** — and that
+      // is exactly the high-ML case where the caps matter most.
+      //
+      // Found by the new behavioural test helper on its first run: a stock ONE DAY from earnings
+      // reported `max_allowed: HIGH` while its own reason list said `earnings_in_1d_cap_LOW`. The
+      // model is instructed "You may NOT output a tier above max_allowed", so the operative half was
+      // the wrong one — and the earnings 0-2d gate is the single condition in this system validated
+      // on its own stated mechanism (7.08x the baseline gap rate, 8/8 periods). It was being
+      // overridden to the TOP tier. `continuation<2` and `treatment_long_confirm_PARTIAL` were
+      // equally inert.
+      //
+      // A cap ladder must be monotone: if MODERATE is disallowed, HIGH cannot be allowed.
+      const maxAllowed = autoFlat.length ? 'FLAT'
+        : moderateBlocks.length ? 'LOW'
+        : highBlocks.length ? 'MODERATE'
+        : 'HIGH';
       L('Conviction Envelope:');
       L(`  max_allowed: ${maxAllowed}`);
       if (calibLifted) L(`  note: raw ML_WIN ${rawMlPct}% would auto-FLAT, but the live forward calibration corrects it to ~${mlPct}% (bucket realizes higher than the drifted model predicts) — NOT auto-FLAT on ML alone.`);
