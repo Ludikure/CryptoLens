@@ -4003,7 +4003,20 @@ async function computeSymbolPredictions(
       const sentiment = isCrypto ? { fearGreedIndex, fearGreedZone, ethBtcRatio, ethBtcDelta6, basisPct } : undefined;
       const sectorETF = isCrypto ? null : sectorETFForSymbol(symbol);
       const sectorCandles = sectorETF ? (sectorETFCandlesMap[sectorETF] || []) as FullCandle[] : [];
-      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol], spyCandles, isCrypto ? undefined : darkPoolData[symbol], iwmCandles as FullCandle[], sectorCandles, dxyCandles as FullCandle[], vix3mPrice, symbol);
+      // TRAIN/SERVE SKEW FIX (2026-08-26, plan step 4.3). `evalTimeMs` defaults to `Date.now()`,
+      // and nothing was passing it — but TRAINING passes the 4H bar's OPEN (`runBacktest.ts:487`).
+      // The cron runs every minute against the last CLOSED bar, so `Date.now()` sits somewhere in
+      // [T+4h, T+8h): the model was trained on one timestamp and served another, 4 to 8 hours later.
+      //
+      // That moves `hourBucket` (boundaries at ET 8/14/21) on most bars, and moves `dayOfWeek` and
+      // `isWeekend` on every bar whose window straddles an ET midnight. `dayOfWeek` is crypto's TOP
+      // permutation feature (+0.048), and `news_catalyst_test` measured BTC goodR swinging 34pp
+      // across days of the week — so this is skew on the single temporal input the model leans on
+      // hardest, not a rounding detail.
+      //
+      // Passing the last closed 4H bar's open time reproduces the training semantics exactly.
+      const evalTimeMs = fourHCandles.length ? fourHCandles[fourHCandles.length - 1].time : Date.now();
+      const features = computeAllFeatures(candles as FullCandle[], fourHCandles, oneHCandles, isCrypto, derivSignals, defaultMacro, sentiment, prevSnapshots[symbol], spyCandles, isCrypto ? undefined : darkPoolData[symbol], iwmCandles as FullCandle[], sectorCandles, dxyCandles as FullCandle[], vix3mPrice, symbol, evalTimeMs);
 
       // Save snapshot for next cron's rate-of-change deltas + acceleration
       const ps = prevSnapshots[symbol];
