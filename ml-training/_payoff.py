@@ -81,6 +81,12 @@ class PayoffParams:
     fee_pct: float = 0.171      # round-trip, in percent of notional
     bar_hours: int = 4          # the feature bar's length, in path bars
     slippage_atr: float = 0.0   # only used by entry_mode='market_with_slippage'
+    # Arm A of the entry controls: require price to trade THROUGH the level by this much rather than
+    # merely touch it. A limit order at a price the market kisses once often does not fill.
+    trigger_penetration_atr: float = 0.0
+    # Arm B: enter at market this many path bars after the signal, to separate the LEVEL from the
+    # DELAY. Applies to market modes only.
+    delay_bars: int = 0
 
 
 def _first_true(mask: np.ndarray, never: int) -> np.ndarray:
@@ -131,7 +137,7 @@ def simulate(
     # feature bar, so the actionable window starts `bar_hours` later and its offsets start at 0.
     shift = 0 if anchor == 'legacy_open' else p.bar_hours
     first_off = 1 if anchor == 'legacy_open' else 0
-    span = p.wait_h + p.hold_h + shift + first_off
+    span = p.wait_h + p.hold_h + shift + first_off + p.delay_bars
 
     idx = np.searchsorted(pts, fts, side='left')
     in_range = (idx >= 0) & (idx < len(pts))
@@ -184,9 +190,12 @@ def simulate(
             f'{symbol}: pullback entry is not against the direction — the fill test would be inverted'
 
     if entry_mode == 'pullback':
+        # The TRIGGER may sit beyond the entry (arm A: trade through, don't just touch), but the
+        # FILL price stays at the level — that is what a resting limit order does.
+        trig = entry - sg * p.trigger_penetration_atr * a_
         w = np.arange(first_off, first_off + p.wait_h)
         wl, wh = lo[base[:, None] + w], hi[base[:, None] + w]
-        touch = (wl <= entry[:, None]) if side == 'LONG' else (wh >= entry[:, None])
+        touch = (wl <= trig[:, None]) if side == 'LONG' else (wh >= trig[:, None])
         ti = _first_true(touch, never)
         filled = ti < never
         fill_off = np.where(filled, first_off + ti, 0)
@@ -195,7 +204,10 @@ def simulate(
         # that price is the honest model of "enter at market"; the next bar's open would be a
         # different and slightly optimistic assumption. Fill offset 0 = the bar boundary itself.
         filled = np.ones(len(e_), bool)
-        fill_off = np.zeros(len(e_), int)
+        fill_off = np.full(len(e_), p.delay_bars)
+        if p.delay_bars:
+            # Delayed market entry fills at that later bar's CLOSE.
+            entry = cl[base + first_off + p.delay_bars - 1] + sg * p.slippage_atr * a_
 
     risk = p.stop_atr * a_
     stop = entry - sg * risk
@@ -252,18 +264,66 @@ def simulate(
 
 
 def eff_n(df: pd.DataFrame, mask: pd.Series | np.ndarray | None = None) -> int:
-    """Independent EPISODES, not rows: contiguous runs per symbol.
+    """Independent EPISODES of a CONDITION: contiguous runs per symbol.
 
-    A 72-hour hold sampled every 4 hours means ~18 consecutive rows share an outcome, so a "9/9
-    periods" claim over rows is not what it appears to be. Dependent observations have nearly
-    produced a finding in this project four separate times, so this is a first-class output rather
-    than something a caller may forget to compute.
+    Use this for a gate's fire mask. With no mask every row is True and the answer is just the symbol
+    count, which is why callers should pass one — `overlap_eff_n` is the right measure for a whole
+    dataset.
+
+    Dependent observations have nearly produced a finding in this project four separate times, so
+    this is a first-class output rather than something a caller may forget to compute.
     """
-    m = np.ones(len(df), bool) if mask is None else np.asarray(mask, bool)
+    d = df.reset_index(drop=True)
+    m = np.ones(len(d), bool) if mask is None else np.asarray(mask, bool).copy()
+    if len(m) != len(d):
+        raise ValueError(f'mask length {len(m)} != frame length {len(d)}')
     total = 0
-    for _, g in df.groupby('symbol', sort=False):
-        v = m[g.index.to_numpy()] if df.index.equals(pd.RangeIndex(len(df))) else m[:len(g)]
+    for _, g in d.groupby('symbol', sort=False):
+        v = m[g.index.to_numpy()]
         if not len(v):
             continue
         total += int((v[1:] & ~v[:-1]).sum()) + (1 if v[0] else 0)
     return total
+
+
+def overlap_eff_n(n_rows: int, hold_h: int, bar_hours: int) -> int:
+    """Effective sample size when consecutive rows share most of their outcome window.
+
+    A 72-hour hold sampled every 4 hours means ~18 consecutive rows resolve against overlapping
+    price paths. Treating those as 18 independent observations is what makes a "9/9 periods" claim
+    read as far stronger than it is. This is the crude but honest correction: rows divided by the
+    overlap factor.
+    """
+    overlap = max(1, hold_h // max(1, bar_hours))
+    return int(n_rows // overlap)
+
+
+def align_arms(arms: dict[str, pd.DataFrame], *, key=('symbol', 'timestamp'),
+               max_loss: float = 0.05) -> tuple[pd.DataFrame, dict]:
+    """Inner-join per-arm outputs onto ONE row set, so arms are compared on the same population.
+
+    Arms legitimately drop different rows: a delayed-entry arm needs more future bars than a market
+    arm, so its horizon guard bites harder. Concatenating them side by side without aligning would
+    compare arms on different populations — the same class of error that made Part 7 score kill
+    rules on 15x their true domain.
+
+    Raises if the intersection costs more than `max_loss` of the largest arm, because at that point
+    the arms are not really measuring the same thing and silently proceeding would hide it.
+    """
+    if not arms:
+        raise ValueError('no arms')
+    keys = None
+    for name, df in arms.items():
+        k = df[list(key)].drop_duplicates()
+        keys = k if keys is None else keys.merge(k, on=list(key), how='inner')
+    biggest = max(len(df) for df in arms.values())
+    loss = 1.0 - (len(keys) / biggest) if biggest else 0.0
+    if loss > max_loss:
+        raise ValueError(f'aligning arms costs {loss:.1%} of the largest arm '
+                         f'({biggest:,} -> {len(keys):,}); arms are not on comparable populations')
+    out = keys
+    for name, df in arms.items():
+        cols = [c for c in df.columns if c not in key]
+        out = out.merge(df[list(key) + cols].rename(columns={c: f'{name}|{c}' for c in cols}),
+                        on=list(key), how='left')
+    return out.reset_index(drop=True), {'rows': len(out), 'largest_arm': biggest, 'loss': loss}
