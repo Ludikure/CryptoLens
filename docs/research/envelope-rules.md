@@ -2139,3 +2139,66 @@ the operative one, because the gate's claim is about a stop placed at 2 ATR.)*
 baseline (7.1x)"**. The measured values are now **32.65% against 8.05% (4.06×)** for 0-2d, **47.38%
 (5.88×)** for 3-7d, and **33.21% (4.13×)** for 8-14d. Deferred to Phase 3 with the other prompt-text
 decisions, so the corrections land in one pass rather than drifting again.
+
+---
+
+# PHASE 2 — C3: A LIVE GATE FAILS ITS OWN BAR (2026-08-26)
+
+The open production decision. These removals stand today on evidence that has been retracted, and
+*unsupported is not the same as proven wrong* — so each is re-decided on evidence rather than left
+where a broken measurement put it.
+
+**What is different this time:** every earlier test RECONSTRUCTED these conditions in Python, and the
+audit measured that reconstruction against the real envelope at **11.3% agreement**. This joins
+`envelope_exports/` — the verdict recorded by the real `buildUserPrompt` — to the payoff rows on
+`(symbol, timestamp)`. 271,479 rows, 24 symbols, ~15,082 independent. **The conditions are read, not
+rebuilt.**
+
+Bar: **lift ≥ +0.02R AND ≥ 6/9 periods AND coverage ≥ 20%.** Both entry styles reported, because C1
+showed a pullback entry is mostly abstention — a gate that helps under only one is a weaker finding.
+
+| side | condition | entry | lift | block 95% CI | cluster 95% CI | periods | verdict |
+|---|---|---|---:|---|---|---:|---|
+| SHORT | `alignment_not_full` | market | −0.0086 | [−0.0328, +0.0148] | [−0.0317, +0.0133] | 4/9 | fails |
+| SHORT | `alignment_not_full` | pullback | −0.0061 | [−0.0248, +0.0122] | [−0.0231, +0.0097] | 3/9 | fails |
+| SHORT | **`continuation < 2`** | market | **+0.0385** | [+0.0095, +0.0658] | [+0.0047, +0.0753] | 7/9 | **PASSES** |
+| SHORT | **`continuation < 2`** | pullback | **+0.0306** | [+0.0071, +0.0515] | [+0.0036, +0.0586] | 7/9 | **PASSES** |
+| SHORT | `continuation < 3` | market | +0.2322 | [+0.1528, +0.3135] | — | 7/9 | fails — **1% coverage** |
+| **LONG** | **`alignment_not_full`** | market | **−0.0096** | [−0.0391, +0.0192] | [−0.0476, +0.0238] | **2/7** | **fails** |
+| **LONG** | **`alignment_not_full`** | pullback | **−0.0106** | [−0.0350, +0.0133] | [−0.0404, +0.0151] | **2/7** | **fails** |
+| LONG | `continuation < 2` | market | −0.0149 | [−0.0725, +0.0473] | [−0.0896, +0.0517] | 2/7 | fails |
+| LONG | `continuation < 2` | pullback | +0.0080 | [−0.0423, +0.0617] | [−0.0502, +0.0597] | 4/7 | fails |
+
+## The headline: `alignment_not_full` is live on LONG and fails on the true conditions
+
+Part 1 called it *"the one condition that cleared the pre-declared bar"* — **+0.0264R at 6/9 on
+LONG** — and scoped it to LONG for exactly that reason. It is in force in production today.
+
+Measured on the real envelope it is **−0.0096 / −0.0106, at 2 of 7 periods, with both intervals
+spanning zero on both entry styles.** Verified independently of the harness. Part 1's LONG result was
+a reconstruction artifact: `tfAlignment == 0` covers 29.5% of bars where the real MIXED state covers
+63.9%, so that arm was scored on a mask that missed more than half its own population.
+
+**This does not mean "remove it".** The measurement says *unsupported*, not *harmful* — the intervals
+include zero. It joins the contested set as the first gate to fail its bar while live, and Phase 3
+decides it with the others. No interim change.
+
+## What else the join settles
+
+**`continuation < 2` on crypto SHORT is confirmed, and more strongly than Part 9 found it**
+(+0.0385 / +0.0306 against its +0.0303, 7/9 against 6/9, both CIs clear of zero on both entry
+styles). It is the only condition in the envelope that has now passed the bar on data that was never
+reconstructed. Its removal on LONG is also confirmed — 2/7 and 4/7, intervals spanning zero.
+
+**`continuation < 3` behaves exactly as Part 9 predicted and the coverage floor exists to catch:**
+the largest lift in the vault (+0.2322) on **1% coverage**. Correctly not adopted, twice.
+
+**`alignment_not_full` on SHORT stays removed** — 4/9 and 3/9, intervals spanning zero, consistent
+with Part 1's removal even though Part 1's reasoning was measured on a broken mask.
+
+## Not yet testable, and why
+
+`funding_supports_counter` and both divergence rules **cannot be read from the export**, because they
+were removed from the code and so are no longer computed. Testing them needs the exporter extended to
+emit them as diagnostics from the real implementation — the alternative is a reconstruction, which is
+the thing this phase exists to stop. Carried to Phase 3 as an explicit gap, not silently dropped.
