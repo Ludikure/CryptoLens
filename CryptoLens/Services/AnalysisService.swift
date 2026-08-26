@@ -416,6 +416,7 @@ class AnalysisService: ObservableObject {
             var tf1ML = tf1
             let workerML = await fetchWorkerML(symbol: symbol)
             tf1ML.mlWinProbability = workerML?.probability
+            tf1ML.mlWinCalibrated = workerML?.probabilityCalibrated
             tf1ML.mlPersistenceProbability = workerML?.probabilityH72
             tf1ML.mlBigMoveBucket = workerML?.bigMove?.bucket
             tf1ML.mlBigMoveMultiple = workerML?.bigMove?.multiple
@@ -584,6 +585,7 @@ class AnalysisService: ObservableObject {
             // ML win probability for the AI prompt — worker is the single source of truth.
             let workerML2 = await fetchWorkerML(symbol: symbol)
             tf1.mlWinProbability = workerML2?.probability
+            tf1.mlWinCalibrated = workerML2?.probabilityCalibrated
             tf1.mlPersistenceProbability = workerML2?.probabilityH72
             tf1.mlBigMoveBucket = workerML2?.bigMove?.bucket
             tf1.mlBigMoveMultiple = workerML2?.bigMove?.multiple

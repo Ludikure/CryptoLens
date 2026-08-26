@@ -67,14 +67,15 @@ struct IndicatorTableView: View {
                 .background(Color(.systemGray5))
 
                 // Rows
-                row("ML Win", tooltip: "Trade-or-not gate. Calibrated probability of ≥1.5 ATR favorable move within 24h. Direction-agnostic — LLM determines direction. ≥70% = TOP bucket (high probability), <50% = no trade.") { r in
-                    if let ml = r.mlWinProbability {
+                row("ML Win", tooltip: "Trade-or-not gate: probability of a ≥1.5 ATR favorable move within 24h, direction-agnostic. The figure shown is the LIVE-CALIBRATED value, which is what the conviction gates key on; the raw model output is in brackets when it differs. They drifted apart because the live base rate runs above the model's training base — auto-FLAT at calibrated 50 is roughly raw 30. ≥70% = TOP bucket, <50% = no trade.") { r in
+                    if let ml = r.mlWinCalibrated ?? r.mlWinProbability {
                         let pct = Int(ml * 100)
                         let color: Color = pct >= 70 ? .green :
                                            pct >= 60 ? Theme.bullish.opacity(0.7) :
                                            pct >= 50 ? .secondary :
                                            .red
-                        Text("\(pct)%")
+                        let rawPct = r.mlWinCalibrated != nil ? r.mlWinProbability.map { Int($0 * 100) } : nil
+                        Text(rawPct != nil && abs(rawPct! - pct) >= 3 ? "\(pct)%  (raw \(rawPct!)%)" : "\(pct)%")
                             .fontWeight(pct >= 70 ? .bold : .regular)
                             .foregroundStyle(color)
                     } else { dash }
@@ -86,6 +87,9 @@ struct IndicatorTableView: View {
                                            pct >= 60 ? Theme.bullish.opacity(0.7) :
                                            pct >= 50 ? .secondary :
                                            .red
+                        // ML Persistence (h72t25) has its OWN scale and is NOT run through the
+                        // ML_WIN calibration curve — showing that raw value here would be a
+                        // different number about a different model.
                         Text("\(pct)%")
                             .fontWeight(pct >= 70 ? .bold : .regular)
                             .foregroundStyle(color)

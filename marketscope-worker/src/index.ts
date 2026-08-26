@@ -1597,7 +1597,26 @@ export default {
       if (!entry) return json({ error: 'No cached prediction', symbol }, 404);
       // Attach display-ready big-move risk (bucket + x-base multiple) so clients don't
       // each hardcode the thresholds. Raw bigMoveProb stays for back-compat.
-      return json({ ...entry, bigMove: tailRiskInfo(entry.bigMoveProb) });
+      //
+      // CALIBRATED ML (2026-08-26). `probability` is the RAW model output, but every gate keys on
+      // the LIVE-CALIBRATED value (`prompt.ts` Phase C10), and the two have drifted apart: the live
+      // base rate runs ~58% against v14's 50.5% training base, so the PAV curve lifts raw upward.
+      // Measured 2026-08-21: the auto-FLAT at calibrated 50 corresponds to raw < 30.3%.
+      //
+      // The app was showing `probability` while the app's own decision used the calibrated number,
+      // so a user seeing "ML 31" next to a permitted setup had no way to reconcile the two — the
+      // display and the decision were on different scales. Both now ship, explicitly named.
+      let calibrated: number | null = null;
+      try {
+        const c = await fetchMlCalibration(env, entry.probability, !!entry.isCrypto);
+        calibrated = c.calibratedMlWin;
+      } catch { /* display-only; a calibration failure must not 500 the prediction */ }
+      return json({
+        ...entry,
+        bigMove: tailRiskInfo(entry.bigMoveProb),
+        probabilityCalibrated: calibrated,
+        gatedOn: calibrated != null ? 'calibrated' : 'raw',
+      });
     }
 
     // Phase 1: HAR-RV expected-range forecast (direction-agnostic). No LLM, lightweight —

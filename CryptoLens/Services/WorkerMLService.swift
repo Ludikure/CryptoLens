@@ -16,7 +16,19 @@ enum WorkerMLService {
     }
 
     struct Prediction {
+        /// RAW model output. Kept because the mandate tier and the `ML Bucket` line both read the
+        /// raw scale, and because it is what the model itself says.
         let probability: Double              // 24h@1.5 ATR — trade-quality gate
+        /// The LIVE-CALIBRATED value, which is what every envelope gate actually keys on.
+        ///
+        /// These two have drifted apart and the gap is large: the live base rate runs ~58% against
+        /// v14's 50.5% training base, so the PAV curve lifts raw upward, and the auto-FLAT at
+        /// calibrated 50 corresponds to raw < 30.3%. Showing `probability` next to a permitted setup
+        /// left no way to reconcile the badge with the decision — "ML 31, and it gave me a setup"
+        /// is the display being on a different scale from the gate, not a broken gate.
+        ///
+        /// nil when the worker could not fit a curve; the UI falls back to raw and says so.
+        let probabilityCalibrated: Double?
         let probabilityH72: Double?          // 72h@2.5 ATR — runner-hold persistence
         let bigMove: BigMove?                // tail head: outsized-move risk (crypto-only)
         let timestamp: Date
@@ -73,6 +85,7 @@ enum WorkerMLService {
 
         struct Body: Decodable {
             let probability: Double
+            let probabilityCalibrated: Double?
             let probabilityH72: Double?
             let bigMove: BigMove?
             let timestamp: TimeInterval
@@ -88,6 +101,7 @@ enum WorkerMLService {
         }
         return Prediction(
             probability: body.probability,
+            probabilityCalibrated: body.probabilityCalibrated,
             probabilityH72: body.probabilityH72,
             bigMove: body.bigMove,
             timestamp: Date(timeIntervalSince1970: body.timestamp / 1000),

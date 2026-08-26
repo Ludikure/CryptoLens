@@ -155,7 +155,19 @@ struct IndicatorResult: Identifiable, Codable {
     let biasScore: Int             // Signed score: positive=bullish, negative=bearish
     var marketStructure: MarketStructureResult?
     var volScalar: Double?
-    var mlWinProbability: Double?   // v9 goodR: calibrated P(>= 1.5 ATR favorable move in 24h)
+    /// RAW model output — P(>= 1.5 ATR favorable move in 24h). The comment here used to say
+    /// "calibrated"; it never was. The raw scale is what the mandate tier and the `ML Bucket` line
+    /// read, and it is what the model itself says.
+    var mlWinProbability: Double?
+    /// The LIVE-CALIBRATED value, which is what every envelope gate keys on.
+    ///
+    /// The two have drifted apart and the gap is large: the live base rate runs ~58% against v14's
+    /// 50.5% training base, so the PAV curve lifts raw upward and the auto-FLAT at calibrated 50
+    /// corresponds to raw < 30.3%. Displaying the raw number beside a permitted setup meant the
+    /// badge and the decision were on different scales, with no way to reconcile them.
+    ///
+    /// nil when the worker could not fit a curve — the UI then falls back to raw and labels it.
+    var mlWinCalibrated: Double?
     var mlPersistenceProbability: Double?  // h72t25: calibrated P(>= 2.5 ATR favorable move in 72h) — runner-hold confidence
     // Phase 1/2 additive heads (crypto-only; nil otherwise). Runtime-only (not persisted).
     var mlMetaProbability: Double?  // P(triple-barrier win | mlMetaDirection) — direction-conditioned

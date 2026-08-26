@@ -104,8 +104,19 @@ struct VerdictCard: View {
         return cleaned.isEmpty ? nil : cleaned
     }
 
+    /// The gating number — live-calibrated, falling back to raw when no curve exists. The gates key
+    /// on this, so the headline must too; showing raw here is what made "ML 31 with a setup" look
+    /// like a malfunction rather than two different scales.
     private var mlPercent: Int? {
-        result.daily.mlWinProbability.map { Int(($0 * 100).rounded()) }
+        (result.daily.mlWinCalibrated ?? result.daily.mlWinProbability).map { Int(($0 * 100).rounded()) }
+    }
+
+    /// Raw, shown only when it differs enough to be worth reconciling.
+    private var mlRawPercent: Int? {
+        guard result.daily.mlWinCalibrated != nil,
+              let raw = result.daily.mlWinProbability else { return nil }
+        let r = Int((raw * 100).rounded())
+        return (mlPercent.map { abs($0 - r) >= 3 } ?? false) ? r : nil
     }
 
     var body: some View {
@@ -122,10 +133,14 @@ struct VerdictCard: View {
                 if let ml = mlPercent {
                     // ML_WIN is direction-agnostic move likelihood, NOT confidence in a direction —
                     // labelled "move" so the card can't be misread as a directional score.
-                    Text("move \(ml)%")
+                    // The raw value rides along when it differs materially, so the headline can be
+                    // reconciled against the ML row and against what the analysis reasoned on.
+                    Text(mlRawPercent.map { "move \(ml)% · raw \($0)%" } ?? "move \(ml)%")
                         .font(Theme.micro)
                         .foregroundStyle(ml >= 70 ? Theme.bullish : Theme.neutral)
-                        .accessibilityLabel("Move likelihood \(ml) percent in 24 hours")
+                        .accessibilityLabel(mlRawPercent.map {
+                            "Move likelihood \(ml) percent in 24 hours, calibrated; raw model value \($0) percent"
+                        } ?? "Move likelihood \(ml) percent in 24 hours")
                 }
             }
 

@@ -32,7 +32,13 @@ struct FavoritePillsView: View {
                                     Text(asset.ticker)
                                         .font(.caption)
                                         .fontWeight(isSelected ? .semibold : .regular)
-                                    if let mlProb = service.resultsBySymbol[asset.id]?.tf1.mlWinProbability {
+                                    // Show the number the app's own gates act on: the live-calibrated
+                                    // value, falling back to raw only when no curve could be fitted.
+                                    // The raw scale drifted well below the calibrated one (auto-FLAT
+                                    // at calibrated 50 is raw < 30.3%), so a raw badge beside a
+                                    // permitted setup read as a contradiction.
+                                    if let tf = service.resultsBySymbol[asset.id]?.tf1,
+                                       let mlProb = tf.mlWinCalibrated ?? tf.mlWinProbability {
                                         Text("\(Int(mlProb * 100))")
                                             .font(.caption2)
                                             .fontWeight(.medium)

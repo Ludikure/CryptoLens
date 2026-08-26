@@ -67,14 +67,14 @@ private struct DecisionVerdict {
 private func decisionVerdict(for result: AnalysisResult) -> DecisionVerdict {
     if let setup = result.tradeSetups.first {
         var reason = "\(setup.direction) setup"
-        if let ml = result.daily.mlWinProbability { reason += " · ML \(Int((ml * 100).rounded()))%" }
+        if let ml = result.daily.mlWinCalibrated ?? result.daily.mlWinProbability { reason += " · ML \(Int((ml * 100).rounded()))%" }
         return DecisionVerdict(label: "CONDITIONS PRESENT", reason: reason, color: .blue, icon: "scope")
     }
     if result.analysisTimestamp != nil {
         return DecisionVerdict(label: "STAND ASIDE", reason: "Analysis found no setup — no edge to enter", color: .secondary, icon: "hand.raised")
     }
     let bias = shortBias(result.daily.bias)
-    if let ml = result.daily.mlWinProbability {
+    if let ml = result.daily.mlWinCalibrated ?? result.daily.mlWinProbability {
         return DecisionVerdict(label: "WATCH", reason: "\(bias) · ML \(Int((ml * 100).rounded()))% — tap to analyze", color: .orange, icon: "eye")
     }
     return DecisionVerdict(label: "WATCH", reason: "\(bias) — tap to analyze", color: .orange, icon: "eye")
