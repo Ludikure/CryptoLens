@@ -356,3 +356,62 @@ describe('Binance CMS source — exchange actions about the traded instrument', 
     expect(parseBinanceCms('{}', feed)).toEqual([]);
   });
 });
+
+// Regression: the exact three headlines that reached a live BTC screen on 2026-08-26.
+//
+// The per-symbol drop required a specific VERB after the ticker
+// (`delist|launch|remov|add|monitor`), so it only recognised listing- and delisting-shaped titles.
+// Anything else naming another instrument passed as "market-wide" and appeared on every analysis.
+// And nothing vetoed exchange MARKETING, which arrives under the News and Maintenance catalogs the
+// feed does take.
+describe('exchange notices about OTHER instruments do not reach this symbol', () => {
+  const NOW = Date.parse('2026-08-26T18:00:00Z');
+
+  async function seed(titles: string[]) {
+    const { D1Adapter } = await import('../server/d1-adapter');
+    const db = new D1Adapter(':memory:');
+    const env = { DB: db } as any;
+    await ensureNewsTable(env);
+    for (const [i, title] of titles.entries()) {
+      await env.DB.prepare(
+        `INSERT INTO news_items (id, source, source_name, primary_source, scope, title, summary,
+           url, published_at, fetched_at, terms)
+         VALUES (?, 'binance', 'Binance', 1, 'crypto', ?, '', ?, ?, ?, '')`
+      ).bind(`n${i}`, title, `https://x/${i}`, NOW - 3600_000 * (i + 1), NOW).run();
+    }
+    return env;
+  }
+
+  const NOISE = [
+    'Binance Will Support the Corning Incorporated (GLW) and Goldman Sachs Group (GS) Cash Dividend Distribution via bStocks',
+    'Binance Earn Yield Arena: Earn Up to $5,888 Rewards With This Week’s New Limited-Time Offers!',
+    'Wallet Maintenance for Ethereum Network (ETH) - 2026-08-27',
+  ];
+
+  it('drops all three from a BTC analysis', async () => {
+    const env = await seed(NOISE);
+    const view = await fetchRecentNews(env, { isCrypto: true, nowMs: NOW, symbol: 'BTCUSDT' });
+    expect(view?.headlines ?? []).toEqual([]);
+  });
+
+  it('still delivers a notice about THIS instrument', async () => {
+    const env = await seed([...NOISE, 'Binance Will Delist BTCUP and BTCDOWN Leveraged Tokens']);
+    const view = await fetchRecentNews(env, { isCrypto: true, nowMs: NOW, symbol: 'BTCUSDT' });
+    expect(view!.headlines).toHaveLength(1);
+    expect(view!.headlines[0]).toMatch(/BTCUP/);
+  });
+
+  it('keeps a genuinely market-wide notice, which names no instrument', async () => {
+    const env = await seed(['Binance Futures Will Update the Tick Size for All USDⓈ-M Contracts']);
+    const view = await fetchRecentNews(env, { isCrypto: true, nowMs: NOW, symbol: 'BTCUSDT' });
+    expect(view!.headlines).toHaveLength(1);
+  });
+
+  it('the ETH maintenance notice DOES reach an ETH analysis', async () => {
+    // The filter must be per-symbol, not a blanket ban on maintenance notices — a wallet halt is
+    // exactly the kind of instrument fact this feed exists to carry.
+    const env = await seed(NOISE);
+    const view = await fetchRecentNews(env, { isCrypto: true, nowMs: NOW, symbol: 'ETHUSDT' });
+    expect(view!.headlines.join()).toMatch(/Wallet Maintenance/);
+  });
+});

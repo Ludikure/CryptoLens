@@ -510,10 +510,46 @@ export async function fetchRecentNews(
     const base = (opts.symbol ?? '').replace(/USDT$|USD$|PERP$/i, '').toUpperCase();
     const mentions = (t: string) => base.length >= 2 && new RegExp(`\\b${base}\\b`, 'i').test(t);
     const isExchange = (r: any) => r.source === 'binance';
-    // A notice naming no symbol at all (tick-size sweeps, API changes) is market-wide, so it stays.
-    const namesSomeSymbol = (t: string) => /\b[A-Z0-9]{2,10}(USDT|USD)?\b.*\b(delist|launch|remov|add|monitor)/i.test(t);
+    // A notice naming no instrument at all (tick-size sweeps, API changes) is market-wide and stays.
+    //
+    // FIXED 2026-08-26. This required a specific VERB after the ticker
+    // (`delist|launch|remov|add|monitor`), so it only recognised listing- and delisting-shaped
+    // titles. Everything else naming another instrument sailed through as "market-wide" and landed
+    // on every analysis. Observed on a live BTC screen, all three kept:
+    //
+    //   "Binance Will Support the Corning Incorporated (GLW) and Goldman Sachs Group (GS) Cash
+    //    Dividend Distribution via bStocks"        -> verb is "Support", not in the list
+    //   "Wallet Maintenance for Ethereum Network (ETH) - 2026-08-27"  -> verb is "Maintenance"
+    //   "Binance Earn Yield Arena: Earn Up to $5,888 Rewards..."      -> pure marketing, no verb
+    //
+    // Binance writes instruments as a PARENTHESISED TICKER, which is the reliable signal and needs
+    // no verb vocabulary to keep current. A bare uppercase run is not enough on its own — titles are
+    // full of "API", "USD", "NEW" — so it must look like a ticker in brackets or carry a USDT/USD
+    // pair suffix.
+    const TICKER_IN_PARENS = /\(([A-Z0-9]{2,10})\)/g;
+    const PAIR_TOKEN = /\b([A-Z0-9]{2,10})(?:USDT|USD)\b/g;
+    const namedInstruments = (t: string): string[] => {
+      const found: string[] = [];
+      for (const re of [TICKER_IN_PARENS, PAIR_TOKEN]) {
+        re.lastIndex = 0;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(t)) !== null) found.push(m[1].toUpperCase());
+      }
+      return found;
+    };
+    // Exchange MARKETING. The catalog filter excludes the Activities and Airdrop catalogs, but promos
+    // also appear under News and Maintenance, so provenance alone does not keep them out. These are
+    // never facts about a tradeable instrument.
+    const PROMO = /\b(earn|rewards?|airdrop|giveaway|campaign|promotion|bonus|yield arena|celebrat|carnival|contest|sweepstake)\b/i;
 
-    rows = rows.filter(r => !isExchange(r) || mentions(r.title) || !namesSomeSymbol(r.title));
+    rows = rows.filter(r => {
+      if (!isExchange(r)) return true;
+      const t = String(r.title);
+      if (PROMO.test(t)) return false;
+      const named = namedInstruments(t);
+      if (!named.length) return true;                  // market-wide notice
+      return named.includes(base) || mentions(t);      // otherwise it must be about THIS instrument
+    });
     const score = (r: any) => isExchange(r) && mentions(r.title) ? 3 : (r.primary_source ? 2 : 1);
     rows.sort((a, b) => score(b) - score(a) || b.published_at - a.published_at);
     rows = rows.slice(0, limit);
