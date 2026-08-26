@@ -23,7 +23,7 @@ from _payoff import simulate, PayoffParams, overlap_eff_n
 DEPTHS = [0.00, 0.25, 0.50, 1.00]
 FEAT, PATH = 'csv_exports_v14', 'vision_backfill/klines_long'
 P = PayoffParams(wait_h=12, hold_h=72, stop_atr=2.0, tp_atr=2.5, fee_pct=0.171, bar_hours=4)
-OUT = 'level_entry_rows.pkl.gz'
+OUT = 'level_entry_rows.pkl.gz'   # never write LEGACY: that name is the frozen reference
 
 
 def build(anchor='bar_close'):

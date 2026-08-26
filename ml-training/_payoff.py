@@ -94,6 +94,121 @@ def _first_true(mask: np.ndarray, never: int) -> np.ndarray:
     return np.where(mask.any(1), mask.argmax(1), never)
 
 
+@dataclass
+class Located:
+    """Rows that survived every guard, plus the index of the first bar a strategy may act in."""
+    rows: np.ndarray        # positional indices into `feat`
+    base: np.ndarray        # positional indices into `path`
+    fts: np.ndarray         # feature timestamps (seconds) of the surviving rows
+    entry_px: np.ndarray    # the feature bar's reference price
+    atr: np.ndarray         # ATR in price units
+    atr_pct: np.ndarray
+    first_off: int          # offset of the first actionable bar, relative to `base`
+
+
+def locate(feat: pd.DataFrame, path: pd.DataFrame, *, symbol: str, anchor: Anchor, span_h: int,
+           bar_hours: int = 4, require_contiguous: bool = True, max_gap_s: int = 3600,
+           prov: Provenance | None = None) -> Located:
+    """Anchor feature rows onto the price path and drop every row that cannot be simulated.
+
+    Shared by `simulate` and `barriers` so the anchor, the gap guard and the horizon guard exist in
+    ONE place. Twelve private copies of this block is how five distinct defects reached production
+    independently of each other.
+    """
+    prov = prov if prov is not None else Provenance(anchor=anchor)
+    ts_raw = feat['timestamp'].to_numpy(np.int64)
+    fts_all = (ts_raw // 1000) if ts_raw[0] > 1e12 else ts_raw
+    pts = path['ts'].to_numpy(np.int64)
+    prov.rows_in = len(fts_all)
+
+    shift = 0 if anchor == 'legacy_open' else bar_hours
+    first_off = 1 if anchor == 'legacy_open' else 0
+    span = span_h + shift + first_off
+
+    idx = np.searchsorted(pts, fts_all, side='left')
+    in_range = (idx >= 0) & (idx < len(pts))
+    matched = np.zeros(len(fts_all), bool)
+    matched[in_range] = pts[idx[in_range]] == fts_all[in_range]
+    prov.dropped_no_path_match = int((~matched).sum())
+
+    horizon_ok = matched & (idx < len(pts) - span)
+    prov.dropped_short_horizon = int((matched & ~horizon_ok).sum())
+
+    # CONTIGUITY. Every offset downstream is index arithmetic, which silently means something else
+    # across a HOLE. Measured on the real crypto path files: 10 of 24 symbols have gaps, and
+    # NEARUSDT's is 57.8 MILLION seconds — 669 days. `base + 4` there is not "four hours later", it
+    # is two years later.
+    #
+    # `max_gap_s` is what makes this work for stocks too, and it must not be set to 3600 for them: a
+    # stock hourly series is the TRADING-hours sequence, whose normal spacings are 3600s intraday,
+    # 64800s overnight, 237600s over a weekend and 324000s over a long one (measured on AAPL:
+    # 11,144 / 1,437 / 306 / 50 occurrences). Those are the market being closed, not missing data,
+    # and index arithmetic over them is exactly right. Only a gap larger than the longest legitimate
+    # closure is a hole. A non-positive diff is a duplicate or out-of-order row and always a hole.
+    d_ts = np.diff(pts)
+    run_id = np.concatenate([[0], np.cumsum((d_ts > max_gap_s) | (d_ts <= 0))])
+    end_i = np.clip(idx + span, 0, len(pts) - 1)
+    contiguous = horizon_ok & ((run_id[np.clip(idx, 0, len(pts) - 1)] == run_id[end_i])
+                               if require_contiguous else True)
+    prov.dropped_gap_in_window = int((horizon_ok & ~contiguous).sum())
+
+    e0 = feat['price'].to_numpy(np.float64)
+    atr_pct = feat['atrPercent'].to_numpy(np.float64)
+    atr = (atr_pct / 100.0) * e0
+    good = contiguous & np.isfinite(atr) & (atr > 0) & np.isfinite(e0) & (e0 > 0)
+    prov.dropped_bad_atr = int((contiguous & ~good).sum())
+
+    r_ = np.where(good)[0]
+    prov.rows_out = len(r_)
+    return Located(rows=r_, base=idx[r_] + shift, fts=fts_all[r_], entry_px=e0[r_],
+                   atr=atr[r_], atr_pct=atr_pct[r_], first_off=first_off)
+
+
+def barriers(feat: pd.DataFrame, path: pd.DataFrame, *, symbol: str,
+             side: Literal['LONG', 'SHORT'], r_grid: list[float], anchor: Anchor,
+             horizon_h: int = 72, stop_atr: float = 1.0,
+             bar_hours: int = 4) -> tuple[pd.DataFrame, Provenance]:
+    """Which barrier is touched FIRST, for each R in `r_grid`, within `horizon_h`.
+
+    The label a trade actually faces. `goodR` asks whether price EVER moved favourably and ignores
+    ordering, so a bar that fell 3 ATR and then rallied 2 scores 1 while the position was stopped out
+    hours earlier.
+
+    CONSERVATIVE INTRA-BAR CONVENTION: when one bar's range spans both barriers, ordering is
+    unknowable at this resolution and the STOP is assumed to fill first. That biases every
+    probability DOWN, the correct direction for a number that will size positions.
+    """
+    prov = Provenance(anchor=anchor, entry_mode='barrier', symbols=1,
+                      params=dict(side=side, r_grid=list(r_grid), horizon_h=horizon_h,
+                                  stop_atr=stop_atr, bar_hours=bar_hours))
+    loc = locate(feat, path, symbol=symbol, anchor=anchor, span_h=horizon_h,
+                 bar_hours=bar_hours, prov=prov)
+    if not len(loc.rows):
+        return pd.DataFrame(), prov
+
+    hi, lo = (path[c].to_numpy(np.float64) for c in ('high', 'low'))
+    e, a = loc.entry_px, loc.atr
+    risk = stop_atr * a
+    never = horizon_h + 10
+    offs = np.arange(loc.first_off, loc.first_off + horizon_h)
+    gi = loc.base[:, None] + offs
+    assert gi.max() < len(hi), f'{symbol}: barrier window runs past the path series'
+    gh, gl = hi[gi], lo[gi]
+
+    sg = 1.0 if side == 'LONG' else -1.0
+    stop_px = (e - sg * risk)[:, None]
+    stop_i = _first_true((gl <= stop_px) if side == 'LONG' else (gh >= stop_px), never)
+
+    out = {'symbol': symbol, 'timestamp': loc.fts, 'entry': e, 'atr': a}
+    for R in r_grid:
+        tgt = (e + sg * R * risk)[:, None]
+        tgt_i = _first_true((gh >= tgt) if side == 'LONG' else (gl <= tgt), never)
+        # Strict '<': a tie means the same bar touched both, and the stop wins by convention.
+        out[f'hit_{side}_{R:g}R'] = (tgt_i < stop_i).astype(np.int8)
+    out[f'stopfirst_{side}'] = (stop_i < never).astype(np.int8)
+    return pd.DataFrame(out), prov
+
+
 def simulate(
     feat: pd.DataFrame,
     path: pd.DataFrame,
@@ -105,6 +220,7 @@ def simulate(
     entry_mode: Entry = 'pullback',
     params: PayoffParams | None = None,
     require_contiguous: bool = True,
+    max_gap_s: int = 3600,
 ) -> tuple[pd.DataFrame, Provenance]:
     """One symbol, one depth, one side. Returns per-opportunity rows plus provenance.
 
@@ -127,51 +243,18 @@ def simulate(
     if entry_mode != 'pullback' and depth_atr != 0:
         raise ValueError(f'entry_mode={entry_mode!r} takes no depth (got {depth_atr})')
 
-    ts_raw = feat['timestamp'].to_numpy(np.int64)
-    fts = (ts_raw // 1000) if ts_raw[0] > 1e12 else ts_raw
-    pts = path['ts'].to_numpy(np.int64)
-    hi, lo, cl, op = (path[c].to_numpy(np.float64) for c in ('high', 'low', 'close', 'open'))
-    prov.rows_in = len(fts)
-
-    # `shift` is the whole correction. Under bar_close the signal is only known at the CLOSE of the
-    # feature bar, so the actionable window starts `bar_hours` later and its offsets start at 0.
-    shift = 0 if anchor == 'legacy_open' else p.bar_hours
-    first_off = 1 if anchor == 'legacy_open' else 0
-    span = p.wait_h + p.hold_h + shift + first_off + p.delay_bars
-
-    idx = np.searchsorted(pts, fts, side='left')
-    in_range = (idx >= 0) & (idx < len(pts))
-    matched = np.zeros(len(fts), bool)
-    matched[in_range] = pts[idx[in_range]] == fts[in_range]
-    prov.dropped_no_path_match = int((~matched).sum())
-
-    horizon_ok = matched & (idx < len(pts) - span)
-    prov.dropped_short_horizon = int((matched & ~horizon_ok).sum())
-
-    # CONTIGUITY. Every offset below is index arithmetic, which silently means something else across
-    # a gap. Measured on the real path files: 10 of 24 symbols have gaps, and NEARUSDT's is 57.8
-    # MILLION seconds — 669 days. `base + 4` there is not "four hours later", it is two years later.
-    run_id = np.concatenate([[0], np.cumsum(np.diff(pts) != 3600)])
-    end_i = np.clip(idx + span, 0, len(pts) - 1)
-    contiguous = horizon_ok & ((run_id[np.clip(idx, 0, len(pts) - 1)] == run_id[end_i])
-                               if require_contiguous else True)
-    prov.dropped_gap_in_window = int((horizon_ok & ~contiguous).sum())
-
-    e0 = feat['price'].to_numpy(np.float64)
-    atr_pct = feat['atrPercent'].to_numpy(np.float64)
-    atr = (atr_pct / 100.0) * e0
-    good = contiguous & np.isfinite(atr) & (atr > 0) & np.isfinite(e0) & (e0 > 0)
-    prov.dropped_bad_atr = int((contiguous & ~good).sum())
-
-    r_ = np.where(good)[0]
-    prov.rows_out = len(r_)
+    loc = locate(feat, path, symbol=symbol, anchor=anchor,
+                 span_h=p.wait_h + p.hold_h + p.delay_bars, bar_hours=p.bar_hours,
+                 require_contiguous=require_contiguous, max_gap_s=max_gap_s, prov=prov)
+    hi, lo, cl = (path[c].to_numpy(np.float64) for c in ('high', 'low', 'close'))
+    r_, first_off, fts = loc.rows, loc.first_off, loc.fts
     if len(r_) == 0:
         return pd.DataFrame(columns=['symbol', 'timestamp', 'atrPct', 'filled', 'oppR', 'fillR']), prov
 
-    base = idx[r_] + shift          # index of the first bar the strategy may act in
-    e_, a_, apct = e0[r_], atr[r_], atr_pct[r_]
+    base = loc.base                 # index of the first bar the strategy may act in
+    e_, a_, apct = loc.entry_px, loc.atr, loc.atr_pct
     sg = 1.0 if side == 'LONG' else -1.0
-    never = span + 10
+    never = p.wait_h + p.hold_h + p.delay_bars + 10
 
     if entry_mode == 'pullback':
         entry = e_ - sg * depth_atr * a_          # AGAINST the direction: a better price
@@ -254,7 +337,7 @@ def simulate(
     fee_r = p.fee_pct / np.clip(apct * p.stop_atr, 0.05, None)
 
     out = pd.DataFrame({
-        'symbol': symbol, 'timestamp': fts[r_], 'atrPct': apct,
+        'symbol': symbol, 'timestamp': fts, 'atrPct': apct,
         'filled': filled.astype(np.int8),
         'oppR': np.where(filled, r - fee_r, 0.0),
         'fillR': np.where(filled, r - fee_r, np.nan),

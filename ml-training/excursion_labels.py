@@ -7,13 +7,20 @@ The label a trade actually faces. `goodR` asks whether price EVER moved 1.5 ATR 
 ignores ordering, so a bar that fell 3 ATR and then rallied 2 scores 1 while the position was
 stopped out hours earlier. This walks the real 1h path and records which barrier is touched first.
 
-CONSERVATIVE INTRA-BAR CONVENTION: when a single 1h bar's range spans both barriers, ordering is
-unknowable at this resolution and the STOP is assumed to fill first. That biases every probability
-DOWN, which is the correct direction for a number that will size positions.
+RE-RUN 2026-08-26 ON `_payoff.barriers`. The original scanned `arange(1, 73)` from the bar whose
+timestamp EQUALS the feature timestamp T. But a feature row's `price` is the CLOSE of the bar
+spanning T..T+4h, so the label window started four hours BEFORE the signal existed — and the
+pre-entry span T+1h..T+4h sits inside the very 4H bar whose OHLC is in the feature vector, giving
+the leak a feature-side handle (`atrPercent`, `bodyWickRatio`, `hBBPercentB`).
+
+That is why `ml-model-excursion-crypto.json` was quarantined on 2026-08-26 (plan step 0.5): it was
+trained on these labels and served live. Regenerating this file is the prerequisite for retraining
+it. The window now runs `arange(0, 72)` from the bar OPENING at T+4h.
 """
 import glob, os, sys
 import numpy as np
 import pandas as pd
+from _payoff import barriers, Provenance
 
 HORIZON_H = 72            # hours; matches DEFAULT_STRUCTURE.holdingHorizonHours
 STOP_ATR = 1.0            # matches DEFAULT_STRUCTURE.stopAtrMultiple
@@ -21,83 +28,35 @@ R_GRID = [1.0, 1.5, 2.0, 3.0, 5.0, 8.0]   # the grid provisionalCurve emits
 FEAT_DIR = 'csv_exports_v14'
 PATH_DIR = 'vision_backfill/klines_long'
 OUT = 'excursion_dataset.pkl.gz'   # pickle+gzip: no pyarrow/fastparquet dependency
+ANCHOR = 'bar_close'
 
 
-def label_symbol(sym: str) -> pd.DataFrame | None:
+def label_symbol(sym: str):
     fp, pp = f'{FEAT_DIR}/{sym}.csv', f'{PATH_DIR}/{sym}.csv'
     if not (os.path.exists(fp) and os.path.exists(pp)):
-        return None
-
-    feat = pd.read_csv(fp)
+        return None, None
+    feat = pd.read_csv(fp, low_memory=False)
     path = pd.read_csv(pp).sort_values('ts').reset_index(drop=True)
 
-    # Both are unix SECONDS. (Checked, not assumed: an earlier version divided by 1000 on the
-    # assumption features were ms, which silently produced zero exact matches and zero rows.)
-    ts_raw = feat['timestamp'].to_numpy(np.int64)
-    fts = (ts_raw // 1000) if ts_raw[0] > 1e12 else ts_raw
-    pts = path['ts'].to_numpy(np.int64)
-    high = path['high'].to_numpy(np.float64)
-    low = path['low'].to_numpy(np.float64)
-
-    # Locate each feature bar in the 1h path. searchsorted 'left' then verify exactness: a feature
-    # bar with no matching kline hour must be dropped, not silently snapped to a neighbour.
-    idx = np.searchsorted(pts, fts, side='left')
-    ok = (idx < len(pts) - HORIZON_H) & (idx >= 0)
-    idx_safe = np.clip(idx, 0, len(pts) - 1)
-    ok &= (pts[idx_safe] == fts)                       # exact hour match only
-
-    # Entry is the bar's reference price -- the v14 column is `price`, which is exactly what the
-    # live model sees. ATR comes from the same row, so entry and risk cannot disagree.
-    entry = feat['price'].to_numpy(np.float64)
-    atr = (feat['atrPercent'].to_numpy(np.float64) / 100.0) * entry
-    ok &= np.isfinite(atr) & (atr > 0) & np.isfinite(entry) & (entry > 0)
-
-    if ok.sum() == 0:
-        return None
-
-    rows = np.where(ok)[0]
-    base = idx[rows]
-    e, a = entry[rows], atr[rows]
-    risk = STOP_ATR * a
-
-    # Gather the next HORIZON_H bars for every row at once: (n, 72).
-    offs = np.arange(1, HORIZON_H + 1)
-    gh = high[base[:, None] + offs]
-    gl = low[base[:, None] + offs]
-
-    NEVER = HORIZON_H + 10
-
-    def first_true(mat):
-        """Index of the first True per row, or NEVER when the row never fires."""
-        any_hit = mat.any(axis=1)
-        first = mat.argmax(axis=1)
-        return np.where(any_hit, first, NEVER)
-
-    out = {'symbol': sym, 'timestamp': fts[rows], 'entry': e, 'atr': a}
-
+    frames, provs = [], []
     for side in ('LONG', 'SHORT'):
-        # LONG  : stop below (low breaches), target above (high breaches)
-        # SHORT : stop above (high breaches), target below (low breaches)
-        # [:, None] gives each row its own barrier against the (n, 72) path matrix; without it
-        # numpy aligns the (n,) barrier against the 72 TIME axis and compares the wrong things.
-        stop_px = (e - risk if side == 'LONG' else e + risk)[:, None]
-        stop_i = first_true(gl <= stop_px) if side == 'LONG' else first_true(gh >= stop_px)
+        out, prov = barriers(feat, path, symbol=sym, side=side, r_grid=R_GRID,
+                             anchor=ANCHOR, horizon_h=HORIZON_H, stop_atr=STOP_ATR)
+        provs.append(prov)
+        if not len(out):
+            return None, None
+        frames.append(out if not frames else out.drop(columns=['symbol', 'timestamp', 'entry', 'atr']))
+    lab = pd.concat(frames, axis=1)
 
-        for R in R_GRID:
-            tgt_px = (e + R * risk if side == 'LONG' else e - R * risk)[:, None]
-            tgt_i = first_true(gh >= tgt_px) if side == 'LONG' else first_true(gl <= tgt_px)
-            # Strict '<': a tie means the same 1h bar touched both, and the stop wins by convention.
-            out[f'hit_{side}_{R:g}R'] = (tgt_i < stop_i).astype(np.int8)
-
-        out[f'stopfirst_{side}'] = (stop_i < NEVER).astype(np.int8)
-
-    lab = pd.DataFrame(out)
-    # Carry the features across on the same rows, so the join cannot drift.
-    fcols = [c for c in feat.columns if c not in ('symbol',)]
+    # Carry the features across on the SAME rows the labels came from, so the join cannot drift.
+    # `barriers` returns rows in feature order, and `locate` reports which survived.
+    keep = feat['timestamp'].to_numpy(np.int64)
+    keep = (keep // 1000) if keep[0] > 1e12 else keep
+    pos = pd.Index(keep).get_indexer(lab['timestamp'].to_numpy())
+    assert (pos >= 0).all(), f'{sym}: a label row has no feature row'
+    fcols = [c for c in feat.columns if c != 'symbol']
     return pd.concat([lab.reset_index(drop=True),
-                      feat.iloc[rows][fcols].reset_index(drop=True).add_prefix('f_')], axis=1)
-
-
+                      feat.iloc[pos][fcols].reset_index(drop=True).add_prefix('f_')], axis=1), provs
 def main():
     syms = sorted({os.path.basename(f)[:-4] for f in glob.glob(f'{FEAT_DIR}/*.csv')} &
                   {os.path.basename(f)[:-4] for f in glob.glob(f'{PATH_DIR}/*.csv')})
@@ -106,7 +65,7 @@ def main():
     parts = []
     for i, s in enumerate(syms, 1):
         try:
-            d = label_symbol(s)
+            d, _pv = label_symbol(s)
         except Exception as ex:
             print(f'  {s}: FAILED {ex}', flush=True); continue
         if d is None or len(d) == 0:
@@ -119,6 +78,9 @@ def main():
         print('no data'); sys.exit(1)
 
     df = pd.concat(parts, ignore_index=True)
+    df.attrs['provenance'] = Provenance(anchor=ANCHOR, entry_mode='barrier', symbols=len(parts),
+                                        params=dict(horizon_h=HORIZON_H, stop_atr=STOP_ATR,
+                                                    r_grid=R_GRID)).to_dict()
     df.to_pickle(OUT)
     print(f'\nwrote {OUT}: {len(df):,} rows, {df["symbol"].nunique()} symbols')
 

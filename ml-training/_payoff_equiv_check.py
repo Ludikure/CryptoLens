@@ -53,7 +53,12 @@ def run(anchor, require_contiguous=True):
 
 def main():
     print('=== step 1: legacy_open must reproduce level_entry_rows.pkl.gz exactly ===')
-    old = pd.read_pickle('level_entry_rows.pkl.gz')
+    # A FROZEN copy of the artifact produced by the pre-migration `level_entry.py`, restored from
+    # commit 75864bf. It deliberately does NOT share a filename with anything a driver writes: the
+    # first version of this check read `level_entry_rows.pkl.gz`, which the migrated driver then
+    # overwrote with corrected output, and the check silently started comparing the new code against
+    # itself. A reference artifact that a run can clobber is not a reference.
+    old = pd.read_pickle('level_entry_rows.LEGACY.pkl.gz')
     new, provs = run('legacy_open')
     print(f'old {len(old):,} rows x {old.shape[1]} cols   new {len(new):,} rows x {new.shape[1]} cols')
 
