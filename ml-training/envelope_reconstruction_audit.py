@@ -18,6 +18,7 @@ Usage:  python3 envelope_reconstruction_audit.py [--symbols N]
 """
 import sys, glob, os
 import numpy as np, pandas as pd
+import _guards as G
 
 EXPORTS, V14 = 'envelope_exports', 'csv_exports_v14'
 
@@ -49,6 +50,28 @@ def main():
     print(f'{len(d):,} bars, {len(syms)} symbols\n')
 
     out = []
+
+    # ── 0. the guards, on the real columns ────────────────────────────────────────────────────
+    # Run first, and reported rather than raised, because this script's PURPOSE is to characterise
+    # broken conditions — a guard that aborted here would prevent the very measurement being made.
+    # Everywhere else they should raise.
+    print('=== guards (each of these caught a defect that shipped) ===')
+    try:
+        G.check_value_domain('|momentumAlignment| (used as a continuation COUNT)',
+                             d.momentumAlignment.abs().to_numpy(), 2)
+        print('  value domain: PASSED (unexpected)')
+    except G.GuardError as e:
+        print(f'  value domain: {e}')
+    bias = np.sign(d.tfAlignment)
+    fund = np.sign(d.fundingRateRaw.fillna(0))
+    try:
+        G.check_no_duplicates({'live funding rule': ((fund == bias) & (bias != 0)).to_numpy(),
+                               'reconstruction':    ((fund == -bias) & (bias != 0)).to_numpy()})
+        print('  duplicate/complement: PASSED')
+    except G.GuardError as e:
+        print(f'  duplicate/complement: {str(e).splitlines()[-1].strip()}')
+    print(f'  independence: {G.check_independence(len(d), 72, 4)}')
+    print()
 
     # ── 1. continuation ────────────────────────────────────────────────────────────────────────
     # `envelope_whole.py:43`: cont = |f_momentumAlignment|, then `cont < 2` and `cont < 3`.

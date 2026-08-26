@@ -216,7 +216,7 @@ interface TradeSimResult {
     maxAdverse: number;
 }
 
-function simulateTrade(
+export function simulateTrade(
     alignment: string, isCrypto: boolean, fourHPrice: number, atrFor4H: number,
     oneHCandles: Candle[], firstFutureOneHIdx: number,
 ): TradeSimResult {
@@ -272,14 +272,34 @@ function simulateTrade(
 }
 
 /// First 1H candle index strictly after `evalTime`. Mirrors Swift's `oneHIdx` semantics
-/// (it's pre-advanced to the next bar before each iteration's trade scan).
-function firstOneHIndexAfter(oneHCandles: Candle[], evalTime: number): number {
-    let lo = 0, hi = oneHCandles.length;
-    while (lo < hi) {
+const FOUR_H_MS = 4 * 3_600_000;
+
+/**
+ * Index of the 1H bar OPENING exactly at `targetMs`, or -1 when the archive has no such bar.
+ *
+ * THE ANCHOR (fixed 2026-08-26, plan step 1.5). `simulateTrade` derives its entry from
+ * `fourHAll[i].close` — the price at T+4h — but was handed the index of the
+ * first bar strictly after `evalTime`, which is the bar at T+1h. So it scanned for stops and targets across three hours that had already
+ * happened when the entry price came into existence: a stop could be "hit" by a low that occurred
+ * BEFORE the trade could have been placed. This is the same defect that inverted the entry-discipline
+ * finding in the Python layer, in TypeScript, and it contaminates the `trade*` columns of every v14
+ * CSV.
+ *
+ * Not live damage — v14 excludes `trade*` from the feature list — but a loaded gun in the export.
+ *
+ * Exact match rather than "first at or after": if the hour that should open the trade is MISSING
+ * from the archive, the honest answer is that this bar cannot be simulated. Snapping to a neighbour
+ * would silently place the entry at a different time than the price it was priced from.
+ */
+export function oneHIndexAtExact(oneHCandles: Candle[], targetMs: number): number {
+    let lo = 0, hi = oneHCandles.length - 1;
+    while (lo <= hi) {
         const mid = (lo + hi) >>> 1;
-        if (oneHCandles[mid].time <= evalTime) lo = mid + 1; else hi = mid;
+        const t = oneHCandles[mid].time;
+        if (t === targetMs) return mid;
+        if (t < targetMs) lo = mid + 1; else hi = mid - 1;
     }
-    return lo;
+    return -1;
 }
 
 /// Direction-aware fwdMaxFavR matching BacktestEngine.swift:1022-1026. For aligned
@@ -496,10 +516,12 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
 
         // Trade simulation — only fires on aligned bars; matches Swift's
         // tradeResult == nil semantics on neutral/conflict.
-        const firstOneH = firstOneHIndexAfter(oneHAll, evalTime);
-        const tradeSim = simulateTrade(
-            biasAlignmentStr, isCrypto, price, atrFor4H, oneHAll, firstOneH,
-        );
+        // The trade opens at the CLOSE of this 4H bar, so the first hour it can be exposed to is the
+        // one opening at T+4h — not T+1h, which is inside the signal bar itself.
+        const firstOneH = oneHIndexAtExact(oneHAll, evalTime + FOUR_H_MS);
+        const tradeSim = firstOneH < 0
+            ? { outcome: 'NONE', pnlPct: 0, barsToOutcome: 0, maxFavorable: 0, maxAdverse: 0 }
+            : simulateTrade(biasAlignmentStr, isCrypto, price, atrFor4H, oneHAll, firstOneH);
 
         const w24 = computeFwdWindow24H(fourHAll, i);
         // Direction-aware fwdMaxFavR mirrors BacktestEngine.swift:1022-1026 — long
