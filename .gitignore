@@ -29,3 +29,7 @@ ml-training/vision_cache/
 marketscope.db
 marketscope.db-shm
 marketscope.db-wal
+
+# Envelope verdict exports — regenerable from marketscope-worker/scripts/exportEnvelope.ts
+# (~40 min against marketscope.db). 129 MB; provenance lives in the files themselves.
+ml-training/envelope_exports/

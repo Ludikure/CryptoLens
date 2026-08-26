@@ -1901,3 +1901,110 @@ module is the fix, and no further one-off simulation may be used to justify a pr
   choice. `CLAUDE.md` documents a `predeploy` hook, but that belongs to `wrangler deploy`, which this
   box does not use. **This was the channel through which every broken prompt reached production.** A
   `test` job now gates `build-and-push` via `needs:`.
+
+---
+
+# THE RECONSTRUCTIONS, MEASURED — 2026-08-26 (plan steps 1.8-1.10)
+
+Everything above measured the Conviction Envelope by **rebuilding its rules in Python** from the v14
+feature columns. Two reviews found five defects in that rebuild, each of which had already driven a
+live change. The repair was not to test the rebuild harder — it was to stop having a second
+implementation.
+
+`marketscope-worker/src/envelope.ts` now holds the rules as `evaluateEnvelope()`, `buildUserPrompt`
+returns its verdict, and `scripts/exportEnvelope.ts` replays the real builder bar by bar into
+`ml-training/envelope_exports/`. Research reads that by **joining on (symbol, timestamp)**.
+
+## Why the verdict had to be returned rather than parsed
+
+`buildUserPrompt` renders `HIGH_blocked_because` / `MODERATE_blocked_because` /
+`downgrade_one_tier_if_LLM_decides` only in the `else` branch of `if (autoFlat.length)`. On a FLAT
+bar all three are computed and discarded. Measured on the real BTC tape at ML 0.30: **66 of 139 bars
+FLAT, and the block lists were invisible on 66 of 66 of them.** FLAT bars are both the majority and
+the ones a gate study is about, so a replay that reads the rendered prose is blind exactly where it
+needs to see.
+
+## The join gate, and the data defect it found
+
+The export refuses to write unless its bars agree with `csv_exports_v14` on **price and three
+slice-sensitive columns** — `dRsi` (daily slice), `hRsi` (4H slice), `atrPercentile` (daily
+population). Price alone is not enough: it is read off the bar, so an `i-300..i` mutation passed a
+price-only check silently. Mutation-tested — three deliberate slice errors, three catches, each by a
+different column, including **restoring the in-progress-day leak** (the 2026-06-02 defect behind the
+retracted 94% direction claim), which shows up as a 0.15 dRsi difference and is now a standing test.
+
+It immediately found that the local box snapshot carries **mid-bar cron writes**. ADAUSDT's 4H bar at
+2026-04-14 00:00 is stored closing 0.2461 on 5.9M volume where the settled bar closed 0.2447 — and
+that settled close appears as the NEXT bar's open. Handled as a longest-agreeing-prefix with the
+divergence recorded per symbol: **75 symbols, 799,193 rows, 97.0% kept, 137 isolated blips (0.017%),
+73 symbols tail-truncated (mostly April 2026).**
+
+> **Consequence for the frozen holdout.** The holdout is the last six months — precisely the span
+> this archive cannot reproduce. **It must be built from Binance Vision, not from this snapshot.**
+
+## Funding is not optional dressing
+
+The first export ran without derivatives and returned an ADAUSDT `continuationCount` that could never
+reach 3 — the exact structural degeneracy Part 9 found on stocks, on a crypto symbol, for the same
+reason: the third continuation signal is funding support (`prompt.ts:1038`). With funding taken from
+the v14 row itself:
+
+| count | 0 | 1 | 2 | 3 |
+|---|---:|---:|---:|---:|
+| share | 26.7% | 50.0% | 22.4% | **0.86%** |
+
+P(count = 3) = 0.86% against the **0.87%** Part 9 reported, and `continuation < 2` fires on 76.7%
+against its **77.5%**. Part 9's continuation figures were a CODE reading rather than a simulation,
+and they replicate — worth recording, since most of what this programme re-checked did not.
+
+Blast radius, measured: funding moves `continuationCount` on 29.1% of rows, `moderateBlocks` on
+10.4%, and **`max_allowed` on 8.7%**. An envelope study run without derivatives is not approximately
+right; it is wrong on about one bar in eleven.
+
+*(Unit trap, avoided by checking: `fundingRateRaw` is ALREADY IN PERCENT — `scripts/derivatives.ts:20`
+documents it as "% (already × 100)". The name invites a `× 100` that would be a 100× error.)*
+
+## How wrong the reconstructions were
+
+`ml-training/envelope_reconstruction_audit.py`, **799,193 bars, 75 symbols**:
+
+| condition | true fires | reconstructed | agreement | Jaccard |
+|---|---:|---:|---:|---:|
+| `continuation < 2` | 0.754 | **1.000** | 0.754 | 0.754 |
+| `continuation < 3` | 0.991 | **1.000** | 0.991 | 0.991 |
+| `biases_MIXED` | 0.639 | 0.295 | 0.611 | 0.411 |
+| `alignment_not_full` | 0.761 | 0.757 | 0.827 | 0.796 |
+| `funding_supports_counter` (sign only) | 0.365 | 0.320 | 0.314 | **0.000** |
+| `funding_supports_counter` (as gated) | **0.028** | 0.320 | 0.652 | **0.000** |
+| `ANY_KILLED` domain | **0.066** | 1.000 | 0.066 | 0.066 |
+| `1H opposes daily` | 0.066 | 0.199 | 0.853 | 0.287 |
+| **`max_allowed`** (ML excluded) | | | **0.113** | |
+
+Four findings, each previously an argument and now a measurement:
+
+1. **`|momentumAlignment|` takes values {0, 1}** — confirmed empirically, not inferred. Both
+   continuation thresholds fire on every row, so the reconstructed tier emits **only FLAT and LOW**:
+   across 799k bars it never once produced MODERATE or HIGH. **Part 2's "NOT VERIFIED" verdict — the
+   premise the entire Parts 6-10 programme was built on — rests on that.**
+2. **`funding_supports_counter` has Jaccard 0.0000.** Not inaccurate: the reconstruction is the exact
+   logical complement, so the masks are disjoint by construction. And the live rule fires on 2.8% of
+   bars where the sweep scored 32.0% — a sign inversion on top of an 11× population error.
+3. **`ANY_KILLED` exists on 6.6% of bars.** Part 7 scored every kill rule on 100% of them — a 15.1×
+   inflation contaminating BOTH kill rows, `counter_move_volume_exceeds` included.
+4. **The real MIXED state covers 63.9% of bars** where `tfAlignment == 0` covers 29.5%. Part 1's
+   biases_MIXED arm missed more than half of its own population.
+
+`envelope_sweep.py`, `envelope_whole.py`, `stock_gates.py` and `chase_stop_test.py` are **retracted in
+place** — docstring carrying these numbers, plus a hard `sys.exit` so a stale invocation cannot
+quietly produce another figure. Nothing imported them.
+
+## What this does NOT establish
+
+The audit computes **no payoffs and reaches no trading conclusion**. It says the reconstructions
+described a different population from the one the app gates; it does not say what the right gate
+configuration is. The payoff layer is separately retracted (the 4-hour anchor) and its replacement is
+plan step 1a. Mixing the two is how the original numbers got their credibility.
+
+**Unsupported is still not the same as proven wrong.** Every removal made in Parts 1-11 remains in
+force pending Phase 3, and re-adding a gate whose evidence is equally broken would be a second
+unvalidated change.
