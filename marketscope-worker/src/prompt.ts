@@ -490,6 +490,12 @@ export interface BuildPromptInput {
   // Insight enrichments (2026-07-02) — all derived from data the system already stores:
   mlCalibration?: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null;  // live realized goodR for the CURRENT prediction's bucket (ml_calibration D1)
   calibratedMlWin?: number | null;   // raw ML_WIN corrected by the live forward calibration — used by the auto-FLAT/quality gate so drift can't over-suppress
+  /**
+   * RAW-scale cut rejecting the weakest fraction of the live prediction distribution. REPLACES the
+   * envelope's fixed `calibrated < 50` floor when supplied, so recalibration cannot silently move
+   * the gate's selectivity. See `docs/research/ml-floor-coverage.md`.
+   */
+  mlCoverageCut?: number | null;
   mlTrajectory?: { points: number[]; hours: number } | null;                   // sampled ML_WIN path over the last N hours, oldest→newest (score_history D1)
   btcContext?: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null; // BTC regime read for alt analyses (ml_preds:all KV)
   volPricing?: { dvol: number; impliedMovePct: number; forecastMovePct: number } | null;  // options-implied vs model-forecast move (BTC/ETH, Deribit DVOL)
@@ -1364,6 +1370,7 @@ export function buildUserPrompt(input: BuildPromptInput): {
         // makes a historical replay honest.
         daysToEarnings: stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs
           ? Math.floor((stockInfo.earningsDate - nowMs) / 86400000) : null,
+        mlCoverageCut: input.mlCoverageCut ?? null,
       };
       const env = evaluateEnvelope(envIn);
       envelopeInput = envIn; envelopeVerdict = env;

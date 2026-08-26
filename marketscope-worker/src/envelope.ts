@@ -53,6 +53,19 @@ export interface EnvelopeInput {
   cryptoBearRegime: boolean;
   /** Whole days to the next FUTURE earnings report, or null when none is scheduled ahead. */
   daysToEarnings: number | null;
+  /**
+   * RAW-scale cut that rejects the weakest `COVERAGE_FLOOR` of the live prediction distribution,
+   * from `coverageCut()`. When present it REPLACES the fixed `calibrated < 50` floor.
+   *
+   * The floor was built to reject ~45% of bars and had come to reject 8.0%, because the PAV curve
+   * kept moving under a cutoff expressed as a fixed level (calibrated 50 now means raw 30.3%). This
+   * makes SELECTIVITY the invariant instead of the number, so recalibration cannot silently loosen
+   * it again. Pre-declared in `docs/research/ml-floor-coverage.md`.
+   *
+   * null when there is too little live data to invert a distribution — the level-based floor is then
+   * used unchanged, which is the safe direction.
+   */
+  mlCoverageCut: number | null;
 }
 
 export interface EnvelopeVerdict {
@@ -81,7 +94,23 @@ export function evaluateEnvelope(input: EnvelopeInput): EnvelopeVerdict {
   const mlPct = gateMlWin != null ? iTrunc(gateMlWin * 100) : null;
   const calibLifted = input.calibratedMlWin != null && rawMlPct != null && rawMlPct < 50 && mlPct != null && mlPct >= 50;
   const autoFlat: string[] = [];
-  if (mlPct != null && mlPct < 50) autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);
+  // THE HARD FLOOR. Expressed as COVERAGE when a live distribution exists, as a LEVEL otherwise.
+  //
+  // This REPLACES the fixed `calibrated < 50`; it does not add a gate. Same population, same
+  // placement in `autoFlat`, same `ML_WIN_` reason prefix (which `isQualityGateReason` matches, so
+  // the FRAMING hatch keeps working — losing that was one of the five defects that got the Part 11
+  // version reverted within a day).
+  //
+  // The cut is on the RAW scale because that is the scale the distribution is measured on. Comparing
+  // a raw value against a raw percentile is the whole point: it is immune to the calibration curve
+  // moving, which is what broke the level version.
+  if (input.mlCoverageCut != null && input.rawMlWin != null) {
+    if (input.rawMlWin < input.mlCoverageCut) {
+      autoFlat.push(`ML_WIN_${rawMlPct}%_below_live_floor_${iTrunc(input.mlCoverageCut * 100)}%`);
+    }
+  } else if (mlPct != null && mlPct < 50) {
+    autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);
+  }
   if (input.anyKilled) autoFlat.push('ANY_KILLED=true');
   // REMOVED 2026-08-25 — directly tested and unsupported (envelope-rules.md Part 6 + follow-up).
   //

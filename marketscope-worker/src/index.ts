@@ -2,7 +2,7 @@
 // All API keys stay server-side. Device auth via signed tokens.
 
 import { type Candle as ScoreCandle } from './scoring';
-import { fitCalibrationCurve, applyCalibration, type CalBucket, type CalPoint } from './calibration';
+import { fitCalibrationCurve, applyCalibration, coverageCut, type CalBucket, type CalPoint } from './calibration';
 import { mlPredict, mlPredictH72, mlPredictMeta, mlPredictQuantile, mlConfident, mlPredictDirection, mlPredictTail, tailRiskBucket, tailRiskInfo, buildMLInput } from './ml-predict';
 import { computeAllFeatures, sectorETFForSymbol, type Candle as FullCandle, type FullFeatures } from './scoring-full';
 import { aggregate1HTo4H_ET } from './aggregation';
@@ -279,6 +279,38 @@ export async function fetchLiquidationSummary(env: Env, symbol: string):
 // precheck, and the symbol pass's notify threshold — one mapping gates every decision.
 const CAL_WINDOW_DAYS = 90;
 
+/**
+ * Selectivity of the envelope's hard ML floor, as a FRACTION OF LIVE BARS REJECTED.
+ *
+ * This is the gate's original design intent, recovered — NOT a fitted value, and it must never be
+ * re-optimised. `envelope.ts`'s `< 50` floor was designed against v14's training distribution, where
+ * it rejected ~45%; by 2026-08-21 it rejected 8.0%, because the PAV curve kept moving under a cutoff
+ * expressed as a fixed level. C6 measured that walk-forward fitting of this threshold DESTROYS it —
+ * on SHORT the out-of-sample result swung across a 0.34R range on a signal whose whole size is
+ * 0.05R, and on LONG the optimizer picked the loosest threshold available every single time.
+ *
+ * Setting this to null restores the level-based gate exactly. See docs/research/ml-floor-coverage.md.
+ */
+const COVERAGE_FLOOR: number | null = 0.45;
+
+/** Per-market cut, memoized for one cron pass — inverting the distribution twice per bar is waste. */
+let coverageCutCache: { crypto: number | null; stock: number | null; at: number } | null = null;
+
+async function mlCoverageCutFor(env: Env, isCrypto: boolean): Promise<number | null> {
+  if (COVERAGE_FLOOR == null) return null;
+  const fresh = coverageCutCache && Date.now() - coverageCutCache.at < 300_000;
+  if (!fresh) {
+    // Per market: crypto and stock prediction distributions differ, and gating one on the other's
+    // percentile is the defect that got the Part 11 version reverted.
+    const [c, st] = await Promise.all([
+      fetchLiveCalBuckets(env, true).then(b => coverageCut(b, COVERAGE_FLOOR!)).catch(() => null),
+      fetchLiveCalBuckets(env, false).then(b => coverageCut(b, COVERAGE_FLOOR!)).catch(() => null),
+    ]);
+    coverageCutCache = { crypto: c, stock: st, at: Date.now() };
+  }
+  return isCrypto ? coverageCutCache!.crypto : coverageCutCache!.stock;
+}
+
 async function fetchLiveCalBuckets(env: Env, isCrypto: boolean): Promise<CalBucket[]> {
   try {
     const res = await env.DB.prepare(
@@ -377,7 +409,8 @@ async function envelopePrecheck(env: Env, symbol: string, isCrypto: boolean, mlP
     const { calibratedMlWin } = cal ?? await fetchMlCalibration(env, mlProb, isCrypto);
     let prevState: PromptState = {};
     try { const s = await env.ALERTS.get(`prompt:${symbol}`); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh */ }
-    const built = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin });
+    const built = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin,
+      mlCoverageCut: await mlCoverageCutFor(env, isCrypto) });
     // The full verdict is stashed for the forward logger, which needs `max_allowed` and the block
     // lists — three of the four are rendered only on non-FLAT bars, so parsing the prose would be
     // blind on exactly the bars a gate study is about. The return contract is unchanged.
@@ -559,6 +592,9 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   const { prompt, newState } = buildUserPrompt({
     symbol, nowMs, indicators, livePrice, outcomeHistory, prevState, settings, economicEvents, activeSetups, volForecast, riskStates,
     mlCalibration, calibratedMlWin, mlTrajectory, btcContext, volPricing, liquidations, news,
+    // Same cut the notify precheck uses, from the same function — the zero-drift-by-construction
+    // property only holds if both paths read one implementation.
+    mlCoverageCut: await mlCoverageCutFor(env, isCrypto),
     derivatives: deriv?.derivatives ?? null, positioning: deriv?.positioning ?? null, macro, spotPressure, sentiment, crossAsset,
     stockInfo: stock?.stockInfo ?? null, stockSentiment: stock?.stockSentiment ?? null,
   });

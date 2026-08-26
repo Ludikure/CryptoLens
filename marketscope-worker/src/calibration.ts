@@ -72,3 +72,46 @@ export function applyCalibration(curve: CalPoint[], raw: number): number {
   }
   return last.y;   // unreachable, but keeps the function total
 }
+
+
+/**
+ * The raw-scale cut that rejects the weakest `coverage` fraction of the LIVE prediction distribution.
+ *
+ * WHY THIS EXISTS. The envelope's hard floor was a fixed LEVEL on a MOVING scale. `applyCalibration`
+ * refits from live forward outcomes on every use — correctly — but a cutoff expressed as
+ * "calibrated < 50" drifts in meaning as the curve moves under it. Measured 2026-08-21: the floor
+ * was built to reject ~45% of bars and had come to reject 8.0%, because calibrated 50 now
+ * corresponds to raw 30.3%. That is a ~5x loosening nobody decided.
+ *
+ * A coverage cut cannot drift that way: it is re-derived from the distribution each time, so the
+ * SELECTIVITY is the invariant rather than the number.
+ *
+ * The buckets carry `predMean` and `n`, which is a histogram of live predictions — enough to invert
+ * the CDF without a second query. Interpolates within the bucket that straddles the target so the
+ * cut is not quantised to bucket edges.
+ *
+ * Returns null when there is too little data to invert a distribution; the caller must then fall
+ * back to the level-based gate rather than blocking everything or nothing.
+ */
+export function coverageCut(buckets: CalBucket[], coverage: number, minN = 500): number | null {
+  if (!(coverage > 0 && coverage < 1)) return null;
+  const pts = buckets.filter(b => Number.isFinite(b.predMean) && b.n > 0)
+                     .sort((a, b) => a.predMean - b.predMean);
+  const total = pts.reduce((s, b) => s + b.n, 0);
+  if (total < minN || pts.length < 3) return null;
+
+  const target = total * coverage;
+  let cum = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const next = cum + pts[i].n;
+    if (next >= target) {
+      // Linear interpolation across the straddling bucket, using its neighbours to size the step.
+      const lo = i > 0 ? (pts[i - 1].predMean + pts[i].predMean) / 2 : pts[i].predMean;
+      const hi = i < pts.length - 1 ? (pts[i].predMean + pts[i + 1].predMean) / 2 : pts[i].predMean;
+      const within = pts[i].n > 0 ? (target - cum) / pts[i].n : 0;
+      return lo + (hi - lo) * Math.min(1, Math.max(0, within));
+    }
+    cum = next;
+  }
+  return pts[pts.length - 1].predMean;
+}
