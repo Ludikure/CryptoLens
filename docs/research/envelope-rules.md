@@ -2546,3 +2546,61 @@ to be positive.
 
 Still no gate change. One measurement on a split of thin data does not move a live gate, and the
 forward logger now accumulates the independent evidence.
+
+---
+
+# CORRECTION: THE REGIME SPLIT WAS MEASURED AGAINST THE WRONG ASSET (2026-08-26)
+
+The entry above ("The LONG inversion is NOT the bear market") **is wrong, and this supersedes it.**
+
+It defined regime by **BTC's** trailing 90-day return. But BTC ran **+112% in 2024 while the
+equal-weight alt basket fell**, so the "BTC RISING" bucket was largely composed of bars where the
+*traded symbol* was falling. The confound was flagged as a possibility in the same session and then
+not checked before the conclusion was published.
+
+Re-run with each bar classified by **its own symbol's** trailing 90-day return (still causal):
+
+| symbol's own trend | side | n | net R (market entry) | block 95% CI |
+|---|---|---:|---:|---|
+| **RISING** | SHORT | 2,781 | **−0.1068** | [−0.2069, −0.0078] |
+| **RISING** | **LONG** | 21,476 | **−0.0275** | [−0.0648, +0.0118] |
+| FLAT | SHORT | 5,895 | −0.0566 | [−0.1238, +0.0129] |
+| FLAT | LONG | 4,417 | −0.0469 | [−0.1253, +0.0317] |
+| **FALLING** | **SHORT** | 38,106 | **+0.0068** | [−0.0188, +0.0349] |
+| **FALLING** | LONG | 1,651 | **−0.1395** | [−0.2606, −0.0220] |
+
+**When the symbol is rising, LONG beats SHORT. When it is falling, SHORT beats LONG.** The side
+asymmetry is DRIFT, measured against the right asset.
+
+**Why SHORT looked better in aggregate:** 38,106 falling-symbol SHORT bars against 2,781
+rising-symbol ones. The dataset is overwhelmingly bars where the traded asset was going down, so the
+aggregate SHORT number is that mix rather than a property of the short side.
+
+## What still stands
+
+**No side is profitable on its own.** Even in a rising symbol, LONG is −0.0275 with the interval
+spanning zero. "Less bad" is the whole of it.
+
+**The ordering asymmetry is real and separate.** Down-moves arrive FIRST at every ML bucket — the
+ordered SHORT-minus-LONG gap (+0.028 to +0.081) is roughly double the unordered one (+0.010 to
++0.045). That is a genuine tape property. It is simply not what drives the payoff gap.
+
+**ML predicts volatility, not direction.** Realised goodR runs 0.227 → 0.781 monotonically across
+buckets, and favourable/adverse excursions grow together at a flat ~1.0 ratio across the whole ML
+range. The model does its job; the app uses the answer as though it were directional.
+
+**ML pays through TARGET DISTANCE.** At a 1.5R target, ML lifts the ordered LONG hit rate by +0.023
+(0.364 → 0.387). At 3R it lifts it by +0.075 (0.148 → 0.222). The app's geometry is a 1.25R target —
+nearer than either, and therefore in the region where its own volatility signal has least to offer.
+
+## The methodological point
+
+Two published conclusions in one session were wrong for the same reason: a **proxy chosen for
+convenience and not validated against the thing it stood in for.** `|momentumAlignment|` for
+continuation count; BTC's trend for a per-symbol regime. The guard that catches the first
+(`check_value_domain`) has no equivalent for the second, and the fix is not another guard — it is
+that a proxy must be justified against the quantity it replaces before a conclusion rests on it.
+
+**Sample-size caveat on the table:** bias correlates with trend, so a rising symbol produces bullish
+bias and "rising symbol + SHORT" is rare (2,781 rows, wide interval). Cross-cell comparisons are
+between differently-sized and differently-selected populations.
