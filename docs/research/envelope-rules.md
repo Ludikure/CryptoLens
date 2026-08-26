@@ -2344,3 +2344,63 @@ hide an inverted gate inside a working one.
 **Regime caveat, unchanged and load-bearing:** the window is a crypto bear in which the equal-weight
 basket fell 83%, and SHORT is the better side ungated. A gate that "works on SHORT" in that window
 may be reading the regime rather than the bar. This is why C5 changes nothing on its own.
+
+---
+
+# PHASE 2 — C6: ABSOLUTE VS COVERAGE IS A NON-QUESTION ONCE YOU CONDITION ON SIDE (2026-08-26)
+
+Part 11 asked how the ML gate should be parameterised, and its shipped artifact was retracted the
+same day for a specific reason: it **measured unconditionally** (`m = w & (d.ml >= t)`, no bias
+filter, so 41.3% was 41.3% of *all* bars) and then **shipped conditionally on SHORT**, whose ML runs
+lower — a realised selectivity of ~24%, which the same research called worse than no gate.
+
+C4 and C5 established that side is the dominant term. C6 therefore conditions every arm on the side
+the gate would govern, which is exactly what the retraction demanded.
+
+## SHORT — the two parameterisations are the same curve
+
+| arm | coverage | lift | block 95% CI | periods |
+|---|---:|---:|---|---:|
+| ABS ML ≥ 0.50 | 34.4% | +0.0416 | [+0.0036, +0.0812] | 5/7 |
+| COV top 30% (≥ 0.517) | 30.0% | +0.0537 | [+0.0133, +0.0942] | 5/7 |
+| ABS ML ≥ 0.55 | 22.1% | +0.0650 | [+0.0199, +0.1109] | 5/7 |
+| COV top 20% (≥ 0.559) | 20.0% | +0.0719 | [+0.0261, +0.1195] | 5/7 |
+| ABS ML ≥ 0.65 | 6.0% | +0.0542 | [−0.0230, +0.1277] | 4/7 |
+
+**At matched coverage the two are indistinguishable.** The absolute-vs-coverage debate that produced
+`coverageCut()` is not a real choice: **coverage is the parameter, and side is the conditioner.**
+Part 11 shipped machinery to solve a problem that does not exist at the level where it matters — and
+missed the one that does.
+
+## LONG — inverted at every coverage, under both parameterisations
+
+| arm | coverage | lift | block 95% CI | periods |
+|---|---:|---:|---|---:|
+| ABS ML ≥ 0.50 | 28.2% | −0.1005 | [−0.1549, −0.0483] | 1/5 |
+| COV top 30% (≥ 0.494) | 30.0% | −0.0966 | [−0.1490, −0.0446] | 1/5 |
+| ABS ML ≥ 0.60 | 5.5% | −0.1976 | [−0.3087, −0.0871] | 0/5 |
+| COV top 20% (≥ 0.531) | 20.0% | −0.1192 | [−0.1835, −0.0558] | 0/5 |
+
+Monotone in tightness, in the wrong direction, on both scales.
+
+## Fitting the threshold is inadmissible — Part 11's control replicates
+
+| side | walk-forward mean | out-of-sample by period | thresholds chosen |
+|---|---:|---|---|
+| SHORT | +0.0516 (3/5) | +0.195, −0.125, +0.098, +0.211, −0.121 | 0.60, 0.60, 0.60, 0.55, 0.60 |
+| LONG | −0.0471 (1/4) | −0.046, −0.107, +0.037, −0.073 | **0.40, 0.40, 0.40, 0.40** |
+
+On SHORT, fitting does not destroy the edge outright but makes it **wildly unstable** — the
+out-of-sample result swings across a 0.34R range period to period, on a signal whose whole size is
+0.05R. On LONG, **the optimizer picks the loosest available threshold every single time**: it is
+trying to switch the gate off, and still loses. Part 11 saw the same thing as its coverage arm
+converging on q = 1.00. That behaviour replicates exactly.
+
+**Verdict: the threshold must stay FIXED and never fitted** — which is what production does today,
+and the one Part 11 conclusion that survives contact with the corrected stack.
+
+## The limit that applies to all of C4-C6
+
+The OOF window begins where the first walk-forward fold ends, so these arms have **5-7 half-year
+periods, not 9**. Every SHORT arm above sits at 5/7 — a majority, but short of the pre-declared 6.
+Nothing here clears the bar outright, and that is why C6, like C4 and C5, changes nothing by itself.
