@@ -15,6 +15,7 @@
 import systemPrompts from './prompt-system.json';
 import { stopQuality } from './risk-engine';
 import { tailRiskInfo } from './ml-predict';
+import { evaluateEnvelope } from './envelope';
 
 export function systemPrompt(isCrypto: boolean): string {
   return isCrypto ? (systemPrompts as { crypto: string }).crypto : (systemPrompts as { stock: string }).stock;
@@ -1296,197 +1297,35 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
 
     // Phase C10 — Conviction Envelope
     {
-      const rawMlPct = daily.mlWinProbability != null ? iTrunc(daily.mlWinProbability * 100) : null;
-      // The ML auto-FLAT keys on the CALIBRATION-CORRECTED value (2026-07-02) — the raw number
-      // has drifted low (30-50 bucket realizing ~65%), so keying the hard "no trade" on it was
-      // over-suppressing tradeable-quality bars ("no trade auto-FLAT for 2 days while BTC ran").
-      const gateMlWin = input.calibratedMlWin ?? daily.mlWinProbability;
-      const mlPct = gateMlWin != null ? iTrunc(gateMlWin * 100) : null;
-      const calibLifted = input.calibratedMlWin != null && rawMlPct != null && rawMlPct < 50 && mlPct != null && mlPct >= 50;
+      // The rule bodies live in `src/envelope.ts` (2026-08-26). They were extracted because three
+      // of the four verdict lists are computed here and then discarded on a FLAT bar — nothing
+      // outside this builder could observe `highBlocks` / `moderateBlocks` / `downgrade`, which is
+      // why every measurement of them so far reconstructed the rules in Python instead. The
+      // exporter and the research layer now call the same function this does.
       const staleCount = dataQuality?.missingEnrichments.length ?? 0;
-      const autoFlat: string[] = [];
-      if (mlPct != null && mlPct < 50) autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);
-      if (envAnyKilled) autoFlat.push('ANY_KILLED=true');
-      // REMOVED 2026-08-25 — directly tested and unsupported (envelope-rules.md Part 6 + follow-up).
-      //
-      // Twelve variant tests, zero passes. Best SHORT lift +0.0028R against a +0.02R bar, and EVERY
-      // LONG lift negative — `against bias (daily)` blocked bars averaging +0.0504R while keeping
-      // +0.0186R, the same block-the-best-bars signature as biases_MIXED and alignment_not_full.
-      //
-      // The underlying signal is real but worthless: 4H divergence moves P(up24) by +2.24pp at
-      // p=3.9e-09 and does not convert into money, while DAILY divergence is INVERTED (bearish
-      // divergence precedes UP more often, significantly). One indicator, two timeframes, opposite
-      // signs — a weak effect sliced two ways, not a mechanism.
-      //
-      // WHY THIS GOES WHILE macro_IMMINENT AND EARNINGS STAY: those guard an EXOGENOUS EVENT and
-      // never claimed predictive power, so a null EV test does not refute them. Divergence CLAIMS
-      // prediction, and a claim of prediction has to be earned.
-      // biases_MIXED auto-FLAT is ML-GATED (2026-07-06, ml-training/mixed_flat_test.py on the
-      // clean v14 regen — 870K crypto + 503K stock bars). Non-aligned bars (daily/4H mixed or
-      // neutral) carry ~2× the goodR rate of aligned bars (crypto 61/59% vs 33/30%; stocks
-      // 70/71% vs 39/35%) — they are compression/transition states where a >=1.5-ATR move is
-      // MORE likely, and the unconditional MIXED auto-FLAT fired on ~60% of all bars while
-      // suppressing the system's best volatility cell (it also made the counter-trend reversal
-      // playbook unreachable: the envelope FLATted before the LLM could build the setup the
-      // playbook allows). Direction remains a coin flip in EVERY state (P(up24) 48–53%), so the
-      // opened window trades as a structure-led setup capped at MODERATE (the alignment
-      // highBlock keeps HIGH unreachable) — never as a trend-follow. Below ML 70 the hard block
-      // stands. (The old "Stoch agreement overrides this" exemption stays removed — Stoch
-      // direction is noise and can't rescue a mixed-bias setup; ML_WIN gates VOLATILITY, which
-      // is the edge that actually exists here.)
-      // REMOVED 2026-08-25 — measured INVERTED (docs/research/envelope-rules.md Part 1).
-      //
-      // This rule blocked bars averaging **+0.0503R** against a **+0.0197R** baseline: it was
-      // discarding the best cell in the tape, at 2/9 six-month periods positive on shorts and
-      // merely noise on longs. It never passed the bar in either direction.
-      //
-      // The mechanism, confirmed in Part 2: both goodR and the barrier target are ATR-normalised,
-      // and MIXED bars are the un-compressed state where a large move relative to ATR is MORE
-      // available. Blocking them was backwards. The ML_WIN < 50 floor below still applies, so a
-      // genuinely dead tape is still flatted; what is gone is the extra alignment requirement.
-      //
-      // (Kept as history: the 2026-07-06 change already ML-gated this rule after mixed_flat_test
-      // showed non-aligned bars carry ~2x the goodR rate. That was the right direction and did not
-      // go far enough — the correct gate strength turned out to be zero.)
-      // `chase_into_extended_aligned_trend` REMOVED from auto-FLAT 2026-08-25 (Part 10). It was
-      // added 2026-07-02 as a symmetry fix and REHABILITATED in Part 4 on the grounds that it
-      // defends the CHASING arm (entering 0.25 ATR the wrong way, −0.129R/−0.195R at 0/9 periods).
-      // Both of those still stand. What changed underneath them is that `ENTRY DISCIPLINE` now
-      // forbids the app from chasing at all — so the guard defends against a move that can no
-      // longer be made, while blocking 27% of bars from producing the entry that is the single
-      // best action in the system.
-      //
-      // Measured as a bar filter on 274,079 opportunities, faithfully reconstructed:
-      //   MARKET   SHORT −0.0005 (4/9)   LONG +0.0022 (5/9)
-      //   PULLBACK SHORT −0.0017 (3/9)   LONG −0.0005 (4/9)
-      // Noise in all four cells, and the robust `stretch>=2` arm is INVERTED on LONG (−0.0067, 3/9).
-      // By the Part 6 principle this rule claims PREDICTION — that entering after an extended move
-      // is worse — and a prediction claim must be earned.
-      //
-      // It survives as CONTEXT, exactly like divergence in Part 6: the loud CHASE / EXHAUSTION RISK
-      // line, the "prefer a pullback entry" directive and the Risk Map instruction are untouched.
-      // The reading stays; the gate goes.
-      //
-      // The product consequence is the point. A chase-HIGH bar can now emit a CONDITIONAL setup at
-      // the measured pullback band instead of an empty array — which registers in `tracked_setups`,
-      // gets monitored by the cron, and fires the entry-zone push when price actually arrives. The
-      // previous behaviour named a price 0.33% away and had no mechanism to say it got there.
-      if (envMacroRisk === 'IMMINENT') autoFlat.push('macro_IMMINENT');
-      if (isTreatment) {
-        // `treatment_long_confirm_FAIL` REMOVED 2026-08-25 (Part 8). Tested on the stock intraday
-        // paths the earlier parts lacked — 487k opportunities, 159 symbols, the app's own geometry:
-        // 4/9 periods, +0.0007R global, and −0.0070R on the LONG bars it actually governs. A hard
-        // auto-FLAT with no measured benefit and a mild inversion where it matters, which is the
-        // same profile as `biases_MIXED` and SHORT-side `alignment_not_full`. The PARTIAL cap below
-        // survives: it measured mildly positive (+0.0074R, 6/9) and is a soft conviction cap rather
-        // than a block, so being wrong costs far less. Both numbers are noise-scale — the
-        // asymmetric action tracks the asymmetric cost, not a claim that either was demonstrated.
-        //
-        // Aligned-bearish stock SHORTs stay blocked, but WITHOUT the three-way escape hatch, which
-        // was inert: across 43,904 applicable bars, ML≥70 fired on 1.4%, 4H Stoch bearish on 11.5%,
-        // TRENDING on 32.0% — and all three together on 0.02%, SEVEN bars in four years, which then
-        // averaged −0.2082R, worse than the 43,897 the gate blocked. By the Part 6 principle a
-        // condition claiming predictive power must earn it; this one never once demonstrated it.
-        // The ban itself is well supported: blocked bars average −0.1123R against a −0.0457R
-        // stock-SHORT average (8/9 periods) — aligned-bearish shorts are 2.5× worse than stock
-        // shorts generally. See docs/research/envelope-rules.md Part 8.
-        const isStock = !!stockInfo;
-        if (isStock && alignedDirection === 'SHORT' && envAlignment === 'ALIGNED_BEARISH') {
-          // The label carried `_measured_-0.11R` until 2026-08-26. That figure came from
-          // `stock_gates.py` scoring `d0.25_{side}_oppR`, a column produced by the retracted
-          // 4-hour-lookahead simulation, so the NUMBER is withdrawn and must not be quoted.
-          // The GATE stands on a separate, anchor-independent fact: the three-way escape hatch it
-          // replaced fired on 7 bars in four years (0.02% of applicable bars), so simplifying it to
-          // a ban changed almost nothing. Whether aligned-bearish stock SHORTs should be blocked at
-          // all is re-tested in Phase 3 (docs/research/envelope-rules.md).
-          autoFlat.push('aligned_bearish_stock_SHORT_evidence_under_review');
-        }
-      }
-      const highBlocks: string[] = [];
-      // SCOPED TO LONG 2026-08-25 — this rule is DIRECTION-DEPENDENT, and the envelope previously
-      // had no way to say so (Part 1):
-      //   SHORT  lift -0.0276R, 3/9 periods — it blocked bars averaging +0.0288R and KEPT bars
-      //          averaging -0.0079R, converting a positive-expectancy set into a negative one.
-      //   LONG   lift +0.0264R, 6/9 periods — the one condition that cleared the pre-declared bar.
-      // Applying one rule to both sides was averaging an inverted gate with a working one.
-      //
-      // HONEST CAVEAT, recorded rather than buried: the LONG pass improves a LOSING proposition to
-      // a less-losing one (kept bars still average -0.0729R), and its likely mechanism is regime —
-      // "only go long in a confirmed uptrend" means simply *fewer longs* across a window in which
-      // the equal-weight basket fell 83%. It is kept because it passed the bar that was declared in
-      // advance, not because the mechanism is understood.
-      const alignmentBlockApplies = alignedDirection !== 'SHORT';
-      if (alignmentBlockApplies
-          && envAlignment !== 'ALIGNED_BULLISH' && envAlignment !== 'ALIGNED_BEARISH') {
-        highBlocks.push(`alignment_${envAlignment}_not_full`);
-      }
-      // `continuation < 3` REMOVED 2026-08-25 (Part 9). It required all THREE continuation signals
-      // — 4H volume confirmation (fires 5%), 4H EMA stack (50%), and funding support — and the
-      // third is crypto-only, because index.ts:492 hard-wires `derivatives` to null for stocks.
-      // Measured: P(count = 3) is 0.87% on crypto and **0.0000% on stocks**, so the rule fired on
-      // 100.0% of stock bars and HIGH conviction was structurally unreachable for the entire stock
-      // universe since it shipped. On crypto it left 0.87% of bars tradeable against a declared 20%
-      // floor, and it measured INVERTED on LONG (−0.0981R, 3/9). Its SHORT lift (+0.1345R) is the
-      // largest number in the research vault and is deliberately NOT adopted — 2,523 kept bars is
-      // exactly the thin-slice trap the coverage floor exists to catch.
-      if (mlPct != null && mlPct < 70) highBlocks.push(`ML_WIN_${mlPct}<70`);
-      if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON') highBlocks.push(`macro_${envMacroRisk}_not_ON_HORIZON`);
-      if (envNewsConflicts) highBlocks.push('news_thesis_conflict');
-      const moderateBlocks: string[] = [];
-      // SCOPED TO CRYPTO SHORT 2026-08-25 (Part 9) — direction-dependent, like `alignment_not_full`
-      // before it, and one rule averaged across two sides was averaging a working gate with an
-      // inverted one:
-      //   crypto SHORT  +0.0303R lift, 6/9 periods, 22.5% coverage — clears all three criteria.
-      //   crypto LONG   −0.0284R, 3/9 — INVERTED, the fifth condition to behave this way and the
-      //                 first where that behaviour was PREDICTED in advance from the
-      //                 ATR-normalisation mechanism (Part 2) rather than explained afterwards.
-      //   stocks        fires on 97.4% of bars (funding is unreachable, so the count maxes at 2),
-      //                 leaving 2.56% coverage — both sides under the bar and far under the floor.
-      // Caveat kept in view: the SHORT pass sits in a window where the equal-weight crypto basket
-      // fell 83%, so "only short a confirmed downtrend" may be regime rather than mechanism.
-      const continuationBlockApplies = isCryptoSym && alignedDirection === 'SHORT';
-      if (continuationBlockApplies && envContinuationCount < 2) moderateBlocks.push(`continuation_${envContinuationCount}/2+_required`);
-      if (mlPct != null && mlPct < 60) moderateBlocks.push(`ML_WIN_${mlPct}<60`);
-      // Label was `macro_${risk}_exceeds_NEARBY`, which rendered as "macro_NEARBY_exceeds_NEARBY"
-      // — literally false, and the commonest case. The rule fires at NEARBY or closer.
-      if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON' && envMacroRisk !== 'UPCOMING') moderateBlocks.push(`macro_${envMacroRisk}_at_or_inside_NEARBY`);
-      if (isTreatment) {
-        if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'PARTIAL') moderateBlocks.push('treatment_long_confirm_PARTIAL_cap_LOW');
-        const transitioningHighOk = regime === 'TRANSITIONING' && envAlignment === 'ALIGNED_BULLISH' && (mlPct ?? 0) >= 65 && (treatmentLongConfirmStatus === 'PASS' || treatmentLongConfirmStatus === 'n/a');
-        // The `continuation_` clause is gone with the rule it referenced — `highBlocks` can no
-        // longer contain one (Part 9), and a splice pattern matching a prefix nothing emits is the
-        // kind of dead branch that reads as live governance. ML_WIN_ is still stripped.
-        if (transitioningHighOk) { for (let i = highBlocks.length - 1; i >= 0; i--) if (highBlocks[i].startsWith('ML_WIN_')) highBlocks.splice(i, 1); }
-      }
-      const downgrade: string[] = [];
-      if (staleCount >= 2) downgrade.push(`data_stale_${staleCount}_sources`);
-      if (oneHOpposes) downgrade.push('counter_trend_pullback_cap_MODERATE');
-      if (envCryptoBearRegime) downgrade.push('crypto_bear_regime_LONG_cap_MODERATE_halve_size');
-      if (stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs) {
-        const days = Math.floor((stockInfo.earningsDate - nowMs) / 86400000);
-        if (days <= 2) moderateBlocks.push(`earnings_in_${days}d_cap_LOW`);
-        else if (days <= 7) highBlocks.push(`earnings_in_${days}d_cap_MODERATE`);
-        else if (days <= 14) downgrade.push(`earnings_in_${days}d_downgrade_one_tier`);
-      }
-      // FIXED 2026-08-26 — the ladder skipped a rung. `highBlocks` cap conviction at MODERATE and
-      // `moderateBlocks` cap it at LOW (see their own labels: `earnings_in_5d_cap_MODERATE` vs
-      // `earnings_in_1d_cap_LOW`). The old expression tested `highBlocks.length === 0 ? 'HIGH'`
-      // FIRST, so **any moderateBlock was silently ignored whenever no highBlock fired** — and that
-      // is exactly the high-ML case where the caps matter most.
-      //
-      // Found by the new behavioural test helper on its first run: a stock ONE DAY from earnings
-      // reported `max_allowed: HIGH` while its own reason list said `earnings_in_1d_cap_LOW`. The
-      // model is instructed "You may NOT output a tier above max_allowed", so the operative half was
-      // the wrong one — and the earnings 0-2d gate is the single condition in this system validated
-      // on its own stated mechanism (7.08x the baseline gap rate, 8/8 periods). It was being
-      // overridden to the TOP tier. `continuation<2` and `treatment_long_confirm_PARTIAL` were
-      // equally inert.
-      //
-      // A cap ladder must be monotone: if MODERATE is disallowed, HIGH cannot be allowed.
-      const maxAllowed = autoFlat.length ? 'FLAT'
-        : moderateBlocks.length ? 'LOW'
-        : highBlocks.length ? 'MODERATE'
-        : 'HIGH';
+      const env = evaluateEnvelope({
+        rawMlWin: daily.mlWinProbability ?? null,
+        calibratedMlWin: input.calibratedMlWin ?? null,
+        staleCount,
+        anyKilled: envAnyKilled,
+        macroRisk: envMacroRisk,
+        newsConflicts: envNewsConflicts,
+        alignment: envAlignment,
+        alignedDirection,
+        continuationCount: envContinuationCount,
+        isCrypto: isCryptoSym,
+        isStock: !!stockInfo,
+        isTreatment,
+        regime,
+        longConfirmStatus: treatmentLongConfirmStatus,
+        oneHOpposes,
+        cryptoBearRegime: envCryptoBearRegime,
+        // Resolved here so the envelope itself has no notion of "now" — a pure function is what
+        // makes a historical replay honest.
+        daysToEarnings: stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs
+          ? Math.floor((stockInfo.earningsDate - nowMs) / 86400000) : null,
+      });
+      const { rawMlPct, mlPct, calibLifted, autoFlat, highBlocks, moderateBlocks, downgrade, maxAllowed } = env;
       L('Conviction Envelope:');
       L(`  max_allowed: ${maxAllowed}`);
       if (calibLifted) L(`  note: raw ML_WIN ${rawMlPct}% would auto-FLAT, but the live forward calibration corrects it to ~${mlPct}% (bucket realizes higher than the drifted model predicts) — NOT auto-FLAT on ML alone.`);

@@ -16,6 +16,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { systemPrompt } from '../src/prompt';
 import { envelopeFor, BIAS } from './helpers/envelope';
+import { promptSource } from './helpers/prompt-source';
 
 const STATES = [
   { name: 'aligned bullish', o: { ml: 0.80, ...BIAS.alignedBullish } },
@@ -56,14 +57,14 @@ describe('divergence never gates, in any envelope state', () => {
     // fixture happens not to produce a divergence reading, so behaviour cannot show it. Removing
     // one indicator because it was tested, while RSI/MACD/ADX sit there equally untested, would be
     // inconsistent — the prior is governed in the system prompt instead.
-    const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+    const src = promptSource;
     expect(src).toMatch(/Divergence: \$\{ind\.divergence\}/);
   });
 
   it('no dead references survive the removal', () => {
     // Also legitimately a SOURCE check: absence of dead code is a property of the source, not of
     // behaviour. A splice or flag nothing reads still reads as live governance to the next author.
-    const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+    const src = promptSource;
     expect(src).not.toMatch(/envDivergenceEscalated =/);
     expect(src).not.toMatch(/killParts\.push\(`divergence_against_bias/);
   });

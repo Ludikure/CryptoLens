@@ -10,6 +10,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { computeFullIndicators } from '../src/indicators-full';
 import { buildUserPrompt, systemPrompt, type PromptIndicator } from '../src/prompt';
+import { promptSource } from './helpers/prompt-source';
 
 const fx = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'btc-rally-2026-08.json'), 'utf-8'));
 const nowMs = fx.fourH[fx.fourH.length - 1].time + 14400e3;
@@ -99,7 +100,7 @@ describe('crash risk reaches the model — input AND output contract', () => {
 // regens: P(fwdMaxFavR72H >= 2.5) is 54.1% crypto and 60.8% stocks, so a stock reading of 60-69%
 // printed "ABOVE AVERAGE" while sitting at or below its real base.
 describe('ML Persistence labels are stated against EACH MARKET\'s own base rate', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+  const src = promptSource;
 
   it('picks the base rate from the market rather than hardcoding crypto\'s', () => {
     expect(src).toMatch(/const p72Base = stockInfo \? 61 : 54;/);

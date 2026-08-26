@@ -9,6 +9,7 @@ import { join } from 'path';
 import { computeFullIndicators } from '../src/indicators-full';
 import { buildUserPrompt, systemPrompt, type PromptIndicator } from '../src/prompt';
 import { entryReached, stepSetup } from '../src/outcome-tracking';
+import { promptSource } from './helpers/prompt-source';
 
 const fx = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'btc-rally-2026-08.json'), 'utf-8'));
 const nowMs = fx.fourH[fx.fourH.length - 1].time + 14400e3;
@@ -187,7 +188,7 @@ describe('pending setups — candle evidence outranks the wall clock', () => {
 //
 // This is the user-visible form of "it tells me not to trade and to trade at the same time".
 describe('raw vs calibrated ML_WIN cannot contradict the gate', () => {
-  const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+  const src = promptSource;
 
   it('POSITION SIZING gates on the same calibrated value as the envelope', () => {
     expect(src).toMatch(/const mlWin = input\.calibratedMlWin \?\? rawWin;/);

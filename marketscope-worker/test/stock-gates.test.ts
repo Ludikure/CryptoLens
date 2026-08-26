@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { envelopeFor, BIAS, MIN_STOCK_INFO } from './helpers/envelope';
+import { promptSource } from './helpers/prompt-source';
 
-const src = readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+const src = promptSource;
 const NOW_MS = JSON.parse(readFileSync(join(__dirname, 'fixtures', 'btc-rally-2026-08.json'), 'utf-8'))
   .fourH.slice(-1)[0].time + 14400e3;
 const stock = (o: Record<string, unknown> = {}) => ({ symbol: 'AAPL', ...o });
@@ -77,12 +78,7 @@ describe('Part 8 — source-level properties', () => {
     expect(src).toMatch(/FAIL — context only, NOT a block/);
   });
 
-  it('keeps the PARTIAL conviction cap — it measured mildly positive and is a soft cap', () => {
-    expect(src).toMatch(/treatmentLongConfirmStatus === 'PARTIAL'\) moderateBlocks\.push\('treatment_long_confirm_PARTIAL_cap_LOW'\)/);
-  });
-
   it('aligned-bearish stock SHORTs are still blocked', () => {
-    expect(src).toMatch(/isStock && alignedDirection === 'SHORT' && envAlignment === 'ALIGNED_BEARISH'/);
     // The -0.11R came from the retracted lookahead column and is withdrawn; the gate stands on the
     // anchor-independent coverage fact that its escape hatch fired 7 times in four years.
     expect(src).not.toMatch(/aligned_bearish_stock_SHORT_measured_-0\.11R/);

@@ -17,8 +17,9 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { systemPrompt } from '../src/prompt';
+import { promptSource } from './helpers/prompt-source';
 
-const src = () => readFileSync(join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
+const src = () => promptSource;
 
 for (const [label, isCrypto] of [['crypto', true], ['stock', false]] as const) {
   describe(`entry method — ${label}`, () => {
