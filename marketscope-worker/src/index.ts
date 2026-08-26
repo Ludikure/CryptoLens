@@ -350,6 +350,18 @@ export function nextSuppressionState(args: { crossed: boolean; wasSuppressed: bo
 /** Build the real prompt from the cron's candles and return its auto-FLAT reasons
  *  (null = precheck failed, fail open). READ-ONLY: buildUserPrompt's newState is discarded —
  *  the SINCE-LAST-ANALYSIS baseline and kill-duration state only advance on real analyses. */
+/**
+ * The most recent verdict `envelopePrecheck` computed, for the forward logger.
+ *
+ * Module-scope rather than a return value because the precheck is memoized and called from three
+ * push paths that all want only the boolean; widening its contract for one consumer would make every
+ * caller carry a shape it does not use.
+ */
+let lastEnvelopeVerdict: {
+  symbol: string; maxAllowed: string; mlPct: number | null; rawMlPct: number | null;
+  alignedDirection: string | null; autoFlat: string; highBlocks: string; moderateBlocks: string;
+} | null = null;
+
 async function envelopePrecheck(env: Env, symbol: string, isCrypto: boolean, mlProb: number,
   daily: ScoreCandle[], fourH: FullCandle[], oneH: FullCandle[],
   economicEvents: any[], cal?: { calibratedMlWin: number | null }): Promise<string[] | null> {
@@ -365,8 +377,19 @@ async function envelopePrecheck(env: Env, symbol: string, isCrypto: boolean, mlP
     const { calibratedMlWin } = cal ?? await fetchMlCalibration(env, mlProb, isCrypto);
     let prevState: PromptState = {};
     try { const s = await env.ALERTS.get(`prompt:${symbol}`); if (s) prevState = JSON.parse(s) as PromptState; } catch { /* fresh */ }
-    const { prompt } = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin });
-    return parseAutoFlatReasons(prompt);
+    const built = buildUserPrompt({ symbol, nowMs: Date.now(), indicators, prevState, economicEvents, calibratedMlWin });
+    // The full verdict is stashed for the forward logger, which needs `max_allowed` and the block
+    // lists — three of the four are rendered only on non-FLAT bars, so parsing the prose would be
+    // blind on exactly the bars a gate study is about. The return contract is unchanged.
+    lastEnvelopeVerdict = built.envelope
+      ? { symbol, maxAllowed: built.envelope.maxAllowed, mlPct: built.envelope.mlPct,
+          rawMlPct: built.envelope.rawMlPct,
+          alignedDirection: built.envelopeInput?.alignedDirection ?? null,
+          autoFlat: built.envelope.autoFlat.join('|'),
+          highBlocks: built.envelope.highBlocks.join('|'),
+          moderateBlocks: built.envelope.moderateBlocks.join('|') }
+      : null;
+    return parseAutoFlatReasons(built.prompt);
   } catch (e) {
     console.log(`[notify] envelope precheck failed ${symbol}: ${e}`);
     return null;
@@ -2654,6 +2677,39 @@ export default {
       }
     }
 
+    // Forward validation of the Conviction Envelope. Realised excursion by TIER and by SIDE, so the
+    // direction split Phase 2 found four times over can eventually be checked in a window that is
+    // NOT the 2022-2026 crypto bear every retrospective arm shares. Returns almost nothing for the
+    // first few months, by construction.
+    if (path === '/envelope-accuracy' && request.method === 'GET') {
+      try {
+        await ensureEnvelopeSignalsTable(env);
+        const side = url.searchParams.get('side');
+        const rows = await env.DB.prepare(
+          `SELECT max_allowed, aligned_direction, COUNT(*) AS n,
+                  AVG(fav_r) AS avg_fav_r, AVG(adv_r) AS avg_adv_r,
+                  AVG(CASE WHEN fav_r >= 1.5 THEN 1.0 ELSE 0.0 END) AS good_r_rate
+           FROM envelope_signals
+           WHERE resolved = 1${side ? ' AND aligned_direction = ?' : ''}
+           GROUP BY max_allowed, aligned_direction
+           ORDER BY aligned_direction, max_allowed`
+        ).bind(...(side ? [side] : [])).all();
+        const pending = await env.DB.prepare(
+          'SELECT COUNT(*) AS n FROM envelope_signals WHERE resolved = 0').first();
+        return json({
+          horizonHours: ENV_SIG_HORIZON_MS / 3600000,
+          byTier: rows.results ?? [],
+          pending: (pending as { n?: number } | null)?.n ?? 0,
+          note: 'Forward-only. Every retrospective envelope arm was measured in one crypto-bear '
+              + 'window where SHORT is the better side ungated, so mechanism could not be separated '
+              + 'from regime. This accumulates the window that can. It says nothing until it has '
+              + 'months of rows.',
+        });
+      } catch (e) {
+        return json({ error: String(e) }, 500);
+      }
+    }
+
     if (path === '/ml-calibration' && request.method === 'GET') {
       try {
         // ?market=crypto|stock filters to one model's forward record AND returns `curve` —
@@ -3318,9 +3374,48 @@ async function logDirectionSignals(env: Env, predictions: Map<string, SymbolPred
 
 const CAL_LOG_INTERVAL_MS = 20 * 3600 * 1000;
 const CAL_HORIZON_MS = 24 * 3600 * 1000;
+/** The envelope gates a SETUP, and the app's setups run to 72h — so grade it at the horizon it governs. */
+const ENV_SIG_HORIZON_MS = 72 * 3600 * 1000;
+/** One sample per symbol per ~20h, matching the calibration loop's cadence gate. */
+const ENV_SIG_INTERVAL_MS = 20 * 3600 * 1000;
 const CAL_GOODR_ATR = 1.5;
 
 let calTableReady = false;
+let envSigTableReady = false;
+/**
+ * FORWARD validation for the Conviction Envelope (2026-08-26).
+ *
+ * Every retrospective test of the envelope shares one window — a crypto bear in which the
+ * equal-weight basket fell 83% and SHORT is the better side ungated. Phase 2 found the envelope is a
+ * working gate on SHORT and an inverted one on LONG, four times over on different targets, and could
+ * not tell mechanism from regime, because every arm was measured in that same window.
+ *
+ * The retrospective holdout is also gone: plan step 1.11 reserved the last six months and was never
+ * implemented, so C1-C6 consumed the whole span. There is no unseen data left in that dataset.
+ *
+ * So the only honest holdout is FORWARD, and this is it: record each bar's tier and grade it at +72h
+ * against the direction-agnostic excursion the envelope claims to gate. Same shape as
+ * `direction_signals` and `ml_calibration`, which already work this way.
+ *
+ * It will not answer anything for months. That is the point — it needs a window that is not this one.
+ */
+async function ensureEnvelopeSignalsTable(env: Env) {
+  if (envSigTableReady) return;
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS envelope_signals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL, is_crypto INTEGER NOT NULL,
+    logged_at INTEGER NOT NULL, entry_price REAL NOT NULL, atr_price REAL NOT NULL,
+    max_allowed TEXT NOT NULL, aligned_direction TEXT,
+    ml_raw REAL, ml_calibrated REAL,
+    auto_flat TEXT, high_blocks TEXT, moderate_blocks TEXT,
+    resolve_at INTEGER NOT NULL,
+    resolved INTEGER NOT NULL DEFAULT 0, fav_r REAL, adv_r REAL
+  )`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_envsig_unresolved ON envelope_signals(resolved, resolve_at)`).run();
+  await env.DB.prepare(`CREATE INDEX IF NOT EXISTS idx_envsig_symbol ON envelope_signals(symbol, logged_at DESC)`).run();
+  envSigTableReady = true;
+}
+
 async function ensureCalibrationTable(env: Env) {
   if (calTableReady) return;
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS ml_calibration (
@@ -3767,6 +3862,7 @@ async function computeSymbolPredictions(
   // resolution happen inside the loop (resolution needs the 4H candle history for the max
   // excursion). Inserts/updates are batched after the loop.
   await ensureCalibrationTable(env);
+  await ensureEnvelopeSignalsTable(env);
   const nowCal = Date.now();
   const calLogged: Record<string, number> = JSON.parse((await env.ALERTS.get('cal_logged:all')) || '{}');
   const calDueBySymbol = new Map<string, Array<{ id: number; logged_at: number; entry_price: number; atr_price: number }>>();
@@ -3783,6 +3879,25 @@ async function computeSymbolPredictions(
   } catch (e) { console.log(`[cal] due-load err ${e}`); }
   const calInserts: D1PreparedStatement[] = [];
   const calUpdates: D1PreparedStatement[] = [];
+
+  // Envelope forward validation — same cadence gate and same batching as the calibration loop above.
+  // ENV_SIG_HORIZON_MS is 72h rather than the calibration loop's 24h because the envelope gates a
+  // SETUP, and the app's setups run to a 72h horizon.
+  const envSigLogged: Record<string, number> = JSON.parse((await env.ALERTS.get('envsig_logged:all')) || '{}');
+  const envSigDueBySymbol = new Map<string, Array<{ id: number; logged_at: number; entry_price: number; atr_price: number }>>();
+  try {
+    const due = await env.DB.prepare(
+      'SELECT id, symbol, logged_at, entry_price, atr_price FROM envelope_signals WHERE resolved = 0 AND resolve_at <= ? LIMIT 300'
+    ).bind(nowCal).all();
+    for (const r of due.results || []) {
+      const sym = r.symbol as string;
+      if (!envSigDueBySymbol.has(sym)) envSigDueBySymbol.set(sym, []);
+      envSigDueBySymbol.get(sym)!.push({ id: r.id as number, logged_at: r.logged_at as number,
+        entry_price: r.entry_price as number, atr_price: r.atr_price as number });
+    }
+  } catch (e) { console.log(`[envsig] due-load err ${e}`); }
+  const envSigInserts: D1PreparedStatement[] = [];
+  const envSigUpdates: D1PreparedStatement[] = [];
 
   // Pre-warm stale crypto derivative caches in bounded-parallel (5 symbols in flight) BEFORE the
   // serial loop, so the loop always hits a warm cache. Collapses the cold/refresh pass from ~87s
@@ -4278,6 +4393,56 @@ async function computeSymbolPredictions(
         ).bind(symbol, isCrypto ? 1 : 0, nowCal, last4HClose, atrPrice, mlProb, nowCal + CAL_HORIZON_MS));
         calLogged[symbol] = nowCal;
       }
+      // Envelope forward log: one sample per symbol per ~20h. Runs the REAL prompt builder via
+      // `envelopePrecheck`, so the tier recorded is the tier production would emit — the whole point
+      // of the exercise is that this is not a reconstruction.
+      if (isCrypto && fourHCandles.length >= 210 && (nowCal - (envSigLogged[symbol] || 0)) >= ENV_SIG_INTERVAL_MS) {
+        // Same arguments the notify path uses, including the real economic events — the recorded
+        // tier has to be the tier production would emit, and passing `[]` would silently switch the
+        // macro conditions off in every logged row.
+        const flatReasons = await envelopePrecheck(env, symbol, isCrypto, mlProb,
+          candles as ScoreCandle[], fourHCandles as FullCandle[], oneHCandles as FullCandle[],
+          await econEvents(), calForPrecheck(mlProb, isCrypto));
+        const v = lastEnvelopeVerdict;
+        if (flatReasons !== null && v && v.symbol === symbol) {
+          const px = fourHCandles[fourHCandles.length - 1].close;
+          const atrPx = (features.atrPercent / 100) * px;
+          if (px > 0 && atrPx > 0) {
+            envSigInserts.push(env.DB.prepare(
+              `INSERT INTO envelope_signals (symbol, is_crypto, logged_at, entry_price, atr_price,
+                 max_allowed, aligned_direction, ml_raw, ml_calibrated, auto_flat, high_blocks,
+                 moderate_blocks, resolve_at, resolved)
+               VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+            ).bind(symbol, nowCal, px, atrPx, v.maxAllowed, v.alignedDirection,
+                   v.rawMlPct, v.mlPct, v.autoFlat, v.highBlocks, v.moderateBlocks,
+                   nowCal + ENV_SIG_HORIZON_MS));
+            envSigLogged[symbol] = nowCal;
+          }
+        }
+      }
+      // Envelope grade: direction-agnostic favourable AND adverse excursion in ATR units over the
+      // horizon. Both are stored because the envelope's own claim is direction-agnostic — it gates
+      // "is this bar tradeable", not "which way" — and keeping the adverse leg is what lets a later
+      // analysis ask whether a tier that admitted a big move admitted it on the RIGHT side.
+      const envDue = envSigDueBySymbol.get(symbol);
+      if (envDue && fourHCandles.length) {
+        for (const row of envDue) {
+          let maxHigh = -Infinity, minLow = Infinity;
+          for (const c of fourHCandles) {
+            const t = (c as { time?: number }).time ?? 0;
+            if (t > row.logged_at && t <= row.logged_at + ENV_SIG_HORIZON_MS) {
+              if (c.high > maxHigh) maxHigh = c.high;
+              if (c.low < minLow) minLow = c.low;
+            }
+          }
+          if (maxHigh === -Infinity || row.atr_price <= 0) continue;
+          const favR = (maxHigh - row.entry_price) / row.atr_price;
+          const advR = (row.entry_price - minLow) / row.atr_price;
+          envSigUpdates.push(env.DB.prepare(
+            'UPDATE envelope_signals SET resolved = 1, fav_r = ?, adv_r = ? WHERE id = ?'
+          ).bind(favR, advR, row.id));
+        }
+      }
       // Calibration grade: any due rows for this symbol → max excursion over [logged, resolve]
       // from the 4H candle history (direction-agnostic, matches the goodR target).
       const due = calDueBySymbol.get(symbol);
@@ -4308,6 +4473,14 @@ async function computeSymbolPredictions(
     if (calInserts.length) await env.DB.batch(calInserts);
     if (calUpdates.length) await env.DB.batch(calUpdates);
     if (calInserts.length) await env.ALERTS.put('cal_logged:all', JSON.stringify(calLogged), { expirationTtl: 86400 * 3 });
+    if (envSigInserts.length || envSigUpdates.length) {
+      try {
+        if (envSigInserts.length) await env.DB.batch(envSigInserts);
+        if (envSigUpdates.length) await env.DB.batch(envSigUpdates);
+        if (envSigInserts.length) await env.ALERTS.put('envsig_logged:all', JSON.stringify(envSigLogged), { expirationTtl: 86400 * 3 });
+        console.log(`[envsig] +${envSigInserts.length} logged, ${envSigUpdates.length} graded`);
+      } catch (e) { console.log(`[envsig] write err ${e}`); }
+    }
     if (calInserts.length || calUpdates.length) console.log(`[cal] +${calInserts.length} logged, ${calUpdates.length} graded`);
   } catch (e) { console.log(`[cal] flush err ${e}`); }
 
