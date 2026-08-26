@@ -2082,3 +2082,60 @@ is worth **+0.009R**, not +0.066R.
 worse on SHORT. **What does not:** that this is a large effect, that deeper is better, or that it is
 the biggest thing in the system. And all LONG arms remain **negative in absolute terms** — the best
 of them is −0.0150R. A pullback makes a losing proposition less bad.
+
+---
+
+# PHASE 2 — C2: THE EARNINGS GATES SURVIVE, AT LOWER MAGNITUDES (2026-08-26)
+
+The three earnings conditions are the only ones in the envelope whose code states a **mechanism**
+rather than a payoff claim: *"gap risk, the stop will not hold"*. By the Part 6 principle an EV null
+cannot refute an exogenous-event guard, so the test is the variance claim itself.
+
+486,900 stock bars, 159 symbols, 89.9% with a known next report. Baseline is bars **more than 14
+days** from any report — not all bars, which would dilute the baseline with the windows under test.
+**Bar: ratio ≥ 1.5× with a majority of periods clearing it.**
+
+| window | bars | P(gap ≥ 2 ATR) | ratio | cluster 95% CI | periods | verdict |
+|---|---:|---:|---:|---|---:|---|
+| baseline (>14d) | — | 0.0805 | 1.00× | — | — | — |
+| 0-2d | 16,951 | 0.3265 | **4.06×** | [3.68×, 4.43×] | 9/9 | **PASSES** |
+| 3-7d | 21,796 | 0.4738 | **5.88×** | [5.46×, 6.30×] | 9/9 | **PASSES** |
+| 8-14d | 31,885 | 0.3321 | **4.13×** | [3.86×, 4.39×] | 9/9 | **PASSES** |
+
+**All three keep their justification.** The gates stand, and they remain the best-supported
+conditions in the envelope.
+
+## Two honest discrepancies against Part 8
+
+**The magnitudes are lower.** Part 8 reported 7.08× / 7.03× / 4.99× against a 7.4% baseline; this run
+gives 4.06× / 5.88× / 4.13× against 8.05%. Same direction, same verdict, materially smaller. The
+inputs differ in three ways — corrected anchor, full 300-bar warm-up on all three timeframes, and a
+baseline computed on >14d bars — and **I cannot attribute the gap to any one of them.** The
+conclusion does not depend on which: every window clears 1.5× by a wide margin under both runs.
+
+**The ordering flipped, and it is not an ATR artifact.** Part 8 had 0-2d highest; here 3-7d is
+highest and 0-2d is the *lowest* of the three. The obvious explanation — implied vol running up into
+a report inflating ATR and deflating gap/ATR — is **wrong**: ATR is flat across the windows (baseline
+2.070 vs 1.94-2.00 inside them), and the ordering **persists on an ATR-free metric**:
+
+| window | mean atrPct | P(gap ≥ 2% of price) | ratio |
+|---|---:|---:|---:|
+| baseline | 2.070 | 0.3670 | 1.00× |
+| 0-2d | 1.999 | 0.5689 | 1.55× |
+| 3-7d | 1.943 | 0.7187 | **1.96×** |
+| 8-14d | 1.961 | 0.6032 | 1.64× |
+
+**No mechanism is offered for why 3-7d exceeds 0-2d.** It is recorded as an unexplained detail rather
+than given a story. It does not affect the decision: all three windows carry materially elevated gap
+risk on both metrics, which is the whole of the gates' claim.
+
+*(The ATR-free ratios are smaller because a 2%-of-price gap is far commoner than a 2 ATR one — a
+36.7% baseline against 8.05% — which compresses every ratio toward 1. The ATR-normalised figure is
+the operative one, because the gate's claim is about a stop placed at 2 ATR.)*
+
+## The prompt numbers need updating
+
+`prompt.ts` currently tells the model **"52% of bars see an overnight gap >= 2 ATR against a 7.4%
+baseline (7.1x)"**. The measured values are now **32.65% against 8.05% (4.06×)** for 0-2d, **47.38%
+(5.88×)** for 3-7d, and **33.21% (4.13×)** for 8-14d. Deferred to Phase 3 with the other prompt-text
+decisions, so the corrections land in one pass rather than drifting again.
