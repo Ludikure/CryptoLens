@@ -514,6 +514,8 @@ export function buildUserPrompt(input: BuildPromptInput): {
   envelope: EnvelopeVerdict | null;
   /// The inputs that produced it, so an export can record WHY without re-deriving anything.
   envelopeInput: EnvelopeInput | null;
+  /// Removed-but-still-computed conditions, for research. Null outside their own domain.
+  diagnostics: Record<string, number | null>;
 } {
   const {
     symbol, nowMs, indicators, sentiment, stockInfo, derivatives, positioning, stockSentiment,
@@ -547,6 +549,15 @@ export function buildUserPrompt(input: BuildPromptInput): {
   // text sees nothing on exactly the bars a research replay cares most about.
   let envelopeVerdict: EnvelopeVerdict | null = null;
   let envelopeInput: EnvelopeInput | null = null;
+  /// Conditions that are still COMPUTED by the real rules but no longer feed any gate. Exported so
+  /// research can measure them without rebuilding them: `funding_supports_counter` and both
+  /// divergence rules were removed in Parts 6-7 on evidence since retracted, and re-deciding them
+  /// needs the real values. Note they are only defined on counter-trend-pullback bars, because the
+  /// whole kill block is wrapped in `if (oneHOpposes && oneH)` — that scoping IS the thing Part 7
+  /// got wrong, so it must survive into the export rather than be flattened.
+  const diagnostics: Record<string, number | null> = {
+    killFunding: null, killVolume: null, killMacro: null, killDivergence: null,
+  };
 
   // #6 — SINCE LAST ANALYSIS: a snapshot of the previous run for this symbol so the LLM can lead
   // with what CHANGED (the antidote to same-y serial reads). Emitted only when the prior state is
@@ -903,6 +914,10 @@ export function buildUserPrompt(input: BuildPromptInput): {
       // would change almost nothing. "Does nothing measurable" is not "proven wrong".
       const anyKilled = killVolume || killMacro;
       envAnyKilled = anyKilled;
+      diagnostics.killFunding = killFunding ? 1 : 0;
+      diagnostics.killVolume = killVolume ? 1 : 0;
+      diagnostics.killMacro = killMacro ? 1 : 0;
+      diagnostics.killDivergence = killDivergence ? 1 : 0;
 
       // Phase 3 — Kill duration tracking (candle-anchored)
       const lastTracked = prevState.killDurCandleMs ?? null;
@@ -2274,6 +2289,6 @@ export function buildUserPrompt(input: BuildPromptInput): {
     }
   }
 
-  return { prompt: lines.join('\n'), newState, envelope: envelopeVerdict, envelopeInput };
+  return { prompt: lines.join('\n'), newState, envelope: envelopeVerdict, envelopeInput, diagnostics };
 }
 

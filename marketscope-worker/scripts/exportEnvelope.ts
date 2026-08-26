@@ -109,9 +109,13 @@ const FIELDS = [
 
 // `dRsi` / `hRsi` / `atrPct` are join-verification columns, not research inputs: they exist so the
 // file carries the evidence that its slices matched v14's, rather than only having been checked once.
+// Removed-but-still-computed conditions. Empty outside their domain (the kill block only runs on
+// counter-trend-pullback bars) — an empty cell is NOT a zero, and a consumer must not read it as one.
+const DIAGS = ['killFunding', 'killVolume', 'killMacro', 'killDivergence'] as const;
+
 const HEADER = ['symbol', 'timestamp', 'price', 'rawMlPct', 'mlPct', 'maxAllowed',
     'autoFlat', 'highBlocks', 'moderateBlocks', 'downgrade', ...FIELDS,
-    'dRsi', 'hRsi', 'atrPct'].join(',');
+    'dRsi', 'hRsi', 'atrPct', ...DIAGS].join(',');
 
 const num = (v: number | null | undefined) => (v == null ? '' : v.toFixed(4));
 
@@ -211,6 +215,7 @@ export function exportEnvelope(db: Database.Database, symbol: string, opts: {
                 return typeof x === 'boolean' ? (x ? 1 : 0) : x == null ? '' : String(x);
             }),
             num(indicators[0].rsi), num(indicators[1].rsi), num((indicators[0] as unknown as { atrPercentile?: number }).atrPercentile),
+            ...DIAGS.map(k => (r.diagnostics?.[k] == null ? '' : String(r.diagnostics[k]))),
         ].join(','));
     }
     return { symbol, rows: out.length - 1, skipped, csv: out.join('\n') + '\n' };
