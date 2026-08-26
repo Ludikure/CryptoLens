@@ -93,15 +93,17 @@ describe('Part 8 — source-level properties', () => {
   });
 
   it('carries the measured gap numbers into all three earnings windows', () => {
-    // "gap risk" as a bare phrase invites the model to weigh it against a chart pattern.
-    // "43% of stops fill BEYOND the stop" does not.
-    // The stop-fill clause was withdrawn 2026-08-26 (it came from stock_gap_fill.py on the
-    // retracted anchor). The GAP RATES survive — they compare gap frequency near vs far from
-    // earnings, which a window shift of a few bars does not move — and are re-run in Phase 2.
-    expect(src).toMatch(/52% of bars see an overnight gap >= 2 ATR against a 7\.4% baseline \(7\.1x\)/);
+    // "gap risk" as a bare phrase invites the model to weigh it against a chart pattern; a measured
+    // multiple does not. RE-MEASURED 2026-08-26 (Phase 2 C2) on 486,900 bars against a >14d baseline:
+    // 4.06x / 5.88x / 4.13x, 9/9 periods each. The previously published 7.08x / 7.03x / 4.99x were
+    // overstated, and the prompt was quoting them.
+    expect(src).toMatch(/33% of bars see an overnight gap >= 2 ATR against an 8\.1% baseline/);
+    expect(src).toMatch(/gap >= 2 ATR on 47% of bars, 5\.9x/);
+    expect(src).toMatch(/33% of bars, still 4\.1x the baseline gap rate/);
+    // The withdrawn stop-fill clause stays withdrawn, and the overstated figures must not return.
     expect(src).not.toMatch(/43% of stops fill BEYOND the stop/);
-    expect(src).toMatch(/CONVICTION_CAP_MODERATE\. MEASURED: gap >= 2 ATR on 52% of bars \(7\.0x baseline\)/);
-    expect(src).toMatch(/MEASURED: still 5\.0x the baseline gap rate/);
+    expect(src).not.toMatch(/7\.1x/);
+    expect(src).not.toMatch(/52% of bars/);
   });
 
   it('states the earnings finding as variance, never as direction', () => {

@@ -1310,8 +1310,18 @@ export function buildUserPrompt(input: BuildPromptInput): {
         // MEASURED 2026-08-25 (Part 8) on 487k stock opportunities, 159 symbols, 2020-2026 — the
         // first envelope condition validated on its OWN stated mechanism rather than merely
         // surviving an EV null. Baseline P(overnight gap >= 2 ATR inside the hold window) away from
-        // earnings is 7.4%; inside these windows it is 52% / 52% / 37% — 7.1x / 7.0x / 5.0x, in
-        // 8/8, 9/9 and 9/9 half-year periods. The numbers are in the prompt because "gap risk" as a
+        // earnings is 8.05%; inside these windows it is 33% / 47% / 33% — 4.06x / 5.88x / 4.13x,
+        // in 9/9 half-year periods each, with cluster CIs [3.68,4.43] / [5.46,6.30] / [3.86,4.39].
+        //
+        // RE-MEASURED 2026-08-26 (Phase 2 C2); the previously published figures were OVERSTATED.
+        // Part 8 gave 7.08x / 7.03x / 4.99x against a 7.4% baseline. Three inputs differ — corrected
+        // anchor, full 300-bar warm-up, and a baseline of >14d bars rather than all bars — and the
+        // gap is not attributable to any one of them. The VERDICT is unchanged, every window clears
+        // the 1.5x bar by a wide margin, but the prompt was quoting numbers that were too large.
+        //
+        // The ORDERING also flipped: 3-7d is now highest, not 0-2d. That is NOT an ATR artifact —
+        // ATR is flat across the windows (1.94-2.00 against a 2.070 baseline) and the ordering
+        // survives an ATR-free gap threshold. No mechanism is offered for it. The numbers are in the prompt because "gap risk" as a
         // bare phrase invites the model to weigh it against a chart pattern; "42% of stops gap
         // straight through" does not.
         // The "43% of stops fill beyond the stop, averaging 1.4R lost" clause was removed
@@ -1319,9 +1329,9 @@ export function buildUserPrompt(input: BuildPromptInput): {
         // lookahead anchor. The GAP RATES below survive that retraction — they are computed from
         // `maxGapATR`, a window-shift-robust comparison of gap frequency near vs far from earnings,
         // not from any entry simulation — but they are re-run in Phase 2 C2 regardless.
-        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW. MEASURED: 52% of bars see an overnight gap >= 2 ATR against a 7.4% baseline (7.1x). A gap that size jumps clean over a 2 ATR stop, so the stop cannot be relied on through the report. This is a variance fact, not a direction call.`);
-        else if (days <= 7) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_MODERATE. MEASURED: gap >= 2 ATR on 52% of bars (7.0x baseline); ~31% of stops gap through. Skip if 4H momentum opposes thesis.`);
-        else if (days <= 14) L(`Earnings Proximity: ${days}d to earnings — flag in Risk Factors, no conviction cap. MEASURED: still 5.0x the baseline gap rate, because a multi-day hold opened this far out often straddles the report anyway.`);
+        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW. MEASURED (re-run 2026-08-26): 33% of bars see an overnight gap >= 2 ATR against an 8.1% baseline away from earnings — 4.1x, in 9 of 9 half-year periods. A gap that size jumps clean over a 2 ATR stop, so the stop cannot be relied on through the report. This is a variance fact, not a direction call.`);
+        else if (days <= 7) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_MODERATE. MEASURED (re-run 2026-08-26): gap >= 2 ATR on 47% of bars, 5.9x the away-from-earnings baseline and the HIGHEST of the three windows, 9/9 periods. Skip if 4H momentum opposes thesis.`);
+        else if (days <= 14) L(`Earnings Proximity: ${days}d to earnings — flag in Risk Factors, no conviction cap. MEASURED (re-run 2026-08-26): 33% of bars, still 4.1x the baseline gap rate, because a multi-day hold opened this far out often straddles the report anyway.`);
       }
     }
 

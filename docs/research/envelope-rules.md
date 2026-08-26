@@ -2404,3 +2404,87 @@ and the one Part 11 conclusion that survives contact with the corrected stack.
 The OOF window begins where the first walk-forward fold ends, so these arms have **5-7 half-year
 periods, not 9**. Every SHORT arm above sits at 5/7 — a majority, but short of the pre-declared 6.
 Nothing here clears the bar outright, and that is why C6, like C4 and C5, changes nothing by itself.
+
+---
+
+# PHASE 3 — THE VERDICTS (2026-08-26)
+
+Every envelope condition, with what the corrected stack says and what changes. The standing rule
+governs throughout: **unsupported is not the same as proven wrong**, and re-deciding a gate on
+evidence that is itself thin would repeat the error this programme exists to fix.
+
+## Verdict table
+
+| condition | status | evidence | verdict |
+|---|---|---|---|
+| `biases_MIXED` | removed | `mixed_flat_test` on 870K+503K bars, independent of the anchor; plus 71/73 BTC bars FLAT through a +7.5% advance | **stays removed** |
+| `alignment_not_full` SHORT | removed | C3: −0.0086 / −0.0061, CIs span zero, 4/9 and 3/9 | **stays removed** (noise) |
+| **`alignment_not_full` LONG** | **IN FORCE** | C3: **−0.0096 / −0.0106, 2/7, CIs span zero** | **contested — no change** |
+| `continuation < 3` | removed | code fact (P=0 on stocks); C3: 1% coverage against a 20% floor | **stays removed** |
+| **`continuation < 2` crypto SHORT** | IN FORCE | C3: **+0.0385 / +0.0306, both CIs clear of zero, 7/9, 34% coverage** | **PASSES — stays** |
+| `continuation < 2` LONG / stocks | removed | C3: 2/7 and 4/7, CIs span zero | **stays removed** |
+| `funding_supports_counter` | removed | Phase 3: −0.0036 / +0.0146 on its **own 6.4% domain**, CIs span zero | **stays removed** |
+| divergence (kill + escalated) | removed | Phase 3: +0.0044 / +0.0038 on own domain, CIs span zero | **stays removed** |
+| **earnings 0-2d / 3-7d / 8-14d** | IN FORCE | C2: **4.06× / 5.88× / 4.13×, 9/9 periods**, cluster CIs far above the 1.5× bar | **PASSES — stays; prompt numbers corrected** |
+| ML thresholds (50/60/70) | IN FORCE | C4/C6: SHORT +0.0416…+0.0650; **LONG −0.1005…−0.1976** | **contested — no change** |
+| `crypto_bear_regime` | IN FORCE | C4: **−0.0709 on SHORT** (CI clear of zero); null on its own side | **contested — no change** |
+| `ANY_KILLED` (volume ∥ macro) | IN FORCE | C4 + Phase 3: inert, ±0.005, CIs span zero | **stays** (harmless, cheap) |
+| 1H-opposes downgrade | IN FORCE | inert, ±0.005 | **stays** |
+| macro ×3, news conflict, data stale | IN FORCE | **no historical archive exists** | **stay, untested by design** |
+| `treatment_long_confirm_*` | mixed | **not re-runnable** — the live day-over-day daily-RSI delta is exported under no name | **unchanged, untested** |
+| aligned-bearish stock SHORT ban | IN FORCE | not re-tested: no stock envelope export | **unchanged, untested** |
+
+## What actually changes in production
+
+**One thing: the earnings numbers in the prompt.** They were overstated — 7.08× / 7.03× / 4.99×
+where the re-run measures 4.06× / 5.88× / 4.13×. The gates are unaffected; the model was being fed
+figures too large by roughly half. Corrected, with the ordering flip recorded and no mechanism
+invented for it.
+
+**No gate is added, removed or rescoped.** That is the finding, not an absence of one. Three
+conditions now have evidence they never had (`continuation < 2` on crypto SHORT passes on data that
+was never reconstructed; the three earnings windows pass on their own stated mechanism; the removed
+kills are noise on their true domain rather than inverted on an inflated one). Everything contested
+fails on **5-7 half-year periods against a bar of 6**, in a window that is a crypto bear where SHORT
+is the better side ungated. That is not enough to move a live gate.
+
+## The three contested gates, stated plainly
+
+**`alignment_not_full` on LONG** is the sharpest: Part 1 called it *"the one condition that cleared
+the pre-declared bar"* and it does not clear it on the real conditions. But its interval spans zero —
+**unsupported, not harmful** — and removing it would leave LONG conviction governed by ML alone, the
+component C4 shows is inverted there.
+
+**The ML floor** is the largest open question in the system. It lifts SHORT and inverts LONG,
+monotonically, with intervals clear of zero on both. The mechanism is understood — `goodR` is
+direction-agnostic, and in an 83%-drawdown window "big move likely" is disproportionately a move down
+— which is exactly why it may be **regime rather than mechanism**. It is also the last thing between
+the app and trading every bar.
+
+**`crypto_bear_regime`** measures inverted where it fires and null on the side it governs. Small,
+and the cheapest of the three to revisit.
+
+## An honesty problem with the holdout, stated rather than worked around
+
+Plan step 1.11 reserved the last six months as a frozen holdout, untouched until Phase 3. **It was
+never implemented, and C1-C6 consumed the entire span.** There is now no unseen data in this dataset,
+so running a "holdout" on it would report a number I have already looked at — which is the shape of
+the error this whole programme is repairing.
+
+Two consequences, both accepted rather than patched:
+
+1. **No holdout number is reported.** Reporting one would be worse than reporting none.
+2. **The only honest holdout left is FORWARD.** `direction_signals` and `ml_calibration` already
+   accumulate live graded outcomes; the equivalent for the envelope is to log each bar's
+   `max_allowed` and grade it at +72h. That is a build, not an analysis, and it is the right next
+   piece of work — it is also the only way the regime caveat above ever gets resolved, since it needs
+   a window that is not this one.
+
+## What this programme actually delivered
+
+Not a better gate configuration — the configuration is almost unchanged. What changed is that the
+**measurement layer is now trustworthy**: one payoff simulator with a proved-identical port, one
+envelope implementation that production and research share, a join gate that has already caught a
+data defect, guards that each reproduce a defect that shipped, and provenance on every artifact. The
+five defects the reviews found are structurally unable to recur, and the numbers above are the first
+in this vault that were measured rather than reconstructed.
