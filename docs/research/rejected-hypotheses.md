@@ -5,6 +5,23 @@ re-proposing anything** — "did we try X?" lives here. Methodology for all of t
 [[edge-methodology]]. When something here gets revived and works, move it to its own note
 and link back.
 
+## Stop × target, jointly — REJECTED 2026-08-27
+
+**Both sides fail period consistency at 5 of 10 half-year windows.** Design and bar pre-declared at
+e286e31 in [[stop-target-joint]]; full map there.
+
+- SHORT `2 ATR @ 1.5R` → `1 ATR @ 5R`: **+0.0340R**, CI [+0.0132, +0.0559], gross agrees (+0.0692),
+  effective n 4,444 — clears magnitude, power and the fee control, and dies on **5/10 periods**.
+- LONG `4 ATR @ 1.5R` → `3 ATR @ 5R`: +0.0186R, under the +0.0200 bar, and also **5/10 periods**.
+
+Real in aggregate over the window, not stable within it — a regime finding, not a geometry finding.
+Partial support does not ship, so the shipped stops and targets are unchanged.
+
+**What survives as a measurement rather than a rule:** the reward:risk gradient is LARGER than the
+stop gradient (+0.056R across the R:R range at a fixed 2 ATR LONG stop, against +0.0362R for the
+whole 2→4 ATR stop-width effect), and the app's shipped SHORT geometry sits in the worst region of
+its own grid. Neither is actionable without a period criterion it can pass.
+
 ## ⚠️ Crypto direction prediction — RETRACTED, was a leak (2026-06-02)
 The [[edge-crypto-direction-model]] (94.7% dual-gate, `pUp` head) **and** the indicator
 direction edge were artifacts of the daily in-progress-candle leak ([[edge-leak-daily-candle]]).

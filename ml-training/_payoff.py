@@ -395,6 +395,30 @@ def align_arms(arms: dict[str, pd.DataFrame], *, key=('symbol', 'timestamp'),
     """
     if not arms:
         raise ValueError('no arms')
+
+    # DUPLICATE KEYS MULTIPLY, ONCE PER ARM. `keys` below is de-duplicated, but each arm was then
+    # LEFT-merged undeduplicated -- so a single repeated (symbol, timestamp) in the feature export
+    # yields 2 rows after one arm, 4 after two, 2**n after n. `csv_exports_v14/AVAXUSDT.csv` has
+    # exactly one, at 2026-05-06 00:00:00.
+    #
+    # The failure is silent in both directions, which is what makes it dangerous. At 98 arms it is
+    # an instant OOM -- exit 137, no traceback, which reads as a hang. At the 12 arms
+    # `phase3_stop_width_test.py` uses it does NOT crash: it completes with that one bar weighted
+    # 4,096 times.
+    #
+    # De-duplicating is the correct handling rather than a workaround: the contract is one row per
+    # (symbol, timestamp), and a repeat is a defect in the export, not a second observation. It is
+    # reported rather than swallowed, because a silent fix here is how the original got missed.
+    dup_total = 0
+    for name, df in list(arms.items()):
+        d = int(df.duplicated(subset=list(key)).sum())
+        if d:
+            dup_total += d
+            arms[name] = df.drop_duplicates(subset=list(key), keep='first')
+    if dup_total:
+        print(f'[align_arms] dropped {dup_total} duplicate key rows across {len(arms)} arms '
+              f'(would have multiplied the row set 2**n)', file=__import__('sys').stderr)
+
     keys = None
     for name, df in arms.items():
         k = df[list(key)].drop_duplicates()
@@ -409,4 +433,5 @@ def align_arms(arms: dict[str, pd.DataFrame], *, key=('symbol', 'timestamp'),
         cols = [c for c in df.columns if c not in key]
         out = out.merge(df[list(key) + cols].rename(columns={c: f'{name}|{c}' for c in cols}),
                         on=list(key), how='left')
-    return out.reset_index(drop=True), {'rows': len(out), 'largest_arm': biggest, 'loss': loss}
+    return out.reset_index(drop=True), {'rows': len(out), 'largest_arm': biggest, 'loss': loss,
+                                        'duplicate_rows_dropped': dup_total}

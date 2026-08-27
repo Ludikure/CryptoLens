@@ -87,3 +87,92 @@ sample, and the ML-floor arms converged on "no gate" when allowed to optimise.
 If the map shows the shipped R:R is materially worse than a neighbour AND that survives the four
 criteria, the action is to move it. If it does not, the action is to record the map and leave the
 defaults alone — and to state in the UI that the geometry is a default, not a measured optimum.
+
+---
+
+# RESULT — 2026-08-27. NOT SUPPORTED on both sides. The shipped geometry stands.
+
+Scripts: `ml-training/stop_target_joint.py` (the map), `ml-training/stop_target_confirm.py` (the
+four criteria). 24 crypto symbols, `anchor='bar_close'`, market and pullback entry, net of 0.171%.
+
+## The map — net R per opportunity, market entry
+
+**LONG** (55,752 bars, effective n 3,097):
+
+| stop | 0.75R | 1.0R | 1.25R | 1.5R | 2.0R | 3.0R | 5.0R |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 2.0 ATR | −0.0360 | −0.0376 | −0.0342 | −0.0301 | −0.0180 | +0.0020 | +0.0198 |
+| 3.0 ATR | −0.0224 | −0.0179 | −0.0109 | −0.0042 | +0.0058 | +0.0182 | **+0.0255** |
+| 4.0 ATR | −0.0114 | −0.0041 | +0.0020 | **+0.0069** | +0.0153 | +0.0192 | +0.0239 |
+| 5.0 ATR | −0.0030 | +0.0042 | +0.0097 | +0.0146 | +0.0168 | +0.0209 | +0.0222 |
+
+**SHORT** (79,992 bars, effective n 4,444):
+
+| stop | 0.75R | 1.0R | 1.25R | 1.5R | 2.0R | 3.0R | 5.0R |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1.0 ATR | −0.0220 | −0.0135 | −0.0048 | −0.0030 | −0.0047 | −0.0097 | **+0.0191** |
+| 2.0 ATR | −0.0087 | −0.0114 | −0.0147 | **−0.0149** | −0.0093 | +0.0027 | +0.0036 |
+| 3.0 ATR | −0.0144 | −0.0170 | −0.0144 | −0.0096 | −0.0048 | −0.0043 | −0.0067 |
+
+Bold = shipped, and the best cell per side.
+
+## The verdict
+
+| | SHORT: 2A@1.5R → 1A@5R | LONG: 4A@1.5R → 3A@5R |
+|---|---|---|
+| 1 magnitude (bar +0.0200) | **+0.0340**, CI [+0.0132, +0.0559] → PASS | +0.0186, CI [+0.0071, +0.0314] → **FAIL** |
+| 2 periods (bar 6/9) | **5/10** → **FAIL** | **5/10** → **FAIL** |
+| 3 gross moves the same way | +0.0692 → PASS | +0.0236 → PASS |
+| 4 power (bar 500) | 4,444 → PASS | 3,097 → PASS |
+| | **NOT SUPPORTED** | **NOT SUPPORTED** |
+
+**Both fail period consistency at 5 of 10 half-year windows.** By the pre-declared stopping rule
+that makes each a REGIME finding rather than a geometry finding, and partial support does not ship.
+Filed accordingly; the shipped stops and targets are unchanged.
+
+## The prediction was half right, and the half that was wrong is the interesting one
+
+I recorded before running that "the shipped geometry stands" and that "the +0.02R magnitude bar
+fails on both sides". The verdict held; the reasoning did not. **SHORT's magnitude bar PASSED and
+passed clearly** — +0.0340R with a CI well clear of zero and a gross series agreeing at +0.0692. It
+died on period consistency, which is a different failure and a more informative one: the effect is
+real in aggregate over this window and is not stable within it.
+
+## Four things worth carrying forward, none of them shipped
+
+1. **The R:R gradient dominates the stop gradient, and nothing had measured it.** On LONG at a fixed
+   2 ATR stop, moving 0.75R → 5.0R is worth **+0.056R** — larger than the entire 2→4 ATR stop-width
+   effect (+0.0362R) that is the vault's best-validated result. Every cell improves monotonically in
+   R:R, on every stop, on both entries. The project has spent its attention on the stop and has been
+   measuring the smaller of the two levers.
+
+2. **The app's shipped SHORT geometry sits in the worst region of its own grid.** 2 ATR @ 1.5R is
+   −0.0149, and the entire 2 ATR row is negative until R:R 3.0. Not actionable here — it failed the
+   bar — but a SHORT-side stop/target test with a period criterion it can pass is now the highest
+   value item this map identifies.
+
+3. **The scanner's geometry is vindicated on its own terms.** `/opportunities` prices a 1 ATR stop
+   at 5R, and that is the single best SHORT cell in the grid (+0.0191). The two geometries in the
+   product are not one good and one arbitrary — they are the best short cell and a poor one. That
+   makes reconciling them a real decision rather than a tidy-up, and it is still blocked on a period
+   criterion neither side passes.
+
+4. **SHORT pullback entry is negative in every cell** (−0.0220 to −0.0526), against a market entry
+   that reaches +0.0191. This independently reproduces the 2026-08-26 Phase 0 correction, which
+   found entry discipline INVERTS on SHORT (−0.0123, 2/9) after the lookahead was removed. Two
+   different scripts, two different populations, same sign.
+
+## A defect in the shared payoff module, found by this test
+
+`_payoff.align_arms` de-duplicated the KEY set but then LEFT-merged each arm undeduplicated, so one
+repeated `(symbol, timestamp)` in a feature export multiplies the row set by 2 **per arm** —
+`2**n`. `csv_exports_v14/AVAXUSDT.csv` contains exactly one, at 2026-05-06 00:00:00.
+
+It fails silently in both directions, which is what made it hard to see. At this test's 98 arms it
+is an instant `SIGKILL` (exit 137, no traceback, which reads as a hang). At the 12 arms
+`phase3_stop_width_test.py` uses it does not crash at all — it would simply weight one bar 4,096
+times.
+
+**The shipped stop-width result was re-run with the fix and reproduces EXACTLY** — +0.0362R, CI
+[+0.0245, +0.0484], 10/10 periods, 55,752 bars, effective n 3,097, all five criteria PASS. So that
+finding is clean. The defect is real and demonstrated, and it did not reach a published number.
