@@ -609,6 +609,51 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-27 — Phase 1 of the redesign: the scanner replaces the symbol-first landing screen
+
+The app opens on **Scan** ("is there anything worth doing right now?") instead of a symbol
+switcher. `ChartTabContent` becomes the **Symbol** tab; `NavigationCoordinator.Tab` names the tags
+and `symbol` KEEPS 0, so a tapped push still lands on the symbol screen rather than being silently
+redirected by a renumbering. New: `Views/OpportunitiesView.swift`, `Views/TradeCardView.swift`,
+`Utils/OpportunityCopy.swift`. Design: `design/trade-opportunities/`.
+
+**`docs/redesign-spec-corrections.md` is new and is the governing document for this whole
+programme** — it overrides the base spec wherever they disagree, and it had no durable home before
+today. Four of its ten defects are one kind: a measured number applied outside the population it
+was measured on, the same class as the 2026-08-25 entry-discipline retraction. What it changed
+here: §15 deletes the weighted 0-100 score, so the trade card is a CHECKLIST and nothing is summed;
+§20 ranks on net expected R shown in R; §2E makes the PROVISIONAL regime label a rule rather than a
+footnote; §6's short edge is **mood-conditioned**, so in greed the answer line says "but not in
+this mood" rather than presenting it as available. A5's condition ("at move likelihood 55%+")
+travels with those numbers wherever they appear — they are not general short expectancy.
+
+**Worker: additive fields on `/opportunities`** (865/865 green) — `floorR`, `scanned`, `nearMiss`,
+`fearGreed`, `structure`, `crashReadings`, per-row `feeBurdenR` / `grossExpectedValueR` /
+`branches`, `model.baseWinRate`. Two were computed and thrown away: the closest sub-floor candidate,
+and the fee — 0.081R against a 0.154R gross is **52% of the edge** and had never been displayed.
+`crashReadings` exists because warnings fire on the MARGIN over the 41% base rate, so on an ordinary
+day there are none, and a gauge that renders nothing most days teaches the user it is broken.
+`AssetInput.features` was USED but never DECLARED, so it typed as `any` on the one input that
+decides both the excursion curve and the crash overlay. **Needs a box redeploy**; until then the app
+renders the subset the current box serves.
+
+**The 2026-08-25 contradiction is reopened deliberately, with the reconciliation that was missing.**
+That entry deleted the book's trade cards because it proposed an ADA SHORT beside an ADA LONG SETUP.
+Three things are different: `/opportunities` now runs the real envelope precheck and drops anything
+the analysis would auto-FLAT; the two are no longer on the same screen; and where they still differ
+on direction the row says so. `DrawdownRiskCard` is deleted rather than left compiling — the gauge
+owns those warnings, and the HIGH message renders verbatim because `crash.ts` builds the episodic
+caveat into it.
+
+**Three defects found by installing and screenshotting, none of which a build catches:** a symbol
+switcher and a "BTC ⌄" title across the top of the one screen in the app that is not symbol-scoped;
+"+0.050R" for a threshold, which is precision the number does not have; and green on a target price
+and on a +5R branch payout, breaking the colour law that keeps green meaning money that already
+exists. `WorkerOpportunitiesService.demoBook()` renders the rare populated state from worker-shaped
+JSON — decoded, not constructed, so it asserts the DTO against the real key names. **It needs
+`-configuration Debug`: the install command documented above builds Release and strips `#if DEBUG`
+silently.**
+
 ### 2026-08-26c — Envelope tests converted from source regexes to behaviour (Phase 0.4)
 
 The four files that asserted on `prompt.ts` SOURCE TEXT — `continuation-gate`, `stock-gates`,
