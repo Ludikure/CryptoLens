@@ -16,7 +16,8 @@ describe('the minimum stop distance is direction-dependent', () => {
     // so asserting on a rendered number would test the fixture rather than the rule.
     const src = require('fs').readFileSync(
       require('path').join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
-    expect(src).toMatch(/const minStopDist = atr \* \(effectiveDirection === 'SHORT' \? 2\.0 : 4\.0\)/);
+    expect(src).toMatch(/minStopMultiple = effectiveDirection === 'SHORT' \? 2\.0 : 4\.0/);
+    expect(src).toMatch(/minStopDist = atr \* minStopMultiple/);
   });
 
   it('the reward:risk ratio is NOT changed alongside it', () => {

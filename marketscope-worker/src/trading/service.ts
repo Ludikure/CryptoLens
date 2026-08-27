@@ -29,7 +29,7 @@ import { generateCandidate, DEFAULT_STRUCTURE, type StructureConfig } from './ge
 import { rankCandidates } from './opportunity';
 import { allocatePortfolio, type AllocationResult } from './portfolio';
 import type { ExcursionCurve } from './payoff';
-import type { PortfolioState } from './sizing';
+import { DEFAULT_LIMITS, type PortfolioState, type RiskLimits } from './sizing';
 
 export const PROVISIONAL_MODEL_VERSION = EXCURSION_MODEL_VERSION;
 
@@ -100,6 +100,13 @@ export function computeOpportunities(
   portfolio: PortfolioState,
   decisionTimestamp: number,
   structure: StructureConfig = DEFAULT_STRUCTURE,
+  /**
+   * The user's own risk limits. Defaulted rather than required, but a caller that knows the user's
+   * risk-per-trade MUST pass it: every dollar figure the client renders converts R with
+   * `accountSize * riskPercent`, while sizing here fell back to a fixed 2%. A user on 1% saw
+   * "1R is $280" beside "Risk if stopped 2.00% of the account" — $560 — for the same event.
+   */
+  limits: RiskLimits = DEFAULT_LIMITS,
 ): OpportunityResult {
   const candidates = [];
   const skipped: OpportunityResult['skipped'] = [];
@@ -155,7 +162,7 @@ export function computeOpportunities(
       curves,
       // Holdout AUC ~0.60 on both sides: real discrimination, a long way from certainty.
       confidence: { LONG: hasFeatures ? 0.6 : 0.4, SHORT: hasFeatures ? 0.6 : 0.4 },
-      portfolio, provenance, structure,
+      portfolio, provenance, structure, limits,
     });
 
     if (res.candidate.recommendedPositionFraction > 0) {
@@ -168,7 +175,7 @@ export function computeOpportunities(
 
   return {
     allocation: allocatePortfolio({ ranked: rankCandidates(candidates), state: portfolio,
-                                    liquidityByAsset, curve: VALIDATED_CURVE }),
+                                    liquidityByAsset, curve: VALIDATED_CURVE, limits }),
     crashWarnings: warnings,
     crashReadings: readings,
     directionAgnosticAssets: agnostic,

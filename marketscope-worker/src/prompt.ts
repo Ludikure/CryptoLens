@@ -2146,7 +2146,8 @@ export function buildUserPrompt(input: BuildPromptInput): {
           // the same dollar risk. `suggestedQty` below is `riskDollars / risk` and adjusts by
           // construction — but anyone sizing by NOTIONAL will not, and at 4 ATR the same contract
           // count carries roughly twice the risk.
-          const minStopDist = atr * (effectiveDirection === 'SHORT' ? 2.0 : 4.0);
+          const minStopMultiple = effectiveDirection === 'SHORT' ? 2.0 : 4.0;
+          const minStopDist = atr * minStopMultiple;
           if (Math.abs(entry.price - adjustedStop) < minStopDist) adjustedStop = effectiveDirection === 'SHORT' ? entry.price + minStopDist : entry.price - minStopDist;
           const risk = Math.abs(entry.price - adjustedStop);
           if (!(risk > 0)) continue;
@@ -2174,7 +2175,17 @@ export function buildUserPrompt(input: BuildPromptInput): {
           // The scale is a UNITS fix, not a re-tune: it is exactly 1.0 at a 2 ATR stop, so every
           // band keeps the value it was tuned with, stocks (1.5 ATR floor) are untouched via the
           // clamp, and the ATR fallback's reward:risk becomes invariant at the 0.75 it always had.
-          const stopScale = Math.max(1, (risk / Math.max(atr, 0.0001)) / 2.0);
+          // Keyed on the FLOOR that changed, not on the realised stop.
+          //
+          // Keying it on `risk` re-tuned bars the 2026-08-26 floor change never touched: a 5.4 ATR
+          // structural stop on the real BTC tape pushed the TP2 fallback to 8.1 ATR and an 8 ATR
+          // stop to 12 ATR, targets `excursion-model.md` measures as unreachable inside a 72h
+          // horizon. It also fired on SHORT, which the stop-width test says is deliberately
+          // unchanged. The floor is the quantity that moved, so it is the quantity that scales.
+          //
+          // A genuinely wide STRUCTURAL stop with nearby levels does have poor reward:risk, and
+          // `viable` reporting false there is the correct answer, not a defect to engineer around.
+          const stopScale = Math.max(1, minStopMultiple / 2.0);
           const sc = (b: [number, number]): [number, number] => [b[0] * stopScale, b[1] * stopScale];
           let tp1RRBand: [number, number], tp1ATRBand: [number, number], idealTP1RR: number;
           if (isCounterTrend) { tp1RRBand = [0.8, 1.5]; tp1ATRBand = sc([0.5, 2.0]); idealTP1RR = 1.0; }
@@ -2209,8 +2220,24 @@ export function buildUserPrompt(input: BuildPromptInput): {
           };
           let tp2: TaggedLevel | null = null, tp2Best = -Infinity;
           for (const l of directionalLevels) { const sc = tp2Score(l); if (sc != null && sc > tp2Best) { tp2Best = sc; tp2 = l; } }
-          const atrFallback = (multiplier: number, label: string): { price: number; type: string } => {
-            const fp = effectiveDirection === 'SHORT' ? entry.price - atr * multiplier : entry.price + atr * multiplier;
+          // Placed in R, not in ATR.
+          //
+          // The ATR-multiple fallbacks could not satisfy their own R:R bands. Non-wideBand puts TP1
+          // at 1.2 ATR and then demands `finalTP1RR >= 1.0`, which needs 1.2 ATR >= the whole stop —
+          // false at the 4 ATR floor (R:R 0.60) and false at the OLD 2 ATR floor too (also 0.60).
+          // So for the 18 `trendingSymbols` every candidate has always fallen back to a target that
+          // fails viability, and `prompt-system.json` says "Emit a setup ONLY if a Viable
+          // risk-defined level exists". The 2026-08-27 scaling fix repaired only the wideBand path,
+          // where the numbers happened to coincide, and its test used BTCUSDT so it never saw this.
+          //
+          // Anchoring the fallback at the band's own ideal R:R makes it satisfy the band and the
+          // viability bar at ANY stop width, with no scale factor involved. At the geometry these
+          // bands were tuned on it lands where the ATR multiple already did (wideBand crypto: 0.75R
+          // and 1.5R = 3 ATR and 6 ATR against a 4 ATR stop), so it is a re-expression of the
+          // intent rather than a re-tune.
+          const rFallback = (rr: number, label: string): { price: number; type: string } => {
+            const dist = rr * risk;
+            const fp = effectiveDirection === 'SHORT' ? entry.price - dist : entry.price + dist;
             let nearest: TaggedLevel | null = null, nd = Infinity;
             for (const l of uniqueLevels) { const dd = Math.abs(l.price - fp); if (dd < nd) { nd = dd; nearest = l; } }
             if (nearest && Math.abs(nearest.price - fp) / Math.max(atr, 0.0001) <= 0.5) return { price: nearest.price, type: `ATR target (${label}) → ${nearest.type}` };
@@ -2218,13 +2245,13 @@ export function buildUserPrompt(input: BuildPromptInput): {
           };
           let finalTP1Price: number, finalTP1Type: string;
           if (tp1) { finalTP1Price = tp1.price; finalTP1Type = tp1.type; }
-          else { const fbMult = (isWideBand ? 1.5 : isCounterTrend ? 1.5 : 1.2) * stopScale; const fb = atrFallback(fbMult, `${f(fbMult, 1)}× ATR`); finalTP1Price = fb.price; finalTP1Type = fb.type; }
+          else { const fb = rFallback(idealTP1RR, `${f(idealTP1RR, 2)}R`); finalTP1Price = fb.price; finalTP1Type = fb.type; }
           let finalTP2Price: number, finalTP2Type: string;
           if (tp2) { finalTP2Price = tp2.price; finalTP2Type = tp2.type; }
           else {
-            const adaptiveTP2 = (isCrypto && settings.conformalGateEnabled === true && daily.mlQ75 != null) ? Math.min(3.5, Math.max(2.0, daily.mlQ75)) : null;
-            const tp2FallbackMult = (adaptiveTP2 ?? ((isWideBand && isCrypto) ? 3.0 : 2.5)) * stopScale;
-            const fb = atrFallback(tp2FallbackMult, `${f(tp2FallbackMult, 1)}× ATR`); finalTP2Price = fb.price; finalTP2Type = fb.type;
+            // Kept strictly above TP1's R so the two can never collapse onto each other.
+            const tp2R = Math.max(idealTP2RR, tp2MinRR);
+            const fb = rFallback(tp2R, `${f(tp2R, 2)}R`); finalTP2Price = fb.price; finalTP2Type = fb.type;
           }
           const finalTP1RR = Math.abs(finalTP1Price - entry.price) / risk, finalTP2RR = Math.abs(finalTP2Price - entry.price) / risk;
           const targetLines = [`${formatPrice(finalTP1Price)} (${finalTP1Type}) R:R=${f(finalTP1RR, 2)}`, `${formatPrice(finalTP2Price)} (${finalTP2Type}) R:R=${f(finalTP2RR, 2)}`];

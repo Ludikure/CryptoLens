@@ -43,6 +43,14 @@ struct OpportunitiesView: View {
     private var floorR: Double { book?.floorR ?? 0.05 }
     private var mood: OpportunityCopy.Mood? { .from(book?.fearGreed) }
 
+    /// Risk-per-trade the worker actually sized these rows at, as a percentage.
+    ///
+    /// Not the local default: the two disagreed, and the card printed both. A user on 1% saw
+    /// "1R is $280" beside "Risk if stopped 2.00% of the account" for the same event.
+    private var sizedRiskPercent: Double? {
+        book?.structure?.maxRiskPerTrade.map { $0 * 100 }
+    }
+
     /// A row the MOOD cancels. §6 measured the short edge NEGATIVE in greed (−0.05R at ML ≥ 0.55)
     /// and says plainly: do not present it as available.
     ///
@@ -234,7 +242,7 @@ struct OpportunitiesView: View {
             parts.append("Net of the \(trimmed(rt))% round trip.")
         }
         parts.append("Floor \(rText(floorR, decimals: 2)).")
-        if let anchor = OpportunityCopy.rAnchor() { parts.append(anchor + ".") }
+        if let anchor = OpportunityCopy.rAnchor(riskPercent: sizedRiskPercent) { parts.append(anchor + ".") }
         return parts.joined(separator: " ")
     }
 
@@ -279,7 +287,7 @@ struct OpportunitiesView: View {
                     Text(rText(o.expectedValueR))
                         .font(Theme.mono).fontWeight(.medium)
                         .foregroundStyle(Theme.info)
-                    if let money = OpportunityCopy.money(forR: o.expectedValueR) {
+                    if let money = OpportunityCopy.money(forR: o.expectedValueR, riskPercent: sizedRiskPercent) {
                         Text(money).font(Theme.frame).foregroundStyle(.tertiary)
                     }
                 }
@@ -368,7 +376,10 @@ struct OpportunitiesView: View {
     private var bookTotal: some View {
         // Two positions minimum, or the sentence is about correlation between a thing and itself:
         // the first live run rendered "about 1 independent bets, not 1 — these move together."
-        if let t = book?.totals, t.positions > 1 {
+        // `totals` is computed over ALL accepted candidates, including the sub-floor ones the
+        // endpoint filters out and re-serves as `nearMiss`, and before any mood cancellation. So it
+        // said "if you took all 3" over two cards. Only claim it when it describes what is drawn.
+        if let t = book?.totals, t.positions > 1, t.positions == ranked.count {
             Text("If you took all \(t.positions): about \(trimmed(t.effectiveBets)) independent "
                  + "bets, not \(t.positions) — these move together.")
                 .font(Theme.frame).foregroundStyle(.secondary)
@@ -424,7 +435,18 @@ struct OpportunitiesView: View {
 
     @ViewBuilder
     private var drawdownGauge: some View {
-        if let readings = book?.crashReadings, !readings.isEmpty, let base = book?.crashModel?.baseRate {
+        // The HIGH warning is rendered inside this block, so gating the whole gauge on a field
+        // introduced in the same deploy meant that during the install-before-redeploy window — which
+        // every worker change in this project treats as a separate step — a HIGH crash warning
+        // rendered NOWHERE, after `DrawdownRiskCard` was deleted for keying on a field the old box
+        // already served. Fall back to the warnings when the readings are absent.
+        let fallbackReadings = (book?.crashWarnings ?? []).map {
+            WorkerOpportunitiesService.CrashReading(asset: $0.asset, probability: $0.probability)
+        }
+        if let base = book?.crashModel?.baseRate,
+           case let readings = (book?.crashReadings?.isEmpty == false
+                                ? book!.crashReadings! : fallbackReadings),
+           !readings.isEmpty {
             let warned = readings.filter { r in book?.crashWarnings?.contains { $0.asset == r.asset } ?? false }
             let shown = warned.isEmpty
                 ? Array(readings.sorted { $0.probability > $1.probability }.prefix(1))
@@ -540,8 +562,11 @@ struct OpportunitiesView: View {
     private func excursionLine(_ t: TrackedSetup, risk: Double) -> String {
         var parts = ["best \(String(format: "%+.1f", t.outcome.maxFavorable / risk))",
                      "worst \(String(format: "%+.1f", -abs(t.outcome.maxAdverse) / risk))"]
+        // NOT "can no longer lose". A break-even exit still pays the round trip, which this same
+        // screen prices at 0.171% — larger than the whole per-trade edge at a 2% stop — and it
+        // assumes the stop fills at its price, which a gap does not guarantee.
         parts.append(t.outcome.breakevenActivated
-                     ? "stop at break-even, so this one can no longer lose"
+                     ? "stop at break-even — worst case is now roughly the fees"
                      : "stop not yet at break-even")
         return parts.joined(separator: " · ")
     }
@@ -558,7 +583,12 @@ struct OpportunitiesView: View {
         if let cached = service.cachedResults[t.symbol],
            Date().timeIntervalSince(cached.timestamp) < 1800, cached.daily.price > 0 {
             price = cached.daily.price
-        } else if let o = book?.opportunities.first(where: { $0.asset == t.symbol }), o.entry > 0 {
+        } else if let at = book?.at, let o = book?.opportunities.first(where: { $0.asset == t.symbol }),
+                  o.entry > 0,
+                  Date().timeIntervalSince1970 - at / 1000 < 1800 {
+            // Same 30-minute guard as the branch above. Without it this reached for the scan-time
+            // close on a book fetched once per appearance, so leaving the app open through a move
+            // rendered a confident unrealised R — in green or red — against an hours-old price.
             price = o.entry
         }
         guard let p = price else { return nil }
@@ -619,9 +649,16 @@ struct OpportunitiesView: View {
             ? UserDefaults.standard.double(forKey: "accountSize") : 0
         // The same key `FeeDragCard` edits, so the two cannot disagree about what a trade costs.
         let fee = UserDefaults.standard.object(forKey: "feeRoundTripPercent") as? Double
+        let risk = UserDefaults.standard.object(forKey: "riskPercent") as? Double
         async let fetched = WorkerOpportunitiesService.fetch(symbols: syms,
                                                             equity: equity > 0 ? equity : 28000,
-                                                            feePercent: fee)
+                                                            feePercent: fee, riskPercent: risk)
+        // PULL THE SNAPSHOT, don't just read it. `openPositionsAsync` reads a cached file whose only
+        // writer is `refresh()`, and Scan is now the LAUNCH tab — so a user who opens the app and
+        // stays here got one refresh at launch and none after, including on pull-to-refresh. A
+        // position that stopped out stayed under "Open" indefinitely with a live-looking R, in the
+        // one section whose whole claim is that it shows money that exists.
+        await OutcomeTracker.refresh()
         async let positions = OutcomeTracker.openPositionsAsync()
         book = await fetched
         openPositions = await positions

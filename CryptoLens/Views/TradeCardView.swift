@@ -22,7 +22,9 @@ struct TradeCardView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var o: WorkerOpportunitiesService.Opportunity { opportunity }
-    private var oneR: Double { OpportunityCopy.oneR() }
+    /// Sized-at risk, not the local default — see `OpportunitiesView.sizedRiskPercent`.
+    private var sizedRiskPercent: Double? { book?.structure?.maxRiskPerTrade.map { $0 * 100 } }
+    private var oneR: Double { OpportunityCopy.oneR(riskPercent: sizedRiskPercent) }
     private var mood: OpportunityCopy.Mood? { .from(book?.fearGreed) }
     private var ticker: String {
         o.asset.hasSuffix("USDT") ? String(o.asset.dropLast(4)) : o.asset
@@ -65,7 +67,7 @@ struct TradeCardView: View {
                 Text(rText(o.expectedValueR))
                     .font(Theme.mono).fontWeight(.medium).foregroundStyle(Theme.info)
             }
-            if let money = OpportunityCopy.money(forR: o.expectedValueR) {
+            if let money = OpportunityCopy.money(forR: o.expectedValueR, riskPercent: sizedRiskPercent) {
                 Text("Net expected value — \(money), averaged over many trades.")
                     .font(Theme.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -114,8 +116,15 @@ struct TradeCardView: View {
             // endpoint runs the real precheck per symbol and drops the ones it stops. That is what
             // stops this screen and the AI read contradicting each other, as they did on 2026-08-25.
             // Not green either: the law keeps green for money that exists, and a gate that opened is
-            // a precondition, not a result. "PASSED" already says it in a word.
-            check("Analysis gate", "PASSED", .secondary)
+            // a precondition, not a result.
+            //
+            // And not "PASSED", which over-claimed in two ways the endpoint's own code states. The
+            // precheck is wrapped in try/catch and returns null on a throw, which the caller reads
+            // as "no reasons" and shows the row — so a D1 hiccup rendered as a gate that passed
+            // rather than one that never ran. It also runs with `economicEvents: []` and no
+            // enrichment, so macro and every enrichment-dependent kill condition structurally
+            // cannot fire; the endpoint comments that it "can only UNDER-suppress".
+            check("Analysis gate", "not auto-FLAT", .secondary)
             if let m = mood {
                 check("Mood context", moodText(m), m.shortEdgeAbsent && o.direction == "SHORT"
                       ? Theme.caution : .secondary)
@@ -127,7 +136,8 @@ struct TradeCardView: View {
     private var checklistFooter: String {
         "Shown, never summed. A single 0-100 score would need weights, and no component here has "
         + "measured expectancy to derive them from — so the only number this ranks on is net "
-        + "expected R, in R."
+        + "expected R, in R. The analysis gate is a partial check: it runs without macro events or "
+        + "enrichment, so it can only miss reasons to stand aside, never invent them."
     }
 
     private func check(_ label: String, _ value: String, _ color: Color) -> some View {

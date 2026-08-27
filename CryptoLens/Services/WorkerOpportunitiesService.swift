@@ -90,6 +90,19 @@ enum WorkerOpportunitiesService {
         let targetR: Double
         let stopAtrMultiple: Double
         let holdingHorizonHours: Double
+        /// Risk-per-trade the worker ACTUALLY sized with. Every R-to-money conversion must use
+        /// this, not the local `riskPercent` default — they disagreed, and the local one
+        /// understated the loss.
+        let maxRiskPerTrade: Double?
+    }
+
+    /// Positive-EV candidates the PORTFOLIO layer zeroed — liquidity, concentration, correlated
+    /// exposure, or a 0.00 crash multiplier. They belong in neither `opportunities` nor `skipped`,
+    /// so before this they vanished with no line accounting for them.
+    struct Rejected: Decodable {
+        let asset: String
+        let direction: String
+        let reasons: [String]
     }
 
     /// The best candidate that scored but missed the display floor.
@@ -110,6 +123,13 @@ enum WorkerOpportunitiesService {
         let asset: String
         let probability: Double
         var id: String { asset }
+
+        /// Lets a client synthesise a reading from a warning, for the window where the box predates
+        /// `crashReadings` — otherwise a HIGH warning has nowhere to render at all.
+        init(asset: String, probability: Double) {
+            self.asset = asset
+            self.probability = probability
+        }
     }
 
     /// Drawdown-risk warning. Arrives independently of whether any trade was produced — the day
@@ -156,6 +176,7 @@ enum WorkerOpportunitiesService {
         /// Market-wide, never per row: drawing it on a card would fabricate per-asset specificity.
         let fearGreed: Double?
         let structure: Structure?
+        let rejected: [Rejected]?
 
         /// Rows that carry a ranking. A direction-agnostic row does NOT: the pipeline could not
         /// separate the two sides, so its nominal direction is an artifact of needing one, not a
@@ -172,11 +193,17 @@ enum WorkerOpportunitiesService {
     /// different venue was reading an expected value computed for someone else's costs — and at a
     /// 2% stop the round trip is 0.086R against a ~0.15R gross edge, so it decides the sign of
     /// roughly half these rows rather than nudging them.
-    static func fetch(symbols: [String], equity: Double, feePercent: Double? = nil) async -> Book? {
+    static func fetch(symbols: [String], equity: Double, feePercent: Double? = nil,
+                      riskPercent: Double? = nil) async -> Book? {
         var comps = URLComponents(string: "\(PushService.workerURL)/opportunities")
         var items = [URLQueryItem(name: "equity", value: String(Int(equity)))]
         if let fee = feePercent, fee >= 0, fee <= 2 {
             items.append(URLQueryItem(name: "fee", value: String(fee)))
+        }
+        // As a FRACTION, matching `RiskLimits.maxRiskPerTrade`. Without it the worker sized every
+        // row at a fixed 2% while the app converted R at the user's own percentage.
+        if let risk = riskPercent, risk > 0, risk <= 10 {
+            items.append(URLQueryItem(name: "risk", value: String(risk / 100.0)))
         }
         if !symbols.isEmpty {
             items.append(URLQueryItem(name: "symbols", value: symbols.joined(separator: ",")))

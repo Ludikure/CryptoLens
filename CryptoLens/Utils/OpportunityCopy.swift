@@ -152,6 +152,9 @@ enum OpportunityCopy {
     /// `ContentView.loadCostContext` read `account_size` and silently got 0.
     static func oneR(accountSize: Double? = nil, riskPercent: Double? = nil) -> Double {
         let account = accountSize ?? UserDefaults.standard.double(forKey: "accountSize")
+        // NOTE callers on the scanner pass the worker's `structure.maxRiskPerTrade` here, because
+        // that is the percentage the rows were actually sized at. Reading the local default made
+        // every dollar figure disagree with the "Risk if stopped" line on the same card.
         let risk = riskPercent ?? UserDefaults.standard.double(forKey: "riskPercent")
         guard account > 0, risk > 0 else { return 0 }
         return account * risk / 100.0

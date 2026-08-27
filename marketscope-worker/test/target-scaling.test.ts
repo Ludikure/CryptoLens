@@ -54,11 +54,27 @@ describe('targets scale with the stop', () => {
     }
   });
 
-  it('is a NO-OP at a 2 ATR stop — the width every band was tuned at', () => {
-    // The scale is `max(1, stopAtr/2)`, so it is exactly 1.0 at 2 ATR and clamped below it. That is
-    // what makes this a units fix rather than a re-tune: stocks (1.5 ATR floor) and every SHORT
-    // sitting on its 2 ATR floor keep the behaviour they were tuned with.
-    const src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
-    expect(src).toContain('const stopScale = Math.max(1, (risk / Math.max(atr, 0.0001)) / 2.0);');
+  it('the fallback target satisfies its own R:R band, at whatever the stop turns out to be', () => {
+    // The property that makes the whole class of defect impossible, asserted as a property rather
+    // than as a formula. An ATR-multiple fallback can miss the R:R band it is judged against — that
+    // is how non-wideBand ended up placing TP1 at 1.2 ATR while demanding R:R >= 1.0, unsatisfiable
+    // at BOTH the 4 ATR floor and the old 2 ATR one. An R-anchored fallback cannot.
+    for (const bias of [BIAS.alignedBullish, BIAS.alignedBearish]) {
+      for (const row of candidates(envelopeFor({ ml: 0.8, calibratedMl: 0.8, ...bias }).prompt)) {
+        if (!row.includes('R)')) continue;              // fallback rows are labelled in R
+        expect(rr(row, 'TP1')).toBeGreaterThanOrEqual(0.5);
+        expect(rr(row, 'TP2')).toBeGreaterThan(rr(row, 'TP1'));
+      }
+    }
+  });
+
+  it('a trendingSymbol — the non-wideBand path — can emit a setup at all', () => {
+    // TIAUSDT is on the `trendingSymbols` whitelist, so it takes tp1RRBand [1.0,1.7] with a 1.2 ATR
+    // fallback. Six of six candidates reported `Viable: false` before this, at every stop width,
+    // which made the 18 whitelisted symbols silently unemittable — including NVDA, COIN and GLD.
+    const rows = candidates(envelopeFor({ ml: 0.8, calibratedMl: 0.8, symbol: 'TIAUSDT',
+                                         ...BIAS.alignedBullish }).prompt);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some(viable)).toBe(true);
   });
 });

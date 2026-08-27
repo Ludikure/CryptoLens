@@ -47,13 +47,20 @@ def build(fee):
         for side in ('LONG', 'SHORT'):
             for st in STOPS[side]:
                 for rr in RRS:
-                    for mode, tag in (('market', 'mkt'), ('pullback', 'pb')):
+                    # `mtag`, NOT `tag` — `tag` is the FEE tag in the cache filename above, and
+                    # rebinding it here meant every symbol after the first cached under a key that
+                    # no longer carried the fee. Harmless for the published map (each ONLY= run
+                    # built exactly one symbol, so the rebind never reached a filename), but a
+                    # later gross build would have found those files and silently returned
+                    # net-of-fee numbers as the fee-free series. `stop_target_confirm.py` avoids it
+                    # by naming its loop variable `ftag`.
+                    for mode, mtag in (('market', 'mkt'), ('pullback', 'pb')):
                         o, _ = simulate(f, p, symbol=s, depth_atr=0.0 if mode == 'market' else 0.25,
                                         side=side, anchor='bar_close', entry_mode=mode,
                                         params=PayoffParams(wait_h=12, hold_h=72, stop_atr=st,
                                                             tp_atr=st * rr, fee_pct=fee, bar_hours=4))
                         if not len(o): ok = False; break
-                        arms[f'{side}_{st}_{rr}_{tag}'] = o[['symbol', 'timestamp', 'oppR']]
+                        arms[f'{side}_{st}_{rr}_{mtag}'] = o[['symbol', 'timestamp', 'oppR']]
                     if not ok: break
                 if not ok: break
             if not ok: break

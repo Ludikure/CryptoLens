@@ -19,6 +19,7 @@ import { computeOpportunities, PROVISIONAL_CAVEAT, type AssetInput } from './tra
 import { excursionModelInfo } from './trading/excursion';
 import { crashModelInfo, crashProbability } from './trading/crash';
 import { DEFAULT_STRUCTURE } from './trading/generator';
+import { DEFAULT_LIMITS } from './trading/sizing';
 import { payoffBranches } from './trading/opportunity';
 
 /** `forecastVol` needs comp_bars['30d'] = 720 one-hour bars and returns null if any component is
@@ -2623,10 +2624,25 @@ export default {
         // stop the round trip is 0.086R against a gross edge of ~0.15R, so the fee decides the sign
         // of roughly half these rows. Clamped because it flows straight into EV and into sizing.
         // Same treatment `/basis?fee=` already gives the carry monitor.
-        const feeRaw = Number(url.searchParams.get('fee'));
+        // `Number(null)` is 0, NOT NaN — so a missing `fee` param passed the finite/range guard and
+        // priced every row at ZERO cost, making the fallback unreachable. That is the whole edge:
+        // 0.171% against a 4% stop is 0.043R, against a 1% stop 0.171R, versus a gross edge around
+        // 0.15R. Negative-EV rows would cross the 0.05R display floor and be ranked, sized and
+        // shown, with `structure.roundTripPercent: 0` telling the client to print "Net of the 0%
+        // round trip." `/basis` gets this right with `?? '0.0007'`; that `??` is what was missing.
+        const feeParam = url.searchParams.get('fee');
+        const feeRaw = feeParam === null ? NaN : Number(feeParam);
         const roundTripPercent = Number.isFinite(feeRaw) && feeRaw >= 0 && feeRaw <= 2
           ? feeRaw : DEFAULT_STRUCTURE.roundTripPercent;
         const structure = { ...DEFAULT_STRUCTURE, roundTripPercent };
+
+        // The user's risk-per-trade, for the same reason as the fee: the client renders every
+        // dollar figure as `accountSize * riskPercent`, so sizing here at a fixed 2% made the money
+        // wrong — and understated the loss, which is the worse direction.
+        const riskParam = url.searchParams.get('risk');
+        const riskRaw = riskParam === null ? NaN : Number(riskParam);
+        const limits = Number.isFinite(riskRaw) && riskRaw > 0 && riskRaw <= 0.1
+          ? { ...DEFAULT_LIMITS, maxRiskPerTrade: riskRaw } : DEFAULT_LIMITS;
 
         const preds = JSON.parse((await env.ALERTS.get('ml_preds:all')) ?? '{}');
         const assets: AssetInput[] = [];
@@ -2712,7 +2728,7 @@ export default {
         const correlations = pairwiseCorrelations(closesByAsset);
 
         const result = computeOpportunities(
-          assets, { equity, openNotionalByAsset: {}, correlations }, nowMs, structure);
+          assets, { equity, openNotionalByAsset: {}, correlations }, nowMs, structure, limits);
 
         // THE CLOSEST MISS IS THE MOST INSTRUCTIVE ROW ON A QUIET DAY, and it was being thrown away
         // by the display filter below. "Nothing qualifies" and "the best candidate missed the floor
@@ -2734,8 +2750,15 @@ export default {
         // Market-wide, not per-asset: drawing Fear & Greed on a row would fabricate a per-symbol
         // specificity the input does not have. First asset that carries it wins — they all read the
         // same index.
+        // EXACTLY 50 IS THE PLACEHOLDER, NOT A READING. `index.ts` initialises
+        // `let fearGreedIndex = 50` and wraps the fetch in try/catch, and `scoring-full.ts` writes
+        // `?? 50` — so a dead sentiment feed serves a literal 50 that reads as a measured Neutral.
+        // Worst possible failure for this field: the client states "Neutral — the mood where the
+        // short edge measured strongest" as fact AND stops cancelling shorts, which is the one
+        // protection the mood carries. Suppressing a genuine 50 costs a caveat line; trusting a
+        // fake one promotes withheld trades back onto the screen as blue actionable cards.
         const fearGreedRaw = symbols.map(s2 => preds[s2]?.features?.fearGreedIndex)
-          .find((v: unknown) => typeof v === 'number' && Number.isFinite(v));
+          .find((v: unknown) => typeof v === 'number' && Number.isFinite(v) && v !== 50);
 
         return json({
           at: nowMs,
@@ -2765,6 +2788,8 @@ export default {
             targetR: structure.targetR,
             stopAtrMultiple: structure.stopAtrMultiple,
             holdingHorizonHours: structure.holdingHorizonHours,
+            /** Risk-per-trade actually used for sizing. The client's R-to-money must use THIS. */
+            maxRiskPerTrade: limits.maxRiskPerTrade,
           },
           opportunities: shown
             .map(a => ({
@@ -2794,6 +2819,15 @@ export default {
             branches: payoffBranches(a.candidate.payoff.winProbability, a.candidate.payoff.payoffAsymmetry),
           })),
           totals: result.allocation.totals,
+          // Sized to zero by the portfolio layer — liquidity, concentration, correlated exposure,
+          // or a 0.00 crash multiplier above p=0.5001. These appeared in NO list, so the asset with
+          // the scariest drawdown reading was the one that silently vanished while the screen said
+          // "Every asset scanned was scored."
+          rejected: result.allocation.rejected.map(r => ({
+            asset: r.candidate.asset,
+            direction: r.candidate.direction,
+            reasons: r.reasons,
+          })),
           crashWarnings: result.crashWarnings,
           crashReadings: result.crashReadings,
           crashModel: crashModelInfo(),
