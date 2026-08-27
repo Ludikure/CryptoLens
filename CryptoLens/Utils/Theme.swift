@@ -61,6 +61,19 @@ enum Theme {
     /// Decorative glyph for empty states.
     static let emptyGlyph = Font.system(.largeTitle, design: .rounded)
 
+    // MARK: - The scanner's three registers
+    //
+    // The Opportunities screen uses exactly THREE type registers and nothing else, which is what
+    // removes the need for a legend on it. A first pass used six and the honesty layer — every
+    // caveat, repeated per row — became the dominant visual mass, burying the answer it qualified.
+
+    /// The one white sentence on the screen: always a threshold statement, never a verdict.
+    /// `.title3` bases at 20pt and scales, unlike a `.system(size: 20)`.
+    static let answer = Font.system(.title3, design: .rounded).weight(.semibold)
+    /// Properties of the STRUCTURE — stated once above the rows, never repeated inside one.
+    /// Regular weight is load-bearing: `micro` is semibold and reads as a label, not a sentence.
+    static let frame = Font.caption2
+
     // MARK: - Chrome
 
     static let cardRadius: CGFloat = 14

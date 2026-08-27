@@ -197,6 +197,17 @@ export function excursionModelInfo() {
     features: MODEL.features.length,
     longAuc: MODEL.heads.long.holdoutAuc,
     shortAuc: MODEL.heads.short.holdoutAuc,
+    /**
+     * The MEASURED hit rate at the primary target, per side — what a refused head falls back to.
+     *
+     * Served rather than hardcoded on the client because it is the whole explanation for why a LONG
+     * carries no ranking: at 7.6% it is the rate every long shares, and it does not clear the round
+     * trip. A number that explains a design decision must come from the artifact it describes.
+     */
+    baseWinRate: {
+      long: MODEL.heads.long.baseCurve[String(MODEL.primaryR)] ?? null,
+      short: MODEL.heads.short.baseCurve[String(MODEL.primaryR)] ?? null,
+    },
     description: MODEL.description,
     // QUARANTINE LIFTED 2026-08-26 (Phase 3). Retrained on labels rebuilt at `anchor='bar_close'`;
     // the 4-hour lookahead below is gone. It is replaced by a PER-HEAD verdict — see

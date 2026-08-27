@@ -29,31 +29,60 @@ struct ContentView: View {
         //
         // Five destinations, each answering ONE question — the previous set was organised by data
         // source, which is why the app's own conclusion wasn't on the screen you land on:
-        //   Now     — what's the read, and what do I do? (verdict first, then price/indicators)
+        //   Scan    — is there anything worth doing right now? (NOT symbol-scoped; the landing screen)
+        //   Symbol  — what's the read on this one? (verdict first, then price/indicators)
         //   Chart   — show me the tape
         //   Market  — the surrounding context (derivatives, macro, calendar, sentiment)
         //   Record  — is this system actually working? (was buried in Settings)
-        // The full AI analysis is no longer a peer tab: it's PUSHED from the verdict card on Now,
+        //
+        // SCAN LEADS since the corrected spec's §42 reordering. The app used to open on a symbol
+        // switcher, which presumes you have already chosen to trade something — the question a
+        // scanner asks comes first, and on most days its answer is "nothing", which is a result.
+        //
+        // The full AI analysis is no longer a peer tab: it's PUSHED from the verdict card on Symbol,
         // which is both the right hierarchy (you land on the answer, tap for the reasoning) and what
-        // freed the fifth slot for Record without spilling into iOS's "More" tab.
+        // keeps five destinations from spilling into iOS's "More" tab.
         TabView(selection: $coordinator.selectedTab) {
+            // Deliberately NOT `symbolScopedTab`. The scanner's whole premise is that it is not
+            // about a symbol, and a first build wrapped it in the shared chrome — which put a
+            // star, a watchlist grid and a "BTC ⌄" picker across the top of a screen that scans 24
+            // assets, and replaced its title with the name of one of them. Settings is carried on
+            // its own so the landing tab is not the one place you cannot reach it from.
+            NavigationStack {
+                OpportunitiesView(onOpenSymbol: { symbol in
+                    service.switchToSymbol(symbol)
+                    coordinator.openSymbol(symbol)
+                })
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button { coordinator.showSettings = true } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .accessibilityLabel("Settings")
+                    }
+                }
+                .sheet(isPresented: $coordinator.showSettings) { SettingsView() }
+            }
+            .tabItem { Label("Scan", systemImage: "scope") }
+            .tag(NavigationCoordinator.Tab.opportunities.rawValue)
+
             symbolScopedTab { ChartTabContent(showHistory: $showHistory) }
-                .tabItem { Label("Now", systemImage: "bolt.horizontal.circle") }
-                .tag(0)
+                .tabItem { Label("Symbol", systemImage: "bolt.horizontal.circle") }
+                .tag(NavigationCoordinator.Tab.symbol.rawValue)
 
             symbolScopedTab { ChartScreenView() }
                 .tabItem { Label("Chart", systemImage: "chart.xyaxis.line") }
-                .tag(4)
+                .tag(NavigationCoordinator.Tab.chart.rawValue)
 
             symbolScopedTab { MarketTabContent() }
                 .tabItem { Label("Market", systemImage: "building.columns") }
-                .tag(1)
+                .tag(NavigationCoordinator.Tab.market.rawValue)
 
             NavigationStack {
                 OutcomeDashboardView()
             }
             .tabItem { Label("Record", systemImage: "checkmark.seal") }
-            .tag(5)
+            .tag(NavigationCoordinator.Tab.record.rawValue)
         }
         .preferredColorScheme(colorSchemeOverride == "light" ? .light : colorSchemeOverride == "dark" ? .dark : nil)
         .task {
@@ -142,7 +171,6 @@ struct ChartTabContent: View {
 
     @State private var newsFeed: WorkerNewsService.Feed?
     @State private var basis: WorkerBasisService.Snapshot?
-    @State private var book: WorkerOpportunitiesService.Book?
     @State private var recentSetups: [TrackedSetup] = []
 
     /// Best-effort and non-blocking: headlines are context, so a failure just hides the card.
@@ -152,15 +180,14 @@ struct ChartTabContent: View {
 
     /// Carry + fee context. Both are best-effort and symbol-independent, so they load once per
     /// appearance rather than on every symbol switch.
+    // The ranked book moved to the Scan tab, which now owns `/opportunities` outright. Two screens
+    // fetching the same book was a second network call per appearance and, worse, a second place the
+    // same drawdown numbers could be drawn in a different visual language. (The call here also read
+    // `account_size`, a key that does not exist, so every book it fetched was sized against the
+    // worker's 25,000 default rather than the user's equity.)
     private func loadCostContext() async {
         basis = await WorkerBasisService.fetch()
         recentSetups = await OutcomeTracker.allSetupsAsync()
-        // The ranked book is scoped to the user's favourites and sized against their real equity,
-        // so the numbers on the card are the numbers for THIS account, not a generic illustration.
-        let syms = Array(favorites.orderedFavorites.prefix(12))
-        let equity = UserDefaults.standard.double(forKey: "account_size")
-        book = await WorkerOpportunitiesService.fetch(symbols: syms,
-                                                     equity: equity > 0 ? equity : 28000)
     }
 
     var body: some View {
@@ -204,14 +231,9 @@ struct ChartTabContent: View {
                         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
                 }
 
-                // Drawdown warnings only. The book's TRADE cards were removed 2026-08-25: they
-                // proposed a direction on the same screen as the AI analysis, with nothing
-                // reconciling the two, and were seen recommending ADA SHORT while the analysis
-                // showed ADA LONG. The analysis is now the single place a trade is proposed.
-                if let ws = book?.crashWarnings, !ws.isEmpty {
-                    DrawdownRiskCard(warnings: ws)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
-                }
+                // Drawdown warnings live on the Scan tab's gauge now — one place per idea. This
+                // screen is symbol-scoped and the gauge is not; drawing it here as well meant the
+                // same evidence in two visual languages, which is what `Theme` exists to prevent.
 
                 if let result = service.currentResult {
                     TimestampBar(dataTimestamp: result.timestamp, analysisTimestamp: result.analysisTimestamp)

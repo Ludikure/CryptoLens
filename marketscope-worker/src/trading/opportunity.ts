@@ -70,14 +70,24 @@ export function timeoutBranch(targetR: number): { share: number; meanR: number }
  * measured mean rather than zero. Clamped into [-1, targetR] because a timeout exit cannot pay more
  * than the target or less than the stop — the position would have closed.
  */
-export function expectedValueThreeWay(pTarget: number, targetR: number): number {
+export function payoffBranches(pTarget: number, targetR: number): {
+  target: number; stop: number; timeout: number; timeoutPayR: number;
+} {
   const pt = Math.min(Math.max(pTarget, 0), 1);
   const { share, meanR } = timeoutBranch(targetR);
   // The timeout share is measured unconditionally; it cannot exceed the mass left after a win.
-  const pTimeout = Math.min(share, 1 - pt);
-  const pStop = Math.max(0, 1 - pt - pTimeout);
-  const timeoutPay = Math.min(Math.max(meanR, -1), targetR);
-  return pt * targetR + pStop * -1 + pTimeout * timeoutPay;
+  const timeout = Math.min(share, 1 - pt);
+  return {
+    target: pt,
+    stop: Math.max(0, 1 - pt - timeout),
+    timeout,
+    timeoutPayR: Math.min(Math.max(meanR, -1), targetR),
+  };
+}
+
+export function expectedValueThreeWay(pTarget: number, targetR: number): number {
+  const b = payoffBranches(pTarget, targetR);
+  return b.target * targetR + b.stop * -1 + b.timeout * b.timeoutPayR;
 }
 
 /**

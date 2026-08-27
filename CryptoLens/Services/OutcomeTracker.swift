@@ -129,6 +129,23 @@ enum OutcomeTracker {
         }
     }
 
+    /// Every position you are actually IN right now, across all symbols.
+    ///
+    /// Deliberately narrower than `activeSetups`: a PENDING conditional is a setup waiting for a
+    /// trigger, not money at risk. The scanner's "Open" section is the only place green appears on
+    /// that screen, and green means money that already exists — so a row you have not entered must
+    /// not qualify for it.
+    static func openPositionsAsync() async -> [TrackedSetup] {
+        await withCheckedContinuation { continuation in
+            ioQueue.async {
+                let setups = serverSetupsLocked().filter {
+                    $0.outcome.state == .active && $0.outcome.entryHit && !$0.outcome.resolved
+                }
+                continuation.resume(returning: setups.sorted { $0.timestamp > $1.timestamp })
+            }
+        }
+    }
+
     /// Returns wins/losses for a (symbol, archetype) pair over the last N days.
     /// Win = tp1Hit or tp2Hit (resolved profitably). Loss = stopHit. Setups still
     /// active/pending or expired-no-fill are excluded — they have no verdict yet.

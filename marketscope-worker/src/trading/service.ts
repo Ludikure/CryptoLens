@@ -44,6 +44,14 @@ export interface AssetInput {
   mlWin: number | null;
   /** Crash probability, when a crash model is available. Absent means no overlay is applied. */
   crashProbability: number | null;
+  /**
+   * The 110 serving features the excursion and crash models read.
+   *
+   * Was USED but never DECLARED, so `a.features` typed as `any` and a rename or a typo here would
+   * have compiled silently — on the one input that decides both the excursion curve and the crash
+   * overlay. Optional because the service falls back to measured base rates without it.
+   */
+  features?: Record<string, number>;
   liquidityUsd24h: number;
   isCrypto: boolean;
   dataTimestamp: number;
@@ -60,6 +68,15 @@ export interface OpportunityResult {
   allocation: AllocationResult;
   /** Drawdown-risk warnings, independent of whether any trade was produced. */
   crashWarnings: CrashWarning[];
+  /**
+   * EVERY scored asset's drawdown reading, whether or not it warned.
+   *
+   * `crashWarnings` fires on the MARGIN over the base rate, so on an ordinary day it is empty --
+   * and a gauge that renders nothing on an ordinary day teaches the user it is broken. The reading
+   * itself is the product: 44% against a 41% base is "normal", and saying so is not the same as
+   * saying nothing. Absence of a warning is a documented property, never an all-clear (crash.ts).
+   */
+  crashReadings: Array<{ asset: string; probability: number }>;
   /** Assets whose structure pays on either side — the validated convex case, not a failure. */
   directionAgnosticAssets: string[];
   /** Assets that produced no candidate, with the reason. */
@@ -87,6 +104,7 @@ export function computeOpportunities(
   const candidates = [];
   const skipped: OpportunityResult['skipped'] = [];
   const warnings: CrashWarning[] = [];
+  const readings: OpportunityResult['crashReadings'] = [];
   const agnostic: string[] = [];
   const liquidityByAsset: Record<string, number> = {};
 
@@ -108,6 +126,7 @@ export function computeOpportunities(
       ? { probability: 0, regime: 'LOW', confidence: 0, horizonDays: 0 }
       : { probability: cp, regime: crashRegime(cp, VALIDATED_CURVE), confidence: 0.6, horizonDays: 10 };
     if (cp != null) {
+      readings.push({ asset: a.asset, probability: cp });
       const w = crashWarning(cp);
       if (w) warnings.push({ asset: a.asset, level: w.level, message: w.message, probability: cp });
     }
@@ -151,6 +170,7 @@ export function computeOpportunities(
     allocation: allocatePortfolio({ ranked: rankCandidates(candidates), state: portfolio,
                                     liquidityByAsset, curve: VALIDATED_CURVE }),
     crashWarnings: warnings,
+    crashReadings: readings,
     directionAgnosticAssets: agnostic,
     skipped,
     provisional: true,

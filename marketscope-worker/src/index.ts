@@ -18,6 +18,8 @@ import { fetchBasisRows, findBasisOpportunities, netAnnualized } from './basis';
 import { computeOpportunities, PROVISIONAL_CAVEAT, type AssetInput } from './trading/service';
 import { excursionModelInfo } from './trading/excursion';
 import { crashModelInfo, crashProbability } from './trading/crash';
+import { DEFAULT_STRUCTURE } from './trading/generator';
+import { payoffBranches } from './trading/opportunity';
 
 /** `forecastVol` needs comp_bars['30d'] = 720 one-hour bars and returns null if any component is
  *  short. Named so the requirement is visible rather than buried in a magic 800. */
@@ -2602,9 +2604,11 @@ export default {
     // ADDITIVE AND READ-ONLY: this touches no cron behaviour, no notifications and no model serving.
     // The existing /full-analysis path is unchanged.
     //
-    // ⚠️ PROVISIONAL. No trained excursion model exists yet, so curves are anchored on ML_WIN at 1.5R
-    // and interpolated toward the random-walk tail — an assumption about shape, not a measurement.
-    // Every response says so. Do not trade or journal these as model output.
+    // ⚠️ PROVISIONAL, but no longer for the reason this comment used to give. A trained excursion
+    // model HAS shipped (2026-08-24) and the crash overlay with it, so the curves are measured — the
+    // SHORT head clears its bar and serves; the LONG head does not and degrades to the observed base
+    // rate. What stays provisional is PROFITABILITY: ranking is regime-independent, the payoff is
+    // not (1 of 5 rising-market periods). `caveat` carries that to every surface.
     if (path === '/opportunities' && request.method === 'GET') {
       try {
         const nowMs = Date.now();
@@ -2663,7 +2667,9 @@ export default {
               // The 110 serving features the excursion model reads. Without them the pipeline
               // falls back to measured base rates, whose EV is negative -- i.e. no trade.
               features: p.features && typeof p.features === 'object' ? p.features : undefined,
-              crashProbability: null,          // no crash model shipped yet -> no overlay applied
+              // null defers to the crash model, which the service runs from these same features.
+              // It is NOT "no overlay" — that was true before 2026-08-24 and the comment outlived it.
+              crashProbability: null,
               // REAL 24h traded notional from the last 24 hourly bars, not a flat 50M placeholder.
               // With a constant, the liquidity cap was the same generous number for BTC and for a
               // thin alt, so it could never bind where it actually matters.
@@ -2696,6 +2702,29 @@ export default {
         const result = computeOpportunities(
           assets, { equity, openNotionalByAsset: {}, correlations }, nowMs);
 
+        // THE CLOSEST MISS IS THE MOST INSTRUCTIVE ROW ON A QUIET DAY, and it was being thrown away
+        // by the display filter below. "Nothing qualifies" and "the best candidate missed the floor
+        // by a cent" are very different messages, and only the second teaches what the floor is.
+        // Cost of the round trip expressed in R, which is what makes it comparable to the edge.
+        // Recomputed rather than plumbed through the candidate: it is one division, and the inputs
+        // (entry, stop, the frozen structure) are all right here.
+        const feeBurden = (c: { entryPrice: number; stopPrice: number }) => {
+          const stopPct = Math.abs(c.entryPrice - c.stopPrice) / c.entryPrice * 100;
+          return stopPct > 0 ? DEFAULT_STRUCTURE.roundTripPercent / stopPct : 0;
+        };
+
+        const shown = result.allocation.accepted
+          .filter(a => a.candidate.payoff.expectedValueR >= MIN_DISPLAY_EV_R);
+        const nearMiss = result.allocation.accepted
+          .filter(a => a.candidate.payoff.expectedValueR < MIN_DISPLAY_EV_R)
+          .sort((a, b) => b.candidate.payoff.expectedValueR - a.candidate.payoff.expectedValueR)[0];
+
+        // Market-wide, not per-asset: drawing Fear & Greed on a row would fabricate a per-symbol
+        // specificity the input does not have. First asset that carries it wins — they all read the
+        // same index.
+        const fearGreedRaw = symbols.map(s2 => preds[s2]?.features?.fearGreedIndex)
+          .find((v: unknown) => typeof v === 'number' && Number.isFinite(v));
+
         return json({
           at: nowMs,
           provisional: true,
@@ -2703,8 +2732,29 @@ export default {
           model: excursionModelInfo(),
           modelVersion: result.modelVersion,
           equity,
-          opportunities: result.allocation.accepted
-            .filter(a => a.candidate.payoff.expectedValueR >= MIN_DISPLAY_EV_R)
+          /** How many assets were looked at — the denominator every count on the screen needs. */
+          scanned: symbols.length,
+          /** The display floor a row must clear. Served so no client has to hardcode it. */
+          floorR: MIN_DISPLAY_EV_R,
+          /** Best candidate that scored but missed the floor, or null. See above. */
+          nearMiss: nearMiss ? {
+            asset: nearMiss.candidate.asset,
+            direction: nearMiss.candidate.direction,
+            expectedValueR: nearMiss.candidate.payoff.expectedValueR,
+          } : null,
+          fearGreed: typeof fearGreedRaw === 'number' ? fearGreedRaw : null,
+          /**
+           * The frozen structure every row shares. Served because the screen states these as
+           * properties of the STRUCTURE, once, above the rows — and a client that hardcoded
+           * "0.171%" would keep printing it after `DEFAULT_STRUCTURE` changed.
+           */
+          structure: {
+            roundTripPercent: DEFAULT_STRUCTURE.roundTripPercent,
+            targetR: DEFAULT_STRUCTURE.targetR,
+            stopAtrMultiple: DEFAULT_STRUCTURE.stopAtrMultiple,
+            holdingHorizonHours: DEFAULT_STRUCTURE.holdingHorizonHours,
+          },
+          opportunities: shown
             .map(a => ({
             asset: a.candidate.asset,
             direction: a.candidate.direction,
@@ -2721,9 +2771,19 @@ export default {
             positionUsd: a.sizing.positionUsd,
             crashMultiplier: a.sizing.crashMultiplier,
             bindingConstraints: a.sizing.bindingConstraints,
+            // THE SPLIT THE ROW HIDES AND THE DETAIL VIEW SHOWS. `expectedValueR` is already net,
+            // and the fee is the term that decides most of these trades: 0.171% against a 2% stop
+            // is 0.086R, larger than the entire edge. Both halves were computed inside
+            // `netExpectedValueR` and discarded, so nothing could say what the fee actually cost.
+            feeBurdenR: feeBurden(a.candidate),
+            grossExpectedValueR: a.candidate.payoff.expectedValueR + feeBurden(a.candidate),
+            // Three ways this ends, and their measured shares. "1 in 13 reach target" is the
+            // sentence that makes a +0.07R average readable; the average alone reads as a wage.
+            branches: payoffBranches(a.candidate.payoff.winProbability, a.candidate.payoff.payoffAsymmetry),
           })),
           totals: result.allocation.totals,
           crashWarnings: result.crashWarnings,
+          crashReadings: result.crashReadings,
           crashModel: crashModelInfo(),
           skipped: [...result.skipped, ...unavailable],
         });
