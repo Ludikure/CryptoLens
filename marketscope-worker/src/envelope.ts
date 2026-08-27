@@ -104,8 +104,27 @@ export function evaluateEnvelope(input: EnvelopeInput): EnvelopeVerdict {
   // The cut is on the RAW scale because that is the scale the distribution is measured on. Comparing
   // a raw value against a raw percentile is the whole point: it is immune to the calibration curve
   // moving, which is what broke the level version.
-  if (input.mlCoverageCut != null && input.rawMlWin != null) {
-    if (input.rawMlWin < input.mlCoverageCut) {
+  //
+  // SCOPED TO SHORT (2026-08-26). The coverage form was built for drift-resistance and that argument
+  // is unchanged, but applying it to LONG would have been a large, unjustified behaviour change:
+  //
+  //   - 0.45 coverage cuts at raw 0.491, and the three LONG bands that measured POSITIVE
+  //     (0.25-0.30, 0.30-0.35, 0.35-0.40) all sit BELOW it. Long setups would have been all but
+  //     eliminated. The existing level floor rejects 6.1% of bars and permits raw 0.31+, which
+  //     happens to preserve exactly those bands — the "5x loosening nobody decided" was, by
+  //     accident, right for this side.
+  //   - The justification for gating on ML at all is SHORT-side. Cross-sectional AUC — measured
+  //     WITHIN a timestamp, so it cannot be a date proxy — is 0.53 on SHORT and 0.4993 on LONG.
+  //     On longs the signal carries no information about whether the trade pays, so a floor built
+  //     from it is filtering on noise.
+  //
+  // Note the argument is ABSENCE of information on LONG, not evidence of harm: the pre-declared
+  // inversion test (docs/research/ml-floor-long-inversion.md) FAILED — its sign reverses in
+  // non-greedy tape — so nothing here claims longs do better at low ML. LONG keeps the existing
+  // level floor unchanged.
+  const coverageApplies = input.mlCoverageCut != null && input.alignedDirection === 'SHORT';
+  if (coverageApplies && input.rawMlWin != null) {
+    if (input.rawMlWin < input.mlCoverageCut!) {
       autoFlat.push(`ML_WIN_${rawMlPct}%_below_live_floor_${iTrunc(input.mlCoverageCut * 100)}%`);
     }
   } else if (mlPct != null && mlPct < 50) {

@@ -113,22 +113,25 @@ describe('criterion 3 — nothing else moves', () => {
     mlCoverageCut: 0.42,
   };
 
-  it('the coverage cut REPLACES the level floor — the raw 30 bar now flats', () => {
-    // This is the user-reported case: raw 30 calibrates to ~50 and produced setups.
-    const v = evaluateEnvelope(base);
+  it('the coverage cut REPLACES the level floor on SHORT — a raw 30 bar flats', () => {
+    // NOTE the side. The user's reported case was a raw-31 LONG, and that one is deliberately NOT
+    // flatted: 0.45 coverage cuts above every LONG band that measured positive, and ML carries no
+    // cross-sectional information about long payoff (AUC 0.4993). The floor is a SHORT-side tool.
+    const v = evaluateEnvelope({ ...base, alignedDirection: 'SHORT' });
     expect(v.autoFlat.some(r => r.includes('below_live_floor'))).toBe(true);
     expect(v.maxAllowed).toBe('FLAT');
   });
 
   it('a bar above the cut is NOT flatted by ML', () => {
-    const v = evaluateEnvelope({ ...base, rawMlWin: 0.55, calibratedMlWin: 0.72 });
+    const v = evaluateEnvelope({ ...base, alignedDirection: 'SHORT', rawMlWin: 0.55, calibratedMlWin: 0.72 });
     expect(v.autoFlat.some(r => r.startsWith('ML_WIN_'))).toBe(false);
   });
 
   it('keeps the ML_WIN_ prefix, so the FRAMING hatch still matches', () => {
     // `isQualityGateReason` in prompt.ts tests `startsWith('ML_WIN_')`. Losing that silently killed
     // the hatch for a week in 2026-07-24, and again in the reverted Part 11 change.
-    const r = evaluateEnvelope(base).autoFlat.find(x => x.includes('below_live_floor'))!;
+    const r = evaluateEnvelope({ ...base, alignedDirection: 'SHORT' })
+      .autoFlat.find(x => x.includes('below_live_floor'))!;
     expect(r.startsWith('ML_WIN_')).toBe(true);
   });
 
@@ -138,12 +141,22 @@ describe('criterion 3 — nothing else moves', () => {
     expect(v.moderateBlocks.some(r => r.startsWith('ML_WIN_'))).toBe(false);
   });
 
-  it('applies to BOTH sides — measured population and shipped population are the same', () => {
-    // Part 11 measured unconditionally and shipped on SHORT only, giving a realised selectivity it
-    // had itself called worse than no gate.
-    for (const side of ['LONG', 'SHORT'] as const) {
-      const v = evaluateEnvelope({ ...base, alignedDirection: side });
-      expect(v.autoFlat.some(r => r.includes('below_live_floor')), side).toBe(true);
-    }
+  it('is SCOPED TO SHORT, and LONG keeps the level floor', () => {
+    // 0.45 coverage cuts at raw 0.491, above all three LONG bands that measured positive — applying
+    // it to LONG would have all but eliminated long setups. And the justification for gating on ML
+    // is SHORT-side: cross-sectional AUC (within-timestamp, so not a date proxy) is 0.53 on SHORT
+    // and 0.4993 on LONG, where the signal carries no information about payoff.
+    expect(evaluateEnvelope({ ...base, alignedDirection: 'SHORT' }).autoFlat
+      .some(r => r.includes('below_live_floor'))).toBe(true);
+    const long = evaluateEnvelope({ ...base, alignedDirection: 'LONG' });
+    expect(long.autoFlat.some(r => r.includes('below_live_floor'))).toBe(false);
+    // calibrated 50 is not < 50, so the level floor does not flat it either — LONG behaviour is
+    // exactly what it was before this change.
+    expect(long.autoFlat.some(r => r.startsWith('ML_WIN_'))).toBe(false);
+  });
+
+  it('LONG still flats on the LEVEL floor when calibrated drops below 50', () => {
+    const v = evaluateEnvelope({ ...base, alignedDirection: 'LONG', calibratedMlWin: 0.40 });
+    expect(v.autoFlat.some(r => r.startsWith('ML_WIN_'))).toBe(true);
   });
 });

@@ -119,3 +119,42 @@ SHORT and inverts LONG, and every arm sat in one window. **Whether 45% is the ri
 unanswered, and this must not be tuned toward an answer**: C6 measured that walk-forward fitting of
 this threshold destroys it. What is established is narrower: the gate now does what it was designed
 to do, and will go on doing it when the scale moves again.
+
+---
+
+# SCOPED TO SHORT (2026-08-26, same day)
+
+The user caught the contradiction before deploy: *"the envelope then shouldn't bar lower ML because
+we won't ever get any long setups."* Correct, and the numbers are stark.
+
+**0.45 coverage cuts at raw 0.491.** The three LONG bands that measured positive — 0.25–0.30,
+0.30–0.35, 0.35–0.40 — are **all below it**. Shipping it on both sides would have all but eliminated
+long setups.
+
+There is an irony in that. The existing level floor rejects **6.1%** of bars and permits raw 0.31+,
+which preserves exactly those bands. **The "~5× loosening nobody decided" was, by accident, right for
+the long side** — it was only wrong for shorts, which is the side the gate's evidence comes from.
+
+## The argument for scoping is ABSENCE of information, not evidence of harm
+
+Cross-sectional AUC — measured **within a timestamp**, so it cannot be a date proxy — is **0.53 on
+SHORT** and **0.4993 on LONG**. On longs the ML signal carries no information about whether the trade
+pays, so a floor built from it filters on noise.
+
+This is deliberately NOT the claim that longs do better at low ML. The pre-declared inversion test
+(`ml-floor-long-inversion.md`) **FAILED**: its sign reverses in non-greedy tape (greed +0.1752,
+not-greed −0.0475), the period criterion was unsatisfiable, and the not-greed cell holds 149
+effective observations. Nothing here rests on it.
+
+## What ships
+
+- **SHORT**: coverage floor, restoring the intended selectivity and immune to further drift.
+- **LONG**: the existing `calibrated < 50` level floor, **unchanged**.
+
+## Consequence to be honest about
+
+**This does not fix the user's original complaint.** A raw-31 LONG setup will still appear, because
+that is the band where longs historically worked and because the gate has no measured basis for
+blocking it. The question *"how is ML 31 tradeable?"* now has an answer rather than a fix: **for a
+long, at that reading, it was** — and the display fix means the number on screen is finally the one
+the gate used.
