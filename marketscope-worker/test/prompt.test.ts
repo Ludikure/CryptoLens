@@ -368,7 +368,15 @@ describe('prompt.ts (AnalysisPrompt port)', () => {
     expect(prompt).not.toContain('chase_into_extended_aligned_trend');
     // The guidance that actually does the work is untouched: prefer a pullback entry, never chase.
     expect(prompt).toContain('the lower-risk play is to WAIT');
-    expect(prompt).toContain('prefer a pullback entry over the current extreme');
+    // The chase directive must bind the MACHINE-READABLE output, not only the prose. On
+    // 2026-08-27 a live analysis named $79,639 as the preferred entry three times — Bottom Line,
+    // Risk Map, and the JSON `reasoning` field — and then published the chase price $80,438.20 as
+    // the JSON `entry`. Downstream reads only the JSON, so the version the user was shown was the
+    // one the analysis spent its whole length arguing against.
+    expect(prompt).toContain('in the table AND in the JSON block');
+    expect(prompt).toContain('If no valid pullback level exists to name, emit no setup at all');
+    // And it must NOT read as a revival of the retracted entry-method claim.
+    expect(prompt).toContain('not a claim that pullback entries pay better');
   });
 
   it('F-1: CHASE / EXHAUSTION guard stays quiet on a calm, mid-range tape', () => {
