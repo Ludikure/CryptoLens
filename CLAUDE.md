@@ -609,6 +609,43 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-27c — Joint stop × target: rejected, and the reward:risk lever is the bigger one
+
+The test §9 demanded ([[stop-target-joint]], pre-declared at e286e31). Both sides **NOT SUPPORTED** —
+each fails period consistency at **5 of 10** half-year windows, which the pre-declaration named as
+the thing that makes a result a regime finding rather than a geometry finding. Shipped stops and
+targets unchanged.
+
+| | magnitude (bar +0.0200) | periods (bar 6/9) | gross | eff n |
+|---|---|---|---|---|
+| SHORT 2A@1.5R → **1A@5R** | **+0.0340** CI [+0.0132,+0.0559] PASS | **5/10 FAIL** | +0.0692 | 4,444 |
+| LONG 4A@1.5R → **3A@5R** | +0.0186 FAIL | **5/10 FAIL** | +0.0236 | 3,097 |
+
+**The prediction recorded before running was half right, and the wrong half matters.** I expected the
+magnitude bar to fail on both sides; SHORT's passed, clearly, and died elsewhere.
+
+**What the map shows, none of it shipped.** (a) **The R:R gradient DOMINATES the stop gradient and
+nothing had measured it** — at a fixed 2 ATR LONG stop, 0.75R → 5.0R is worth **+0.056R**, larger
+than the entire 2→4 ATR stop-width effect (+0.0362R) that is the vault's best-validated result. Every
+cell improves monotonically in R:R, on every stop, on both entries; the project has been optimising
+the smaller lever. (b) The app's shipped SHORT geometry sits in the **worst region of its own grid**
+(2A@1.5R = −0.0149; the whole 2 ATR row is negative until R:R 3.0). (c) **The scanner's 1 ATR @ 5R is
+the single best SHORT cell** (+0.0191) — the two geometries in the product are the best short cell and
+a poor one, which makes reconciling them a decision rather than a tidy-up. (d) SHORT **pullback entry
+is negative in every cell** (−0.0220 to −0.0526) against a market entry reaching +0.0191,
+independently reproducing the 2026-08-26 finding that entry discipline inverts on SHORT.
+
+**A defect in the shared payoff module, found by running it.** `_payoff.align_arms` de-duplicated the
+KEY set and then LEFT-merged each arm undeduplicated, so one repeated `(symbol, timestamp)`
+multiplies the row set by 2 **per arm** — `2**n`. `csv_exports_v14/AVAXUSDT.csv` has exactly one, at
+2026-05-06 00:00:00. **Silent in both directions, which is what hid it:** at this test's 98 arms it is
+an instant `SIGKILL` (exit 137, no traceback — it reads as a hang, and cost three restarts before I
+checked the exit code); at the 12 arms `phase3_stop_width_test.py` uses it does not crash at all, it
+would simply weight one bar 4,096 times. **The shipped stop-width result was re-run with the fix and
+reproduces EXACTLY** (+0.0362R, CI [+0.0245,+0.0484], 10/10, 55,752 bars, all five criteria PASS), so
+that finding is clean and the defect never reached a published number. Duplicates are now dropped and
+REPORTED rather than silently multiplied.
+
 ### 2026-08-27b — LONG setups have been unemittable since the 4 ATR stop shipped (Phase 2)
 
 Phase 2 opened on the risk engine and the first thing it found was a live outage. **`stop-width.md`
