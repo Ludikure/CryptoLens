@@ -609,6 +609,46 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-27b — LONG setups have been unemittable since the 4 ATR stop shipped (Phase 2)
+
+Phase 2 opened on the risk engine and the first thing it found was a live outage. **`stop-width.md`
+raised the LONG stop floor to 4 ATR on 2026-08-26 — the single best-validated result in the vault,
+10/10 periods across a bear and a bull — and in doing so it silently made every ordinary LONG setup
+impossible to emit.**
+
+The mechanism is arithmetic, not judgement. `viable` requires `TP1 distance / risk >= 0.5`, and all
+three TP1 variants cap `tp1ATRBand` at **2.0 ATR**, so `finalTP1RR <= 2 / stopAtr` unconditionally.
+At a 4 ATR floor that ceiling IS the threshold, so `Viable: true` survives only at a measure-zero
+point. `prompt-system.json` says in three places *"Emit a setup ONLY if a Viable risk-defined level
+exists … Otherwise empty array"*, so the JSON block came back empty. Only a mandate window
+(`HIGH_CONVICTION_WINDOW` / `MIXED_HIGH_ML_WINDOW`) could still force one through.
+
+Measured on the real BTC tape through `test/helpers/envelope.ts`: **LONG 0 of 3 candidates viable,
+SHORT 1 of 3.** TP1 R:R came out 0.18 / 0.26 / 0.35.
+
+**The code did the opposite of what its own research says it does.** `stop-width.md:44`: *"The
+reward:risk ratio is NOT changed — widening the stop widens the target with it, which is what was
+tested."* The stop widened; the targets are absolute ATR distances tuned when the floor was 2 ATR,
+so reward:risk HALVED instead of holding. This is exactly the corrected spec's §9 — **stop and
+target INTERACT, and a change to one voids measurements of the other** — going unapplied to the
+change that motivated writing it down.
+
+**Fix: `stopScale = max(1, stopAtr / 2)` multiplies every ATR-DISTANCE band and both ATR fallbacks.**
+The R:R bands are already stop-relative and are untouched, as are the level-spacing tolerances. It
+is a UNITS fix, not a re-tune: exactly 1.0 at a 2 ATR stop, so every band keeps the value it was
+tuned with, stocks (1.5 ATR floor) are unaffected by the clamp, and the ATR fallback's reward:risk
+becomes invariant at the 0.75 it always had by construction. After: **LONG 3/3 viable, SHORT 3/3**;
+TP1 R:R 0.60/0.75/0.75, TP2 1.50/1.50/1.69 — the ~1.25-1.5 structure that was actually tested. The
+SHORT row sitting exactly on its 2 ATR floor is byte-identical, which is the no-op property holding.
+
+**Fourth instance of this project's recurring defect class** — after the 2026-08-22 calibration
+ceiling, the `conformal_abstain` flag that was declared and never assigned, and `continuation < 3`
+which had never once fired satisfiably on a stock. The shared fingerprint is now unmistakable: **a
+threshold compared against a quantity whose attainable RANGE was never re-checked after something
+moved.** A 0% or 100% rate is the tell, and asserting it is cheap. `test/target-scaling.test.ts`
+pins the invariant behaviourally rather than pinning the numbers, so a future band re-tune cannot
+reintroduce it. 870/870 green. Worker-only — **needs a box redeploy**.
+
 ### 2026-08-27 — Phase 1 of the redesign: the scanner replaces the symbol-first landing screen
 
 The app opens on **Scan** ("is there anything worth doing right now?") instead of a symbol

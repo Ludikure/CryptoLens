@@ -2155,16 +2155,37 @@ export function buildUserPrompt(input: BuildPromptInput): {
           const suggestedQty = riskDollars / risk;
           const qtyStr = suggestedQty >= 1 ? f(suggestedQty, 0) : f(suggestedQty, 4);
           const isWideBand = useTighterBands(symbol), isCrypto = isCryptoSym;
+          // TARGETS SCALE WITH THE STOP, because that is the structure that was tested.
+          //
+          // `stop-width.md:44`: "The reward:risk ratio is NOT changed — widening the stop widens the
+          // target with it, which is what was tested." The stop floor shipped on 2026-08-26; this
+          // half did not. Every ATR-distance band and fallback below was tuned when the floor was
+          // 2 ATR, and they are ABSOLUTE distances — so raising the LONG floor to 4 ATR halved every
+          // reward:risk instead of holding it, which is the opposite of the tested intervention.
+          //
+          // The consequence was total, not marginal. `viable` needs TP1 R:R >= 0.5, and every TP1
+          // band caps distance at 2.0 ATR, so TP1 R:R <= 2/stopAtr. At a 4 ATR floor that is <= 0.5
+          // exactly — reachable only at a measure-zero point. Measured on the real BTC tape: 0 of 3
+          // LONG candidates viable, 1 of 3 SHORT. And `prompt-system.json` says "Emit a setup ONLY
+          // if a Viable risk-defined level exists", so ordinary LONG setups could not be emitted at
+          // all. Fourth instance of this project's recurring defect — a threshold compared against a
+          // quantity whose attainable RANGE was never re-checked after something moved.
+          //
+          // The scale is a UNITS fix, not a re-tune: it is exactly 1.0 at a 2 ATR stop, so every
+          // band keeps the value it was tuned with, stocks (1.5 ATR floor) are untouched via the
+          // clamp, and the ATR fallback's reward:risk becomes invariant at the 0.75 it always had.
+          const stopScale = Math.max(1, (risk / Math.max(atr, 0.0001)) / 2.0);
+          const sc = (b: [number, number]): [number, number] => [b[0] * stopScale, b[1] * stopScale];
           let tp1RRBand: [number, number], tp1ATRBand: [number, number], idealTP1RR: number;
-          if (isCounterTrend) { tp1RRBand = [0.8, 1.5]; tp1ATRBand = [0.5, 2.0]; idealTP1RR = 1.0; }
-          else if (isWideBand) { tp1RRBand = [0.5, 1.0]; tp1ATRBand = [1.0, 2.0]; idealTP1RR = 0.75; }
-          else { tp1RRBand = [1.0, 1.7]; tp1ATRBand = [0.8, 2.0]; idealTP1RR = 1.3; }
+          if (isCounterTrend) { tp1RRBand = [0.8, 1.5]; tp1ATRBand = sc([0.5, 2.0]); idealTP1RR = 1.0; }
+          else if (isWideBand) { tp1RRBand = [0.5, 1.0]; tp1ATRBand = sc([1.0, 2.0]); idealTP1RR = 0.75; }
+          else { tp1RRBand = [1.0, 1.7]; tp1ATRBand = sc([0.8, 2.0]); idealTP1RR = 1.3; }
           let tp2RRBand: [number, number], tp2ATRBand: [number, number], idealTP2RR: number;
-          if (isCounterTrend) { tp2RRBand = [1.3, 2.5]; tp2ATRBand = [1.0, 3.5]; idealTP2RR = 1.8; }
+          if (isCounterTrend) { tp2RRBand = [1.3, 2.5]; tp2ATRBand = sc([1.0, 3.5]); idealTP2RR = 1.8; }
           else if (isWideBand) {
-            if (isCrypto) { tp2RRBand = [0.75, 1.75]; tp2ATRBand = [2.0, 3.5]; idealTP2RR = 1.5; }
-            else { tp2RRBand = [0.75, 1.5]; tp2ATRBand = [2.0, 3.0]; idealTP2RR = 1.25; }
-          } else { tp2RRBand = [1.3, 4.0]; tp2ATRBand = [1.5, 5.0]; idealTP2RR = 2.5; }
+            if (isCrypto) { tp2RRBand = [0.75, 1.75]; tp2ATRBand = sc([2.0, 3.5]); idealTP2RR = 1.5; }
+            else { tp2RRBand = [0.75, 1.5]; tp2ATRBand = sc([2.0, 3.0]); idealTP2RR = 1.25; }
+          } else { tp2RRBand = [1.3, 4.0]; tp2ATRBand = sc([1.5, 5.0]); idealTP2RR = 2.5; }
           const directionalLevels = effectiveDirection === 'SHORT' ? uniqueLevels.filter(l => l.price < entry.price) : uniqueLevels.filter(l => l.price > entry.price);
           const tp1Score = (level: TaggedLevel): number | null => {
             const reward = Math.abs(level.price - entry.price), rr = reward / risk, atrDist = reward / Math.max(atr, 0.0001);
@@ -2197,12 +2218,12 @@ export function buildUserPrompt(input: BuildPromptInput): {
           };
           let finalTP1Price: number, finalTP1Type: string;
           if (tp1) { finalTP1Price = tp1.price; finalTP1Type = tp1.type; }
-          else { const fbMult = isWideBand ? 1.5 : isCounterTrend ? 1.5 : 1.2; const fb = atrFallback(fbMult, `${f(fbMult, 1)}× ATR`); finalTP1Price = fb.price; finalTP1Type = fb.type; }
+          else { const fbMult = (isWideBand ? 1.5 : isCounterTrend ? 1.5 : 1.2) * stopScale; const fb = atrFallback(fbMult, `${f(fbMult, 1)}× ATR`); finalTP1Price = fb.price; finalTP1Type = fb.type; }
           let finalTP2Price: number, finalTP2Type: string;
           if (tp2) { finalTP2Price = tp2.price; finalTP2Type = tp2.type; }
           else {
             const adaptiveTP2 = (isCrypto && settings.conformalGateEnabled === true && daily.mlQ75 != null) ? Math.min(3.5, Math.max(2.0, daily.mlQ75)) : null;
-            const tp2FallbackMult = adaptiveTP2 ?? ((isWideBand && isCrypto) ? 3.0 : 2.5);
+            const tp2FallbackMult = (adaptiveTP2 ?? ((isWideBand && isCrypto) ? 3.0 : 2.5)) * stopScale;
             const fb = atrFallback(tp2FallbackMult, `${f(tp2FallbackMult, 1)}× ATR`); finalTP2Price = fb.price; finalTP2Type = fb.type;
           }
           const finalTP1RR = Math.abs(finalTP1Price - entry.price) / risk, finalTP2RR = Math.abs(finalTP2Price - entry.price) / risk;
