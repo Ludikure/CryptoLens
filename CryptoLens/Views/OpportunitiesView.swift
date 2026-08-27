@@ -296,15 +296,31 @@ struct OpportunitiesView: View {
              + "They disagree — neither is verified."
     }
 
+    /// Why the size was cut, without claiming the gauge is alarmed when it is not.
+    ///
+    /// The sizing curve and the warning fire at DIFFERENT thresholds by design (`crash.ts`): sizing
+    /// steps down above 0.30 because that is what T8 validated, while a warning needs 0.08 over the
+    /// 41% base rate, because at 0.30 nearly every symbol clears it on an ordinary day and six
+    /// alerts reading 41/41/43/41/50/39% is "today is normal" dressed as an alarm.
+    ///
+    /// So a cut with no warning is the COMMON case, and the first live run hit it: BTC read 39%
+    /// against a 41% base and the line said "-2 points above a normal day" — a negative number
+    /// inside the word "above", asserting an elevation that was not there. Below the warning margin
+    /// the line now states the reading against the base and names the curve as the cause.
     private func sizeCutLine(_ o: WorkerOpportunitiesService.Opportunity) -> String? {
         let pct = Int((o.crashMultiplier * 100).rounded())
         guard let reading = book?.crashReadings?.first(where: { $0.asset == o.asset }),
               let base = book?.crashModel?.baseRate else {
             return "Size cut to \(pct)% for drawdown risk."
         }
-        let over = Int(((reading.probability - base) * 100).rounded())
-        return "Size cut to \(pct)% — drawdown risk \(Int((reading.probability * 100).rounded()))%, "
-             + "\(over) points above a normal day."
+        let read = Int((reading.probability * 100).rounded())
+        let normal = Int((base * 100).rounded())
+        let over = read - normal
+        if over >= 8 {
+            return "Size cut to \(pct)% — drawdown risk \(read)%, \(over) points above a normal day."
+        }
+        return "Size cut to \(pct)% — drawdown risk reads \(read)% against a normal day's "
+             + "\(normal)%. Sizing steps down earlier than the gauge warns."
     }
 
     // MARK: - 5 · Book total
@@ -314,7 +330,9 @@ struct OpportunitiesView: View {
 
     @ViewBuilder
     private var bookTotal: some View {
-        if let t = book?.totals, t.positions > 0 {
+        // Two positions minimum, or the sentence is about correlation between a thing and itself:
+        // the first live run rendered "about 1 independent bets, not 1 — these move together."
+        if let t = book?.totals, t.positions > 1 {
             Text("If you took all \(t.positions): about \(trimmed(t.effectiveBets)) independent "
                  + "bets, not \(t.positions) — these move together.")
                 .font(Theme.frame).foregroundStyle(.secondary)
