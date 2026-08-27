@@ -2616,6 +2616,18 @@ export default {
         const symbols = (url.searchParams.get('symbols') ?? 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT')
           .split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 20);
 
+        // THE FEE IS THE USER'S, NOT A CONSTANT. It was hardcoded here at the nano-BTC assumption
+        // (0.171%) while the app has carried a user-editable `feeRoundTripPercent` since the fee
+        // drag card shipped — so anyone on a different venue or contract got an expected value
+        // computed for someone else's costs. That matters more here than almost anywhere: at a 2%
+        // stop the round trip is 0.086R against a gross edge of ~0.15R, so the fee decides the sign
+        // of roughly half these rows. Clamped because it flows straight into EV and into sizing.
+        // Same treatment `/basis?fee=` already gives the carry monitor.
+        const feeRaw = Number(url.searchParams.get('fee'));
+        const roundTripPercent = Number.isFinite(feeRaw) && feeRaw >= 0 && feeRaw <= 2
+          ? feeRaw : DEFAULT_STRUCTURE.roundTripPercent;
+        const structure = { ...DEFAULT_STRUCTURE, roundTripPercent };
+
         const preds = JSON.parse((await env.ALERTS.get('ml_preds:all')) ?? '{}');
         const assets: AssetInput[] = [];
         const closesByAsset: Record<string, number[]> = {};
@@ -2700,7 +2712,7 @@ export default {
         const correlations = pairwiseCorrelations(closesByAsset);
 
         const result = computeOpportunities(
-          assets, { equity, openNotionalByAsset: {}, correlations }, nowMs);
+          assets, { equity, openNotionalByAsset: {}, correlations }, nowMs, structure);
 
         // THE CLOSEST MISS IS THE MOST INSTRUCTIVE ROW ON A QUIET DAY, and it was being thrown away
         // by the display filter below. "Nothing qualifies" and "the best candidate missed the floor
@@ -2710,7 +2722,7 @@ export default {
         // (entry, stop, the frozen structure) are all right here.
         const feeBurden = (c: { entryPrice: number; stopPrice: number }) => {
           const stopPct = Math.abs(c.entryPrice - c.stopPrice) / c.entryPrice * 100;
-          return stopPct > 0 ? DEFAULT_STRUCTURE.roundTripPercent / stopPct : 0;
+          return stopPct > 0 ? structure.roundTripPercent / stopPct : 0;
         };
 
         const shown = result.allocation.accepted
@@ -2749,10 +2761,10 @@ export default {
            * "0.171%" would keep printing it after `DEFAULT_STRUCTURE` changed.
            */
           structure: {
-            roundTripPercent: DEFAULT_STRUCTURE.roundTripPercent,
-            targetR: DEFAULT_STRUCTURE.targetR,
-            stopAtrMultiple: DEFAULT_STRUCTURE.stopAtrMultiple,
-            holdingHorizonHours: DEFAULT_STRUCTURE.holdingHorizonHours,
+            roundTripPercent: structure.roundTripPercent,
+            targetR: structure.targetR,
+            stopAtrMultiple: structure.stopAtrMultiple,
+            holdingHorizonHours: structure.holdingHorizonHours,
           },
           opportunities: shown
             .map(a => ({

@@ -37,6 +37,8 @@ struct TradeCardView: View {
                     footer: { Text(checklistFooter) }
                 Section { payoffShape } header: { Text("How this ends") }
                     footer: { Text(shapeFooter) }
+                if let st = book?.structure { Section { structureRows(st) }
+                    header: { Text("The structure") } footer: { Text(structureFooter) } }
                 Section { sizing } header: { Text("Size") }
                 if let caveat = book?.caveat {
                     Section { Text(caveat).font(Theme.caption).foregroundStyle(.secondary) }
@@ -204,6 +206,28 @@ struct TradeCardView: View {
         }
         s += "A timeout exit is not zero — it pays what it was worth when the clock ran out."
         return s
+    }
+
+    // MARK: - Structure
+    //
+    // Named explicitly because it is NOT the structure the AI read proposes for the same symbol,
+    // and the difference is not cosmetic: this stops at 1 ATR, the analysis stops at 4 on a long.
+    // Taking this entry with that stop misprices the risk fourfold. §9 forbids reconciling them by
+    // moving one lever, so the honest interim is to say which is which.
+
+    private func structureRows(_ st: WorkerOpportunitiesService.Structure) -> some View {
+        VStack(spacing: 0) {
+            check("Stop", "\(fmt(st.stopAtrMultiple)) ATR", .secondary)
+            check("Target", "\(fmt(st.targetR))R", .secondary)
+            check("Held up to", "\(Int(st.holdingHorizonHours))h", .secondary)
+            check("Round trip", "\(fmt(st.roundTripPercent))%", .secondary)
+        }
+    }
+
+    private var structureFooter: String {
+        "This is the only geometry the ranking model was measured at, so its expected R is valid "
+        + "here and nowhere else. The AI read on this symbol sizes a DIFFERENT trade — 4 ATR stops "
+        + "on a long, 2 on a short. Use one or the other, never one's entry with the other's stop."
     }
 
     // MARK: - Sizing

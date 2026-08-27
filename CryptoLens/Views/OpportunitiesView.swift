@@ -189,6 +189,15 @@ struct OpportunitiesView: View {
 
     private var structureLine: String {
         var parts: [String] = []
+        // NAME THE TRADE. Every row here is one fixed structure, and it is NOT the one the AI read
+        // proposes for the same symbol — that one stops at 4 ATR on a long and 2 on a short. Two
+        // geometries in one product is a real hazard: take this entry with that stop and the risk
+        // is wrong by a factor of four. The corrected spec's §9 forbids reconciling them by moving
+        // either lever alone, so until the joint test settles it, the app states which is which.
+        if let st = book?.structure {
+            parts.append("Each row is a \(trimmed(st.stopAtrMultiple)) ATR stop at "
+                         + "\(trimmed(st.targetR))R, held up to \(Int(st.holdingHorizonHours))h.")
+        }
         if let rt = book?.structure?.roundTripPercent {
             parts.append("Net of the \(trimmed(rt))% round trip.")
         }
@@ -554,8 +563,11 @@ struct OpportunitiesView: View {
         // exist, so every scan was sized against the worker's 25,000 default.
         let equity = OpportunityCopy.oneR() > 0
             ? UserDefaults.standard.double(forKey: "accountSize") : 0
+        // The same key `FeeDragCard` edits, so the two cannot disagree about what a trade costs.
+        let fee = UserDefaults.standard.object(forKey: "feeRoundTripPercent") as? Double
         async let fetched = WorkerOpportunitiesService.fetch(symbols: syms,
-                                                            equity: equity > 0 ? equity : 28000)
+                                                            equity: equity > 0 ? equity : 28000,
+                                                            feePercent: fee)
         async let positions = OutcomeTracker.openPositionsAsync()
         book = await fetched
         openPositions = await positions

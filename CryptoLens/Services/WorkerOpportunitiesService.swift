@@ -166,9 +166,18 @@ enum WorkerOpportunitiesService {
     }
 
     /// Fetch the book. `symbols` empty means the worker's default set.
-    static func fetch(symbols: [String], equity: Double) async -> Book? {
+    ///
+    /// `feePercent` is the user's own round-trip cost. It was a server constant while the app has
+    /// carried an editable `feeRoundTripPercent` since the fee-drag card shipped, so a user on a
+    /// different venue was reading an expected value computed for someone else's costs — and at a
+    /// 2% stop the round trip is 0.086R against a ~0.15R gross edge, so it decides the sign of
+    /// roughly half these rows rather than nudging them.
+    static func fetch(symbols: [String], equity: Double, feePercent: Double? = nil) async -> Book? {
         var comps = URLComponents(string: "\(PushService.workerURL)/opportunities")
         var items = [URLQueryItem(name: "equity", value: String(Int(equity)))]
+        if let fee = feePercent, fee >= 0, fee <= 2 {
+            items.append(URLQueryItem(name: "fee", value: String(fee)))
+        }
         if !symbols.isEmpty {
             items.append(URLQueryItem(name: "symbols", value: symbols.joined(separator: ",")))
         }

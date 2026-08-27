@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { computeOpportunities, type AssetInput } from '../src/trading/service';
 import { excursionModelInfo, headIsShippable } from '../src/trading/excursion';
 import { crashWarning } from '../src/trading/crash';
+import { DEFAULT_STRUCTURE } from '../src/trading/generator';
 import type { PortfolioState } from '../src/trading/sizing';
 
 const t = Date.parse('2026-08-24T12:00:00Z');
@@ -86,5 +87,32 @@ describe('excursionModelInfo().baseWinRate', () => {
   it('is the rate the LONG side actually falls back to, because that head is refused', () => {
     expect(headIsShippable('LONG')).toBe(false);
     expect(headIsShippable('SHORT')).toBe(true);
+  });
+});
+
+// THE FEE IS A USER PARAMETER, AND IT DECIDES THE SIGN OF ROUGHLY HALF THESE ROWS.
+//
+// `netExpectedValueR` subtracts `roundTripPercent / stopDistancePercent`, so at a 2% stop a 0.171%
+// round trip costs 0.086R against a gross edge around 0.15R. Serving someone else's fee schedule is
+// therefore not a rounding error — it flips rows across the display floor in both directions.
+describe('fee sensitivity', () => {
+  const gross = (fee: number) => {
+    const r = computeOpportunities([asset()], portfolio(), t,
+      { ...DEFAULT_STRUCTURE, roundTripPercent: fee });
+    return r.allocation.accepted[0]?.candidate.payoff.expectedValueR;
+  };
+
+  it('a higher fee strictly lowers expected value, and by the amount the formula says', () => {
+    const zero = gross(0), shipped = gross(0.171);
+    expect(zero).toBeDefined();
+    expect(shipped!).toBeLessThan(zero!);
+    // stop is 1 ATR on a price of 100 with atr 4 => 4% stop distance => 0.171/4 = 0.042750R
+    expect(zero! - shipped!).toBeCloseTo(0.171 / 4, 6);
+  });
+
+  it('a fee large enough removes the row entirely rather than showing a negative edge', () => {
+    // `buildSide` rejects non-positive EV outright, which is the behaviour that makes an empty book
+    // an honest answer rather than a failure.
+    expect(gross(2)).toBeUndefined();
   });
 });
