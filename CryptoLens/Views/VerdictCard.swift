@@ -78,14 +78,24 @@ struct VerdictCard: View {
 
     private var verdict: Verdict {
         if let setup = result.tradeSetups.first {
-            // Is the entry reachable from here? A LONG entry BELOW live price is a pullback the
-            // market has not offered yet; a SHORT entry ABOVE it is the same in reverse. The 0.15%
-            // band keeps an at-the-money entry from flickering between states on every tick.
+            // Is price AT the entry? That is the only question this state answers, and it is
+            // direction-independent — which the first version got half right.
+            //
+            // It fired only when a LONG's entry sat BELOW live price (the pullback the market has
+            // not offered), because that is the case the 2026-08-25 screenshot showed. The mirror
+            // case went on rendering "LONG SETUP" in green: on 2026-08-27 the card showed exactly
+            // that with an entry of $80,438 while price was $80,184, and the model's own prose
+            // underneath read "3.3 ATR extended with RSI 80, this is chase territory, no entry
+            // edge; a pullback is the lower-risk wait". Headline said go, everything else said
+            // wait, and the user's response was "I don't know what to do".
+            //
+            // A breakout trigger above price and a pullback level below it are both prices the
+            // market has not reached. Neither is actionable at market, so both are `waiting`.
+            // The 0.15% band is what makes a state "now", and it is symmetric.
             let live = result.daily.price
             guard live > 0, setup.entry > 0 else { return .setup(setup) }
-            let gapPct = (live - setup.entry) / setup.entry * 100
-            let unreachable = setup.direction == "LONG" ? gapPct > 0.15 : gapPct < -0.15
-            return unreachable ? .waiting(setup, live) : .setup(setup)
+            let gapPct = abs(live - setup.entry) / setup.entry * 100
+            return gapPct > 0.15 ? .waiting(setup, live) : .setup(setup)
         }
         return result.claudeAnalysis.isEmpty ? .notRun : .noEdge
     }

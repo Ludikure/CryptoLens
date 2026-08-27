@@ -41,8 +41,29 @@ struct OpportunitiesView: View {
     // MARK: - Derived
 
     private var floorR: Double { book?.floorR ?? 0.05 }
-    private var ranked: [WorkerOpportunitiesService.Opportunity] { book?.ranked ?? [] }
     private var mood: OpportunityCopy.Mood? { .from(book?.fearGreed) }
+
+    /// A row the MOOD cancels. §6 measured the short edge NEGATIVE in greed (−0.05R at ML ≥ 0.55)
+    /// and says plainly: do not present it as available.
+    ///
+    /// It was being presented as available anyway — a blue-striped card with an entry, a stop, a
+    /// target and "about +$29 a trade", carrying three lines of caveat underneath saying it was not
+    /// a trade. That is the 2026-08-25 lesson rebuilt in a new place: a setup you should not take
+    /// must not LOOK like one, because shape is read before text. Cancelled rows drop to the grey
+    /// unranked treatment, which is the colour law's way of saying "not a candidate".
+    private func moodCancels(_ o: WorkerOpportunitiesService.Opportunity) -> Bool {
+        o.direction == "SHORT" && mood?.shortEdgeAbsent == true
+    }
+
+    /// Rows that are genuinely actionable. This is what the cards render.
+    private var ranked: [WorkerOpportunitiesService.Opportunity] {
+        (book?.ranked ?? []).filter { !moodCancels($0) }
+    }
+
+    /// Rows that cleared the floor and were then cancelled by the mood. Shown, never as an offer.
+    private var cancelled: [WorkerOpportunitiesService.Opportunity] {
+        (book?.ranked ?? []).filter { moodCancels($0) }
+    }
 
     private var scanned: Int {
         book?.scanned ?? ((book?.opportunities.count ?? 0) + (book?.skipped.count ?? 0))
@@ -53,6 +74,11 @@ struct OpportunitiesView: View {
     private var notRanked: [(asset: String, line: String)] {
         var out = (book?.noView ?? []).map {
             (asset: $0.asset, line: "Both sides land inside \(rText(floorR, decimals: 2)) of each other. No view.")
+        }
+        out += cancelled.map {
+            (asset: $0.asset,
+             line: "Cleared the floor at \(rText($0.expectedValueR)) — cancelled by the mood, "
+                 + "which is the one condition where this side measured negative.")
         }
         for s in book?.skipped ?? [] where isScoredButUnrankable(s) {
             out.append((asset: s.asset,
@@ -144,7 +170,19 @@ struct OpportunitiesView: View {
         guard loaded else { return "Scanning…" }
         guard book != nil else { return "The scan did not come back." }
         let n = ranked.count
-        guard n > 0 else { return "Nothing clears the \(rText(floorR, decimals: 2)) floor." }
+        guard n > 0 else {
+            // "One short clears the floor — but not in this mood" is a fact about a threshold. It
+            // is not an answer, and a user reading it said so: "I don't know what to do." Lead with
+            // the action; the threshold follows as the reason.
+            if let c = cancelled.first, let m = mood {
+                return cancelled.count == 1
+                    ? "Nothing to do. One \(c.direction.lowercased()) cleared the "
+                      + "\(rText(floorR, decimals: 2)) floor, and \(m.label.lowercased()) cancels it."
+                    : "Nothing to do. \(cancelled.count) cleared the "
+                      + "\(rText(floorR, decimals: 2)) floor, and \(m.label.lowercased()) cancels them."
+            }
+            return "Nothing clears the \(rText(floorR, decimals: 2)) floor."
+        }
 
         let words = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
         let count = n < words.count ? words[n] : "\(n)"
@@ -154,14 +192,8 @@ struct OpportunitiesView: View {
         else if sides == ["LONG"] { noun = n == 1 ? "long" : "longs" }
         else { noun = n == 1 ? "setup" : "setups" }
 
-        let base = "\(count) \(noun) clear\(n == 1 ? "s" : "") the \(rText(floorR, decimals: 2)) floor"
-        // §6: in GREED the measured short edge is NEGATIVE, and the spec's instruction is not to
-        // present it as available. Stated in the ANSWER rather than on each card, because it is a
-        // property of the mood, identical on every row — the same reason the frame exists.
-        if sides.contains("SHORT"), mood?.shortEdgeAbsent == true {
-            return base + " — but not in this mood."
-        }
-        return base + "."
+        // No mood caveat needed here: a row the mood cancels never reaches this list.
+        return "\(count) \(noun) clear\(n == 1 ? "s" : "") the \(rText(floorR, decimals: 2)) floor."
     }
 
     // MARK: - 3 · Frame
@@ -290,7 +322,11 @@ struct OpportunitiesView: View {
     /// out one tap later. This is row-specific, which is why it earns a line inside the card when a
     /// universal caveat would not.
     private func contradictsAnalysis(_ o: WorkerOpportunitiesService.Opportunity) -> String? {
-        guard let setup = service.cachedResults[o.asset]?.tradeSetups.first,
+        // Only on a row you could actually take. When the mood has already cancelled it, "they
+        // disagree — neither is verified" hands the user an arbitration to perform between two
+        // things that are both declining, which is worse than saying nothing.
+        guard !moodCancels(o),
+              let setup = service.cachedResults[o.asset]?.tradeSetups.first,
               setup.direction != o.direction else { return nil }
         return "Your last AI read on \(ticker(o.asset)) called it \(setup.direction). "
              + "They disagree — neither is verified."
