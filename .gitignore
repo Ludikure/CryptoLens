@@ -36,3 +36,8 @@ ml-training/envelope_exports/
 
 # v15 regen scratch — regenerable, and not reproducible without the D1 archive + Yahoo VIX3M
 ml-training/csv_exports_v15/
+
+# Seeded design canvas — 2.4 MB because the editor is baked into the page. Regenerable:
+# design/trade-opportunities/assemble.sh + one seed-canvas.mjs call rebuilds it from the
+# 68 KB of sources beside it. The published copy is the artifact.
+design/trade-opportunities/trade-opportunities.html

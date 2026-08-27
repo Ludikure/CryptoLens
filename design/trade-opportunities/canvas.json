@@ -1,0 +1,25 @@
+{
+  "artboards": [
+    { "file": "Quiet.dc.html", "x": 0,   "y": 0, "w": 402, "h": 680,  "title": "Most days" },
+    { "file": "Main.dc.html",  "x": 502, "y": 0, "w": 402, "h": 980,  "title": "A good day" },
+    { "file": "Law.dc.html",   "x": 1004,"y": 0, "w": 402, "h": 1180, "title": "The one law" }
+  ],
+  "annotations": [
+    {
+      "id": "most-days",
+      "x": 0, "y": -300, "w": 402,
+      "text": "MOST DAYS\nNothing qualifies. This is the primary state, so it is placed first.\n\nIt reads as a measurement rather than an absence: the dateline supplies the denominator, the answer names the threshold instead of the emptiness, and the closest miss gives the exact distance by which the best candidate failed.\n\nThe drawdown gauge sits high here — not by a rule, but because there is nothing above it to push it down."
+    },
+    {
+      "id": "good-day",
+      "x": 502, "y": -300, "w": 402,
+      "text": "A GOOD DAY\nTwo rows. That is what a good day looks like.\n\nEvery caveat that applies to all rows equally is stated once, above them — which is what stops the honesty layer from becoming the dominant mass, the mistake in my first attempt.\n\nA row is five numbers. Everything else lives one tap away."
+    },
+    {
+      "id": "law",
+      "x": 1004, "y": -300, "w": 402,
+      "text": "THE ONE LAW\nA review page, not a screen — the app needs no legend, which is the point.\n\nBlue: something you could start. Green: money that already exists. Orange: a hazard that changes what you would do. Grey: unranked or unmodelled.\n\nGreen never appears on a proposal, so it keeps meaning something."
+    }
+  ],
+  "launch": { "view": "canvas" }
+}
