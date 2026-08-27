@@ -2121,7 +2121,32 @@ export function buildUserPrompt(input: BuildPromptInput): {
             else { const below = uniqueLevels.filter(l => l.price < entry.price).sort((a, b) => b.price - a.price); stop = (below[0]?.price ?? entry.price) - atr * 0.5; }
           }
           let adjustedStop = stop;
-          const minStopDist = atr * 2.0;
+          // MINIMUM STOP DISTANCE, direction-dependent since 2026-08-26.
+          //
+          // LONG uses 4 ATR, SHORT stays at 2. Pre-declared in docs/research/stop-width.md and tested
+          // with reward:risk HELD FIXED at 1.25, so only the stop width varies — widening the stop
+          // widens the target with it, which is what was measured. Changing the ratio would be a
+          // different and untested intervention.
+          //
+          //   LONG net R by stop floor:  -0.0342 (2 ATR)  ->  -0.0109 (3)  ->  +0.0020 (4)
+          //   4-vs-2 ATR: +0.0362R, 95% CI [+0.0245, +0.0484], 10 of 10 half-year periods positive
+          //   spanning the 2022 bear and the 2023-24 bull, on 55,752 bars / ~3,097 effective.
+          //   The GROSS series climbs too (-0.0048 -> +0.0168), so it is not fee dilution — about
+          //   59% of the gain is the stop and 41% is paying proportionally less fee.
+          //   SHORT measured FLAT across the whole sweep, so it is deliberately unchanged.
+          //
+          // Mechanism: a 2 ATR stop is inside the noise. On high-ML bullish bars the measured
+          // outcome was P(2 ATR stop hit) 26.9% against P(2.5 ATR target hit) 14.4% — the trade was
+          // being stopped before it had room, which is why longs lost regardless of ML.
+          //
+          // NOT an edge: this takes longs from reliably losing to roughly break-even (~+$20/trade at
+          // a $28k account risking 2%). It closes a leak.
+          //
+          // 1R IS DEFINED BY THE STOP, so a wider floor means a proportionally SMALLER position for
+          // the same dollar risk. `suggestedQty` below is `riskDollars / risk` and adjusts by
+          // construction — but anyone sizing by NOTIONAL will not, and at 4 ATR the same contract
+          // count carries roughly twice the risk.
+          const minStopDist = atr * (effectiveDirection === 'SHORT' ? 2.0 : 4.0);
           if (Math.abs(entry.price - adjustedStop) < minStopDist) adjustedStop = effectiveDirection === 'SHORT' ? entry.price + minStopDist : entry.price - minStopDist;
           const risk = Math.abs(entry.price - adjustedStop);
           if (!(risk > 0)) continue;
