@@ -521,7 +521,7 @@ struct OpportunitiesView: View {
     private var notRankedSection: some View {
         if !notRanked.isEmpty {
             VStack(alignment: .leading, spacing: 9) {
-                Text("Not ranked — no model exists")
+                Text("Not ranked")
                     .font(Theme.micro).tracking(0.7).foregroundStyle(.secondary)
                 ForEach(notRanked, id: \.asset) { item in
                     HStack(alignment: .top, spacing: 9) {
@@ -534,7 +534,10 @@ struct OpportunitiesView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                if let long = book?.model?.baseWinRate?.long {
+                // Only when a long is actually among the rows — it rendered under an all-SHORT list,
+                // explaining a case that was not on screen.
+                if let long = book?.model?.baseWinRate?.long,
+                   notRanked.contains(where: { $0.line.contains("Long") }) {
                     Text("A long carries no ranking because its model failed its own bar, so its "
                          + "odds are the \(pctText(long)) base rate every long shares.")
                         .font(Theme.frame).foregroundStyle(.tertiary)
@@ -571,9 +574,12 @@ struct OpportunitiesView: View {
                     .themedPill(t.setup.direction == "LONG" ? Theme.bullish : Theme.bearish)
                 Spacer(minLength: 4)
                 if let r = nowR {
-                    Text(rText(r, decimals: 1))
+                    // A signed zero is not a small loss. `%+.1f` renders -0.04 as "-0.0R" in the
+                    // bearish colour, which is the one number on this screen a user reads as P&L.
+                    let flat = abs(r) < 0.05
+                    Text(flat ? "flat" : rText(r, decimals: 1))
                         .font(Theme.mono).fontWeight(.medium)
-                        .foregroundStyle(Theme.forChange(r))
+                        .foregroundStyle(flat ? Color.secondary : Theme.forChange(r))
                 }
             }
             if risk > 0 {
@@ -586,8 +592,16 @@ struct OpportunitiesView: View {
     }
 
     private func excursionLine(_ t: TrackedSetup, risk: Double) -> String {
-        var parts = ["best \(String(format: "%+.1f", t.outcome.maxFavorable / risk))",
-                     "worst \(String(format: "%+.1f", -abs(t.outcome.maxAdverse) / risk))"]
+        let best = t.outcome.maxFavorable / risk, worst = abs(t.outcome.maxAdverse) / risk
+        // A position the cron has not yet walked has no excursion, and "best +0.0 · worst −0.0"
+        // dresses that absence up as a measurement.
+        guard best >= 0.05 || worst >= 0.05 else {
+            return t.outcome.breakevenActivated
+                ? "no movement yet · stop at break-even"
+                : "no movement yet — opened \(ageText(t.timestamp))"
+        }
+        var parts = ["best \(String(format: "%+.1f", best))",
+                     "worst \(String(format: "%+.1f", -worst))"]
         // NOT "can no longer lose". A break-even exit still pays the round trip, which this same
         // screen prices at 0.171% — larger than the whole per-trade edge at a 2% stop — and it
         // assumes the stop fills at its price, which a gap does not guarantee.
@@ -695,6 +709,13 @@ struct OpportunitiesView: View {
     }
 
     // MARK: - Formatting
+
+    private func ageText(_ d: Date) -> String {
+        let m = Int(Date().timeIntervalSince(d) / 60)
+        if m < 60 { return "\(max(1, m))m ago" }
+        let h = m / 60
+        return h < 24 ? "\(h)h ago" : "\(h / 24)d ago"
+    }
 
     private func ticker(_ symbol: String) -> String {
         symbol.hasSuffix("USDT") ? String(symbol.dropLast(4)) : symbol
