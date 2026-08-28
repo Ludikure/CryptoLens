@@ -98,10 +98,15 @@ enum OpportunityCopy {
         }
         if let m = sideEv.firstMatch(in: token, range: range), let g = groups(m, in: token),
            g.count == 2, let r = Double(g[1]) {
-            return "\(g[0].capitalized) pays \(String(format: "%+.2f", r))R after the fee"
+            // Sign in words, not in R. "Long pays -0.10R after the fee" reads as a unit the user
+            // never agreed to; "a long loses money here after fees" reads as the finding it is.
+            return r < 0
+                ? "A \(g[0].lowercased()) loses money here once fees are paid"
+                : "A \(g[0].lowercased()) barely breaks even here after fees"
         }
         if let m = noiseStop.firstMatch(in: token, range: range), let g = groups(m, in: token), g.count == 2 {
-            return "\(g[0].capitalized) stop sits inside the noise — volatility alone reaches it \(g[1])% of the time"
+            return "The stop for a \(g[0].lowercased()) sits inside the noise — normal swings alone "
+                 + "hit it \(g[1])% of the time"
         }
 
         return humanise(token)

@@ -36,6 +36,7 @@ struct OpportunitiesView: View {
     @State private var openPositions: [TrackedSetup] = []
     @State private var loaded = false
     @State private var showStopped = false
+    @State private var showMethod = false
     @State private var detail: WorkerOpportunitiesService.Opportunity?
 
     // MARK: - Derived
@@ -66,7 +67,7 @@ struct OpportunitiesView: View {
     private func moneyPerTrade(_ o: WorkerOpportunitiesService.Opportunity) -> String? {
         guard let unit = oneR(o) else { return nil }
         let d = o.expectedValueR * unit
-        return "about \(d >= 0 ? "+" : "−")$\(Int(abs(d).rounded())) a trade"
+        return "\(d >= 0 ? "+" : "−")$\(Int(abs(d).rounded()))"
     }
 
     /// A row the MOOD cancels. §6 measured the short edge NEGATIVE in greed (−0.05R at ML ≥ 0.55)
@@ -99,16 +100,24 @@ struct OpportunitiesView: View {
     /// separate. Distinct from the ones it never got to score, which are counted in the margin line.
     private var notRanked: [(asset: String, line: String)] {
         var out = (book?.noView ?? []).map {
-            (asset: $0.asset, line: "Both sides land inside \(rText(floorR, decimals: 2)) of each other. No view.")
-        }
-        out += cancelled.map {
             (asset: $0.asset,
-             line: "Cleared the floor at \(rText($0.expectedValueR)) — cancelled by the mood, "
-                 + "which is the one condition where this side measured negative.")
+             line: "Long and short come out too close to call, so there is no view to act on.")
+        }
+        out += cancelled.map { o in
+            let worth = moneyPerTrade(o).map { "worth \($0) a trade" } ?? "made the cut"
+            return (asset: o.asset,
+                    line: "Made the cut on the numbers (\(worth)), but the mood cancels it — the "
+                        + "one condition where this side has historically lost money.")
         }
         for s in book?.skipped ?? [] where isScoredButUnrankable(s) {
+            let lines = OpportunityCopy.plainList(s.reasons)
+            // Both sides losing is ONE finding, not two sentences that repeat each other verbatim:
+            // "A long loses money here once fees are paid. A short loses money here once fees are
+            // paid." is how it read.
+            let bothLose = lines.count == 2 && lines.allSatisfy { $0.contains("loses money") }
             out.append((asset: s.asset,
-                        line: OpportunityCopy.plainList(s.reasons).joined(separator: ". ") + "."))
+                        line: bothLose ? "Neither side makes money here once fees are paid."
+                                       : lines.joined(separator: ". ") + "."))
         }
         return out
     }
@@ -184,7 +193,7 @@ struct OpportunitiesView: View {
         f.dateFormat = "EEE d MMM"
         let t = DateFormatter()
         t.dateFormat = "HH:mm"
-        return "\(f.string(from: d).uppercased()) · \(t.string(from: d)) · \(scanned) SCANNED"
+        return "\(f.string(from: d).uppercased()) · \(t.string(from: d))"
     }
 
     // MARK: - 2 · Answer
@@ -200,35 +209,44 @@ struct OpportunitiesView: View {
             .padding(.top, 10)
     }
 
+    /// The answer, in words a person uses.
+    ///
+    /// It used to read "Nothing to do. One short cleared the +0.05R floor, and greed cancels it." —
+    /// which names an internal constant (`MIN_DISPLAY_EV_R`) and a unit from the research layer in
+    /// the one sentence whose job is to answer the question. The user's response was that they did
+    /// not know what the objective was or what the numbers meant. Thresholds, R, ATR, fees and hit
+    /// rates all moved into "How I judge these", one tap down.
     private var answerText: String {
-        guard loaded else { return "Scanning…" }
-        guard book != nil else { return "The scan did not come back." }
+        guard loaded else { return "Checking…" }
+        guard book != nil else { return "Couldn't check right now." }
         let n = ranked.count
-        guard n > 0 else {
-            // "One short clears the floor — but not in this mood" is a fact about a threshold. It
-            // is not an answer, and a user reading it said so: "I don't know what to do." Lead with
-            // the action; the threshold follows as the reason.
-            if let c = cancelled.first, let m = mood {
-                return cancelled.count == 1
-                    ? "Nothing to do. One \(c.direction.lowercased()) cleared the "
-                      + "\(rText(floorR, decimals: 2)) floor, and \(m.label.lowercased()) cancels it."
-                    : "Nothing to do. \(cancelled.count) cleared the "
-                      + "\(rText(floorR, decimals: 2)) floor, and \(m.label.lowercased()) cancels them."
-            }
-            return "Nothing clears the \(rText(floorR, decimals: 2)) floor."
-        }
-
-        let words = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
-        let count = n < words.count ? words[n] : "\(n)"
-        let sides = Set(ranked.map(\.direction))
-        let noun: String
-        if sides == ["SHORT"] { noun = n == 1 ? "short" : "shorts" }
-        else if sides == ["LONG"] { noun = n == 1 ? "long" : "longs" }
-        else { noun = n == 1 ? "setup" : "setups" }
-
-        // No mood caveat needed here: a row the mood cancels never reaches this list.
-        return "\(count) \(noun) clear\(n == 1 ? "s" : "") the \(rText(floorR, decimals: 2)) floor."
+        guard n > 0 else { return "Nothing worth trading." }
+        return n == 1 ? "One trade worth taking." : "\(spelled(n)) trades worth taking."
     }
+
+    private func spelled(_ n: Int) -> String {
+        let w = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"]
+        return n < w.count ? w[n] : "\(n)"
+    }
+
+    /// One sentence of WHY, under the answer. Never a threshold, never a unit.
+    private var reasonText: String? {
+        guard loaded, book != nil else { return nil }
+        let checked = "I checked \(scanned) \(scanned == 1 ? "coin" : "coins")."
+        if !ranked.isEmpty { return checked + " The rest didn't make the cut." }
+
+        if let c = cancelled.first, let m = mood {
+            let more = cancelled.count > 1 ? " (and \(cancelled.count - 1) more)" : ""
+            return checked + " \(ticker(c.asset))'s \(c.direction.lowercased()) setup made the cut on "
+                 + "the numbers\(more), but the market is in \(m.label.lowercased()) — the one mood "
+                 + "where this side has historically lost money."
+        }
+        if let nm = book?.nearMiss {
+            return checked + " The closest was \(ticker(nm.asset)), a little under the bar."
+        }
+        return checked + " Nothing came close."
+    }
+
 
     // MARK: - 3 · Frame
     //
@@ -238,50 +256,72 @@ struct OpportunitiesView: View {
     @ViewBuilder
     private var frame: some View {
         if loaded, book != nil {
-            VStack(alignment: .leading, spacing: 5) {
-                if let m = mood {
-                    Text(m.sentence)
-                        .foregroundStyle(m.shortEdgeAbsent ? Theme.caution : Color.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                if let r = reasonText {
+                    Text(r).fixedSize(horizontal: false, vertical: true)
                 }
-                Text(structureLine)
-                Text(shapeLine)
+                // COLLAPSED BY DEFAULT. Every number that needs a definition lives in here: the
+                // bar, the unit, the fee, the payoff shape, the regime caveat. On the surface they
+                // read as unexplained jargon — "+0.05R floor", "1 ATR stop at 5R", "1 in 13 reach
+                // target" — and a user looking at them said they could not tell what the screen was
+                // even measuring. None of it is removed; it stops being the first thing you meet.
+                DisclosureGroup(isExpanded: $showMethod) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(methodLines, id: \.self) { line in
+                            Text(line).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.top, 6)
+                } label: {
+                    Text("How I judge these")
+                        .font(Theme.micro).foregroundStyle(.secondary)
+                }
+                .tint(.secondary)
             }
             .font(Theme.frame)
             .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 12)
         }
     }
 
-    private var structureLine: String {
-        var parts: [String] = []
-        // NAME THE TRADE. Every row here is one fixed structure, and it is NOT the one the AI read
-        // proposes for the same symbol — that one stops at 4 ATR on a long and 2 on a short. Two
-        // geometries in one product is a real hazard: take this entry with that stop and the risk
-        // is wrong by a factor of four. The corrected spec's §9 forbids reconciling them by moving
-        // either lever alone, so until the joint test settles it, the app states which is which.
-        if let st = book?.structure {
-            parts.append("Each row is a \(trimmed(st.stopAtrMultiple)) ATR stop at "
-                         + "\(trimmed(st.targetR))R, held up to \(Int(st.holdingHorizonHours))h.")
+    /// The method, in sentences. Money first, because R is a unit this app invented for itself.
+    private var methodLines: [String] {
+        var out: [String] = []
+        let unit = typicalR
+        let bar = unit.map { "$\(Int((floorR * $0).rounded()))" }
+
+        out.append("This screen asks one question: is anything worth trading right now? Most days "
+                   + "the answer is no, and that is the screen working, not failing.")
+
+        if let bar, let unit {
+            out.append("To make the cut, a setup has to be worth about \(bar) per trade on AVERAGE "
+                       + "after costs. That is a deliberately low bar — it only has to beat doing "
+                       + "nothing. A typical trade here risks about $\(Int(unit.rounded())).")
         }
         if let rt = book?.structure?.roundTripPercent {
-            parts.append("Net of the \(trimmed(rt))% round trip.")
+            out.append("Costs are already taken out: \(trimmed(rt))% in fees for the round trip.")
         }
-        parts.append("Floor \(rText(floorR, decimals: 2)).")
-        if let anchor = OpportunityCopy.rAnchor(riskPercent: sizedRiskPercent) { parts.append(anchor + ".") }
-        return parts.joined(separator: " ")
+        if let st = book?.structure {
+            let hit = ranked.compactMap { $0.branches?.target }.sorted()
+            let p = hit.isEmpty ? book?.model?.baseWinRate?.short : hit[hit.count / 2]
+            var line = "Each one risks a set amount and aims for \(trimmed(st.targetR))× that, "
+                     + "held up to \(Int(st.holdingHorizonHours)) hours."
+            if let p, p > 0 {
+                line += " Only about 1 in \(Int((1 / p).rounded())) reach the target — most stop "
+                      + "out. The average is what makes it worth doing, never any single trade."
+            }
+            out.append(line)
+        }
+        out.append("The ranking is measured. The profit is not: it was tested in one market period, "
+                   + "a crypto bear where shorts were the better side before any rule was applied.")
+        return out
     }
 
-    /// The shape that produces the average. Without it a "+$41 a trade" row reads as a wage rather
-    /// than as the mean of "lose 1R most times, occasionally win 5R".
-    private var shapeLine: String {
-        let p = ranked.compactMap { $0.branches?.target }.sorted()
-        let hit = p.isEmpty ? book?.model?.baseWinRate?.short : p[p.count / 2]
-        var s = ""
-        if let h = hit, h > 0 {
-            s += "About 1 in \(Int((1 / h).rounded())) reach target; most stop out. "
-        }
-        return s + "Ranking is measured; profit is not."
+    /// What a typical trade risks, in money — the anchor everything else is quoted against.
+    private var typicalR: Double? {
+        guard let equity = book?.equity, equity > 0,
+              let cap = book?.structure?.maxRiskPerTrade, cap > 0 else { return nil }
+        return equity * cap
     }
 
     // MARK: - 4 · Rows
@@ -309,13 +349,13 @@ struct OpportunitiesView: View {
                 Text(o.direction)
                     .themedPill(o.direction == "LONG" ? Theme.bullish : Theme.bearish)
                 Spacer(minLength: 4)
+                // MONEY LEADS. `+0.073R` was the largest thing on the row and is a unit this app
+                // invented for itself; the dollars were the footnote under it. Swapped.
                 VStack(alignment: .trailing, spacing: 1) {
-                    Text(rText(o.expectedValueR))
+                    Text(moneyPerTrade(o) ?? rText(o.expectedValueR))
                         .font(Theme.mono).fontWeight(.medium)
                         .foregroundStyle(Theme.info)
-                    if let money = moneyPerTrade(o) {
-                        Text(money).font(Theme.frame).foregroundStyle(.tertiary)
-                    }
+                    Text("avg per trade").font(Theme.frame).foregroundStyle(.tertiary)
                 }
             }
 
@@ -439,17 +479,9 @@ struct OpportunitiesView: View {
     }
 
     private var marginText: String {
-        var s = ""
-        if let n = book?.nearMiss {
-            s = "Closest miss: \(ticker(n.asset)) \(n.direction.lowercased()) at "
-              + "\(rText(n.expectedValueR, decimals: 2)), under the floor."
-        }
         let stopped = stoppedBeforeScoring.count
-        if stopped > 0 {
-            s += s.isEmpty ? "\(stopped) stopped before scoring"
-                           : " \(stopped) more stopped before scoring"
-        }
-        return s.isEmpty ? "Every asset scanned was scored." : s
+        guard stopped > 0 else { return "Everything I checked got a price." }
+        return "\(stopped) couldn't be priced — see why"
     }
 
     // MARK: - 7 · Drawdown gauge
