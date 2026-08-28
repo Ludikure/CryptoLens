@@ -30,7 +30,10 @@
 import { classifyArchetype, isValidSetupGeometry, type TradeSetup } from './prompt';
 
 // Minimal structural env — index.ts's Env satisfies it; tests can pass a bare adapter.
-interface Env { DB: any; ALERTS: { get(k: string): Promise<string | null> } }
+// `put` is used at the geometry-void sweep and was undeclared: the adapter has it, this local
+// structural type did not, so a rename in the adapter would not have been caught here.
+interface Env { DB: any; ALERTS: { get(k: string): Promise<string | null>;
+                                   put(k: string, v: string, o?: { expirationTtl?: number }): Promise<unknown> } }
 
 // ─── Constants (registry of record — keep iOS + the index.ts outcome query in sync) ─────────
 export const TRACKED_MODEL_VERSION = 14;                       // = ml-model JSONs' `version`

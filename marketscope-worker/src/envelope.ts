@@ -125,7 +125,7 @@ export function evaluateEnvelope(input: EnvelopeInput): EnvelopeVerdict {
   const coverageApplies = input.mlCoverageCut != null && input.alignedDirection === 'SHORT';
   if (coverageApplies && input.rawMlWin != null) {
     if (input.rawMlWin < input.mlCoverageCut!) {
-      autoFlat.push(`ML_WIN_${rawMlPct}%_below_live_floor_${iTrunc(input.mlCoverageCut * 100)}%`);
+      autoFlat.push(`ML_WIN_${rawMlPct}%_below_live_floor_${iTrunc(input.mlCoverageCut! * 100)}%`);
     }
   } else if (mlPct != null && mlPct < 50) {
     autoFlat.push(input.calibratedMlWin != null ? `ML_WIN_${mlPct}%<50_(calibrated_from_raw_${rawMlPct}%)` : `ML_WIN_${rawMlPct}%<50`);

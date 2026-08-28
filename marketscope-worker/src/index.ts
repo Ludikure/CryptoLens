@@ -21,6 +21,7 @@ import { crashModelInfo, crashProbability } from './trading/crash';
 import { DEFAULT_STRUCTURE } from './trading/generator';
 import { DEFAULT_LIMITS } from './trading/sizing';
 import { effectiveBets } from './trading/portfolio';
+import type { D1PreparedStatement as _D1Stmt } from '@cloudflare/workers-types';
 import { payoffBranches } from './trading/opportunity';
 
 /** `forecastVol` needs comp_bars['30d'] = 720 one-hour bars and returns null if any component is
@@ -331,8 +332,8 @@ async function fetchLiveCalBuckets(env: Env, isCrypto: boolean): Promise<CalBuck
 }
 
 async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boolean):
-  Promise<{ mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null; calibratedMlWin: number | null }> {
-  if (curWin == null) return { mlCalibration: null, calibratedMlWin: null };
+  Promise<{ mlCalibration: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null; calibratedMlWin: number | null; calibrationCeiling: number | null }> {
+  if (curWin == null) return { mlCalibration: null, calibratedMlWin: null, calibrationCeiling: null };
   const buckets = await fetchLiveCalBuckets(env, isCrypto);
   // Display metadata for the prompt's "ML Calibration (live, audited)" line: the raw realized
   // rate of the coarse bucket containing this prediction (pre-PAV — the audit, not the fit).
@@ -351,7 +352,7 @@ async function fetchMlCalibration(env: Env, curWin: number | null, isCrypto: boo
   // value ANY bar can reach. The prompt floors the mandate windows' 70 gate at it (see
   // the notify gate itself unreachable — surfaced by the cron guard log rather than used by the
   // prompt (the mandate tier reads the RAW scale, so it cannot be killed by curve compression).
-  const calibrationCeiling = curve ? curve[curve.length - 1].y : null;
+  const calibrationCeiling: number | null = curve ? curve[curve.length - 1].y : null;
   return { mlCalibration, calibratedMlWin, calibrationCeiling };
 }
 
@@ -450,7 +451,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
   try { livePrice = await fetchLivePrice(symbol, isCrypto); } catch { /* best-effort */ }
 
   // Phase 1: HAR-RV expected-range forecast (crypto-only; needs 721+ 1H closes for rv_30d). Best-effort.
-  let volForecast = null;
+  let volForecast: ReturnType<typeof forecastVol> | null = null;
   if (isCrypto) {
     try {
       const closes1h = await fetchFapiCloses(symbol, 750);
@@ -480,7 +481,7 @@ async function runFullAnalysisCore(env: Env, symbol: string, isCrypto: boolean, 
         // replicated leave-one-symbol-out). Best-effort: a failure leaves the line off the prompt
         // rather than blocking the analysis.
         if (isCrypto && e.features) {
-          try { d.mlCrashProb = crashProbability(e.features as Record<string, number>); }
+          try { d.mlCrashProb = crashProbability(e.features as unknown as Record<string, number>); }
           catch { d.mlCrashProb = null; }
         }
       }
@@ -3374,10 +3375,28 @@ function biasAlignmentFromLabels(dailyBias: string, fourHBias: string): string {
 /// (crossAsset/derivatives inputs default 0, exactly like the /indicators endpoint.)
 /// Exported for the fixture regression test on the real Aug-2026 tape.
 export function notificationBiasAlignment(daily: FullCandle[], fourH: FullCandle[], isCrypto: boolean, symbol = '?'): string {
+  return notificationBiasAndScore(daily, fourH, isCrypto, symbol).alignment;
+}
+
+/**
+ * Bias alignment AND the real signed daily score, from one pass of the faithful scorer.
+ *
+ * `dailyScore` used to be read as `features.dailyScore`, a property that has never existed on
+ * `FullFeatures` — so it was `undefined`, and every `score_history` row ever written carries
+ * **0**: 779,404 of 779,404 in the archive. `/scores` served zeros, the notification payload's
+ * `score` was undefined, and nothing surfaced it because 0 is a legal score. Found by the
+ * typechecker on its first run over this file.
+ */
+export function notificationBiasAndScore(daily: FullCandle[], fourH: FullCandle[], isCrypto: boolean,
+                                         symbol = '?'): { alignment: string; dailyScore: number } {
   try {
     const d = computeFullIndicators(daily as any, { timeframe: '1d', label: 'Daily', isCrypto });
     const h = fourH.length ? computeFullIndicators(fourH as any, { timeframe: '4h', label: '4H', isCrypto }) : null;
-    return biasAlignmentFromLabels(d.bias ?? 'Neutral', h?.bias ?? 'Neutral');
+    return {
+      alignment: biasAlignmentFromLabels(d.bias ?? 'Neutral', h?.bias ?? 'Neutral'),
+      dailyScore: typeof (d as { biasScore?: number }).biasScore === 'number'
+        ? (d as { biasScore: number }).biasScore : 0,
+    };
   } catch (e) {
     // Fail to 'neutral' so the dStochCross leg still works — but LOG it. This value is what
     // /notify-debug reports as biasAlignment, and a silent catch made a computation failure
@@ -3385,7 +3404,7 @@ export function notificationBiasAlignment(daily: FullCandle[], fourH: FullCandle
     // one weaker primitive forever with the endpoint showing a perfectly ordinary-looking row.
     // That endpoint exists precisely because "silence looks identical whichever gate is closed".
     console.log(`[score] ${symbol} bias alignment failed, degrading to neutral: ${e}`);
-    return 'neutral';
+    return { alignment: 'neutral', dailyScore: 0 };
   }
 }
 
@@ -3543,7 +3562,7 @@ async function logDirectionSignals(env: Env, predictions: Map<string, SymbolPred
   ).all();
   const open = new Set((openRows.results || []).map(r => r.symbol as string));
 
-  const inserts = [];
+  const inserts: D1PreparedStatement[] = [];
   for (const p of fired) {
     if (open.has(p.symbol)) continue;
     const dir = p.pUp! >= DIR_PUP_GATE ? 1 : -1;
@@ -3645,7 +3664,7 @@ async function resolveDirectionSignals(env: Env, predictions: Map<string, Symbol
   ).bind(now).all();
   if (!due.results || !due.results.length) return;
 
-  const updates = [];
+  const updates: D1PreparedStatement[] = [];
   for (const row of due.results) {
     const symbol = row.symbol as string;
     const pred = predictions.get(symbol);
@@ -4333,13 +4352,13 @@ async function computeSymbolPredictions(
       const prevFundingHist = ps?.fundingHist || [];
       const newFundingHist = isCrypto ? [...prevFundingHist, derivSignals.fundingRateRaw || 0].slice(-4) : [];
       // v9 single-model: direction-agnostic goodR probability
-      const mlProb = mlPredict(features as Record<string, number>, isCrypto);
+      const mlProb = mlPredict(features as unknown as Record<string, number>, isCrypto);
       // 72h persistence: probability of >= 2.5 ATR favorable move within 72h.
       // Different question than mlProb — runner-hold confidence vs trade-quality gate.
-      const mlProbH72 = mlPredictH72(features as Record<string, number>, isCrypto);
+      const mlProbH72 = mlPredictH72(features as unknown as Record<string, number>, isCrypto);
       // Big-move/tail head: P(>=4 ATR move in 24h). The dedicated huge-move gauge ML_WIN
       // can't be (ML_WIN targets >=1.5 ATR). Crypto-only → null for stocks. See ml-predict.ts.
-      const mlBigMove = mlPredictTail(features as Record<string, number>, isCrypto);
+      const mlBigMove = mlPredictTail(features as unknown as Record<string, number>, isCrypto);
 
       newSnapshots[symbol] = {
         dRsi: features.dRsi, dAdx: features.dAdx,
@@ -4421,7 +4440,8 @@ async function computeSymbolPredictions(
       // faithful iOS-port scorer, so the gate reads the same labels the app displays.
       // (Until 2026-08-21 this used the simplified computeScore, whose RSI-overbought
       // penalty read the strongest rallies as Neutral/Bearish — see notificationBiasAlignment.)
-      const biasAlignment = notificationBiasAlignment(candles as FullCandle[], fourHCandles as FullCandle[], isCrypto, symbol);
+      const { alignment: biasAlignment, dailyScore } =
+        notificationBiasAndScore(candles as FullCandle[], fourHCandles as FullCandle[], isCrypto, symbol);
 
       // Phase 1/2 heads (crypto-only): direction-conditioned triple-barrier meta prob,
       // adaptive-TP2 q75, and the conformal `confident` gate. Additive — served by
@@ -4429,13 +4449,13 @@ async function computeSymbolPredictions(
       // is unchanged until the app reads them. metaDirection = the union(bias, dStoch)
       // the meta head was conditioned on (so the app knows which side it scored).
       const metaDirection = notificationDirection(biasAlignment, features.dStochCross || 0);
-      const probabilityMeta = mlPredictMeta(features as Record<string, number>, isCrypto, metaDirection);
-      const q75 = mlPredictQuantile(features as Record<string, number>, isCrypto, '0.75');
+      const probabilityMeta = mlPredictMeta(features as unknown as Record<string, number>, isCrypto, metaDirection);
+      const q75 = mlPredictQuantile(features as unknown as Record<string, number>, isCrypto, '0.75');
       const confident = mlConfident(probabilityMeta, isCrypto);
       // Calibrated P(up 24h) — the dedicated direction model. Beats the indicator
       // heuristics (holdout: ~80% acc full-coverage, ~95% at pUp>=0.70, conditional on
       // high ML); crypto only. Direction-agnostic input (no tradeDir).
-      const pUp = mlPredictDirection(features as Record<string, number>, isCrypto);
+      const pUp = mlPredictDirection(features as unknown as Record<string, number>, isCrypto);
       mlPredBatch[symbol].probabilityMeta = probabilityMeta;
       mlPredBatch[symbol].q75 = q75;
       mlPredBatch[symbol].confident = confident;
@@ -4565,7 +4585,7 @@ async function computeSymbolPredictions(
         isCrypto,
         mlProb,
         notifyProb,
-        dailyScore: features.dailyScore,
+        dailyScore,
         crossed: effectiveCross,
         envelopeFlat,
         dStochCross: features.dStochCross || 0,
@@ -4926,7 +4946,8 @@ async function processDeviceNotifications(
   predictions: Map<string, SymbolPrediction>,
 ) {
   const pushToken = await getPushToken(env, deviceId);
-  const triggered: { symbol: string; score: number; mlProb: number; direction: string }[] = [];
+  const triggered: Array<{ symbol: string; score: number; mlProb: number;
+                           notifyProb: number; direction: string }> = [];
   const now = Date.now();
   const expiresAt = now + NOTIFY_COOLDOWN_SEC * 1000;
 

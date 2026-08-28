@@ -15,7 +15,11 @@ function pct1d(closes: number[]): number | null {
   return a > 0 ? (b - a) / a * 100 : null;
 }
 
-interface Env { ALERTS: KVNamespace; }
+// Local structural view of the real `Env`. `FINNHUB_API_KEY` was READ below but not declared
+// here, so a typo or a removed binding would have been invisible — and a missing key is
+// exactly what left the Finnhub badge stuck red on 2026-07-14. Optional because the box may
+// legitimately run without it; the call sites already guard.
+interface Env { ALERTS: KVNamespace; FINNHUB_API_KEY?: string; }
 
 const YAHOO = 'https://query1.finance.yahoo.com';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';

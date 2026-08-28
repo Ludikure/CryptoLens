@@ -22,7 +22,7 @@
 import { forecastVol } from '../vol';
 import { excursionCurve, baseExcursionCurve, regimeCaveat,
          EXCURSION_MODEL_VERSION } from './excursion';
-import type { CrashRisk, Provenance } from './candidate';
+import type { CrashRisk, Provenance, TradeCandidate } from './candidate';
 import { crashRegime } from './crash-risk';
 import { crashProbability, crashWarning, VALIDATED_CURVE, CRASH_MODEL_VERSION } from './crash';
 import { generateCandidate, DEFAULT_STRUCTURE, type StructureConfig } from './generator';
@@ -108,7 +108,7 @@ export function computeOpportunities(
    */
   limits: RiskLimits = DEFAULT_LIMITS,
 ): OpportunityResult {
-  const candidates = [];
+  const candidates: TradeCandidate[] = [];
   const skipped: OpportunityResult['skipped'] = [];
   const warnings: CrashWarning[] = [];
   const readings: OpportunityResult['crashReadings'] = [];

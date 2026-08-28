@@ -144,7 +144,7 @@ export function reliability(
   predictions: ReadonlyArray<{ probability: number; outcome: 0 | 1 }>,
   edges: readonly number[] = [0, 0.3, 0.5, 0.6, 0.7, 0.85, 1],
 ): Array<{ lo: number; hi: number; predicted: number; realized: number; n: number }> {
-  const out = [];
+  const out: Array<{ lo: number; hi: number; n: number; predicted: number; realized: number }> = [];
   for (let i = 0; i < edges.length - 1; i++) {
     const lo = edges[i], hi = edges[i + 1];
     const inB = predictions.filter(p => p.probability >= lo && p.probability < hi);
