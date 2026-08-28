@@ -609,6 +609,53 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28b — Monthly extremes rejected too; and a variance estimator that hid its own result
+
+User asked for monthly to be tested after the daily-close rejection. Matched control: the
+trailing-W-bar extreme anchored at a NON-month-end bar, same window length — the same object,
+differing only in whether the window ends on a calendar boundary.
+
+| market | arm | gap vs matched | 95% CI | periods+ |
+|---|---|---:|---|---:|
+| crypto | monthly HIGH | +1.68pp | [−0.03, +3.53] | 6/9 |
+| crypto | monthly LOW | **−2.19pp** | [−3.67, **−0.64**] | 3/9 |
+| crypto | monthly CLOSE | −0.68pp | [−1.66, +0.26] | 6/9 |
+| stock | monthly HIGH | −0.62pp | [−1.41, +0.20] | **2/9** |
+| stock | monthly LOW | −0.39pp | [−1.42, +0.58] | 4/9 |
+| stock | monthly CLOSE | +0.95pp | [−0.01, +1.88] | 6/9 |
+
+Five of six NOT SUPPORTED. **The one inconclusive cell fails the pre-declared ship bar on its
+own point estimate** — under +2.0pp, 6/9 not 7/9, opposite sign on stocks.
+
+**Crypto monthly LOWS hold significantly WORSE than a matched non-calendar low.** Both crypto
+extremes sit below even the random-line control. Consistent with the momentum thesis — on a
+24/7 tape a widely-watched extreme is where the stops are.
+
+**The stock month-end close is ~90% an effect already identified yesterday.** A month-end close
+is always an afternoon bar; the control is ~50% afternoon; the +1.70pp afternoon-vs-morning
+effect therefore predicts +0.85pp of the observed +0.95pp, leaving ~0.10pp for the month.
+Crypto decomposes identically via the hour-20 bucket.
+
+**A variance estimator that would have buried its own significant result.** The first run used
+a Kish design effect clustered on (symbol, period). On the sparse monthly arms — ~1,200 events
+over ~675 cells — most cells fell under the minimum-count filter, the between-block variance
+went unstable, and it reported **eff_n of 21 and CIs of ±15pp**, i.e. "hopelessly
+underpowered". A symbol-level block bootstrap gives eff_n ~1,500-2,400 and ±1.8pp, and
+**crypto monthly LOW moves from inconclusive to decisively negative**. Caught before
+publishing. Standing note: a design-effect estimate needs enough events per block to be
+stable; a bootstrap does not.
+
+**Power was stated BEFORE running** (3,846 crypto / 8,578 stock symbol-months against the
+~3,200 eff_n needed for +2pp) along with the verdict rule — CI upper bound under +2.0pp is
+NOT SUPPORTED, a CI spanning it is INCONCLUSIVE, never "no effect". That rule is what makes
+the one surviving cell reportable as inconclusive rather than quietly rounded to zero.
+
+**Eighth level-selection metric to measure flat or inverted.** Standing conclusion:
+*prices the market recently traded at hold ~5-7pp better than prices it has not, and no way of
+choosing which traded price — calendar, structure, ratio or volume — has ever measured better
+than the others.* Research-layer only, no code change, no redeploy.
+`docs/research/level-monthly-extremes.md`, `ml-training/level_monthly_test.py`.
+
 ### 2026-08-28 — Daily-close levels rejected: a three-month-old "actionable find" was a control artifact
 
 User asked whether reversals cluster at weekly/monthly extremes. Weekly WAS tested

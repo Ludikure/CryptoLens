@@ -298,3 +298,37 @@ you pick has never mattered.
 
 **Nothing shipped** — it had sat NOT YET IMPLEMENTED for three months. Full write-up:
 [[level-daily-close]]. Script: `ml-training/level_daily_close_test.py`.
+
+## Monthly extremes as a level source — REJECTED 2026-08-28
+
+**Claim:** reversals cluster at monthly maximums/minimums, or close to them.
+
+**Matched control:** the trailing-W-bar extreme anchored at a NON-month-end bar, same window
+length — identical object (the highest/lowest price of the trailing ~30 days, known at
+formation), differing only in whether the window ends on a calendar boundary.
+
+| market | arm | gap vs matched | 95% CI | periods+ | verdict |
+|---|---|---:|---|---:|---|
+| crypto | monthly HIGH | +1.68pp | [−0.03, +3.53] | 6/9 | inconclusive |
+| crypto | monthly LOW | **−2.19pp** | [−3.67, **−0.64**] | 3/9 | **inverted** |
+| crypto | monthly CLOSE | −0.68pp | [−1.66, +0.26] | 6/9 | not supported |
+| stock | monthly HIGH | −0.62pp | [−1.41, +0.20] | **2/9** | not supported |
+| stock | monthly LOW | −0.39pp | [−1.42, +0.58] | 4/9 | not supported |
+| stock | monthly CLOSE | +0.95pp | [−0.01, +1.88] | 6/9 | not supported |
+
+Pre-declared bar was ≥ +2.0pp on crypto AND ≥7/9 periods AND same sign on stocks. **The only
+cell not rejected outright — crypto monthly high — fails all three on its own point estimate.**
+
+**Crypto monthly LOWS hold significantly WORSE than a matched non-calendar low** (CI excludes
+zero). Both crypto extremes also sit below the random-line control. Consistent with the
+momentum thesis: on a 24/7 tape a widely-watched extreme is where the stops are, and price
+runs them. Same shape as Finding 4's weekly high at +0.3pp.
+
+**The stock month-end close is ~90% the afternoon-bar effect.** A month-end close is always an
+afternoon bar and the control is ~50% afternoon, so the +1.70pp afternoon effect from
+[[level-daily-close]] predicts +0.85pp of the observed +0.95pp. Residual ~0.10pp.
+
+**Eighth level-selection metric to measure flat or inverted**, after test-count, flip-role,
+timeframe, Fibonacci ratio, formation volume, volume-at-price and the day boundary.
+
+Full write-up: [[level-monthly-extremes]]. Script: `ml-training/level_monthly_test.py`.

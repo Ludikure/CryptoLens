@@ -93,6 +93,88 @@ after the fact:
    thesis ([[edge-crypto-direction-model]]) says crypto blows through highs, and Finding 4
    already measured weekly high +0.3pp against weekly low +1.5pp.
 
-## RESULT
+## RESULT — NOT SUPPORTED in 5 of 6 cells; 1 inconclusive and it fails the ship bar anyway
 
-*(empty — to be filled after the run)*
+`ml-training/level_monthly_test.py`, full sample, both markets. Gap is against the **matched**
+trailing-W control (same window length, anchored off a month boundary). CIs are symbol-level
+block bootstrap, B=2000.
+
+| market | arm | HOLD | matched ctrl | gap | 95% CI | periods+ | verdict |
+|---|---|---:|---:|---:|---|---:|---|
+| crypto | monthly HIGH | 85.10% | 83.42% | **+1.68pp** | [−0.03, +3.53] | 6/9 | INCONCLUSIVE |
+| crypto | monthly LOW | 82.98% | 85.17% | **−2.19pp** | [−3.67, **−0.64**] | 3/9 | NOT SUPPORTED (inverted) |
+| crypto | monthly CLOSE | 90.84% | 91.52% | −0.68pp | [−1.66, +0.26] | 6/9 | NOT SUPPORTED |
+| stock | monthly HIGH | 83.92% | 84.53% | −0.62pp | [−1.41, +0.20] | **2/9** | NOT SUPPORTED |
+| stock | monthly LOW | 85.04% | 85.43% | −0.39pp | [−1.42, +0.58] | 4/9 | NOT SUPPORTED |
+| stock | monthly CLOSE | 86.22% | 85.27% | +0.95pp | [−0.01, +1.88] | 6/9 | NOT SUPPORTED |
+
+**The one cell that survives — crypto monthly HIGH, +1.68pp — fails the pre-declared ship bar
+on its own point estimate anyway**: below the +2.0pp magnitude bar (a), 6 of 9 rather than 7
+of 9 periods (b), and the opposite sign on stocks at 2/9 (c). Three for three. It is recorded
+as inconclusive rather than rejected because the CI genuinely does not exclude +2.0pp, not
+because there is a case for it.
+
+### Crypto monthly LOWS are significantly WORSE than a matched non-calendar low
+
+−2.19pp with a CI excluding zero, at 3 of 9 periods. A monthly low holds *less* often than
+the trailing-30-day low taken at an arbitrary mid-month cut. Both crypto extremes also sit
+**below the random-line control** (high −1.25pp, low −3.38pp) — though that comparison is not
+distance-matched, so the matched control is the one to trust.
+
+This is consistent with the momentum thesis ([[edge-crypto-direction-model]]): on a 24/7 tape
+a widely-watched extreme is where stops sit, and price runs them. It is the same shape as
+Finding 4's weekly high at +0.3pp.
+
+**Prediction 4 was WRONG, and usefully so.** I predicted that if anything showed on crypto it
+would be the LOW side. The low is the cell that came out significantly *negative*, and the
+high is the only one that could not be excluded. Recorded as a miss.
+
+### The stock month-end close is the afternoon-bar effect, not a month effect
+
+[[level-daily-close]] measured the session's afternoon bar at **+1.70pp** over the morning
+bar. A month-end close is *always* an afternoon bar; the control anchors are uniform within
+the month and so are ~50% afternoon. Expected gap from that alone:
+
+```
+0.50 x 1.70pp = +0.85pp        observed +0.95pp        residual +0.10pp
+```
+
+**~90% of the stock month-end close effect is an already-identified intraday effect.** The
+month boundary contributes ~0.1pp. The crypto arm decomposes the same way: a month-end close
+is always the hour-20 bar, which measured 91.36% against a ~91.58% all-hour mean, predicting
+≈ −0.22pp against an observed −0.68pp — same direction, no month effect needed.
+
+### A measurement defect caught before publishing, which CHANGED a verdict
+
+The first run used a Kish design-effect estimate clustered on (symbol, period). On the sparse
+monthly arms — ~1,200 events over ~675 cells — most cells fell below the minimum-count filter
+and the between-block variance became unstable. It reported **eff_n of 21 and 18** and CIs of
+**±15pp**, which would have made both crypto extremes "hopelessly underpowered".
+
+The symbol-level block bootstrap gives eff_n ≈ 1,500-2,400 and CIs of ±1.8pp. **Crypto
+monthly LOW moves from INCONCLUSIVE to a decisive NOT SUPPORTED with a CI excluding zero.**
+An estimator that degrades silently on sparse arms would have buried the single significant
+result in this test. Standing note: a design-effect estimate needs enough events per block to
+be stable, and a bootstrap does not.
+
+### Verdict against the pre-declared bar
+
+Nothing ships. Monthly extremes are not a level source. This is the **eighth** level-selection
+metric to measure flat or inverted, after test-count, flip-role, timeframe, Fibonacci ratio,
+formation volume, volume-at-price and the day boundary.
+
+The full picture across [[strategy-levels]], [[level-daily-close]] and this note:
+
+> Prices the market has recently traded at hold ~5-7pp better than prices it has not. **No
+> method of selecting *which* traded price — by calendar (day, week, month), by structure
+> (swing, flip, test count), by ratio (Fibonacci) or by volume — has ever measured better
+> than the others.** Where a calendar effect does appear it decomposes into an intraday
+> session effect that has nothing to do with the calendar.
+
+### Coverage note
+
+52-week / all-time extremes are still untested here. This tape is 4.4 years, so a 52-week
+extreme arm would carry ~4 events per symbol — an order of magnitude worse powered than the
+monthly arm that already could not resolve one of six cells. It needs a longer history, not
+another run against this one. `fiftyTwoWeekPct` and `distToFiftyTwoHigh` do exist as stock ML
+features, so the model can already use that information if it is there.
