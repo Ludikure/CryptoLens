@@ -609,6 +609,55 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-27d — Two review rounds on the same day's work: 15 + 15 findings, one of them mine-and-new
+
+Two max-effort reviews of the Phase 1/2 commits. Every finding acted on was verified by execution
+first. The headline is uncomfortable and worth stating plainly: **round one's fix introduced the bug
+round two led with.**
+
+**TP1 and TP2 collapsed onto the IDENTICAL price** — `TP1: $72,330.00 … TP2: $72,330.00 … Viable:
+true`, on 6 of 48 candidate rows, under a comment asserting it was impossible. `tp2MinRR` derived
+from a `tp1RR` that was 0 whenever no LEVEL qualified (always, on the non-wideBand path), so it
+collapsed to `tp2RRBand[0]` = 1.3 — numerically identical to non-wideBand `idealTP1RR` — and both
+anti-collision guards degraded to comparing against `entry.price`. **TP1 is now resolved before
+anything derives from it**, the guards key on the resolved price, and a final ladder assertion runs
+on the FINAL prices rather than trusting how they were chosen.
+
+**The same rewrite silently re-tuned two branches** while calling itself "a re-expression of intent
+rather than a re-tune": non-wideBand TP2 1.25R → 2.5R and counter-trend 1.25R → 1.8R. The old
+fallback was `base * stopScale * atr` with `stopScale = risk/(2·atr)` — algebraically `base/2` in R,
+already stop-invariant — so the equivalence held only on the wideBand cell that was checked.
+`fallbackTP1R`/`fallbackTP2R` are now named constants at the OLD values; only TP1 moved, because its
+old values (0.6R non-wideBand, 0.75R counter-trend) could not clear their own viability bars of 1.0
+and 0.8 **at any stop width, including the 2 ATR floor that predates all of this**.
+
+**`Number('')` is 0, not NaN** — so the `Number(null)` fix closed one hole and left three: `?fee=`,
+bare `?fee`, and `?fee=%20` all still priced at zero cost. `?equity=abc` was worse: NaN serialises as
+JSON `null`, Swift's `positionUsd: Double` is non-optional, so the whole Book failed to decode and
+the LAUNCH tab rendered empty with no error. One strict `num()` parser now covers all three params.
+
+**Six of thirty findings were the same failure mode the commit message itself names** — a threshold
+compared against a quantity whose attainable range was never re-checked after something moved. The
+fee guard, the equity guard, both band intersections, `tp2MinRR`, and the viability bar.
+
+Also fixed: R-to-money used `maxRiskPerTrade` (the CAP) where the row's realised `riskFraction`
+belongs — a 39% overstatement on a crash-cut row, printed directly above the correct number on the
+same card; `totals` described every accepted candidate rather than the rows on screen, and the guard
+added in round one suppressed the correlation warning instead of correcting it (now computed
+server-side over `shown`); `rejected` was served and decoded and rendered nowhere; `OutcomeTracker
+.refresh()` gated the primary content on a secondary fetch; and `structure.id`/`limits.id` did not
+move with their overrides, so the journal recorded two different books identically.
+
+**Two tests could not observe what they were named for.** `expect(src).not.toMatch(/tp2Multiple…/)`
+names a symbol that has NEVER existed in `prompt.ts`, so the test called "the reward:risk ratio is
+NOT changed alongside it" passed unconditionally while this very change moved it. And
+`target-scaling.test.ts` asserted `TP1 R:R >= 0.5` against a real bar of 1.0 on non-wideBand — 2x
+loose, so a `Viable: false` row passed green. Both now run per-branch at each branch's own floor.
+
+**Standing lesson, now twice-earned:** run the real builder on a NON-DEFAULT symbol. Both rounds
+found defects invisible to BTCUSDT, because `envelopeFor` defaults to it and the wideBand numbers
+happen to coincide there. 874/874 green.
+
 ### 2026-08-27c — Joint stop × target: rejected, and the reward:risk lever is the bigger one
 
 The test §9 demanded ([[stop-target-joint]], pre-declared at e286e31). Both sides **NOT SUPPORTED** —

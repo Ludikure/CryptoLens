@@ -153,6 +153,12 @@ enum WorkerOpportunitiesService {
     struct Skipped: Decodable {
         let asset: String
         let reasons: [String]
+
+        /// Lets the client fold `rejected` into the same list rather than inventing a second one.
+        init(asset: String, reasons: [String]) {
+            self.asset = asset
+            self.reasons = reasons
+        }
     }
 
     struct Book: Decodable {

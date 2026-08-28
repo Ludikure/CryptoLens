@@ -22,9 +22,15 @@ struct TradeCardView: View {
     @Environment(\.dismiss) private var dismiss
 
     private var o: WorkerOpportunitiesService.Opportunity { opportunity }
-    /// Sized-at risk, not the local default — see `OpportunitiesView.sizedRiskPercent`.
-    private var sizedRiskPercent: Double? { book?.structure?.maxRiskPerTrade.map { $0 * 100 } }
-    private var oneR: Double { OpportunityCopy.oneR(riskPercent: sizedRiskPercent) }
+    /// What a stop costs on THIS row: the realised `riskFraction` against the equity the worker
+    /// sized with. NOT `maxRiskPerTrade`, which is the cap — sizing lands under it whenever the
+    /// crash overlay or a notional/concentration/correlation clamp binds, so the cap overstated
+    /// every figure here by up to 2x on exactly the rows the drawdown model flags as dangerous.
+    /// And NOT the local `accountSize`, which the worker never saw.
+    private var oneR: Double {
+        guard let equity = book?.equity, equity > 0, o.riskFraction > 0 else { return 0 }
+        return equity * o.riskFraction
+    }
     private var mood: OpportunityCopy.Mood? { .from(book?.fearGreed) }
     private var ticker: String {
         o.asset.hasSuffix("USDT") ? String(o.asset.dropLast(4)) : o.asset
@@ -67,8 +73,10 @@ struct TradeCardView: View {
                 Text(rText(o.expectedValueR))
                     .font(Theme.mono).fontWeight(.medium).foregroundStyle(Theme.info)
             }
-            if let money = OpportunityCopy.money(forR: o.expectedValueR, riskPercent: sizedRiskPercent) {
-                Text("Net expected value — \(money), averaged over many trades.")
+            if oneR > 0 {
+                let d = o.expectedValueR * oneR
+                Text("Net expected value — about \(d >= 0 ? "+" : "−")$\(Int(abs(d).rounded())) "
+                     + "a trade, averaged over many trades.")
                     .font(Theme.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -245,7 +253,8 @@ struct TradeCardView: View {
     private var sizing: some View {
         VStack(spacing: 0) {
             if o.positionUsd > 0 { check("Position", unsignedMoney(o.positionUsd), .primary) }
-            check("Risk if stopped", "\(fmt(o.riskFraction * 100))% of the account", .secondary)
+            check("Risk if stopped", "\(fmt(o.riskFraction * 100))% of the account"
+                  + (oneR > 0 ? " · \(unsignedMoney(oneR))" : ""), .secondary)
             if o.crashMultiplier < 1 {
                 check("Drawdown cut", "sized to \(Int((o.crashMultiplier * 100).rounded()))%",
                       Theme.caution)

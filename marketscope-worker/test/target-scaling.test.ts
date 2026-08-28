@@ -35,13 +35,34 @@ describe('targets scale with the stop', () => {
     expect(rows.some(viable)).toBe(true);
   });
 
-  it('the ATR fallback holds its reward:risk instead of collapsing as the stop widens', () => {
-    // The fallback was 1.5x ATR against a 2 ATR stop: R:R 0.75 by construction. Whatever the stop
-    // width, a fallback TP1 must stay in that neighbourhood — the pre-fix values were 0.18-0.35.
-    for (const bias of [BIAS.alignedBullish, BIAS.alignedBearish]) {
-      for (const row of candidates(envelopeFor({ ml: 0.8, calibratedMl: 0.8, ...bias }).prompt)) {
-        if (!row.includes('ATR target')) continue;
-        expect(rr(row, 'TP1')).toBeGreaterThanOrEqual(0.5);
+  // Every branch, at its OWN bar. Asserting 0.5 everywhere was 2x loose on non-wideBand and 1.6x
+  // on counter-trend, so a row reporting `Viable: false` passed it green.
+  const SYMS: Array<[string, number]> = [['BTCUSDT', 0.5], ['TIAUSDT', 1.0]];
+
+  it('a fallback TP1 clears the viability bar of ITS OWN branch, at every stop width', () => {
+    for (const [symbol, floor] of SYMS) {
+      for (const bias of [BIAS.alignedBullish, BIAS.alignedBearish]) {
+        for (const row of candidates(envelopeFor({ ml: 0.8, calibratedMl: 0.8, symbol, ...bias }).prompt)) {
+          expect(rr(row, 'TP1')).toBeGreaterThanOrEqual(floor);
+          expect(row).toContain('Viable: true');
+        }
+      }
+    }
+  });
+
+  it('TP1 and TP2 are never the same price', () => {
+    // They were. `tp2MinRR` derived from a `tp1RR` that was 0 whenever no LEVEL qualified — always,
+    // on the non-wideBand path — so the fallback TP1 landed inside TP2's admissible zone and both
+    // anti-collision guards degraded to comparing against the entry. Measured on the real fixture:
+    // `TP1: $72,330.00 … TP2: $72,330.00 … Viable: true`, one price on two rungs.
+    const px = (row: string, which: 'TP1' | 'TP2') =>
+      new RegExp(`${which}: \\$([\\d,]+\\.?\\d*)`).exec(row)?.[1];
+    for (const [symbol] of SYMS) {
+      for (const bias of [BIAS.alignedBullish, BIAS.alignedBearish]) {
+        for (const row of candidates(envelopeFor({ ml: 0.8, calibratedMl: 0.8, symbol, ...bias }).prompt)) {
+          expect(px(row, 'TP2')).not.toBe(px(row, 'TP1'));
+          expect(rr(row, 'TP2')).toBeGreaterThan(rr(row, 'TP1'));
+        }
       }
     }
   });

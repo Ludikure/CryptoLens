@@ -25,7 +25,12 @@ describe('the minimum stop distance is direction-dependent', () => {
     // ratio as well would be a different intervention that was never measured.
     const src = require('fs').readFileSync(
       require('path').join(__dirname, '..', 'src', 'prompt.ts'), 'utf-8');
-    expect(src).not.toMatch(/tp2Multiple\s*=\s*[\d.]+\s*\*\s*4/);
+    // `tp2Multiple` has NEVER existed in prompt.ts (`git log -S` is empty), so this assertion
+    // passed unconditionally and could not observe the invariant it is named for — a change that
+    // moved non-wideBand TP2 from 1.25R to 2.5R went green through it. Pin the actual fallback
+    // ratios instead, which are now named constants rather than ATR multiples.
+    expect(src).toMatch(/const fallbackTP2R = \(isWideBand && isCrypto\) \? 1\.5 : 1\.25;/);
+    expect(src).toMatch(/const fallbackTP1R = isWideBand \? 0\.75 : isCounterTrend \? 0\.75 : 0\.6;/);
   });
 
   it('the prompt still builds end-to-end on both sides', () => {

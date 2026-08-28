@@ -51,6 +51,24 @@ struct OpportunitiesView: View {
         book?.structure?.maxRiskPerTrade.map { $0 * 100 }
     }
 
+    /// What a stop actually costs on THIS row, in account currency.
+    ///
+    /// `maxRiskPerTrade` is a CAP, and `sizePosition` lands under it whenever the crash overlay,
+    /// the notional cap, concentration or correlation binds — 1.44% against a 0.02 cap on a
+    /// crash-cut row. Using the cap overstated every dollar figure by up to 2x on exactly the rows
+    /// the drawdown model flags as most dangerous. `riskFraction` is the realised number and was
+    /// already being rendered, in percent, on the same card.
+    private func oneR(_ o: WorkerOpportunitiesService.Opportunity) -> Double? {
+        guard let equity = book?.equity, equity > 0, o.riskFraction > 0 else { return nil }
+        return equity * o.riskFraction
+    }
+
+    private func moneyPerTrade(_ o: WorkerOpportunitiesService.Opportunity) -> String? {
+        guard let unit = oneR(o) else { return nil }
+        let d = o.expectedValueR * unit
+        return "about \(d >= 0 ? "+" : "−")$\(Int(abs(d).rounded())) a trade"
+    }
+
     /// A row the MOOD cancels. §6 measured the short edge NEGATIVE in greed (−0.05R at ML ≥ 0.55)
     /// and says plainly: do not present it as available.
     ///
@@ -102,7 +120,15 @@ struct OpportunitiesView: View {
     }
 
     private var stoppedBeforeScoring: [WorkerOpportunitiesService.Skipped] {
+        // `rejected` is folded in, because a portfolio-zeroed candidate belongs in a list the user
+        // can reach. It was in neither `opportunities` nor `skipped`, counted in the SCANNED
+        // denominator, and listed nowhere — so the asset with the worst drawdown reading (a 0.00
+        // crash multiplier above p=0.5001) vanished under the sentence "Every asset scanned was
+        // scored."
         (book?.skipped ?? []).filter { !isScoredButUnrankable($0) }
+        + (book?.rejected ?? []).map {
+            WorkerOpportunitiesService.Skipped(asset: $0.asset, reasons: $0.reasons)
+        }
     }
 
     var body: some View {
@@ -287,7 +313,7 @@ struct OpportunitiesView: View {
                     Text(rText(o.expectedValueR))
                         .font(Theme.mono).fontWeight(.medium)
                         .foregroundStyle(Theme.info)
-                    if let money = OpportunityCopy.money(forR: o.expectedValueR, riskPercent: sizedRiskPercent) {
+                    if let money = moneyPerTrade(o) {
                         Text(money).font(Theme.frame).foregroundStyle(.tertiary)
                     }
                 }
@@ -658,11 +684,14 @@ struct OpportunitiesView: View {
         // stays here got one refresh at launch and none after, including on pull-to-refresh. A
         // position that stopped out stayed under "Open" indefinitely with a live-looking R, in the
         // one section whose whole claim is that it shows money that exists.
-        await OutcomeTracker.refresh()
-        async let positions = OutcomeTracker.openPositionsAsync()
+        async let refreshed: Void = OutcomeTracker.refresh()
+        // The book lands FIRST and unblocks the screen. Awaiting the tracked-setups refresh before
+        // assigning it meant a stalled `/tracked-setups` held the landing screen on "SCANNING…" for
+        // its whole timeout with the book already in memory.
         book = await fetched
-        openPositions = await positions
         loaded = true
+        await refreshed
+        openPositions = await OutcomeTracker.openPositionsAsync()
     }
 
     // MARK: - Formatting

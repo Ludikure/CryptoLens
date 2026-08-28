@@ -2197,29 +2197,22 @@ export function buildUserPrompt(input: BuildPromptInput): {
             if (isCrypto) { tp2RRBand = [0.75, 1.75]; tp2ATRBand = sc([2.0, 3.5]); idealTP2RR = 1.5; }
             else { tp2RRBand = [0.75, 1.5]; tp2ATRBand = sc([2.0, 3.0]); idealTP2RR = 1.25; }
           } else { tp2RRBand = [1.3, 4.0]; tp2ATRBand = sc([1.5, 5.0]); idealTP2RR = 2.5; }
+
+          // FALLBACK REWARD:RISK, per branch, stated as numbers rather than derived from an ATR
+          // multiple that had to be divided by the stop to mean anything.
+          //
+          // These are the OLD effective values: the previous fallback was `base * stopScale * atr`
+          // with `stopScale = risk/(2*atr)`, which is algebraically `base/2` in R — already
+          // stop-invariant. Keeping them means only what HAD to change changes.
+          //
+          // `viableFloor` is what TP1 is judged against a few lines down, and the old TP1 fallbacks
+          // could not clear it: non-wideBand placed TP1 at 0.6R against a 1.0 bar and counter-trend
+          // at 0.75R against 0.8, so those two branches could never emit a setup at ANY stop width —
+          // including the 2 ATR floor that predates all of this.
+          const viableFloor = isCounterTrend ? 0.8 : isWideBand ? 0.5 : 1.0;
+          const fallbackTP1R = isWideBand ? 0.75 : isCounterTrend ? 0.75 : 0.6;
+          const fallbackTP2R = (isWideBand && isCrypto) ? 1.5 : 1.25;
           const directionalLevels = effectiveDirection === 'SHORT' ? uniqueLevels.filter(l => l.price < entry.price) : uniqueLevels.filter(l => l.price > entry.price);
-          const tp1Score = (level: TaggedLevel): number | null => {
-            const reward = Math.abs(level.price - entry.price), rr = reward / risk, atrDist = reward / Math.max(atr, 0.0001);
-            if (!(rr >= tp1RRBand[0] && rr <= tp1RRBand[1] && atrDist >= tp1ATRBand[0] && atrDist <= tp1ATRBand[1])) return null;
-            const rrFit = Math.max(0, 1.0 - Math.abs(rr - idealTP1RR) / idealTP1RR);
-            const clearance = computeClearance(entry.price, level.price, uniqueLevels);
-            return 1.5 * level.strength + 1.0 * rrFit + 1.0 * clearance + 0.5 * level.freshness;
-          };
-          let tp1: TaggedLevel | null = null, tp1Best = -Infinity;
-          for (const l of directionalLevels) { const sc = tp1Score(l); if (sc != null && sc > tp1Best) { tp1Best = sc; tp1 = l; } }
-          const tp1RR = tp1 ? Math.abs(tp1.price - entry.price) / risk : 0;
-          const tp2MinRR = Math.max(tp2RRBand[0], tp1RR + 0.3);
-          const tp2Score = (level: TaggedLevel): number | null => {
-            const reward = Math.abs(level.price - entry.price), rr = reward / risk, atrDist = reward / Math.max(atr, 0.0001);
-            if (!(rr >= tp2MinRR && rr <= tp2RRBand[1] && atrDist >= tp2ATRBand[0] && atrDist <= tp2ATRBand[1])) return null;
-            if (Math.abs(level.price - (tp1?.price ?? entry.price)) / Math.max(atr, 0.0001) < 0.5) return null;
-            if (tp1) { if (effectiveDirection === 'SHORT' ? !(level.price < tp1.price) : !(level.price > tp1.price)) return null; }
-            const rrFit = Math.max(0, 1.0 - Math.abs(rr - idealTP2RR) / idealTP2RR);
-            const clearance = computeClearance(tp1?.price ?? entry.price, level.price, uniqueLevels);
-            return 1.5 * level.strength + 1.0 * rrFit + 1.0 * clearance + 0.5 * level.freshness;
-          };
-          let tp2: TaggedLevel | null = null, tp2Best = -Infinity;
-          for (const l of directionalLevels) { const sc = tp2Score(l); if (sc != null && sc > tp2Best) { tp2Best = sc; tp2 = l; } }
           // Placed in R, not in ATR.
           //
           // The ATR-multiple fallbacks could not satisfy their own R:R bands. Non-wideBand puts TP1
@@ -2235,27 +2228,81 @@ export function buildUserPrompt(input: BuildPromptInput): {
           // bands were tuned on it lands where the ATR multiple already did (wideBand crypto: 0.75R
           // and 1.5R = 3 ATR and 6 ATR against a 4 ATR stop), so it is a re-expression of the
           // intent rather than a re-tune.
-          const rFallback = (rr: number, label: string): { price: number; type: string } => {
+          const rFallback = (rr: number, label: string, snap = true): { price: number; type: string } => {
             const dist = rr * risk;
             const fp = effectiveDirection === 'SHORT' ? entry.price - dist : entry.price + dist;
+            if (!snap) return { price: fp, type: `ATR target (${label})` };
             let nearest: TaggedLevel | null = null, nd = Infinity;
             for (const l of uniqueLevels) { const dd = Math.abs(l.price - fp); if (dd < nd) { nd = dd; nearest = l; } }
             if (nearest && Math.abs(nearest.price - fp) / Math.max(atr, 0.0001) <= 0.5) return { price: nearest.price, type: `ATR target (${label}) → ${nearest.type}` };
             return { price: fp, type: `ATR target (${label})` };
           };
-          let finalTP1Price: number, finalTP1Type: string;
-          if (tp1) { finalTP1Price = tp1.price; finalTP1Type = tp1.type; }
-          else { const fb = rFallback(idealTP1RR, `${f(idealTP1RR, 2)}R`); finalTP1Price = fb.price; finalTP1Type = fb.type; }
+          const tp1Score = (level: TaggedLevel): number | null => {
+            const reward = Math.abs(level.price - entry.price), rr = reward / risk, atrDist = reward / Math.max(atr, 0.0001);
+            if (!(rr >= tp1RRBand[0] && rr <= tp1RRBand[1] && atrDist >= tp1ATRBand[0] && atrDist <= tp1ATRBand[1])) return null;
+            const rrFit = Math.max(0, 1.0 - Math.abs(rr - idealTP1RR) / idealTP1RR);
+            const clearance = computeClearance(entry.price, level.price, uniqueLevels);
+            return 1.5 * level.strength + 1.0 * rrFit + 1.0 * clearance + 0.5 * level.freshness;
+          };
+          let tp1: TaggedLevel | null = null, tp1Best = -Infinity;
+          for (const l of directionalLevels) { const sc = tp1Score(l); if (sc != null && sc > tp1Best) { tp1Best = sc; tp1 = l; } }
+
+          // TP1 IS RESOLVED HERE, BEFORE ANYTHING DERIVES FROM IT.
+          //
+          // It used to be resolved ~30 lines below, so `tp1RR` was 0 whenever no LEVEL qualified —
+          // which is always on the non-wideBand path — and `tp2MinRR` collapsed to `tp2RRBand[0]`.
+          // On that path `tp2RRBand[0]` is 1.3, numerically identical to `idealTP1RR`, so the
+          // fallback TP1 landed exactly inside TP2's admissible zone while both anti-collision
+          // guards compared against `entry.price` instead of a TP1 that did not exist yet.
+          // Measured on the real fixture: TIAUSDT emitted `TP1 $72,330.00 … TP2 $72,330.00`, one
+          // price on two rungs, `Viable: true`, under a header telling the model not to recalculate.
+          // The fallback is placed AT the floor, so the 0.5-ATR snap to a nearby level can only pull
+          // it under. Take the snap only when it still clears — otherwise the fallback that exists
+          // to guarantee viability is the thing that destroys it, which measured live: a TIAUSDT
+          // row snapped 1.00R -> 0.94R against a 1.0 bar and reported `Viable: false`.
+          const tp1FallbackR = Math.max(fallbackTP1R, viableFloor);
+          const tp1Fb = () => {
+            const snapped = rFallback(tp1FallbackR, `${f(tp1FallbackR, 2)}R`);
+            if (Math.abs(snapped.price - entry.price) / risk >= viableFloor) return snapped;
+            return rFallback(tp1FallbackR, `${f(tp1FallbackR, 2)}R`, false);
+          };
+          const resolvedTP1 = tp1 ? { price: tp1.price, type: tp1.type } : tp1Fb();
+          const tp1RR = Math.abs(resolvedTP1.price - entry.price) / risk;
+          const tp2MinRR = Math.max(tp2RRBand[0], tp1RR + 0.3);
+          const tp2Score = (level: TaggedLevel): number | null => {
+            const reward = Math.abs(level.price - entry.price), rr = reward / risk, atrDist = reward / Math.max(atr, 0.0001);
+            if (!(rr >= tp2MinRR && rr <= tp2RRBand[1] && atrDist >= tp2ATRBand[0] && atrDist <= tp2ATRBand[1])) return null;
+            if (Math.abs(level.price - resolvedTP1.price) / Math.max(atr, 0.0001) < 0.5) return null;
+            if (effectiveDirection === 'SHORT' ? !(level.price < resolvedTP1.price) : !(level.price > resolvedTP1.price)) return null;
+            const rrFit = Math.max(0, 1.0 - Math.abs(rr - idealTP2RR) / idealTP2RR);
+            const clearance = computeClearance(resolvedTP1.price, level.price, uniqueLevels);
+            return 1.5 * level.strength + 1.0 * rrFit + 1.0 * clearance + 0.5 * level.freshness;
+          };
+          let tp2: TaggedLevel | null = null, tp2Best = -Infinity;
+          for (const l of directionalLevels) { const sc = tp2Score(l); if (sc != null && sc > tp2Best) { tp2Best = sc; tp2 = l; } }
+          const finalTP1Price = resolvedTP1.price, finalTP1Type = resolvedTP1.type;
           let finalTP2Price: number, finalTP2Type: string;
           if (tp2) { finalTP2Price = tp2.price; finalTP2Type = tp2.type; }
           else {
-            // Kept strictly above TP1's R so the two can never collapse onto each other.
-            const tp2R = Math.max(idealTP2RR, tp2MinRR);
+            // `fallbackTP2R` is the OLD effective R, not `idealTP2RR`. The previous rewrite used the
+            // ideal and silently doubled two branches — non-wideBand TP2 1.25R -> 2.5R and
+            // counter-trend 1.25R -> 1.8R — under a comment calling itself "a re-expression of the
+            // intent rather than a re-tune", an equivalence that held only on the wideBand cell that
+            // was checked. Only TP1 HAD to move, because its old value failed its own viability bar.
+            const tp2R = Math.max(fallbackTP2R, tp2MinRR);
             const fb = rFallback(tp2R, `${f(tp2R, 2)}R`); finalTP2Price = fb.price; finalTP2Type = fb.type;
+          }
+          // LAST-RESORT LADDER GUARD. `rFallback` snaps to a level within 0.5 ATR and a selected TP2
+          // level can sit closer than intended, so the ordering is asserted on the FINAL prices
+          // rather than assumed from the way they were chosen.
+          const tp1Dist = Math.abs(finalTP1Price - entry.price);
+          if (Math.abs(finalTP2Price - entry.price) <= tp1Dist + 0.05 * risk) {
+            const forced = rFallback(tp1RR + 0.3, `${f(tp1RR + 0.3, 2)}R`, false);
+            finalTP2Price = forced.price; finalTP2Type = forced.type;
           }
           const finalTP1RR = Math.abs(finalTP1Price - entry.price) / risk, finalTP2RR = Math.abs(finalTP2Price - entry.price) / risk;
           const targetLines = [`${formatPrice(finalTP1Price)} (${finalTP1Type}) R:R=${f(finalTP1RR, 2)}`, `${formatPrice(finalTP2Price)} (${finalTP2Type}) R:R=${f(finalTP2RR, 2)}`];
-          const viable = finalTP1RR >= (isCounterTrend ? 0.8 : isWideBand ? 0.5 : 1.0);
+          const viable = finalTP1RR >= viableFloor;
           const setupLabel = isCounterTrend ? 'COUNTER-TREND' : 'TREND';
           const confirmation = isCounterTrend ? 'WICK_REJECTION_CLOSE_BACK_ACROSS_LEVEL' : regime === 'TRENDING' ? 'VOLUME_1.2X_OR_SECOND_TEST' : 'NONE';
           // Stop quality (2026-07-02): risk-engine's reflection-principle noise-hit probability —

@@ -20,6 +20,7 @@ import { excursionModelInfo } from './trading/excursion';
 import { crashModelInfo, crashProbability } from './trading/crash';
 import { DEFAULT_STRUCTURE } from './trading/generator';
 import { DEFAULT_LIMITS } from './trading/sizing';
+import { effectiveBets } from './trading/portfolio';
 import { payoffBranches } from './trading/opportunity';
 
 /** `forecastVol` needs comp_bars['30d'] = 720 one-hour bars and returns null if any component is
@@ -2613,7 +2614,21 @@ export default {
     if (path === '/opportunities' && request.method === 'GET') {
       try {
         const nowMs = Date.now();
-        const equity = Number(url.searchParams.get('equity') ?? '25000');
+
+        // `Number('')`, `Number(' ')` and `Number(null)` are ALL 0 — not NaN — so every plain
+        // `Number(param)` guard in this handler admitted a missing or blank param as a legitimate
+        // zero. That is how `?fee=` priced rows at no cost, and `?equity=` sized them at $0 while
+        // still ranking and displaying them. `?equity=abc` was worse: NaN serialises as JSON null,
+        // and Swift's `positionUsd: Double` is non-optional, so the whole Book failed to decode and
+        // the app's LAUNCH tab rendered empty with no error.
+        const num = (key: string): number | null => {
+          const raw = url.searchParams.get(key);
+          if (raw === null || raw.trim() === '') return null;
+          const v = Number(raw);
+          return Number.isFinite(v) ? v : null;
+        };
+        const equityRaw = num('equity');
+        const equity = equityRaw !== null && equityRaw > 0 ? equityRaw : 25000;
         const symbols = (url.searchParams.get('symbols') ?? 'BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT')
           .split(',').map(s => s.trim().toUpperCase()).filter(Boolean).slice(0, 20);
 
@@ -2630,19 +2645,27 @@ export default {
         // 0.15R. Negative-EV rows would cross the 0.05R display floor and be ranked, sized and
         // shown, with `structure.roundTripPercent: 0` telling the client to print "Net of the 0%
         // round trip." `/basis` gets this right with `?? '0.0007'`; that `??` is what was missing.
-        const feeParam = url.searchParams.get('fee');
-        const feeRaw = feeParam === null ? NaN : Number(feeParam);
-        const roundTripPercent = Number.isFinite(feeRaw) && feeRaw >= 0 && feeRaw <= 2
+        const feeRaw = num('fee');
+        const roundTripPercent = feeRaw !== null && feeRaw >= 0 && feeRaw <= 2
           ? feeRaw : DEFAULT_STRUCTURE.roundTripPercent;
-        const structure = { ...DEFAULT_STRUCTURE, roundTripPercent };
+        // The id moves with the override. `RiskLimits.id`/`StructureConfig.id` exist so the trade
+        // journal can tell two configurations apart — `crash-risk.ts` says a silently retuned curve
+        // "would otherwise be undetectable in the trade journal" — and two books minutes apart at
+        // different fees were writing a byte-identical `sizingConfigId`.
+        const structure = roundTripPercent === DEFAULT_STRUCTURE.roundTripPercent
+          ? DEFAULT_STRUCTURE
+          : { ...DEFAULT_STRUCTURE, id: `${DEFAULT_STRUCTURE.id}|fee${roundTripPercent}`, roundTripPercent };
 
         // The user's risk-per-trade, for the same reason as the fee: the client renders every
         // dollar figure as `accountSize * riskPercent`, so sizing here at a fixed 2% made the money
         // wrong — and understated the loss, which is the worse direction.
-        const riskParam = url.searchParams.get('risk');
-        const riskRaw = riskParam === null ? NaN : Number(riskParam);
-        const limits = Number.isFinite(riskRaw) && riskRaw > 0 && riskRaw <= 0.1
-          ? { ...DEFAULT_LIMITS, maxRiskPerTrade: riskRaw } : DEFAULT_LIMITS;
+        const riskRaw = num('risk');
+        // The floor keeps `maxRiskPerTrade` above `minPositionFraction`, which is NOT user-scaled —
+        // below it every candidate returns "below minimum position size" and the book is empty for
+        // a reason no surface can show.
+        const limits = riskRaw !== null && riskRaw >= 0.0025 && riskRaw <= 0.1
+          ? { ...DEFAULT_LIMITS, id: `${DEFAULT_LIMITS.id}|risk${riskRaw}`, maxRiskPerTrade: riskRaw }
+          : DEFAULT_LIMITS;
 
         const preds = JSON.parse((await env.ALERTS.get('ml_preds:all')) ?? '{}');
         const assets: AssetInput[] = [];
@@ -2818,7 +2841,18 @@ export default {
             // sentence that makes a +0.07R average readable; the average alone reads as a wage.
             branches: payoffBranches(a.candidate.payoff.winProbability, a.candidate.payoff.payoffAsymmetry),
           })),
-          totals: result.allocation.totals,
+          // Computed over the SHOWN rows, not over every accepted candidate. `totals.positions` was
+          // `accepted.length`, which includes the sub-floor rows the filter below removes and
+          // re-serves as `nearMiss` — so the client read "if you took all 3" above two cards. The
+          // correlation warning is the most useful number in the payload; it has to describe the
+          // book on screen or it cannot be shown at all.
+          totals: {
+            ...result.allocation.totals,
+            positions: shown.length,
+            effectiveBets: effectiveBets(shown.map(a => a.candidate.asset), correlations),
+            riskFraction: shown.reduce((t, a) => t + a.sizing.riskFraction, 0),
+            notionalFraction: shown.reduce((t, a) => t + a.sizing.notionalFraction, 0),
+          },
           // Sized to zero by the portfolio layer — liquidity, concentration, correlated exposure,
           // or a 0.00 crash multiplier above p=0.5001. These appeared in NO list, so the asset with
           // the scariest drawdown reading was the one that silently vanished while the screen said
