@@ -609,6 +609,52 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28 — Daily-close levels rejected: a three-month-old "actionable find" was a control artifact
+
+User asked whether reversals cluster at weekly/monthly extremes. Weekly WAS tested
+(`level_validation_htf.py`, 2026-05-31) — weekly highs are **+0.3pp over random on crypto,
+i.e. noise**; monthly never was. But the same table's headline claim, that **daily closes are
+the strongest level class** and "the one genuinely actionable find", had been sitting
+**NOT YET IMPLEMENTED — pending decision** for three months. Verified it. It does not hold.
+
+The control was random lines 0.5-3.0 ATR from price, so a daily close differed from it in
+**three** ways at once — a visited price, distance 0 at formation, and a day boundary — and
+only the third was the hypothesis. **The same confound that killed the Fibonacci class**
+(Finding 5: fib looked strong until controlled against random ratios in the same legs).
+
+Decisive contrast, which matches all three at once: evaluate EVERY 4H close as a level
+through identical logic, then split on whether its bar is the last of the day. Exhaustive,
+perfectly matched, no sampling noise.
+
+| | daily close | other 4H close | gap | periods+ |
+|---|---:|---:|---:|---:|
+| crypto | 91.36% | **91.62%** | **−0.26pp** | 4/10 |
+| stock | 85.65% | 83.99% | +1.66pp | 10/10 |
+
+**An arbitrary 4H close beats the random control by +6.95pp — more than the daily close
+(+6.69) and more than the 4H swing the app actually uses (+5.13).** All six hour-of-day
+buckets sit in a 0.85pp band with the boundary hour second worst. Pre-declared bar (≥2.0pp
+crypto AND ≥7/9 periods AND same sign both markets) fails on all three.
+
+**The stock gap is real at 10/10 and is not a calendar effect.** By within-session position
+it is the **afternoon bar vs the morning bar** (+1.70pp, reproducing the gap almost exactly)
+— the morning bar carries the open, the gap and the session's peak volatility. Predicted in
+advance that a genuine effect should be *stronger* on stocks, which have a real session
+close, than on crypto, where the boundary is an arbitrary UTC cut on a 24/7 tape. It is —
+and that asymmetry is what identifies the mechanism as the session, not the calendar.
+
+**Seventh level-selection metric to measure flat**, after test-count, flip-role, timeframe,
+Fibonacci ratio, formation volume and volume-at-price. Standing conclusion, now reached from
+a third direction: *prices the market recently traded at hold ~7pp better than prices it has
+not, and which traded price you pick has never mattered.*
+
+Also corrected: every `vs random` figure in Finding 4 rests on a control of **n≈1,750**
+(2σ ≈ ±1.7pp), so the weekly-high-vs-weekly-low ordering inside it was never a ranking.
+
+**Nothing shipped and no production behaviour was wrong** — levels remain swing-pivot-only,
+which this now supports. Research-layer only, no code change, no redeploy.
+`docs/research/level-daily-close.md`, `ml-training/level_daily_close_test.py`.
+
 ### 2026-08-27d — Two review rounds on the same day's work: 15 + 15 findings, one of them mine-and-new
 
 Two max-effort reviews of the Phase 1/2 commits. Every finding acted on was verified by execution
