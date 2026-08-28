@@ -68,6 +68,38 @@ Conclusion: adding **daily closes** as a level source is defensible (best class,
 edge over existing 4H swings). Adding **weekly** is not justified — weekly close helps only
 on stocks, weekly H/L not at all on crypto. NOT YET IMPLEMENTED — pending decision.
 
+> ## ⚠️ FINDING 4 WITHDRAWN (2026-08-28) — see [[level-daily-close]]
+>
+> The daily-close conclusion above **does not survive a matched control** and is retracted.
+> The comparison is against random lines 0.5-3.0 ATR from price, so a daily close differs
+> from the control in three ways at once — visited price, distance 0 at formation, day
+> boundary — and only the third is the hypothesis. Exactly the confound that killed the
+> Fibonacci class in Finding 5.
+>
+> Decisive contrast (every 4H close evaluated as a level, split by whether its bar is the
+> last of the day — perfectly matched, exhaustive):
+>
+> | | daily close | other 4H close | gap |
+> |---|---:|---:|---:|
+> | crypto | 91.36% | **91.62%** | **−0.26pp**, 4/10 periods |
+> | stock | 85.65% | 83.99% | +1.66pp, 10/10 periods |
+>
+> **On crypto an arbitrary 4H close scores +6.95pp vs the random control — BETTER than the
+> daily close (+6.69) and better than the 4H swing (+5.13).** The +5.8pp was a visited-price
+> artifact. All six hour-of-day buckets sit in a 0.85pp band with the boundary hour second
+> worst.
+>
+> The stock gap IS real at 10/10 periods, but splitting by within-session position shows it
+> is the **afternoon bar vs the morning bar** (+1.70pp, reproducing the gap almost exactly) —
+> an intraday effect, not a calendar one. It does not generalise to a 24/7 tape.
+>
+> Also note: the `vs random` column above rests on a control of **n≈1,750** (2σ ≈ ±1.7pp),
+> so the weekly-high/weekly-low ordering inside it was never a ranking.
+>
+> Nothing shipped on Finding 4 — it sat unimplemented for three months — so no production
+> behaviour was wrong. Levels remain swing-pivot-only, which this now supports.
+
+
 ## Finding 5 — Fibonacci ratios add NOTHING (location artifact)
 `ml-training/level_validation_fib.py`. Fib retracement levels first looked great (crypto
 +6.7pp, even beating 4H swings), with 0.618 nominally best. But the ratios were nearly

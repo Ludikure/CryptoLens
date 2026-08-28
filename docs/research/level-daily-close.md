@@ -121,6 +121,89 @@ the refinement cannot be mistaken for a post-hoc slice.
 
 If prediction 1 is wrong and the bar is met, that is a genuine finding and it ships.
 
-## RESULT
+## RESULT — NOT SUPPORTED. All three criteria fail.
 
-*(empty — to be filled after the run)*
+`ml-training/level_daily_close_test.py`, full sample, both markets. Finding 4's original
+table reproduces EXACTLY first (91.4 / 89.8 / 88.6 / 87.1 / 85.9 crypto), so this is a
+control problem, not an arithmetic one.
+
+### The decisive contrast: every 4H close as a level, split by day boundary
+
+| | HOLD | n | eff_n (deff) |
+|---|---:|---:|---:|
+| **CRYPTO** daily close (day-boundary close) | 91.36% | 108,323 | 32,404 (3.3) |
+| **CRYPTO** other 4H close (NOT a boundary) | **91.62%** | 540,280 | 90,470 (6.0) |
+| | **GAP −0.26pp** | | ~1.4 SE, wrong sign |
+| **STOCK** daily close | 85.65% | 158,698 | 41,594 (3.8) |
+| **STOCK** other 4H close | 83.99% | 159,738 | 39,960 (4.0) |
+| | **GAP +1.66pp** | | ~6.6 SE |
+
+| criterion | bar | crypto | verdict |
+|---|---|---|---|
+| (a) magnitude vs matched control | ≥ +2.0pp | **−0.26pp** | **FAIL** |
+| (b) period consistency | ≥ 7 of 9 | **4 of 10** | **FAIL** |
+| (c) replication, same sign | both markets | crypto −0.26 / stock +1.66 | **FAIL** |
+
+### What the +5.8pp actually was
+
+**A visited-price artifact, as predicted.** Against the original random-line control, an
+*arbitrary* 4H close scores **+6.95pp** — larger than the daily close's +6.69pp and larger
+than the 4H swing's +5.13pp. Everything the market has recently closed at holds better than
+a line it has not traded at. The calendar boundary contributes nothing on crypto.
+
+All six hour buckets land in a 0.85pp band, and the boundary hour is the **second worst**:
+
+```
+00:00 91.40   04:00 91.20   08:00 91.65
+12:00 92.05   16:00 91.79   20:00 91.36  <- the day boundary
+```
+
+Prediction 4 held: the six hours are within noise and the boundary hour does not stand alone.
+
+### The stock effect is real, and it is not a calendar effect
+
++1.66pp at **10 of 10 periods** is not noise. But splitting by position within the session
+(2-bar sessions only, so DST and half-days cannot smear it) locates it exactly:
+
+```
+morning bar   (session OPEN half)   HOLD 83.94%   n 158,888
+afternoon bar (session CLOSE half)  HOLD 85.65%   n 157,114
+                                    GAP  +1.70pp
+```
+
++1.70pp reproduces the +1.66pp boundary gap almost exactly, so on stocks **"daily close
+level" and "the afternoon bar" are the same object**. The mechanism is intraday — the
+morning bar contains the open, the gap and the session's highest volatility, so a level
+formed at its close is likelier to be run through — not "a daily level carries weight".
+
+**Prediction 2 held, and it is the informative one.** I predicted that if the effect were
+real it should be STRONGER on stocks, which have a genuine session close, than on crypto,
+where the daily boundary is an arbitrary UTC cut on a 24/7 tape. It is: +1.66pp vs −0.26pp.
+A boundary effect that appears only where a real session boundary exists, and vanishes where
+the boundary is a convention, is evidence the convention was never the mechanism.
+
+### Two corrections this forces
+
+1. **Finding 4's headline is withdrawn.** "Daily closes are the strongest class, beating the
+   4H swings the app already uses… the one genuinely actionable find" does not survive a
+   matched control. Nothing shipped on it (it sat NOT YET IMPLEMENTED for three months),
+   so no production behaviour was ever wrong — but it was one decision away from being.
+2. **The `vs random` column in Finding 4 is weaker than it reads.** Every "+X pp" there is
+   measured against a control of **n≈1,750** — se 0.86pp crypto / 0.96pp stock, so a 2σ
+   band of ±1.7-1.9pp. The entire weekly-high-vs-weekly-low ordering (+0.3 vs +1.5) sits
+   inside that band and should never have been read as a ranking.
+
+### What survives
+
+Finding 2 (levels beat random lines) and Finding 3 (it is a minor effect) both stand — this
+sharpens them. The right statement is now: **prices the market has recently traded at hold
+better than prices it has not, by ~7pp, and no way of selecting *which* traded price — day
+boundary, week boundary, swing pivot, Fibonacci ratio, test count, flip role — has ever
+measured better than the others.** Seven selection metrics tested, seven flat.
+
+That is the same conclusion as Findings 1 and 5, reached from a third direction.
+
+### Cost of this test
+
+One pre-declaration, one script, ~15 minutes of compute. It closed a three-month-old
+"pending decision" that would otherwise have shipped a level source on a control artifact.

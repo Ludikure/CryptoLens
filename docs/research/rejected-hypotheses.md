@@ -265,3 +265,36 @@ accepted cost WITH evidence rather than an open question.
 
 Caveat recorded: the pre-declared bands (TP1 1.0 ATR vs 2.0 ATR stop) are unfavourable geometry, so
 this rejects the window-as-traded, not the existence of an edge in MIXED bars.
+
+## Daily-close levels as a level source — REJECTED 2026-08-28
+
+**Claim:** daily closes are the strongest S/R class (crypto +5.8pp vs random, beating the
+4H swings the app uses); adding them as a level source is "the one genuinely actionable
+find" of [[strategy-levels]] Finding 4.
+
+**Killed by:** a matched control. The original comparison was against random lines 0.5-3.0
+ATR from price, which differ from a daily close in three ways at once — visited price,
+distance 0 at formation, day boundary — only the last being the hypothesis. Evaluating
+EVERY 4H close as a level and splitting on the day boundary matches all three:
+
+| | daily close | other 4H close | gap | periods+ |
+|---|---:|---:|---:|---:|
+| crypto | 91.36% | **91.62%** | **−0.26pp** | 4/10 |
+| stock | 85.65% | 83.99% | +1.66pp | 10/10 |
+
+Pre-declared bar was ≥2.0pp on crypto AND ≥7/9 periods AND same sign on both markets.
+**All three fail.** An arbitrary 4H close beats the random control by **+6.95pp**, more than
+the daily close (+6.69) or the 4H swing (+5.13) — the effect is "the market traded here",
+not "a day ended here". All six hour buckets lie in a 0.85pp band, boundary hour second worst.
+
+The stock gap is real (10/10) but is the **afternoon bar vs the morning bar** (+1.70pp by
+within-session position, reproducing it) — intraday, not calendar, and structurally absent
+from a 24/7 tape.
+
+**Seventh level-selection metric to measure flat**, after test-count, flip-role, timeframe,
+Fibonacci ratio, formation volume and volume-at-price. The standing conclusion: prices the
+market recently traded at hold ~7pp better than prices it has not, and *which* traded price
+you pick has never mattered.
+
+**Nothing shipped** — it had sat NOT YET IMPLEMENTED for three months. Full write-up:
+[[level-daily-close]]. Script: `ml-training/level_daily_close_test.py`.
