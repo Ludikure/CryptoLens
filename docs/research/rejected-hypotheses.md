@@ -332,3 +332,38 @@ afternoon bar and the control is ~50% afternoon, so the +1.70pp afternoon effect
 timeframe, Fibonacci ratio, formation volume, volume-at-price and the day boundary.
 
 Full write-up: [[level-monthly-extremes]]. Script: `ml-training/level_monthly_test.py`.
+
+## Sloped trendlines / channels as a level source — REJECTED 2026-08-28
+
+**Claim:** price bounces between two sloping trendlines; channels are levels.
+
+**Matched control:** a HORIZONTAL line at the same anchor pivot — the incumbent the app
+already builds. Secondary control: the same anchor with a RANDOM slope.
+
+| comparison | crypto | stock |
+|---|---|---|
+| channel vs horizontal | **−1.12pp** [−1.36, −0.86] | **−1.75pp** [−2.17, −1.33] |
+| periods positive | **0 of 10** | 1 of 10 (n=64 stub) |
+| paired subset | −0.33pp [−0.62, −0.05] | −0.81pp [−1.28, −0.34] |
+| channel vs **random slope** | −0.21pp [−0.48, +0.07] | **+0.03pp** [−0.40, +0.45] |
+
+**The sloped line is significantly WORSE than a flat line through the same pivot, on both
+markets, in 19 of 20 half-year periods.** First of nine level tests where the tested object
+underperforms the incumbent rather than matching it.
+
+**The trap, in its purest form:** a fitted trendline beats a *random line* by +4.09pp
+(crypto) / +4.23pp (stock). Measured against nothing it looks like a large, consistent, real
+effect — which is presumably why the technique is universally believed. Against the right
+control it loses.
+
+**The fitted slope carries no information**: indistinguishable from a randomly drawn slope
+through the same anchor on both markets. The anchor does all the work.
+
+A projected line is also ~21-24% less often reached than the horizontal from the same anchor.
+Regression channels lose to horizontal too (89.32 vs 89.81 crypto; 83.97 vs 85.09 stock).
+
+Ninth level-selection metric to measure flat, and the first to measure negative. No code
+change — the app has no channel concept and the prompt never mentions one; the value is
+preventive. Full write-up: [[level-trend-channels]]. Script:
+`ml-training/level_channel_test.py`.
+

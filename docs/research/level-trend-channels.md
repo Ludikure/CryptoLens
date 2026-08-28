@@ -94,6 +94,95 @@ the fitted slope carries real information.
    the random-line floor. Reported as a gradient, since a decay curve is more informative than
    a single pooled number.
 
-## RESULT
+## RESULT — NOT SUPPORTED on both markets, and the gap is significantly NEGATIVE
 
-*(empty — to be filled after the run)*
+`ml-training/level_channel_test.py`. Slope-0 parity gate passed first (2,800 cases, 0
+mismatches vs `LV.forward_outcome`), so these numbers are directly comparable to all eight
+previous level tests.
+
+| arm | crypto HOLD | vs random line | stock HOLD | vs random line |
+|---|---:|---:|---:|---:|
+| **horizontal at same anchor** | **89.81%** | +5.20pp | **85.09%** | +5.98pp |
+| regression channel | 89.32% | +4.71pp | 83.97% | +4.86pp |
+| random slope | 88.90% | +4.29pp | 83.32% | +4.21pp |
+| **channel (fitted slope)** | 88.69% | +4.09pp | 83.34% | +4.23pp |
+| random line 0.5-3.0 ATR | 84.61% | — | 79.11% | — |
+
+| comparison | crypto | stock |
+|---|---|---|
+| **channel vs horizontal** (the ship bar) | **−1.12pp** [−1.36, −0.86] | **−1.75pp** [−2.17, −1.33] |
+| periods positive | **0 of 10** | 1 of 10 * |
+| paired, both arms resolved | −0.33pp [−0.62, −0.05] | −0.81pp [−1.28, −0.34] |
+| **channel vs random slope** | −0.21pp [−0.48, +0.07] | **+0.03pp** [−0.40, +0.45] |
+
+\* the single positive stock period is 2021H2 at n=64, a stub at the start of the tape.
+
+All three ship criteria fail, and not by falling short — **the sloped line is significantly
+WORSE than a flat line through the same pivot, on both markets, in 19 of 20 half-year
+periods.** This is the first of the nine level tests where the tested object underperforms
+the incumbent rather than merely matching it.
+
+### This is the exact shape of the trap the whole series exists to catch
+
+A fitted trendline beats a random line by **+4.09pp on crypto and +4.23pp on stocks**.
+Measured against nothing — which is how chart TA is normally "verified" — you would conclude
+trendlines work, and conclude it from a large, consistent, real effect. Against the control
+that matters they are strictly worse. **The anchor pivot does all the work; the slope
+subtracts from it.**
+
+### The fitted slope is worth exactly nothing
+
+−0.21pp on crypto and **+0.03pp** on stocks against a *randomly drawn* slope through the same
+anchor, both CIs straddling zero. Prediction 2 held, and this is the sharpest single result in
+the test: the skill the technique is sold on — drawing the line correctly through the right
+two pivots — **carries no information at all.** A random slope performs the same.
+
+### A projected line is also less often actionable
+
+From identical anchors, the channel arm resolved 85,014 events against the horizontal's
+107,531 on crypto (−21%), and 42,083 against 55,233 on stocks (−24%). Roughly a fifth of the
+time price simply never reaches the projected line. That gap is why the pooled and paired
+estimates differ, and the **paired** numbers (−0.33pp / −0.81pp) are the honest ones — still
+significantly negative, so selection explains part of the pooled gap but not the sign.
+
+### Decay is level staleness, not slope drift
+
+Prediction 4 was half right. Absolute hold does fall as a line is evaluated further from its
+anchor (crypto channel 88.86 → 87.84 → 86.46 toward the 84.61 random floor) — but the
+horizontal decays in lockstep (90.08 → 88.92 → 87.90), so the **gap is flat** at −1.22 /
+−1.08 / −1.43. Levels of every kind go stale with distance from formation; the slope is not
+what is decaying.
+
+### Predictions scored
+
+| # | prediction | outcome |
+|---|---|---|
+| 1 | channel will not clear +2.0pp over horizontal | **held** — it is negative |
+| 2 | random slope will land close to fitted | **held exactly** (+0.03pp on stocks) |
+| 3 | if anything shows, it shows on stocks | **failed** — stocks are the MORE negative market |
+| 4 | lines decay with projection distance | **half** — absolute yes, gap no |
+
+**Calibration note, recorded against myself.** The pre-declaration argued this had the
+*weakest* null prior of the nine, because a trendline is a genuinely different object that
+cannot inherit the visited-price effect and would imply a real coordination mechanism. That
+reasoning was sound and the conclusion was wrong: it is not merely absent, it is the only one
+of the nine that is significantly *harmful*. Naming a plausible mechanism in advance did not
+make the effect more likely, and I should weight that argument less next time.
+
+### Verdict
+
+Nothing ships. **Ninth level-selection metric to measure flat, and the first to measure
+negative.** The standing conclusion is unchanged and now stronger:
+
+> Prices the market has recently traded at hold ~5-6pp better than prices it has not. No
+> method of selecting *which* traded price has ever measured better than the others — and
+> extending a level off its anchor with a slope makes it measurably worse.
+
+### Product implication
+
+Confirms an existing choice rather than changing one. The app builds horizontal swing levels
+(`supportResistance` in `indicators-full.ts`) and has no channel concept; grep confirms the
+LLM system prompt never mentions trendlines, channels, wedges or triangles either (the
+`sloping` hits are the 200D EMA). **No code change.** The value is preventive: a channel
+overlay is an obvious-looking feature request, and this is the measurement that says building
+one would make the level layer worse, not better.

@@ -609,6 +609,63 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28c — Trend channels rejected: the slope is worse than no slope, and worth nothing when fitted
+
+User asked about sloping channels. **Never tested** — zero hits in the vault, the graveyard,
+the code or the 110 features. It is the most-used piece of chart TA this project had never
+measured.
+
+Pre-declared that this was NOT the ninth repeat: the previous eight all asked "which VISITED
+price is special" and always answered *none*, leaving one fact standing — traded prices hold
+~5-7pp better than untraded ones. A trendline's projected value is generally a price the
+market has **never traded**, so it cannot inherit that effect, and a positive result would
+imply a real coordination mechanism. **Recorded in advance that my null prior was weaker here
+than in any of the previous eight.** It was the wrong call, and instructively so.
+
+Decisive control: a HORIZONTAL line at the same anchor pivot — the incumbent.
+
+| comparison | crypto | stock |
+|---|---|---|
+| channel vs horizontal | **−1.12pp** [−1.36, −0.86] | **−1.75pp** [−2.17, −1.33] |
+| periods positive | **0 of 10** | 1 of 10 (n=64 stub) |
+| paired, both arms resolved | −0.33pp [−0.62, −0.05] | −0.81pp [−1.28, −0.34] |
+| channel vs **random slope** | −0.21pp [−0.48, +0.07] | **+0.03pp** [−0.40, +0.45] |
+
+**The sloped line is significantly WORSE than a flat line through the same pivot, on both
+markets, in 19 of 20 half-year periods** — the first of nine level tests where the tested
+object underperforms the incumbent rather than merely matching it.
+
+**This is the trap in its purest form.** A fitted trendline beats a *random line* by +4.09pp
+on crypto and +4.23pp on stocks. Measured against nothing — which is how chart TA is normally
+"verified" — that is a large, consistent, real-looking effect, and presumably why the
+technique is universally believed. Against the control that matters it loses. **The anchor
+pivot does all the work; the slope subtracts.**
+
+**The fitted slope carries no information at all**: indistinguishable from a randomly drawn
+slope through the same anchor on both markets (+0.03pp on stocks). The skill the technique is
+sold on — drawing the line correctly through the right two pivots — measures at zero.
+
+Also: a projected line is **21-24% less often reached** than the horizontal from identical
+anchors, so it is less often actionable as well as less reliable. Regression channels lose to
+horizontal too. Decay with projection distance is level staleness, not slope drift — both arms
+decay in lockstep, so the gap is flat.
+
+**Method note.** The sloped outcome function is a reconstruction of `LV.forward_outcome`, so
+per the 2026-08-25j rule the script **refuses to run** unless it reproduces the original
+exactly at slope 0 (2,800 cases, 0 mismatches). Two of my own harness defects were caught
+before trusting the output: a hardcoded projection distance that would have made the decay
+table degenerate, and the fact that the two arms need not resolve the same events — a
+projected line can be unreachable while the horizontal at the same anchor is hit — which
+would have made the pooled gap partly a selection artifact. The paired subset is now reported
+alongside and is the honest number.
+
+**No code change.** The app builds horizontal swing levels and has no channel concept; the
+LLM system prompt never mentions trendlines, channels, wedges or triangles either (grep
+verified — the `sloping` hits are the 200D EMA). The value is preventive: a channel overlay is
+an obvious-looking feature request, and this is the measurement saying it would make the level
+layer worse. `docs/research/level-trend-channels.md`,
+`ml-training/level_channel_test.py`. Research-layer only, no redeploy.
+
 ### 2026-08-28b — Monthly extremes rejected too; and a variance estimator that hid its own result
 
 User asked for monthly to be tested after the daily-close rejection. Matched control: the
