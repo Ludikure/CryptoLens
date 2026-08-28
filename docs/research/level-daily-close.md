@@ -89,6 +89,20 @@ state effective n**, per the standing rule from [[strategy-levels]] Finding 6 / 
 2026-08-25c divergence correction, where dependent observations nearly produced a finding
 three separate times. Clustering: by (symbol, half-year) block.
 
+## Design refinement, added before running (on smoke-test evidence, no results seen)
+
+The smoke test showed the day-boundary arm is **entirely one hour of the day** — on crypto,
+every boundary bar closes at 00:00 UTC (the 20:00-24:00 bar), and the other five arms are
+hours 00/04/08/12/16. That is a confound in this test's own design: the project already
+knows time-of-day carries signal (`hourBucket` is a live feature, and `dayOfWeek` is crypto's
+TOP permutation feature at +0.048, [[feature-pruning]]). A raw boundary-vs-rest contrast
+could be an hour-of-day effect wearing a calendar hat.
+
+Stronger form, adopted: **evaluate all six hour buckets as their own arms.** If the day
+boundary is the mechanism, its hour stands ALONE above the other five. If the six are flat,
+or ordered by something other than the boundary, it is not. Recorded here before the run so
+the refinement cannot be mistaken for a post-hoc slice.
+
 ## Predictions, recorded in advance
 
 1. **The daily-close advantage collapses against the random-4H-close control** — I expect
@@ -102,6 +116,8 @@ three separate times. Clustering: by (symbol, half-year) block.
    market that does not is evidence the mechanism is not what is being measured.**
 3. Distance-matching alone will close a meaningful part of the gap, because hold rate should
    rise as a line sits nearer to price.
+4. **The six hour buckets will be within noise of each other**, and the boundary hour will
+   not stand alone.
 
 If prediction 1 is wrong and the bar is met, that is a genuine finding and it ships.
 
