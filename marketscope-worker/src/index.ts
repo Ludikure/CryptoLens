@@ -9,6 +9,7 @@ import { aggregate1HTo4H_ET } from './aggregation';
 import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
 import { registerTrackedSetups, resolveTrackedSetups, readActiveSetupsForPrompt, readTrackedSetups, voidInvalidGeometrySetups } from './outcome-tracking';
+import { logOpportunities, resolveOpportunityLog, createJournalEntry, updateJournalEntry, deleteJournalEntry, computeAttribution } from './journal';
 import { forecastVol, bandMultipliers } from './vol';
 import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
@@ -2377,6 +2378,62 @@ export default {
       return json(rows.results);
     }
 
+    // === Journal + attribution (Phase 3, 2026-08-28) ===
+    // What the user DID, set against what the system PROPOSED. Definitions are pre-declared in
+    // docs/research/journal-attribution.md; the verdict rule renders nothing until the bar is met.
+    if (path === '/journal' && request.method === 'POST') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        const b = await request.json() as any;
+        const symbol = sanitizeSymbol(b.symbol);
+        const direction = b.direction === 'SHORT' ? 'SHORT' : b.direction === 'LONG' ? 'LONG' : null;
+        const fill = Number(b.fillPrice);
+        const source = ['setup', 'opportunity', 'manual'].includes(b.source) ? b.source : 'manual';
+        if (!symbol || !direction || !Number.isFinite(fill) || fill <= 0) return json({ error: 'symbol, direction and a positive fillPrice are required' }, 400);
+        const num = (v: any) => (v == null || v === '') ? null : (Number.isFinite(Number(v)) ? Number(v) : null);
+        const out = await createJournalEntry(env, deviceId, {
+          source, refId: typeof b.refId === 'string' ? b.refId : null,
+          symbol, isCrypto: symbol.endsWith('USDT'), direction,
+          proposedEntry: num(b.proposedEntry), proposedStop: num(b.proposedStop), proposedTarget: num(b.proposedTarget),
+          fillPrice: fill, contracts: num(b.contracts), riskUsd: num(b.riskUsd),
+          note: typeof b.note === 'string' ? b.note.slice(0, 2000) : null,
+        }, Date.now());
+        return json({ ok: true, ...out });
+      } catch { return json({ error: 'Invalid request' }, 400); }
+    }
+    if (path === '/journal' && request.method === 'PUT') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        const b = await request.json() as any;
+        if (typeof b.id !== 'string') return json({ error: 'Missing id' }, 400);
+        const num = (v: any) => v === undefined ? undefined : ((v == null || v === '') ? null : (Number.isFinite(Number(v)) ? Number(v) : null));
+        const ok = await updateJournalEntry(env, deviceId, {
+          id: b.id, fillPrice: num(b.fillPrice) ?? undefined, contracts: num(b.contracts), riskUsd: num(b.riskUsd),
+          note: b.note === undefined ? undefined : (typeof b.note === 'string' ? b.note.slice(0, 2000) : null),
+          exitPrice: num(b.exitPrice), exitAt: num(b.exitAt),
+          exitReason: b.exitReason === undefined ? undefined : (typeof b.exitReason === 'string' ? b.exitReason.slice(0, 200) : null),
+          reopen: b.reopen === true,
+        }, Date.now());
+        return ok ? json({ ok: true }) : json({ error: 'Not found' }, 404);
+      } catch { return json({ error: 'Invalid request' }, 400); }
+    }
+    if (path === '/journal' && request.method === 'DELETE') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const id = url.searchParams.get('id');
+      if (!id) return json({ error: 'Missing id' }, 400);
+      const ok = await deleteJournalEntry(env, deviceId, id);
+      return ok ? json({ ok: true }) : json({ error: 'Not found' }, 404);
+    }
+    if ((path === '/journal' || path === '/attribution') && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        return json(await computeAttribution(env, deviceId, Date.now()));
+      } catch (e) {
+        console.log(`[journal] attribution failed: ${e}`);
+        return json({ error: 'attribution failed' }, 500);
+      }
+    }
+
     // === Tracked Setups (D1, server-resolved — 2026-07-09 thin-client cutover) ===
     // Full per-device lifecycle rows (setups + flats) for the iOS dashboard/active-trades UI.
     // The cron registers (at /full-analysis) and resolves these; iOS is a read-only display.
@@ -2783,6 +2840,30 @@ export default {
         // fake one promotes withheld trades back onto the screen as blue actionable cards.
         const fearGreedRaw = symbols.map(s2 => preds[s2]?.features?.fearGreedIndex)
           .find((v: unknown) => typeof v === 'number' && Number.isFinite(v) && v !== 50);
+
+        // Phase 3 forward log: every row this device was shown (and the ones that missed the floor,
+        // flagged shown=0) is recorded so it can be graded at +72h and set against what the user
+        // actually did. Detached — a D1 hiccup must never delay the book. Skipped when the request
+        // carries no device id (a probe), since "proposed to nobody" is not a population.
+        if (deviceId) {
+          const heads = excursionModelInfo().heads as any;
+          const shownKeys = new Set(shown.map(a => `${a.candidate.asset}|${a.candidate.direction}`));
+          const rows = result.allocation.accepted.map(a => ({
+            symbol: a.candidate.asset, isCrypto: a.candidate.asset.endsWith('USDT'),
+            direction: a.candidate.direction as 'LONG' | 'SHORT',
+            entry: a.candidate.entryPrice, stop: a.candidate.stopPrice, target: a.candidate.targetPrice,
+            expectedValueR: a.candidate.payoff.expectedValueR,
+            grossR: a.candidate.payoff.expectedValueR + feeBurden(a.candidate),
+            feeBurdenR: feeBurden(a.candidate), winProb: a.candidate.payoff.winProbability,
+            headShippable: (a.candidate.direction === 'LONG' ? heads?.long?.shippable : heads?.short?.shippable) ?? null,
+            crashMultiplier: a.sizing.crashMultiplier,
+            fearGreed: typeof fearGreedRaw === 'number' ? fearGreedRaw : null,
+            shown: shownKeys.has(`${a.candidate.asset}|${a.candidate.direction}`),
+          }));
+          void logOpportunities(env, deviceId, rows,
+            { id: structure.id, targetR: structure.targetR, holdingHorizonHours: structure.holdingHorizonHours }, nowMs)
+            .catch(e => console.log(`[journal] opportunity log failed: ${e}`));
+        }
 
         return json({
           at: nowMs,
@@ -3488,6 +3569,15 @@ async function checkAllDeviceScores(env: Env) {
     });
   } catch (e) {
     console.log(`[tracked] resolve error: ${e}`);
+  }
+
+  // Phase 3: grade scanner rows that have reached their +72h horizon, from the box's own 1h
+  // archive. Fault-isolated for the same reason as the resolver above.
+  try {
+    const g = await resolveOpportunityLog(env, Date.now());
+    if (g.graded || g.ungraded) console.log(`[journal] graded ${g.graded} scanner rows${g.ungraded ? `, ${g.ungraded} ungraded` : ''}`);
+  } catch (e) {
+    console.log(`[journal] resolve error: ${e}`);
   }
 
   for (const [deviceId, watchlist] of watchlistsByDevice) {
