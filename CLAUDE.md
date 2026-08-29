@@ -609,6 +609,48 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28h — Paper trader shipped: MarketScope signal → simulated order → real Coinbase book
+
+User: *"To do this diligently, bot is needed. No one can be watching the app all the time"*, then
+proposed the better architecture — simulate orders against Coinbase's REAL market data with a
+virtual portfolio, no live orders. Built and deployed the same night (`587f3367`).
+
+**What it is** (`server/paper-trader.ts` + `src/paper/{book,contracts,sim,intents}.ts`): every 4H
+close +3m UTC it calls **`buildOpportunityBook()` — the `/opportunities` handler's core, extracted
+so the bot runs EXACTLY the code the app runs** — applies the same 0.05R floor and greed cancel the
+app applies, and sells into the live Coinbase bids, sized in whole contracts off the FILLED price.
+Continuously, every public trade print drives stops and targets; a 15s clock drives 72h exits;
+every event is persisted (`paper_positions`/`paper_events`) and pushed. Restarts restore from D1.
+
+**Why this beats the shadow mode I proposed:** it measures the two costs the backtest cannot —
+spread and depth at your size, stop slippage when price runs through, on the venue you would
+actually trade. Coinbase's "sandbox" is NOT this: its own docs say *"all responses are static and
+pre-defined"* — a wire-format test, not paper trading.
+
+**Fill rules, all conservative:** a stop TRIGGERS on a print at/above it and FILLS by walking the
+asks, never better than the triggering print (a print at P proves the market traded at P); a
+target fills only once prints at/under it accumulate OUR size — a touch is not a fill; fees are
+the measured 0.07%/side plus Coinbase's flat $0.12/contract/side. Stated limitation: a paper order
+removes no liquidity and holds no queue priority — optimistic in exactly one direction.
+
+**The venue as it actually is**, verified against the products API: BTC/ETH have the 2030
+perp-style nanos (`BIP-20DEC30-CDE` 0.01 BTC, `ETP-20DEC30-CDE` 0.1 ETH); **SOL/XRP/ADA exist only
+as monthly dated futures** (×5, ×500, ×1000 — front month, never one expiring inside the hold);
+**DOGE has no US product**. The true perps for all six are on INTX, closed to US persons, and are
+never selected. Market data is public: `wss://advanced-trade-ws.coinbase.com` `level2` +
+`market_trades`, no key — **the box's threat model is unchanged**.
+
+**Live 40 seconds after deploy:** feed healthy, 1,425 messages, all five books ready with real
+spreads — BTC 1.9 bps, ETH 4.1, XRP 8.6, SOL 10.5, **ADA 14.8** (thin, as its $540k/day volume
+predicted; the walk will price it). `GET/POST /paper`: state, open with live marks, closed, Tier 1
+stats beside the +0.22R backtest reference, feed health; enable/disable, clearHalt, closeId,
+runNow. Halts new entries at −25% drawdown and pages. `PAPER_TRADER=0` disables at boot.
+
+Also: `pushToActiveDevices()` exported for server-side processes. 16 new tests; 909 green. **The
+decision point stands** (memory `forward-log-decision-2026-11`): compare paper to backtest around
+late November. **Not built yet:** the Record-tab "Paper bot" section on iOS — the endpoint is
+ready for it.
+
 ### 2026-08-28g — An LLM choosing take/skip: rejected on 1,825 blinded proposals, and the card number beat it
 
 User: *"Can we backtest something like this but instead of me acting use AI to determine if trade
