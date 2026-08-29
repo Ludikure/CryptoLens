@@ -16,7 +16,7 @@ OUT = os.path.join(HERE, 'llm_selection')
 B = 2000
 SEED = 7
 BAR_GAP = 0.05
-BAR_PERIODS = (9, 13)
+BAR_PERIODS = (8, 11)
 BAR_COVERAGE = 0.20
 HORIZON_S = 72 * 3600
 

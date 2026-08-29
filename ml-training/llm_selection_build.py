@@ -48,8 +48,8 @@ def three_way_ev(pt, target_r=PRIMARY_R):
 
 
 def half(ts_s):
-    d = pd.to_datetime(ts_s, unit='s')
-    return d.year.astype(str) + np.where(d.month <= 6, 'H1', 'H2')
+    d = pd.to_datetime(pd.Series(np.asarray(ts_s)), unit='s')
+    return (d.dt.year.astype(str) + np.where(d.dt.month <= 6, 'H1', 'H2')).values
 
 
 def oof_short_scores(df, feats):
@@ -74,14 +74,35 @@ def oof_short_scores(df, feats):
     return df
 
 
+KLINES_LONG = os.path.join(HERE, 'vision_backfill', 'klines_long')
+
+
 def candle_index():
+    """28 four-hour closes per dossier. The 4H archive starts 2021-12-20 and silently dropped every
+    2021H1 row on the first build (1,825 -> 1,472); the hourly Vision klines start 2020-10, so they
+    are resampled to UTC-aligned 4H bars (close = last hourly close in the bucket) and the 4H file
+    is the fallback for a symbol they do not cover."""
+    idx = {}
+    if os.path.isdir(KLINES_LONG):
+        for fn in sorted(os.listdir(KLINES_LONG)):
+            if not fn.endswith('.csv'):
+                continue
+            sym = fn.replace('.csv', '')
+            d = pd.read_csv(os.path.join(KLINES_LONG, fn))
+            ts = d['ts'].values.astype(np.int64)
+            ts = ts // 1000 if ts.max() > 1e12 else ts
+            b = (ts // 14400) * 14400
+            g = pd.DataFrame({'b': b, 'close': d['close'].values.astype(float)}).groupby('b')['close'].last()
+            # bucket b spans [b, b+4h); the 4H bar CLOSES at b+4h, which is the timestamp the
+            # feature row carries for that bar's close
+            idx[sym] = {'close': g.values, 't': (g.index.values + 14400).astype(np.int64)}
     c = pd.read_csv(CANDLES)
     t = c['timestamp'].values.astype(np.int64)
     t = t // 1000 if t.max() > 1e12 else t
     c['t'] = t
-    idx = {}
     for sym, g in c.sort_values('t').groupby('symbol'):
-        idx[sym] = {'close': g['close'].values.astype(float), 't': g['t'].values.astype(np.int64)}
+        if sym not in idx:
+            idx[sym] = {'close': g['close'].values.astype(float), 't': g['t'].values.astype(np.int64)}
     return idx
 
 
@@ -98,8 +119,8 @@ SYSTEM = ("You are the final risk check on a systematic crypto SHORT. A model ha
           "Answer in JSON only: {\"decision\":\"TAKE\"|\"SKIP\",\"confidence\":0-100,\"reason\":\"<=12 words\"}.")
 
 TAIL = ("\n\nPROPOSED TRADE: SHORT at the current price. Stop 1 ATR above entry. Target 5 ATR below entry "
-        "(5R). Time limit 72 hours. Historically about 1 in 13 of these reach the target, most stop out "
-        "at -1R, and about 1 in 5 time out near +1.4R. Decide: TAKE or SKIP.")
+        "(5R). Time limit 72 hours. Historically about 1 in 10 of these reach the target, about 6 in 10 stop "
+        "out at -1R, and about 1 in 4 time out near +1.5R. Decide: TAKE or SKIP.")
 
 
 def dossier(r, closes):
@@ -119,7 +140,7 @@ def dossier(r, closes):
         f"structure {stk(g(r,'hStructBull'),g(r,'hStructBear'))} | RSI divergence {g(r,'hDivergence'):+.0f} | vol {g(r,'hVolumeRatio'):.1f}x\n"
         f"REGIME: code {g(r,'regimeCode'):.0f} | bars-since-change {g(r,'barsSinceRegimeChange'):.0f} | "
         f"TF-align {g(r,'tfAlignment'):+.0f} | momentum-align {g(r,'momentumAlignment'):+.0f} | structure-align {g(r,'structureAlignment'):+.0f}\n"
-        f"DERIVATIVES: funding {g(r,'fundingRateRaw')*100:+.3f}% | OI 6-bar chg {g(r,'oiChangePct'):+.1f}% | "
+        f"DERIVATIVES: funding {g(r,'fundingRateRaw'):+.3f}% | OI 6-bar chg {g(r,'oiChangePct'):+.1f}% | "
         f"taker buy/sell {g(r,'takerRatioRaw',1.0):.2f} | accounts long {g(r,'longPctRaw',50):.0f}% | basis {g(r,'basisPct'):+.2f}% | "
         f"funding-signal {g(r,'fundingSignal'):+.0f} | crowding {g(r,'crowdingSignal'):+.0f}\n"
         f"VOLUME PROFILE / LEVELS: dist-to-POC {g(r,'vpDistToPocATR'):+.1f} ATR | above-POC {yn(g(r,'vpAbovePoc'))} | "
@@ -141,8 +162,13 @@ def main():
              and not c.startswith(('f_fwd', 'f_trade')) and pd.api.types.is_numeric_dtype(df[c])]
     print(f'{len(df):,} rows, {len(feats)} features', flush=True)
 
-    print('walk-forward OOF SHORT scores:', flush=True)
-    df = oof_short_scores(df, feats)
+    cache = os.path.join(OUT, 'scored.pkl.gz')
+    if os.path.exists(cache):
+        df = pd.read_pickle(cache); print('scored frame loaded from cache', flush=True)
+    else:
+        print('walk-forward OOF SHORT scores:', flush=True)
+        df = oof_short_scores(df, feats)
+        df.to_pickle(cache)
     scored = df[df.p_short.notna()].copy()
 
     # Production scoring. LONG at base rate (head refused); SHORT from the model, ratio-scaled

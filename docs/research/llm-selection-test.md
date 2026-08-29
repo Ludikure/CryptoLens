@@ -63,8 +63,11 @@ User: the dossier (28 indexed 4H closes, daily/4H indicators, regime, derivative
 context — identical fields to `build_blinded_rich.py`) followed by:
 
 > PROPOSED TRADE: SHORT at the current price. Stop 1 ATR above entry. Target 5 ATR below entry
-> (5R). Time limit 72 hours. Historically about 1 in 13 of these reach the target, most stop out
-> at −1R, and about 1 in 5 time out near +1.4R. Decide: TAKE or SKIP.
+> (5R). Time limit 72 hours. Historically about 1 in 10 of these reach the target, about 6 in 10
+> stop out at −1R, and about 1 in 4 time out near +1.5R. Decide: TAKE or SKIP.
+
+*(Base-rate sentence corrected to the measured proposal population before any call — amendment 1
+below. The original read "1 in 13 … most stop out … 1 in 5 near +1.4R".)*
 
 The base-rate sentence is deliberate: a judge that does not know the payoff shape will skip
 everything, and "skips everything" is not a selection strategy, it is abstention.
@@ -86,8 +89,8 @@ An LLM judge becomes an automatic take/skip gate on the scanner only if **all fi
 1. **Magnitude**: selection gap ≥ **+0.05R** — one display floor's worth. A judge that cannot add
    what the floor demands is not adding a mechanism.
 2. **Significance**: the day-clustered CI excludes 0.
-3. **Period consistency**: the gap is positive in ≥ **9 of 13** half-years (counting half-years
-   with ≥ 20 rows in both arms).
+3. **Period consistency**: the gap is positive in ≥ **8 of 11** half-years (counting half-years
+   with ≥ 20 rows in both arms). *(Amended from 9 of 13 before any call — see below.)*
 4. **Beats the card**: the gap exceeds the card-number judge's gap. The LLM must add information
    over the number already displayed.
 5. **Coverage** ≥ 20% of proposals taken. Below that the arm is too thin to evaluate — the same
@@ -114,6 +117,23 @@ check reported alongside.
 Dossier ≈ 1.3k tokens, answer ≈ 60 tokens (JSON, no reasoning requested). 2,000 calls:
 DeepSeek v4-pro ≈ **$3–7**, Sonnet 5 ≈ **$10–13**. Account balance $36. Hard cap $30 in the runner,
 priced at peak rates so it can only come in under.
+
+## Pre-run amendments — made after building the sample, BEFORE any judge call
+
+Three corrections, each forced by looking at the sample rather than by any result:
+
+1. **Base-rate sentence.** The prompt said "1 in 13 reach the target … 1 in 5 time out near
+   +1.4R" — the pooled excursion numbers. The PROPOSAL population (post floor, post greed cancel)
+   measures **target 10.5%, stop 63.9%, timeout 25.6% at +1.50R**. The sentence now says "1 in 10 …
+   6 in 10 … 1 in 4 near +1.5R". A judge told the wrong base rate is being nudged toward SKIP.
+2. **Period bar.** The OOF population spans **11 half-years** (2021H1–2026H1; 2020 is the first
+   training block), not 13. "≥ 9 of 13" becomes **≥ 8 of 11** — the same 73%. 2024H1 holds only 43
+   proposals in the whole population (80% of its bars were greed-cancelled) and will not reach the
+   20-row minimum on either arm; it simply does not count.
+3. **Candle source.** The 4H archive starts 2021-12-20, which silently dropped all of 2021H1 and
+   most of 2021H2 on the first build (1,825 → 1,472 dossiers). The hourly Vision klines (2020-10
+   onward) are resampled to 4H instead. And `fundingRateRaw` is already in percent in the dataset
+   (median 0.01); the dossier had multiplied it by 100 again, printing "+50.000%".
 
 ## RESULT
 
