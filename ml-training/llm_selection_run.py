@@ -42,12 +42,17 @@ def call(judge, system, user):
     if not key:
         sys.exit(f'{j["key_env"]} not set')
     if judge == 'deepseek':
-        body = {'model': j['model'], 'temperature': 0, 'max_tokens': 200,
-                'response_format': {'type': 'json_object'},
+        # v4-pro is a reasoning model: with thinking on it spent a 200-token cap deliberating and
+        # returned empty content on 5 of 5 pilot rows. Thinking is disabled so both judges answer
+        # without deliberation (Sonnet's is off by default here); the cap is raised as a margin.
+        body = {'model': j['model'], 'temperature': 0, 'max_tokens': 300,
+                'response_format': {'type': 'json_object'}, 'thinking': {'type': 'disabled'},
                 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': user}]}
         headers = {'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'}
     else:
-        body = {'model': j['model'], 'max_tokens': 200, 'system': system,
+        # 300, not 200: Sonnet wrote reasons past the 12-word ask and 1 of 3 pilot rows was cut
+        # off mid-JSON. A truncated row is lost data, not a judgment.
+        body = {'model': j['model'], 'max_tokens': 300, 'system': system,
                 'messages': [{'role': 'user', 'content': user}]}
         headers = {'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json'}
     req = urllib.request.Request(j['url'], data=json.dumps(body).encode(), headers=headers, method='POST')
@@ -56,7 +61,8 @@ def call(judge, system, user):
             with urllib.request.urlopen(req, timeout=90) as resp:
                 data = json.loads(resp.read())
             if judge == 'deepseek':
-                text = data['choices'][0]['message']['content']
+                msg = data['choices'][0]['message']
+                text = msg.get('content') or msg.get('reasoning_content') or ''
                 u = data.get('usage', {})
                 tin, tout = u.get('prompt_tokens', 0), u.get('completion_tokens', 0)
             else:
@@ -65,6 +71,11 @@ def call(judge, system, user):
                 tin, tout = u.get('input_tokens', 0), u.get('output_tokens', 0)
             return text, tin, tout
         except urllib.error.HTTPError as e:
+            if e.code == 400 and judge == 'deepseek' and 'thinking' in body:
+                # an API that does not accept the switch: drop it and go on
+                body.pop('thinking', None)
+                req = urllib.request.Request(j['url'], data=json.dumps(body).encode(), headers=headers, method='POST')
+                continue
             if e.code in (429, 500, 502, 503, 529):
                 time.sleep(2 ** attempt)
                 continue
