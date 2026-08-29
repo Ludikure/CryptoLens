@@ -367,3 +367,28 @@ change — the app has no channel concept and the prompt never mentions one; the
 preventive. Full write-up: [[level-trend-channels]]. Script:
 `ml-training/level_channel_test.py`.
 
+## An LLM choosing take/skip over the scanner's proposals — REJECTED 2026-08-28
+
+**Claim:** an AI judge selecting which of the system's proposals to take beats taking them all.
+
+**Test:** 1,825 blinded proposals (symbol, date, price withheld; exactly the population the
+scanner would have shown — OOF SHORT head, base-rate LONG, floor, greed cancel), two judges at
+temperature 0 on a verbatim committed prompt, against take-all and against the EV already on the
+card. Pre-declared bar: gap ≥ +0.05R, day-clustered CI excludes 0, ≥ 8/11 half-years, beats the
+card, coverage ≥ 20%.
+
+| arm | coverage | gap vs take-all | CI | periods+ |
+|---|---:|---:|---|---:|
+| card number (top half by EV) | 50% | **+0.120** | [−0.028, +0.277] | **8/10** |
+| DeepSeek v4-pro TAKE | 30% | +0.007 | [−0.186, +0.216] | 7/10 |
+| Claude Sonnet 5 TAKE | **5%** | −0.023 | [−0.428, +0.401] | — |
+
+DeepSeek's picks ARE the population, in both directions. Sonnet declined to select (90 of
+1,825) even when told the structure is +EV and that skipping everything is abstention, and its
+picks did slightly worse. **The model's own EV number beat both** — a model trained on 110
+features outperforms a language model reading a printout of them.
+
+Cost ~$14. Nothing ships; the take/skip decision stays with the user and the journal measures
+it. Full write-up with amendments and scored predictions: [[llm-selection-test]]. Scripts:
+`ml-training/llm_selection_{build,run,analyze}.py`.
+

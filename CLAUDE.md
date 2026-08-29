@@ -609,6 +609,50 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28g — An LLM choosing take/skip: rejected on 1,825 blinded proposals, and the card number beat it
+
+User: *"Can we backtest something like this but instead of me acting use AI to determine if trade
+should be taken?"* Yes — and it is the better test, because n stops being the problem: the live
+journal needs ~200 trades a side, this got 1,825 in one evening for ~$14.
+
+Pre-declared (`docs/research/llm-selection-test.md`, prompt verbatim, four amendments recorded
+before any call). Population = exactly what the scanner would have shown, blinded (no symbol,
+date or price). Judges: take-all, the EV number already on the card (top half), DeepSeek v4-pro,
+Claude Sonnet 5 — both LLMs at temperature 0, thinking off, same dossier.
+
+| arm | coverage | mean net R | gap vs take-all | CI (day-clustered) | periods+ |
+|---|---:|---:|---:|---|---:|
+| take-all | 100% | +0.324 | — | — | — |
+| **card number** | 50% | **+0.444** | **+0.120** | [−0.028, +0.277] | **8/10** |
+| DeepSeek TAKE | 30% | +0.331 | +0.007 | [−0.186, +0.216] | 7/10 |
+| Sonnet TAKE | **5%** | +0.301 | −0.023 | [−0.428, +0.401] | — |
+
+**Both fail every applicable criterion.** DeepSeek's picks are indistinguishable from the
+population in both directions. Sonnet took 90 of 1,825 — after being told in the prompt that the
+structure nets +0.2R and that skipping everything is abstention — and its 90 did slightly worse.
+Its skip reasons are textbook mean-reversion ("4H oversold, bounce risk", "bullish structure
+against the thesis"), which this project has measured as non-predictive nine separate ways.
+**The excursion model's own EV beat both**: a model trained on 110 features outperforms a language
+model reading a printout of them.
+
+**Instrument defects caught by piloting, before spending:** v4-pro is a reasoning model and
+returned empty content on 5/5 rows at a 200-token cap (thinking disabled for both); Sonnet skipped
+3/3 on the original base-rate sentence ("1 in 10 reach the target") because it read a low hit rate
+as a losing trade without multiplying through 5R — the sentence now states the net EV, recorded as
+an amendment made after seeing pilot output; the 4H candle file starts 2021-12 and silently dropped
+all of 2021H1 on the first build; `fundingRateRaw` is already in percent and was ×100'd again.
+
+Predictions: 1 held (neither clears), 2 **failed** (no abstention signal either), 3 sign right but
+magnitude wrong (card +0.12 vs +0.02–0.05 predicted), 5 half-failed (Sonnet 5% coverage).
+Exploratory and NOT a finding: DeepSeek's ≥70%-confidence skips averaged +0.16R vs +0.53R for its
+low-confidence skips — its certainty about skipping tracks worse rows even though its picks carry
+nothing. A different hypothesis for a different pre-declared test.
+
+**Nothing ships.** The scanner keeps ranking on net EV, the take/skip decision stays with the
+user, and the journal measures it. Research-layer only, no redeploy. Also noted: the worker's
+DeepSeek allowlist still names `deepseek-reasoner`/`deepseek-chat`; the API now serves
+`deepseek-v4-flash`/`v4-pro`.
+
 ### 2026-08-28f — Phase 3 shipped: the journal, and the first attribution the app has ever produced
 
 User: *"Ok build phase 3."* Corrected spec §42 calls it *"the highest-value item in the spec: it

@@ -150,6 +150,76 @@ Three corrections, each forced by looking at the sample rather than by any resul
    unparseable: v4-pro is a reasoning model and spent the 200-token cap thinking. Thinking is
    disabled for both judges (Sonnet's was already off), so both answer without deliberation.
 
-## RESULT
+## RESULT — NOT SUPPORTED, both judges. The number already on the card beat them both.
 
-*(empty — to be filled after the run)*
+Run 2026-08-28 evening. 1,825 blinded proposals, 11 half-years (10 evaluable — 2024H1 fell under
+the 20-row floor exactly as amendment 2 predicted). DeepSeek v4-pro: 1,824 parsed, **$2.20** at peak
+list. Claude Sonnet 5: 1,821 parsed, **$12.11**. Population mean net R **+0.324**, target rate 12.7%,
+effective n 1,301 over 698 days.
+
+| arm | n | coverage | mean net R | gap vs take-all | 95% CI (day-clustered) | periods+ |
+|---|---:|---:|---:|---:|---|---:|
+| take-all | 1,825 | 100% | +0.324 | — | — | — |
+| **card number** (top half by EV) | 913 | 50% | **+0.444** | **+0.120** | [−0.028, +0.277] | **8/10** |
+| DeepSeek TAKE | 548 | 30% | +0.331 | +0.007 | [−0.186, +0.216] | 7/10 |
+| DeepSeek SKIP | 1,276 | 70% | +0.322 | −0.003 | [−0.090, +0.079] | 3/10 |
+| Sonnet TAKE | 90 | **5%** | +0.301 | −0.023 | [−0.428, +0.401] | 0 evaluable |
+| Sonnet SKIP | 1,731 | 95% | +0.326 | +0.001 | [−0.021, +0.022] | 6/10 |
+
+| criterion | DeepSeek | Sonnet |
+|---|---|---|
+| gap ≥ +0.05R | **fail** (+0.007) | **fail** (−0.023) |
+| CI excludes 0 | fail | fail |
+| ≥ 8 of 11 periods | fail (7/10) | fail (0 evaluable) |
+| beats the card (+0.120) | **fail** | **fail** |
+| coverage ≥ 20% | pass (30%) | **fail (5%)** |
+
+**DeepSeek's picks are the population.** +0.007R over taking everything, and its skip pile is
+also the population (−0.003R). Whatever it read in the dossier, it did not sort rows by outcome
+in either direction. **Sonnet declined to select at all**: 90 takes in 1,825, after being told
+in the prompt that the structure nets +0.2R and that skipping everything is abstention. Its 90
+did slightly worse than the list. The two agreed on 68% of rows — almost entirely shared SKIPs.
+
+**The card number — the excursion model's own net EV, which the app already shows — is the only
+arm with a signal**: +0.12R at 8 of 10 half-years. It was not a judged arm and it does not clear
+the bar either (the day-clustered CI touches zero), but it is what the LLMs had to beat and
+neither came close. The model that ranks on 110 features outperforms a language model reading a
+printout of the same features. That is the expected direction; the size of the gap is not.
+
+### Predictions scored
+
+| # | prediction | outcome |
+|---|---|---|
+| 1 | neither LLM clears the bar | **held** |
+| 2 | if anything shows, it is on abstention | **failed** — both skip piles equal the population |
+| 3 | card number posts a small positive gap, +0.02–0.05 | sign held, **magnitude wrong** (+0.12), CI spans 0 |
+| 4 | the LLMs agree and their gaps are within noise of each other | held (68%, both ≈ 0) |
+| 5 | coverage 30–70% for both | **half-failed** — DeepSeek 30% on the line, Sonnet 5% |
+
+### Why Sonnet skipped — its own words
+
+Reason vocabulary across 1,731 skips: *short, bullish, 4h, oversold, bounce, against, thesis,
+structure, uptrend, support*. It applied mean-reversion priors against every short — "4H oversold,
+bounce risk", "bullish structure against the thesis" — which is textbook TA, and which this
+project has measured as non-predictive nine separate ways. DeepSeek's vocabulary is
+trend-following (*momentum, bearish, rsi, adx, edge*) and produced a coin flip. Two different
+priors, the same absence of information.
+
+### Exploratory, post-hoc, NOT a finding
+
+DeepSeek's skips split by its own stated confidence: **skips at ≥ 70% confidence (n=720) averaged
++0.16R; skips under 70% (n=555) averaged +0.53R.** Its picks carry nothing, but its certainty
+about skipping tracks worse rows. This slice was not pre-declared and is exactly the kind of
+after-the-fact cut the vault forbids acting on. If anyone wants it, it is a different hypothesis
+— "veto only when the judge is ≥ 70% sure" — for a different pre-declared test on a fresh sample.
+
+### What this changes
+
+Nothing ships. The scanner keeps ranking on net EV and the take/skip decision stays with the
+user, measured by the journal ([[journal-attribution]]). The LLM analysis remains context, not a
+gate. And the standing conclusion sharpens: **an LLM reading the indicators does not add
+selection information over a model trained on them** — on this population, at this cost, at n
+where a ±0.1R effect would have been visible.
+
+Total spend: ~$14 at peak list prices, ~$13 actual (DeepSeek ran off-peak). Decisions committed
+as `ml-training/llm_selection/decisions_{deepseek,anthropic}.jsonl`.
