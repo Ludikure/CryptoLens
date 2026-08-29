@@ -1,9 +1,51 @@
-# Deploying the box (no SSH)
+# Deploying the box
 
-The self-hosted backend ("the box", `marketscope.ludikure.org` on TrueNAS) runs the image
-`marketscope-worker/Dockerfile`. A GitHub Action (`.github/workflows/build-box-image.yml`) builds
-that image on every push to the worker code and publishes it to **GHCR** as
-`ghcr.io/ludikure/marketscope:latest`. So shipping a change is: **push → click Update in TrueNAS.**
+Two paths. **The local build is the default now**; GHCR remains as the offsite, immutable copy
+and the fallback.
+
+## Path A (default) — build on the box, one command
+
+    tools/release-box-image.sh                  # build HEAD on the box + deploy + verify
+    tools/release-box-image.sh --no-deploy      # build only, leave the app running what it runs
+    tools/release-box-image.sh <commit-ish>     # build a specific commit (needs --skip-tests if not HEAD)
+    tools/release-box-image.sh --ghcr           # hand the app back to ghcr.io/...:latest
+
+Ported 2026-08-28 from the wmata-push tool (`82905b9` in that repo) after it proved out there.
+It runs the FULL suite locally, `git archive`s the **commit** (never the working tree) over SSH,
+builds on the box as `marketscope:<short-sha>-local`, smoke-checks the baked `GIT_SHA`, switches
+the app via `tools/nas-deploy-app.py` (`midclt app.update`, `pull_policy: never`, config backed
+up first), waits for a healthy container, then verifies `/health.build` **from outside the box**.
+
+**Why `pull_policy: never`:** a locally built tag has no registry copy, so `always` makes the app
+attempt a pull nothing can serve and leaves it with no container. `--ghcr` restores `always`.
+
+**This app has two services** — `marketscope` and the `gluetun` VPN sidecar whose `PROXIED_HOSTS`
+routing the Binance feeds depend on. Only the marketscope service is modified; gluetun carries
+its own credentials and `pull_policy: None` and is left byte-identical.
+
+**Access it needs** (set up 2026-08-28): SSH as `ludikure@192.168.50.140` with this Mac's
+`id_ed25519`, and passwordless sudo there for `docker` and `midclt` (the TrueNAS middleware CLI,
+root-only). Override with `NAS=`, `NAS_DIR=`, `APP=`, `SERVICE=`, `HEALTH_URL=`.
+
+**Known gap, stated rather than traded away:** the CI gate ran on `ubuntu-latest` (amd64); this
+runs the suite on the Mac (arm64) and builds the image on the box (amd64). `better-sqlite3` is
+the only native dep and it is rebuilt inside the Docker build, so exposure is small but not zero.
+Closing it properly needs a test stage in the Dockerfile — the runtime image is pruned with
+`npm prune --omit=dev`, so vitest is not in it.
+
+**Disk:** ~250 MB per image on the box and nothing prunes them; the script lists what has
+accumulated after every build. `sudo docker image prune` on the box when it gets silly.
+
+## Path B — GHCR (still live, still the offsite copy)
+
+
+The GitHub Action (`.github/workflows/build-box-image.yml`) still builds on every push to the
+worker code and publishes `ghcr.io/ludikure/marketscope:latest` — gated on the test suite via
+`needs:` since 2026-08-26. Shipping that way is **push → click Update in TrueNAS**, or
+`tools/release-box-image.sh --ghcr` to switch the app back to the registry copy.
+
+Keep it: it is the only offsite, immutable record of what shipped, and the fallback when the
+box is unreachable from this Mac.
 
 ## One-time setup (done 2026-06-28 — keep for reference / re-setup)
 

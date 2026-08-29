@@ -609,6 +609,50 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28d — Deploying the box is now one command, run from here
+
+User: *"ludikure truenas user can create docker images. Instead of you asking me to redeploy,
+you should be able to do it"*, then *"we should start building images locally. We are already
+doing it for wmata app."* Both correct — an SSH key named `claude-code-macmini-truenas` and a
+known host at `192.168.50.140` had been set up and never used, and the wmata repo already had
+the pattern at `82905b9`.
+
+**`tools/release-box-image.sh` + `tools/nas-deploy-app.py`**, ported from there. One command:
+run the full suite → `git archive` the COMMIT (never the working tree) over SSH → build on the
+box as `marketscope:<short-sha>-local` → smoke-check the baked `GIT_SHA` → `midclt app.update`
+with `pull_policy: never` (config backed up first) → wait for a healthy container → verify
+`/health.build` **from outside the box**. Proven end-to-end on `27ff998`: 874 green, built,
+deployed, `ix-marketscope-marketscope-1` healthy on the local tag, `/health` serving it.
+
+**The workflow's test gate survives in a different shape and that was the point.** The
+2026-08-26 entry records that the image job had NO test step and was *"the channel through which
+every broken prompt reached production this week"*. Moving the build off Actions must not
+re-open it, so a red suite ships nothing and the archive-the-commit rule keeps an unstaged file
+from riding along.
+
+**Three adaptations from the wmata version, all forced by differences here:**
+1. **This app has TWO services** — `marketscope` and the `gluetun` sidecar whose `PROXIED_HOSTS`
+   routing the Binance feeds depend on. The service is named explicitly, everything else is left
+   byte-identical, and the health wait matches `ix-<app>-<service>-` rather than a substring, or
+   **gluetun's line would satisfy the wait while marketscope was still down**.
+2. **No release tags here** (the workflow builds per-push), so it takes a commit-ish defaulting
+   to HEAD and refuses a non-HEAD commit unless `--skip-tests` is passed — otherwise the local
+   suite would test a different tree than ships.
+3. **`--ghcr` reverts** to the registry copy with `pull_policy: always`. GHCR is kept
+   deliberately: it is the only offsite immutable record, and the fallback when the box is
+   unreachable from this Mac. A local-only tag under `pull_policy: always` makes the app attempt
+   a pull nothing can serve and leaves it with no container — that is why the switch needs
+   `never`, and it cannot be done from the Apps UI at all.
+
+**Known gap, stated rather than traded away:** the CI gate ran on `ubuntu-latest` (amd64); this
+runs the suite on the Mac (arm64) and builds on the box (amd64). `better-sqlite3` is the only
+native dep and is rebuilt inside the Docker build, so exposure is small but not zero. Closing it
+needs a test stage in the Dockerfile — the runtime image is pruned with `npm prune --omit=dev`,
+so vitest is not in it.
+
+Cost: ~250 MB of box disk per image and nothing prunes them; the script lists what has
+accumulated after every build.
+
 ### 2026-08-28c — Trend channels rejected: the slope is worse than no slope, and worth nothing when fitted
 
 User asked about sloping channels. **Never tested** — zero hits in the vault, the graveyard,
@@ -2279,7 +2323,7 @@ Commits: Sonnet 5 `6d713b8`, worker async `2b0a63f`, iOS `11b68f2`. **Both requi
 
 **Architecture now:**
 - **iOS** (`PushService.workerURL`) points **directly at the box** `https://marketscope.ludikure.org` — no Cloudflare Worker in the path. (Requires a rebuild+install to take effect on-device.)
-- **Shipping worker changes** = rebuild the TrueNAS container: `cd marketscope-worker && npm run build:server` → `node dist/server.mjs` (`docker compose up -d --build` on the box). **Never `wrangler deploy`** — `npm run deploy` is now a guard that errors with this reminder. `wrangler.toml` (the full-worker cron+KV+D1+R2 config) is deleted so it can't be redeployed.
+- **Shipping worker changes** = `tools/release-box-image.sh` (2026-08-28) — runs the suite, builds the image ON the box over SSH, switches the app via `midclt` and verifies `/health.build` from outside. No UI click, no Actions minutes. GHCR remains as the offsite copy (`--ghcr` switches back); see `marketscope-worker/DEPLOY.md`. **Never `wrangler deploy`** — `npm run deploy` is now a guard that errors with this reminder. `wrangler.toml` (the full-worker cron+KV+D1+R2 config) is deleted so it can't be redeployed.
 - **ZERO Cloudflare Workers (as of 2026-06-28).** The transitional passthrough Worker was deleted (`wrangler delete`) once the iOS app was rebuilt on the box URL; `passthrough.ts` + `wrangler.passthrough.toml` were removed from the repo. `…workers.dev` now 404s. The box (`marketscope.ludikure.org`, via the cloudflared tunnel) is the sole backend. NOTE: the frozen Cloudflare **D1 / KV / R2 resources still exist** (passive, free, no writes) — the Node-CLI training scripts (`scripts/fetchers/*`) still read the CF **D1 archive** via `wrangler d1 execute --remote`, so don't delete the D1 database without migrating that data first.
 
 **Remaining Cloudflare touchpoints (not yet removed — flagged for a decision):** (a) the **AI Gateway** indirection (`AI_GATEWAY_BASE` / `aiGatewayURL()` in `index.ts`) — inert on the box (env unset → direct LLM call), safe to delete on request; (b) the **`web/` app** is deployed to **Cloudflare Pages** (a separate client — keep or move); (c) **ingress**: how `marketscope.ludikure.org` is exposed (likely a cloudflared tunnel — free, no KV limit, ingress-only) vs. a direct DNS/TLS setup.
