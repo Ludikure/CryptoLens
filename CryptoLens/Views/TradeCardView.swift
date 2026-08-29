@@ -20,6 +20,7 @@ struct TradeCardView: View {
     var onOpenSymbol: (String) -> Void = { _ in }
 
     @Environment(\.dismiss) private var dismiss
+    @State private var showTake = false
 
     private var o: WorkerOpportunitiesService.Opportunity { opportunity }
     /// What a stop costs on THIS row: the realised `riskFraction` against the equity the worker
@@ -51,9 +52,22 @@ struct TradeCardView: View {
                 if let caveat = book?.caveat {
                     Section { Text(caveat).font(Theme.caption).foregroundStyle(.secondary) }
                 }
+                // Phase 3: the journal costs one tap here, at the moment of acting, or it does not
+                // get kept. Linking to the logged scanner row happens on the box.
+                Section {
+                    Button { showTake = true } label: {
+                        Label("I took this", systemImage: "checkmark.circle")
+                    }
+                } footer: {
+                    Text("Records that you entered it, so the Record tab can set what you take against what you skip.")
+                }
                 Section {
                     Button("Open \(ticker)") { onOpenSymbol(o.asset) }
                 }
+            }
+            .sheet(isPresented: $showTake) {
+                JournalEntrySheet(mode: .take(symbol: o.asset, direction: o.direction, source: "opportunity",
+                                              proposedEntry: o.entry, proposedStop: o.stop, proposedTarget: o.target))
             }
             .listStyle(.insetGrouped)
             .navigationTitle("\(ticker) \(o.direction)")

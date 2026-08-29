@@ -24,6 +24,7 @@ struct VerdictCard: View {
     /// NavigationLink in the row's content turns the WHOLE ROW into the link, which then competes
     /// with the sibling buttons for every touch — the other half of "the buttons aren't responsive".
     @State private var showFullRead = false
+    @State private var showTake = false
 
     /// Four states, in the order a trader cares about.
     ///
@@ -232,6 +233,13 @@ struct VerdictCard: View {
                             .font(Theme.micro).lineLimit(1).fixedSize()
                     }
                 }
+                // Phase 3: one tap to say you entered it. Only when there is a setup to enter.
+                if verdict.tradeSetup != nil {
+                    Button { showTake = true } label: {
+                        Label("Took it", systemImage: "checkmark.circle")
+                            .font(Theme.micro).lineLimit(1).fixedSize()
+                    }
+                }
                 Spacer(minLength: 8)
                 Button {
                     HapticManager.impact(.medium)
@@ -242,6 +250,12 @@ struct VerdictCard: View {
                 }
             }
             .buttonStyle(.borderless)
+        }
+        .sheet(isPresented: $showTake) {
+            if let s = verdict.tradeSetup {
+                JournalEntrySheet(mode: .take(symbol: result.symbol, direction: s.direction, source: "setup",
+                                              proposedEntry: s.entry, proposedStop: s.stopLoss, proposedTarget: s.tp1))
+            }
         }
         .themedCard(accent: verdict.accent)
         // Measure the card by its real content height. Without this a List row containing wrapping

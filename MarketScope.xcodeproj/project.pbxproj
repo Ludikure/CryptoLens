@@ -27,6 +27,7 @@
 		1800B1BB6893A4FD9F002442 /* WorkerOpportunitiesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E796EB91237E6F2944BAE871 /* WorkerOpportunitiesService.swift */; };
 		19F5CE7F2B9912BB51A8195F /* chart.html in Resources */ = {isa = PBXBuildFile; fileRef = CE52F94E061882EE7DD97D75 /* chart.html */; };
 		1B5CA24C22D0CBED6012138B /* DataQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB185A3EE56E7A9E6F8C472B /* DataQuality.swift */; };
+		1CEFE33F557DEE3196DC6975 /* JournalEntrySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8F9343D4FDF1E408FE08AC2 /* JournalEntrySheet.swift */; };
 		1DA91CCD4AD89D7CA73F3150 /* ScoringSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A034ED23A494C9E41E6826B /* ScoringSnapshot.swift */; };
 		1DD589421F6653D764A6D74B /* FavoritesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 712D5923C993CB356F7E558C /* FavoritesStore.swift */; };
 		20A85053FF422B346C4F9605 /* AnalysisPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D1B2E6EF4E4D25DA359BC7D /* AnalysisPrompt.swift */; };
@@ -121,6 +122,7 @@
 		ED59023079801F4E8ED088AE /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2375646B3479EA716AE7270B /* NetworkMonitor.swift */; };
 		EFC2732FC7C7873FBB88A6E4 /* EarningsCalendar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 774EAFA76A70F4924070E2BA /* EarningsCalendar.swift */; };
 		FB2F3C3E8890D136BB450D73 /* CoinInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29ADC5116EA585594CD2E515 /* CoinInfo.swift */; };
+		FD79806AF2260BE4691A8B6B /* WorkerJournalService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EA91B738B97DD1BF7432FBC /* WorkerJournalService.swift */; };
 		FE15E19EF0270FE8B25AFF33 /* Tooltips.swift in Sources */ = {isa = PBXBuildFile; fileRef = 303EF4C61079D31610E22F9C /* Tooltips.swift */; };
 		FEA5092E777346921FAF11D9 /* FearGreedService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57FABE40BFC7AC6EF6B91755 /* FearGreedService.swift */; };
 /* End PBXBuildFile section */
@@ -238,6 +240,7 @@
 		9C188735F2331F1002B4B991 /* CoinPickerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoinPickerView.swift; sourceTree = "<group>"; };
 		9C98ABE8F402ADB12ADC93C4 /* PushService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushService.swift; sourceTree = "<group>"; };
 		9D9485756A0FD554CED7F18F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		9EA91B738B97DD1BF7432FBC /* WorkerJournalService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerJournalService.swift; sourceTree = "<group>"; };
 		A4DE7A0E484EF355541AD623 /* CronHealthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronHealthService.swift; sourceTree = "<group>"; };
 		A58C293527EA657FB4BDBDA4 /* MarketScopeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = MarketScopeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A66FEE5F0128956976944289 /* RetryHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetryHelper.swift; sourceTree = "<group>"; };
@@ -247,6 +250,7 @@
 		AF80EA6B3479C991E2111503 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		B016B993A2BC2F6E0DFA2C22 /* Market.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Market.swift; sourceTree = "<group>"; };
 		B687FAC230FEB7E33BE75288 /* PriceActionAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PriceActionAnalyzer.swift; sourceTree = "<group>"; };
+		B8F9343D4FDF1E408FE08AC2 /* JournalEntrySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JournalEntrySheet.swift; sourceTree = "<group>"; };
 		BB12F1B7515B8E8D3F24EFFE /* WorkerIndicatorsService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerIndicatorsService.swift; sourceTree = "<group>"; };
 		BCE089BD3A094D186E3B2F2F /* InfoTooltip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InfoTooltip.swift; sourceTree = "<group>"; };
 		BDB023939777AFC1AC8D15B4 /* PositionSizeCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PositionSizeCard.swift; sourceTree = "<group>"; };
@@ -349,6 +353,7 @@
 				FE56068BFB398B44077DCFAD /* WorkerCandlesService.swift */,
 				5955F9E9132F1671E8DDAACE /* WorkerFullAnalysisService.swift */,
 				BB12F1B7515B8E8D3F24EFFE /* WorkerIndicatorsService.swift */,
+				9EA91B738B97DD1BF7432FBC /* WorkerJournalService.swift */,
 				E969F0701C9DD31D4D15711C /* WorkerMarketService.swift */,
 				AAE82500326A2DCE4B7C4CFF /* WorkerMLService.swift */,
 				2FAA05394E269F731EAB8A5B /* WorkerNewsService.swift */,
@@ -449,6 +454,7 @@
 				E7C0A38B26B77F59B2CE5BB6 /* FeeDragCard.swift */,
 				4ACC70EF9EA70BD6354CD915 /* IndicatorTableView.swift */,
 				BCE089BD3A094D186E3B2F2F /* InfoTooltip.swift */,
+				B8F9343D4FDF1E408FE08AC2 /* JournalEntrySheet.swift */,
 				885D71681696A62F6B8F1E64 /* LevelsChartView.swift */,
 				08FE6A3E4EF46DDD47822E60 /* MacroContextView.swift */,
 				F3A4DF9821FDF5400D93AC3B /* NewsCard.swift */,
@@ -741,6 +747,7 @@
 				C6BB796BC7207CC9E1E8E40D /* IndicatorResult.swift in Sources */,
 				62795D11B0D1547323A7837D /* IndicatorTableView.swift in Sources */,
 				52D9347C7ADB28DF90D6E1E3 /* InfoTooltip.swift in Sources */,
+				1CEFE33F557DEE3196DC6975 /* JournalEntrySheet.swift in Sources */,
 				5EECD991E44E2BD735AFDDBF /* LayerDiagnostic.swift in Sources */,
 				261514FEEB8259565509F467 /* LevelsChartView.swift in Sources */,
 				4E4C1CFCD07E6CA5F24FB811 /* MLCalibrationService.swift in Sources */,
@@ -796,6 +803,7 @@
 				6EA2251B7008EFE69821AD4F /* WorkerCandlesService.swift in Sources */,
 				76E0EE796A444BC47B9A0B98 /* WorkerFullAnalysisService.swift in Sources */,
 				50C760B00E08F8443B119E30 /* WorkerIndicatorsService.swift in Sources */,
+				FD79806AF2260BE4691A8B6B /* WorkerJournalService.swift in Sources */,
 				98CC11CE748131B1C3DAF377 /* WorkerMLService.swift in Sources */,
 				9ECCAA9D938D5D4B00DCAD8B /* WorkerMarketService.swift in Sources */,
 				9DB458342FC640F7704D0D51 /* WorkerNewsService.swift in Sources */,

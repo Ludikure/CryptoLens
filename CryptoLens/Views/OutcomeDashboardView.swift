@@ -9,9 +9,17 @@ struct OutcomeDashboardView: View {
     @State private var cronStale: Bool?
     @State private var overtradingNudge: String?              // F-4
     @State private var debriefs: [UUID: String] = [:]          // F-5, keyed by setup id
+    @State private var attribution: WorkerJournalService.Attribution?   // Phase 3
+    @State private var attributionLoaded = false
+    @State private var closing: WorkerJournalService.Entry?
 
     var body: some View {
         List {
+            // Phase 3 — YOUR record, above the system's. The one question this tab could not
+            // answer before: when you act, does it beat not acting?
+            journalSection
+            if let a = attribution, !a.entries.isEmpty { yourTradesSection(a) }
+
             if let stats {
                 // F-4 — overtrading / cooling-off nudge. Only surfaces when today's surfaced
                 // setups exceed the user's stated cadence.
@@ -120,11 +128,15 @@ struct OutcomeDashboardView: View {
             }
         }
         .navigationTitle("Outcome Tracking")
+        .sheet(item: $closing) { e in
+            JournalEntrySheet(mode: .close(e)) { Task { await loadAttribution() } }
+        }
         .task {
             await OutcomeTracker.refresh()   // pull server-resolved setups before computing stats
             stats = OutcomeTracker.stats()
             loadLiveSetups()
             loadPersonaInsights()
+            await loadAttribution()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
         }
@@ -133,6 +145,7 @@ struct OutcomeDashboardView: View {
             stats = OutcomeTracker.stats()
             loadLiveSetups()
             loadPersonaInsights()
+            await loadAttribution()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
         }
@@ -145,6 +158,158 @@ struct OutcomeDashboardView: View {
                         Image(systemName: "doc.on.doc")
                     }
                     ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
+                }
+            }
+        }
+    }
+
+    // MARK: - Phase 3: your record
+
+    private func loadAttribution() async {
+        attribution = await WorkerJournalService.fetch()
+        attributionLoaded = true
+    }
+
+    private func rStr(_ r: Double) -> String { String(format: "%+.2fR", r) }
+    private func ciStr(_ ci: [Double]?) -> String {
+        guard let ci, ci.count == 2 else { return "" }
+        return String(format: " [%+.2f, %+.2f]", ci[0], ci[1])
+    }
+
+    /// "12 trades (~7 independent) · avg +0.40R · 58% won · 2 still open"
+    private func groupLine(_ g: WorkerJournalService.GroupStats) -> String {
+        guard g.n > 0 else { return "none yet" }
+        var parts = ["\(g.n) \(g.n == 1 ? "trade" : "trades") (~\(g.effectiveN) independent)"]
+        if let e = g.expectancyR {
+            var avg = "avg \(rStr(e))"
+            if let money = OpportunityCopy.money(forR: e) { avg += " (\(money))" }
+            parts.append(avg)
+        }
+        if let w = g.winRate, g.graded > 0 { parts.append("\(Int((w * 100).rounded()))% won") }
+        if g.graded < g.n { parts.append("\(g.n - g.graded) not graded yet") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var journalSection: some View {
+        Section {
+            if let a = attribution {
+                // The headline says exactly what the data can support — and below the bar, that
+                // is only the counts. No verdict word is rendered until taken >= 10 AND skipped >= 10.
+                if a.verdict.status == "insufficient" {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Not enough to judge yet.").font(Theme.answer)
+                        Text("\(a.taken.graded) taken and \(a.skipped.graded) skipped have been graded. "
+                             + "This needs \(WorkerJournalService.minTaken) of each before it will say whether your picks beat the list, "
+                             + "or whether skipping paid.")
+                            .font(Theme.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 2)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let sel = a.verdict.selection, let r = a.selectionR {
+                            Text(selectionText(sel, r) + ciStr(a.selectionCI))
+                                .font(Theme.answer)
+                                .foregroundStyle(sel == "list_beat_picks" ? Theme.caution : .primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let ab = a.verdict.abstention, let r = a.abstentionR {
+                            Text(abstentionText(ab, r) + ciStr(a.abstentionCI))
+                                .font(Theme.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                recordRow("You took", a.taken)
+                recordRow("You skipped", a.skipped)
+                recordRow("System proposed", a.proposed)
+                if a.executionN > 0, let d = a.executionDragR {
+                    recordLine("Entry drag",
+                               "your fills \(d < 0 ? "cost" : "gained") \(rStr(d)) vs the proposed entry (\(a.executionN) closed)")
+                }
+            } else if attributionLoaded {
+                Text("Couldn't load your record right now.").font(Theme.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Loading your record…").font(Theme.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Your record")
+        } footer: {
+            if let a = attribution {
+                Text(a.note).font(Theme.frame)
+            } else {
+                Text("Tap \"I took this\" on a scanner card, or \"Took it\" on a setup, and this tab starts comparing what you take with what you skip.")
+            }
+        }
+    }
+
+    private func recordRow(_ label: String, _ g: WorkerJournalService.GroupStats) -> some View {
+        recordLine(label, groupLine(g))
+    }
+
+    private func recordLine(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(Theme.micro).foregroundStyle(.tertiary)
+            Text(value).font(Theme.caption).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func selectionText(_ v: String, _ r: Double) -> String {
+        switch v {
+        case "picks_beat_list": return "Your picks beat the list by \(rStr(r)) a trade."
+        case "list_beat_picks": return "The list beat your picks by \(rStr(-r)) a trade."
+        default:                return "No difference yet between your picks and the list (\(rStr(r)))."
+        }
+    }
+
+    private func abstentionText(_ v: String, _ r: Double) -> String {
+        switch v {
+        case "skipping_helped": return "Skipping paid: the trades you left alone averaged \(rStr(r))."
+        case "skipped_winners": return "You skipped winners: the trades you left alone averaged \(rStr(r))."
+        default:                return "The trades you skipped came out about even (\(rStr(r)))."
+        }
+    }
+
+    private func yourTradesSection(_ a: WorkerJournalService.Attribution) -> some View {
+        Section("Your trades") {
+            ForEach(a.entries) { e in
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(e.symbol.hasSuffix("USDT") ? String(e.symbol.dropLast(4)) : e.symbol)
+                                .font(.caption).fontWeight(.bold)
+                            Text(e.direction).themedPill(e.direction == "LONG" ? Theme.bullish : Theme.bearish)
+                            Text(e.source == "opportunity" ? "scanner" : e.source == "setup" ? "analysis" : "manual")
+                                .font(Theme.micro).foregroundStyle(.tertiary)
+                        }
+                        Text("filled \(Formatters.formatPrice(e.fillPrice))"
+                             + (e.exitPrice.map { " · closed \(Formatters.formatPrice($0))" } ?? "")
+                             + (e.exitReason.map { " · \($0.replacingOccurrences(of: "_", with: " "))" } ?? ""))
+                            .font(Theme.frame).foregroundStyle(.secondary)
+                        if let n = e.note, !n.isEmpty {
+                            Text(n).font(Theme.frame).foregroundStyle(.tertiary).lineLimit(2)
+                        }
+                    }
+                    Spacer()
+                    if e.status == "closed" {
+                        if let r = e.realizedR {
+                            Text(rStr(r)).font(Theme.mono)
+                                .foregroundStyle(r >= 0 ? Theme.bullish : Theme.bearish)
+                        } else {
+                            Text("closed").font(Theme.frame).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button("Close") { closing = e }
+                            .font(Theme.micro).buttonStyle(.bordered)
+                    }
+                }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        Task { if await WorkerJournalService.delete(id: e.id) { await loadAttribution() } }
+                    } label: { Label("Delete", systemImage: "trash") }
                 }
             }
         }
