@@ -46,11 +46,12 @@ enum OpportunityCopy {
         "no volatility forecast": "Not enough history to forecast volatility",
         "no ATR in cached features": "No volatility reading",
         "missing price or ATR": "No price or volatility reading",
-        "crash overlay closed the position": "Drawdown risk closed the position",
+        "crash overlay closed the position": "Sized down to nothing by the drawdown model",
+        "constraints closed the position": "Sized down to nothing after the caps",
         "max risk per trade": "Capped by risk per trade",
-        "max position notional": "Capped by position size",
-        "asset concentration": "Capped by concentration in this asset",
-        "correlated exposure": "Capped by correlated exposure",
+        "max position notional": "Bigger than the position cap allows",
+        "asset concentration": "Too much already in this asset",
+        "correlated exposure": "Too correlated with the others already sized",
         "portfolio notional": "Capped by total portfolio size",
     ]
 
@@ -91,7 +92,12 @@ enum OpportunityCopy {
         }
         if let m = crashCut.firstMatch(in: token, range: range), let g = groups(m, in: token),
            let mult = Double(g[0]), mult < 1 {
-            return "Size cut to \(Int((mult * 100).rounded()))% for drawdown risk"
+            // The validated sizing curve halves size at ANY reading above 30%, and the base rate is
+            // 41% — so a 50% cut is the ordinary state, not a warning. Saying "for drawdown risk"
+            // beside a gauge reading "nothing elevated" read as a contradiction (2026-08-29), and it
+            // was: the gauge warns at 49%, the sizing cuts at 30%. Name it as the usual setting.
+            if mult == 0.5 { return "Half size — the drawdown model's usual setting on an average day" }
+            return "Size cut to \(Int((mult * 100).rounded()))% by the drawdown model"
         }
         if let m = volBars.firstMatch(in: token, range: range), let g = groups(m, in: token), g.count == 2 {
             return "Not enough history — \(g[1]) hourly bars of \(g[0])"
@@ -263,11 +269,15 @@ enum OpportunityCopy {
     /// crypto, an equal-weight basket down 83%, SHORT the better side before any gate. §2E makes
     /// labelling that in the UI a rule rather than a footnote, so the string is defined once here
     /// and the screen has no way to show an expectancy without it.
-    static let regimeStatus = "PROVISIONAL \u{2014} single-window evidence"
+    // Updated 2026-08-29: the whole-strategy record now spans 2021-2026H1 (the $25k backtest on the
+    // user's symbols, CLAUDE.md 2026-08-28), so "single window" understated what is known. Profit is
+    // still regime-dependent, and that is the fact the label has to carry.
+    static let regimeStatus = "MEASURED 2021\u{2013}26 \u{2014} regime-dependent"
     static let regimeExplanation =
-        "Measured in one window: a crypto bear where shorts were the better side before any rule "
-        + "was applied. Ranking survived that window; profit did not. Only the long stop width has "
-        + "been checked across both a bear and a bull."
+        "Profit depends on the regime: positive in 5 of the last 6 years, negative in 2023's "
+        + "range-bound tape \u{2014} best in a bear, worst in chop. The ranking holds in every regime; "
+        + "the size of the edge does not. Of the individual rules, only the long stop width has been "
+        + "checked across both a bear and a bull."
 
     /// "1R is $560 at your 2% risk" — the anchor that makes every other R on screen readable.
     static func rAnchor(accountSize: Double? = nil, riskPercent: Double? = nil) -> String? {

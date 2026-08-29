@@ -96,6 +96,14 @@ struct OpportunitiesView: View {
         book?.scanned ?? ((book?.opportunities.count ?? 0) + (book?.skipped.count ?? 0))
     }
 
+    /// Stocks on the watchlist. The scanner's models are crypto-only, so every one of them comes
+    /// back "vol model is crypto-only" — they were never candidates, and counting them as "coins
+    /// checked" (2026-08-29: "I checked 11 coins" over TSLA and NVDA) was simply false.
+    private var stocksNotCovered: Int {
+        (book?.skipped ?? []).filter { $0.reasons.contains("vol model is crypto-only") }.count
+    }
+    private var coinsScanned: Int { max(0, scanned - stocksNotCovered) }
+
     /// Assets the pipeline SCORED but cannot rank — a refused long head, or two sides too close to
     /// separate. Distinct from the ones it never got to score, which are counted in the margin line.
     private var notRanked: [(asset: String, line: String)] {
@@ -247,7 +255,11 @@ struct OpportunitiesView: View {
     /// One sentence of WHY, under the answer. Never a threshold, never a unit.
     private var reasonText: String? {
         guard loaded, book != nil else { return nil }
-        let checked = "I checked \(scanned) \(scanned == 1 ? "coin" : "coins")."
+        var checked = "I checked \(coinsScanned) \(coinsScanned == 1 ? "coin" : "coins")."
+        if stocksNotCovered > 0 {
+            checked += " \(stocksNotCovered == 1 ? "One stock" : "\(stocksNotCovered) stocks") on your list "
+                     + "\(stocksNotCovered == 1 ? "isn't" : "aren't") covered — this scanner is crypto-only."
+        }
         if !ranked.isEmpty { return checked + " The rest didn't make the cut." }
 
         if let c = cancelled.first, let m = mood {
@@ -256,10 +268,18 @@ struct OpportunitiesView: View {
                  + "the numbers\(more), but the market is in \(m.label.lowercased()) — the one mood "
                  + "where this side has historically lost money."
         }
+        // The decisive fact on a greed day, stated even when nothing scored: the shorts this
+        // scanner trades are withheld in greed, so the answer would be "nothing" regardless. Without
+        // this line a greed day and a quiet day read identically (2026-08-29).
+        let greedNote: String = {
+            guard let m = mood, m == .greed, let fg = book?.fearGreed else { return "" }
+            return " Fear & Greed is \(Int(fg.rounded())) — greed — and shorts are withheld in greed, "
+                 + "so nothing would be shown today even if one had scored."
+        }()
         if let nm = book?.nearMiss {
-            return checked + " The closest was \(ticker(nm.asset)), a little under the bar."
+            return checked + " The closest was \(ticker(nm.asset)), a little under the bar." + greedNote
         }
-        return checked + " Nothing came close."
+        return checked + " Nothing came close." + greedNote
     }
 
 
@@ -610,10 +630,16 @@ struct OpportunitiesView: View {
                     .font(Theme.micro)
                     .fixedSize(horizontal: false, vertical: true)
 
+                // Two thresholds live here and they are far apart: the validated sizing curve HALVES
+                // size above a 30% reading (which, at a 41% base rate, is most days), while a warning
+                // needs 49%. A screen that said "nothing elevated" beside a row cut "for drawdown
+                // risk" looked like a contradiction (2026-08-29). It is two rules; say both.
                 Text(warned.isEmpty
-                     ? "Nothing elevated — which is a reading, not an all-clear."
+                     ? "Nothing elevated — a reading, not an all-clear. Sizes are halved whenever a "
+                       + "reading is above 30%, which is most days; warnings start at 49%."
                      : "Sizes reduced on \(warned.count == 1 ? "it" : "both").")
                     .font(Theme.frame).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 // A HIGH reading gets the model's OWN sentence, verbatim. `crash.ts` writes it and
                 // deliberately builds the episodic caveat into it, because a user who sees this fire
@@ -763,9 +789,9 @@ struct OpportunitiesView: View {
                 Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 0.5)
                     .padding(.bottom, 10)
                 HStack(alignment: .firstTextBaseline) {
-                    if let fg = book?.fearGreed {
-                        Text("Fear & Greed \(Int(fg.rounded())) · neutral is 50")
-                            .font(Theme.frame).foregroundStyle(.secondary)
+                    if let fg = book?.fearGreed, let m = mood {
+                        Text("Fear & Greed \(Int(fg.rounded())) · \(m.label.lowercased()) (neutral is 50)")
+                            .font(Theme.frame).foregroundStyle(m == .greed ? Theme.caution : .secondary)
                     }
                     Spacer(minLength: 8)
                     Text(OpportunityCopy.regimeStatus)
