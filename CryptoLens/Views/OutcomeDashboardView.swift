@@ -12,9 +12,16 @@ struct OutcomeDashboardView: View {
     @State private var attribution: WorkerJournalService.Attribution?   // Phase 3
     @State private var attributionLoaded = false
     @State private var closing: WorkerJournalService.Entry?
+    @State private var paper: WorkerPaperService.State?       // the bot on the box
+    @State private var paperLoaded = false
+    @State private var paperBusy = false
 
     var body: some View {
         List {
+            // The paper bot leads. It is the thing the November decision is judged on: the same
+            // scanner, filled against the real Coinbase book, with fees and slippage included.
+            paperSection
+
             // Phase 3 — YOUR record, above the system's. The one question this tab could not
             // answer before: when you act, does it beat not acting?
             journalSection
@@ -136,6 +143,7 @@ struct OutcomeDashboardView: View {
             stats = OutcomeTracker.stats()
             loadLiveSetups()
             loadPersonaInsights()
+            await loadPaper()
             await loadAttribution()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
@@ -145,6 +153,7 @@ struct OutcomeDashboardView: View {
             stats = OutcomeTracker.stats()
             loadLiveSetups()
             loadPersonaInsights()
+            await loadPaper()
             await loadAttribution()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
@@ -161,6 +170,160 @@ struct OutcomeDashboardView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Paper bot
+
+    private func loadPaper() async {
+        paper = await WorkerPaperService.fetch()
+        paperLoaded = true
+    }
+
+    private func paperCommand(_ cmd: WorkerPaperService.Command) {
+        Task {
+            paperBusy = true
+            _ = await WorkerPaperService.send(cmd)
+            await loadPaper()
+            paperBusy = false
+        }
+    }
+
+    private func money(_ v: Double, signed: Bool = true) -> String {
+        let s = String(format: "%@$%@", v < 0 ? "−" : (signed && v > 0 ? "+" : ""),
+                       Int(abs(v).rounded()).formatted(.number))
+        return s
+    }
+    private func tick(_ s: String) -> String { s.hasSuffix("USDT") ? String(s.dropLast(4)) : s }
+    private func hoursLeft(_ expiresMs: Double) -> String {
+        let h = (expiresMs / 1000 - Date().timeIntervalSince1970) / 3600
+        return h <= 0 ? "expiring" : h < 1 ? "\(Int((h * 60).rounded()))m left" : "\(Int(h.rounded()))h left"
+    }
+
+    private var paperSection: some View {
+        Section {
+            if let p = paper {
+                // Equity and its change since the bot started. Paper money is not money that
+                // exists, so it never takes the green that open real positions take.
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("$\(Int(p.equity.rounded()).formatted(.number))").font(Theme.answer)
+                        let d = p.equity - p.startEquity
+                        Text("\(money(d)) since start").font(Theme.caption)
+                            .foregroundStyle(d < 0 ? Theme.bearish : .secondary)
+                        Spacer()
+                        Toggle("", isOn: Binding(get: { p.enabled }, set: { paperCommand(.init(enabled: $0)) }))
+                            .labelsHidden().tint(Theme.info).disabled(paperBusy)
+                    }
+                    Text(paperStatusLine(p)).font(Theme.frame)
+                        .foregroundStyle(paperStatusColor(p))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let h = p.halted, !h.isEmpty {
+                        HStack {
+                            Text("Halted: \(h)").font(Theme.frame).foregroundStyle(Theme.danger)
+                            Spacer()
+                            Button("Clear halt") { paperCommand(.init(clearHalt: true)) }
+                                .font(Theme.micro).buttonStyle(.bordered).disabled(paperBusy)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+
+                // Record so far, beside the number it has to match.
+                if let s = p.stats, s.n > 0 {
+                    recordLine("Closed", paperRecordLine(s, reference: p.backtestReference))
+                    recordLine("Costs", "worst dip \(money(-s.maxDrawdownUsd, signed: false)) · fees $\(Int(s.feesUsd.rounded()))"
+                               + (s.avgEntrySlippageBps.map { String(format: " · entry slippage %.1f bps", $0) } ?? ""))
+                } else {
+                    recordLine("Closed", "none yet — the backtest reference is \(String(format: "%+.2fR", p.backtestReference.meanR)) a trade")
+                }
+
+                // Open positions, each with a live mark.
+                ForEach(p.open) { o in
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(tick(o.symbol)).font(.caption).fontWeight(.bold)
+                                Text("SHORT").themedPill(Theme.bearish)
+                                Text("\(Int(o.contracts)) × \(o.productId)").font(Theme.frame).foregroundStyle(.tertiary)
+                            }
+                            Text("in \(Formatters.formatPrice(o.entryPrice)) · stop \(Formatters.formatPrice(o.stopPrice)) · target \(Formatters.formatPrice(o.targetPrice))")
+                                .font(Theme.frame).foregroundStyle(.secondary)
+                            Text("risk $\(Int(o.riskUsd.rounded())) · \(hoursLeft(o.expiresAt))"
+                                 + (o.mark.map { " · mark \(Formatters.formatPrice($0))" } ?? ""))
+                                .font(Theme.frame).foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            if let u = o.unrealizedUsd {
+                                Text(money(u)).font(Theme.mono).foregroundStyle(u < 0 ? Theme.bearish : .primary)
+                            }
+                            Button("Close") { paperCommand(.init(closeId: o.id)) }
+                                .font(Theme.micro).buttonStyle(.bordered).disabled(paperBusy)
+                        }
+                    }
+                }
+
+                // The last few closed, newest first, so a fill can be sanity-checked by eye.
+                ForEach(p.closed.prefix(5)) { c in
+                    HStack {
+                        Text(tick(c.symbol)).font(.caption).fontWeight(.bold)
+                        Text((c.exitReason ?? "closed").replacingOccurrences(of: "_", with: " "))
+                            .font(Theme.frame).foregroundStyle(.secondary)
+                        Text("\(Formatters.formatPrice(c.entryPrice)) → \(Formatters.formatPrice(c.exitPrice ?? 0))")
+                            .font(Theme.frame).foregroundStyle(.tertiary)
+                        Spacer()
+                        if let r = c.realizedR {
+                            Text(String(format: "%+.2fR", r)).font(Theme.mono)
+                                .foregroundStyle(r < 0 ? Theme.bearish : .primary)
+                        }
+                    }
+                }
+            } else if paperLoaded {
+                Text("Couldn't reach the bot.").font(Theme.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Loading the bot…").font(Theme.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Paper bot")
+        } footer: {
+            Text("Runs on the box: the scanner's shorts, filled against the real Coinbase order book at each 4H close, "
+                 + "with stops and targets driven by live prints. Fees and slippage are real; the money is not. "
+                 + "It is the record the November decision is judged on.")
+                .font(Theme.frame)
+        }
+    }
+
+    private func paperRecordLine(_ s: WorkerPaperService.Stats, reference: WorkerPaperService.Reference) -> String {
+        var parts = ["\(s.n) \(s.n == 1 ? "trade" : "trades")"]
+        if let m = s.meanR { parts.append(String(format: "avg %+.2fR", m)) }
+        if let w = s.winRate { parts.append("\(Int((w * 100).rounded()))% won") }
+        parts.append(money(s.pnlUsd))
+        var line = parts.joined(separator: " · ")
+        line += String(format: " — backtest reference %+.2fR", reference.meanR)
+        if s.n < 10 { line += " (too few to judge yet)" }
+        return line
+    }
+
+    private func paperStatusLine(_ p: WorkerPaperService.State) -> String {
+        guard p.running, let st = p.status else { return "Bot process is not running on the box." }
+        if !p.enabled { return "Paused — no new entries. Open positions still managed." }
+        let feed = st.feedHealthy ? "Feed live" : "Feed DOWN (\(st.state))"
+        let live = st.contracts.values.compactMap { $0 }.count
+        var s = "\(feed) · \(live) contracts"
+        if let at = st.lastSignalRunAt {
+            let d = Date(timeIntervalSince1970: at / 1000)
+            s += " · last run \(d.formatted(date: .omitted, time: .shortened))"
+        } else {
+            s += " · first run at the next 4H close"
+        }
+        if let e = st.lastError, !e.isEmpty { s += " · last error: \(e)" }
+        return s
+    }
+
+    private func paperStatusColor(_ p: WorkerPaperService.State) -> Color {
+        guard p.running, let st = p.status else { return Theme.danger }
+        if !p.enabled { return Theme.caution }
+        return st.feedHealthy ? .secondary : Theme.caution
     }
 
     // MARK: - Phase 3: your record

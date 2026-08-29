@@ -93,6 +93,7 @@
 		9DB458342FC640F7704D0D51 /* WorkerNewsService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2FAA05394E269F731EAB8A5B /* WorkerNewsService.swift */; };
 		9ECCAA9D938D5D4B00DCAD8B /* WorkerMarketService.swift in Sources */ = {isa = PBXBuildFile; fileRef = E969F0701C9DD31D4D15711C /* WorkerMarketService.swift */; };
 		A16208044BED328878FD4C11 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7A8F5A68318696489A9302B /* SettingsView.swift */; };
+		A866FADB4AC2CD9EA638937E /* WorkerPaperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21297019850E3A54DE443E0F /* WorkerPaperService.swift */; };
 		A9E54069F13E82A67E316153 /* earnings_history.json in Resources */ = {isa = PBXBuildFile; fileRef = CCFC097BC3FB8E0896B3124E /* earnings_history.json */; };
 		AAD231397B0F9D3E6B125BFC /* BiasNotificationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9152F34D3CCD450200D49DC6 /* BiasNotificationManager.swift */; };
 		AB6DE20F69CD76515EC421DF /* MarketScopeWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 726BD43BA21F6D03D995C187 /* MarketScopeWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -184,6 +185,7 @@
 		1C7BB8B80E33C13365E25DDE /* ml-model-stock.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "ml-model-stock.json"; sourceTree = "<group>"; };
 		1D79AD52F7009C0DF7BC51C8 /* WorkerBasisService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerBasisService.swift; sourceTree = "<group>"; };
 		1D96C0465266CF918A8844FA /* AnalysisHistoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalysisHistoryStore.swift; sourceTree = "<group>"; };
+		21297019850E3A54DE443E0F /* WorkerPaperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkerPaperService.swift; sourceTree = "<group>"; };
 		2375646B3479EA716AE7270B /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		240E25E0B2FC9470C9FD86AF /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
 		269A7170910D8B8931CD2333 /* MarketScopeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketScopeWidget.swift; sourceTree = "<group>"; };
@@ -358,6 +360,7 @@
 				AAE82500326A2DCE4B7C4CFF /* WorkerMLService.swift */,
 				2FAA05394E269F731EAB8A5B /* WorkerNewsService.swift */,
 				E796EB91237E6F2944BAE871 /* WorkerOpportunitiesService.swift */,
+				21297019850E3A54DE443E0F /* WorkerPaperService.swift */,
 				85DB9C1704BB9E0E2FAB4DA1 /* WorkerTrackedSetupsService.swift */,
 				DC9A005B372BCAA04AAAE663 /* YahooFinanceService.swift */,
 			);
@@ -808,6 +811,7 @@
 				9ECCAA9D938D5D4B00DCAD8B /* WorkerMarketService.swift in Sources */,
 				9DB458342FC640F7704D0D51 /* WorkerNewsService.swift in Sources */,
 				1800B1BB6893A4FD9F002442 /* WorkerOpportunitiesService.swift in Sources */,
+				A866FADB4AC2CD9EA638937E /* WorkerPaperService.swift in Sources */,
 				0F774DEDFEA67C32CD9E07E5 /* WorkerTrackedSetupsService.swift in Sources */,
 				16D655DAF13FD9EEC310E60D /* YahooFinanceService.swift in Sources */,
 			);
