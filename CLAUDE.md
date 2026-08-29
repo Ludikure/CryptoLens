@@ -609,6 +609,55 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28f — Phase 3 shipped: the journal, and the first attribution the app has ever produced
+
+User: *"Ok build phase 3."* Corrected spec §42 calls it *"the highest-value item in the spec: it
+is what catches abstention-vs-selection."* Definitions were pre-declared in
+`docs/research/journal-attribution.md` and committed BEFORE the first entry existed.
+
+**The gap, measured before building.** The system graded what it PROPOSED (271 tracked rows) and
+had no record of what the user DID: the manual-close endpoint had never been called, `notes` was
+empty on all 61 outcomes, every `pnl_percent` was 0. Scanner rows were never logged at all.
+
+**Worker (`src/journal.ts`, 20 tests, 913 green):**
+- `opportunity_log` — every scanner row a device was shown, deduped per 4H bar, graded at +72h on
+  the box's own 1h archive at the structure it was priced at. **Same-bar target-and-stop counts as
+  the STOP** (1h bars cannot order intrabar; the conservative reading cannot flatter the record).
+  Sub-floor rows are logged with `shown=0` — a future test of the floor, not a proposal.
+- `journal_entries` — fill, size, note, exit. A `setup` entry links to its `tracked_setups` row by
+  geometry (the analysis response mints different ids); an `opportunity` entry to that bar's row.
+- Attribution — **Tier 1 only (§25)** per population (proposed / taken / skipped): expectancy, win
+  rate, MFE/MAE, profit factor, fee burden, **effective n by overlapping-window clustering** (§21
+  applied to trades), monthly consistency. The two numbers: **selection** = E[R|taken] −
+  E[R|proposed], **abstention** = E[R|skipped], each with a seeded bootstrap CI; **execution drag**
+  separates "picked badly" from "entered badly".
+- **Verdict rule: no verdict word until taken ≥ 10 AND skipped ≥ 10 graded trades.** It will say
+  "not enough data" for months, which is the correct output.
+- Realised R for a system-managed setup follows the composite-band execution the cron simulates:
+  loss −1 · partial_be +0.5 · tp1_win +½·RR₁ · tp2_win +½·RR₁ + ½·RR₂ — gross, and labelled so.
+- Endpoints `POST/PUT/DELETE/GET /journal`, `GET /attribution`. `/opportunities` logs detached;
+  the cron grades due rows beside `resolveTrackedSetups`, fault-isolated.
+- One defect caught by the suite, not in prod: `computeAttribution` assumed `tracked_setups`
+  existed, and it is created lazily — a fresh box or a device that never ran an analysis would
+  have 500'd.
+
+**iOS:** "I took this" on the trade card (source `opportunity`) and "Took it" on the verdict card
+(source `setup`) → `JournalEntrySheet`, fill prefilled from the proposal, size from
+`PositionSizer`, the stop KEPT from the proposal because it is what R is measured against. The
+Record tab opens with **Your record** above the system's — three population lines, the verdict
+line once the bar is met, and until then exactly what the data supports. Your trades list with
+Close (exit + how it ended) and swipe-to-delete. `-startTab record` DEBUG launch arg for
+screenshots.
+
+**Deployed via `tools/release-box-image.sh`** — first real use after the proof: 913 green,
+built on the box, `/health` serving `981235d7`, gluetun untouched.
+
+**The first attribution the app has ever produced, on the live device:** 15 setups proposed
+(~8 independent), 14 graded, **expectancy −0.19R gross — and all 15 skipped**, because nothing
+was ever journaled. So the one thing the record can say today is that *not* taking the system's
+setups has cost nothing. That is the abstention half of the question, answered on day one; the
+selection half starts counting at the first "I took this".
+
 ### 2026-08-28e — The scan card grades rows instead of ranking them (third attempt, first one that worked)
 
 User, for the third time: *"The scan screen is still confusing to me. I don't understand what is a
