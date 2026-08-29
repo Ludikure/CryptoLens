@@ -648,8 +648,12 @@ runNow. Halts new entries at −25% drawdown and pages. `PAPER_TRADER=0` disable
 
 Also: `pushToActiveDevices()` exported for server-side processes. 16 new tests; 909 green. **The
 decision point stands** (memory `forward-log-decision-2026-11`): compare paper to backtest around
-late November. **Not built yet:** the Record-tab "Paper bot" section on iOS — the endpoint is
-ready for it.
+late November. **iOS (2026-08-29):** the Record tab now LEADS with a "Paper bot" section reading
+`/paper` — equity and change since start, feed/contract/last-run status, the closed record beside
+the +0.22R reference (marked "too few to judge" under 10), open positions with live marks and a
+Close button, the last five closes, an enable toggle and clear-halt. Paper money never takes the
+green real positions take. First two signal runs (04:03 and 08:03 UTC): 0 accepted, every symbol
+auto-FLAT on ML_WIN < 50 — correctly idle in the same quiet market the Scan tab shows.
 
 ### 2026-08-28g — An LLM choosing take/skip: rejected on 1,825 blinded proposals, and the card number beat it
 
