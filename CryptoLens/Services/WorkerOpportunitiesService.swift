@@ -77,6 +77,26 @@ enum WorkerOpportunitiesService {
         /// no ranking, so the screen quotes it — from here, never from a literal that would go
         /// stale at the next retrain.
         let baseWinRate: BaseWinRate?
+        /// Per-side ship verdicts from the excursion model, and the sharpest honest quality
+        /// difference the book carries.
+        ///
+        /// The payload has always included these; the app decoded `longAuc`/`shortAuc` and threw
+        /// the verdicts away, so a LONG row built on a head that FAILED three of its five ship
+        /// criteria rendered identically to a SHORT row built on one that passed all five. That is
+        /// what made every row look alike. `reason` is the model's own words and is quoted, never
+        /// paraphrased — it names precisely why the head is untrusted.
+        let heads: Heads?
+    }
+
+    struct Heads: Decodable {
+        let long: Head?
+        let short: Head?
+    }
+
+    struct Head: Decodable {
+        let shippable: Bool
+        let holdoutAuc: Double?
+        let reason: String?
     }
 
     struct BaseWinRate: Decodable {
@@ -253,7 +273,12 @@ extension WorkerOpportunitiesService {
           "caveat": "Ranking is measured and regime-independent; PROFITABILITY is not. This structure was profitable in only 1 of 5 rising-market periods tested (corr with BTC return −0.51), and its edge is +0.109R gross with a median of zero — mostly nothing, occasionally a large hit.",
           "model": { "version": "excursion-v2", "primaryR": 5, "features": 110,
                      "longAuc": 0.5916, "shortAuc": 0.59,
-                     "baseWinRate": { "long": 0.0762, "short": 0.0756 } },
+                     "baseWinRate": { "long": 0.0762, "short": 0.0756 },
+                     "heads": {
+                       "long":  { "shippable": false, "holdoutAuc": 0.5916,
+                                  "reason": "cross-sectional AUC 0.5421 is below the 0.55 floor, a 30-bar-LAGGED model scores 0.5427 (so the head adds nothing over stale information), and calibration has 2 inversions. Criteria 1, 2 and 4 of 5 fail." },
+                       "short": { "shippable": true,  "holdoutAuc": 0.5900,
+                                  "reason": "all five criteria pass." } } },
           "modelVersion": "excursion-v2",
           "equity": 28000,
           "scanned": 24,

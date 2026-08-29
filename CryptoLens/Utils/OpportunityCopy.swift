@@ -277,4 +277,116 @@ enum OpportunityCopy {
         let pct = risk == risk.rounded() ? String(Int(risk)) : String(format: "%.1f", risk)
         return "1R is $\(Int(unit.rounded())) at your \(pct)% risk"
     }
+
+    // MARK: - Support grade
+
+    /// How well SUPPORTED a row is, built ONLY from measured binary facts.
+    ///
+    /// Written 2026-08-28 after the user said three times that the screen was confusing, most
+    /// precisely as: *"I don't understand what is a good trading opportunity from bad one."*
+    /// The first two attempts rewrote copy. This one changes what is claimed.
+    ///
+    /// The screen had been ranking rows by net expected R and printing a dollar figure, which
+    /// implies the model can order candidates by quality. It measurably cannot: the book's own
+    /// caveat says the edge is *"+0.109R gross with a median of zero — mostly nothing,
+    /// occasionally a large hit"*, profitable in 1 of 5 rising-market periods, at a 7.6% base hit
+    /// rate. The difference between a +0.05R row and a +0.09R row is inside that noise.
+    ///
+    /// What DOES differ between rows, and is measured:
+    ///   1. whether the excursion head for THIS DIRECTION passed its ship criteria — today the
+    ///      short head passes all five and the long head fails three of five, which is the largest
+    ///      quality gap in the book and was not on screen at all;
+    ///   2. what share of the gross edge the round trip eats (52% on a typical row);
+    ///   3. whether the crash overlay has cut the size.
+    ///
+    /// Deliberately NOT a score. §15 of the corrected spec deleted the weighted 0-100 precisely
+    /// because summing incommensurable things invents precision. A grade whose every input is a
+    /// named binary fact, each shown next to it, does not reintroduce that — the user can see
+    /// exactly which facts produced the label and disagree with any one of them.
+    enum Support {
+        /// The head for this direction FAILED its own ship test. Not "bad" — UNKNOWN.
+        case unproven
+        /// Head passed, but at least one named caveat applies.
+        case qualified
+        /// Head passed and no caveat fired.
+        case validated
+
+        var headline: String {
+            switch self {
+            case .validated: return "WELL SUPPORTED"
+            case .qualified: return "QUALIFIED"
+            case .unproven:  return "UNPROVEN"
+            }
+        }
+    }
+
+    /// One named fact behind the grade. `ok == false` is what demotes the level.
+    struct Fact: Identifiable {
+        let text: String
+        let ok: Bool
+        var id: String { text }
+    }
+
+    struct Grade {
+        let level: Support
+        let facts: [Fact]
+    }
+
+    /// Above this share of gross, the round trip is unusual for this structure rather than the
+    /// ~50% it costs on a typical row, and is worth saying on the row itself.
+    static let feeWarnShare = 0.65
+
+    /// `headShippable` is `model.heads.{long|short}.shippable` for the row's direction — nil when
+    /// the worker did not send it (an older box), which is treated as unknown rather than as pass.
+    /// `feeShare` is feeBurdenR / grossExpectedValueR. `sizeCut` is true when the crash overlay
+    /// reduced the position.
+    static func grade(direction: String,
+                      headShippable: Bool?,
+                      feeShare: Double?,
+                      sizeCut: Bool,
+                      moodLabel: String?) -> Grade {
+        var facts: [Fact] = []
+        let side = direction.uppercased() == "LONG" ? "longs" : "shorts"
+
+        switch headShippable {
+        case .some(true):
+            facts.append(Fact(text: "The \(side) model passed all 5 of its ship tests", ok: true))
+        case .some(false):
+            // The model's own reason, compressed. Quoting the full string on a row would bury it.
+            facts.append(Fact(text: "The \(side) model FAILED its own ship test — it adds nothing "
+                                  + "over 30-bar-old data", ok: false))
+        case .none:
+            facts.append(Fact(text: "This box did not report whether the \(side) model is validated",
+                              ok: false))
+        }
+
+        // Fee is a FRAME fact, not a row fact, and putting it on the row was a mistake caught by
+        // screenshotting the result: at a 0.171% round trip against a 1-2.5% stop it lands near
+        // half the gross on EVERY row, so it fired as a warning on all of them, told the user
+        // nothing about which row was better, and dragged every row to the same grade — the exact
+        // complaint this change exists to fix. The typical share is stated once above the rows.
+        // It earns a row only when it is unusual for this book, which `feeWarnShare` defines.
+        if let f = feeShare, f.isFinite, f > feeWarnShare {
+            facts.append(Fact(text: "Fees take \(Int((f * 100).rounded()))% of the edge — "
+                                  + "unusually high, this stop is tight", ok: false))
+        }
+
+        facts.append(sizeCut
+            ? Fact(text: "Crash risk elevated — size cut", ok: false)
+            : Fact(text: "Crash risk normal", ok: true))
+
+        if let m = moodLabel, direction.uppercased() == "SHORT" {
+            // Measured per §6: FEAR +0.0616, NEUTRAL +0.1437, GREED −0.0467 at ML ≥ 0.55. Greed
+            // rows never reach here — they are cancelled upstream — so this can only be good news,
+            // and it says which of the two remaining moods it is rather than implying all are equal.
+            facts.append(Fact(text: "Market mood is \(m.lowercased()), where shorts have paid",
+                              ok: true))
+        }
+
+        let level: Support
+        if headShippable != true            { level = .unproven }
+        else if facts.contains(where: { !$0.ok }) { level = .qualified }
+        else                                 { level = .validated }
+        return Grade(level: level, facts: facts)
+    }
 }

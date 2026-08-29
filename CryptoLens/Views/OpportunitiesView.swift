@@ -216,12 +216,27 @@ struct OpportunitiesView: View {
     /// the one sentence whose job is to answer the question. The user's response was that they did
     /// not know what the objective was or what the numbers meant. Thresholds, R, ATR, fees and hit
     /// rates all moved into "How I judge these", one tap down.
+    /// The headline must AGREE with the grades under it.
+    ///
+    /// It read "Two trades worth taking" above two rows that both said QUALIFIED and carried
+    /// warnings — the headline asserting a confidence the rows immediately walked back, which is
+    /// its own kind of confusing. It now reads the best grade actually present, so the top line
+    /// and the cards can never disagree.
     private var answerText: String {
         guard loaded else { return "Checking…" }
         guard book != nil else { return "Couldn't check right now." }
         let n = ranked.count
         guard n > 0 else { return "Nothing worth trading." }
-        return n == 1 ? "One trade worth taking." : "\(spelled(n)) trades worth taking."
+        let best = ranked.map { grade($0).level }
+        if best.contains(.validated) {
+            return n == 1 ? "One trade worth taking." : "\(spelled(n)) trades worth taking."
+        }
+        if best.contains(.qualified) {
+            return n == 1 ? "One trade, with caveats." : "\(spelled(n)) trades, all with caveats."
+        }
+        // Everything on screen rests on a model that failed its own bar. Say so at the top.
+        return n == 1 ? "One candidate — but nothing well supported."
+                      : "\(spelled(n)) candidates — but nothing well supported."
     }
 
     private func spelled(_ n: Int) -> String {
@@ -299,7 +314,21 @@ struct OpportunitiesView: View {
                        + "nothing. A typical trade here risks about $\(Int(unit.rounded())).")
         }
         if let rt = book?.structure?.roundTripPercent {
-            out.append("Costs are already taken out: \(trimmed(rt))% in fees for the round trip.")
+            // The SHARE is the number that matters and it was missing. \(trimmed(rt))% sounds
+            // negligible; against the edge it is about half, on every row. Stated here once
+            // because it is true of every row — putting it on the cards made all of them warn and
+            // told the user nothing about which was better.
+            var line = "Costs are already taken out: \(trimmed(rt))% in fees for the round trip."
+            let shares = ranked.compactMap { o -> Double? in
+                guard let f = o.feeBurdenR, let g = o.grossExpectedValueR, g > 0 else { return nil }
+                return f / g
+            }.sorted()
+            if let mid = shares.isEmpty ? nil : shares[shares.count / 2] {
+                line += " That is about \(Int((mid * 100).rounded()))% of the edge — fees are the "
+                      + "single largest cost here, and a row only mentions them when its own share "
+                      + "is unusually high."
+            }
+            out.append(line)
         }
         if let st = book?.structure {
             let hit = ranked.compactMap { $0.branches?.target }.sorted()
@@ -342,6 +371,41 @@ struct OpportunitiesView: View {
         }
     }
 
+    /// The grade for a row, from the book's per-side ship verdicts. See `OpportunityCopy.grade`.
+    private func grade(_ o: WorkerOpportunitiesService.Opportunity)
+        -> OpportunityCopy.Grade {
+        let head = o.direction.uppercased() == "LONG" ? book?.model?.heads?.long
+                                                      : book?.model?.heads?.short
+        var feeShare: Double? = nil
+        if let fee = o.feeBurdenR, let gross = o.grossExpectedValueR, gross > 0 {
+            feeShare = fee / gross
+        }
+        return OpportunityCopy.grade(direction: o.direction,
+                                     headShippable: head?.shippable,
+                                     feeShare: feeShare,
+                                     sizeCut: o.crashMultiplier < 1,
+                                     moodLabel: mood?.label)
+    }
+
+    /// Grey for UNPROVEN is deliberate and follows the colour law: grey is the unmodelled state,
+    /// and "the head adds nothing over stale data" is not a hazard, it is an absence of knowledge.
+    /// Caution is reserved for a row that IS modelled and carries a live warning.
+    private func gradeColor(_ l: OpportunityCopy.Support) -> Color {
+        switch l {
+        case .validated: return Theme.info
+        case .qualified: return Theme.caution
+        case .unproven:  return Theme.neutral
+        }
+    }
+
+    /// "~+$29 average — but 92% of these lose the full stop." Both halves come from the row.
+    private func realityLine(_ o: WorkerOpportunitiesService.Opportunity) -> String? {
+        guard let money = moneyPerTrade(o) else { return nil }
+        let lose = Int(((1 - o.winProbability) * 100).rounded())
+        guard lose > 0, lose < 100 else { return "\(money) average per trade" }
+        return "\(money) average — but \(lose)% of these lose the full stop"
+    }
+
     private func row(_ o: WorkerOpportunitiesService.Opportunity) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
@@ -349,14 +413,16 @@ struct OpportunitiesView: View {
                 Text(o.direction)
                     .themedPill(o.direction == "LONG" ? Theme.bullish : Theme.bearish)
                 Spacer(minLength: 4)
-                // MONEY LEADS. `+0.073R` was the largest thing on the row and is a unit this app
-                // invented for itself; the dollars were the footnote under it. Swapped.
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(moneyPerTrade(o) ?? rText(o.expectedValueR))
-                        .font(Theme.mono).fontWeight(.medium)
-                        .foregroundStyle(Theme.info)
-                    Text("avg per trade").font(Theme.frame).foregroundStyle(.tertiary)
-                }
+                // THE GRADE LEADS, not the money.
+                //
+                // Money led here until 2026-08-28, on the reasoning that dollars beat a unit the
+                // app invented for itself. Both were wrong for the same reason: a per-row FIGURE
+                // — in any unit — says the model ranks these, and it does not. Its own caveat is
+                // "median of zero, mostly nothing, occasionally a large hit" at a 7.6% hit rate.
+                // What genuinely separates rows is whether the head behind this DIRECTION passed
+                // its ship test, so that is what the row leads with.
+                Text(grade(o).level.headline)
+                    .themedPill(gradeColor(grade(o).level))
             }
 
             (Text(Formatters.formatPrice(o.entry)).foregroundStyle(.primary)
@@ -367,12 +433,32 @@ struct OpportunitiesView: View {
                 .foregroundStyle(.secondary))
                 .font(Theme.mono)
 
-            // Line 3 exists ONLY when something changed the size or the price for THIS row. A
-            // caveat that applies to every row belongs in the frame, not here.
-            if o.crashMultiplier < 1, let cut = sizeCutLine(o) {
-                Text(cut).font(Theme.frame).foregroundStyle(Theme.caution)
+            // The facts BEHIND the grade, each one shown so the label can be checked rather than
+            // trusted. A grade whose inputs are hidden is a score wearing a word.
+            VStack(alignment: .leading, spacing: 3) {
+                ForEach(grade(o).facts) { f in
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text(f.ok ? "✓" : "!")
+                            .font(Theme.frame)
+                            .foregroundStyle(f.ok ? Theme.info : Theme.caution)
+                        Text(f.text).font(Theme.frame)
+                            .foregroundStyle(f.ok ? .secondary : Theme.caution)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            // The money, demoted and carrying the thing that makes it honest. An average of +$29
+            // reads as "a small win each time"; it is a rare large winner paying for a long run of
+            // full losses, and the row has to say so or the average lies.
+            if let line = realityLine(o) {
+                Text(line).font(Theme.frame).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            // Line exists ONLY when something changed the price for THIS row. A caveat that
+            // applies to every row belongs in the frame, not here. (The size cut is now a graded
+            // fact above, so it is no longer repeated here.)
             if let clash = contradictsAnalysis(o) {
                 Text(clash).font(Theme.frame).foregroundStyle(Theme.caution)
                     .fixedSize(horizontal: false, vertical: true)

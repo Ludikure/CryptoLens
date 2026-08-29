@@ -609,6 +609,47 @@ remains:
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
 
+### 2026-08-28e — The scan card grades rows instead of ranking them (third attempt, first one that worked)
+
+User, for the third time: *"The scan screen is still confusing to me. I don't understand what is a
+good trading opportunity from bad one."* The first two attempts rewrote COPY. They failed because
+the problem was what the row CLAIMED.
+
+**The screen ranked rows by net expected R and led with a dollar figure**, which asserts the model
+can order candidates by quality. It measurably cannot — the book's own caveat, which the app was
+already receiving, says the edge is *"+0.109R gross with a median of zero — mostly nothing,
+occasionally a large hit"*, profitable in 1 of 5 rising-market periods, at a **7.6%** base hit
+rate. +0.05R vs +0.09R is inside that noise, so no wording could make those rows feel different.
+
+**Meanwhile the sharpest honest discriminator was in the payload and thrown away.**
+`model.heads.{long,short}.shippable` — the short head passes all five ship criteria, the long head
+**fails three of five** (*"cross-sectional AUC 0.5421 below the 0.55 floor, a 30-bar-LAGGED model
+scores 0.5427, so the head adds nothing over stale information"*). `WorkerOpportunitiesService`
+decoded `longAuc`/`shortAuc`/`baseWinRate` and never decoded `heads`, so **a row built on a model
+that failed its own test rendered identically to one built on a model that passed.**
+
+Rows now lead with a GRADE — WELL SUPPORTED / QUALIFIED / UNPROVEN — over the named binary facts
+that produced it, with the money demoted to *"+$29 average — but 92% of these lose the full stop"*
+(both halves from the row). Deliberately not a score: §15 deleted the weighted 0-100 because
+summing incommensurable things invents precision, and a grade whose every input is shown beside it
+does not reintroduce that — the user can see which facts produced the label and reject any one.
+UNPROVEN renders GREY, per the colour law: "adds nothing over stale data" is absence of knowledge,
+not hazard; caution stays for a modelled row with a live warning.
+
+**A defect I introduced and caught only by screenshotting.** The first version put fee share on the
+row. At a 0.171% round trip against a 1-2.5% stop that lands near half the gross on EVERY row, so
+it warned on all of them, said nothing about which was better, and dragged every row to QUALIFIED —
+reproducing the exact complaint. It is a FRAME fact and is now stated once above the rows, with a
+row mentioning fees only above 65%. Fixing that alone made the rows discriminate: LINK WELL
+SUPPORTED vs SOL QUALIFIED (crash risk elevated, size cut). **The file's own header already said
+"every caveat that applies to all rows equally is stated ONCE, above them"** — I wrote that and
+then broke it.
+
+Also: `answerText` now derives from the best grade present, so the headline cannot say "Two trades
+worth taking" over two rows that both warn.
+
+iOS-only — needs a rebuild+install. No worker change, no redeploy.
+
 ### 2026-08-28d — Deploying the box is now one command, run from here
 
 User: *"ludikure truenas user can create docker images. Instead of you asking me to redeploy,
