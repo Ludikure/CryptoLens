@@ -1,0 +1,348 @@
+============================================================
+Horizon training — 72h target (fwdMaxFavR72H)
+  CSV source: /Volumes/External/CryptoLens/ml-training/csv_exports_v14_stocks
+  Output suffix: h72t25
+============================================================
+
+--- Loading Stocks ---
+  AAPL: 1629 bars, goodR=64.0%
+  ABBV: 1629 bars, goodR=57.6%
+  ABNB: 1141 bars, goodR=60.6%
+  ABT: 1629 bars, goodR=57.6%
+  ADBE: 1629 bars, goodR=59.9%
+  AIG: 1626 bars, goodR=62.7%
+  AMAT: 1629 bars, goodR=66.1%
+  AMD: 1629 bars, goodR=65.8%
+  AMGN: 1629 bars, goodR=57.6%
+  AMT: 1629 bars, goodR=59.6%
+  AMZN: 1629 bars, goodR=62.9%
+  AVGO: 1629 bars, goodR=64.5%
+  AXP: 1629 bars, goodR=64.4%
+  BA: 1629 bars, goodR=62.7%
+  BAC: 1629 bars, goodR=65.8%
+  BIIB: 1627 bars, goodR=56.1%
+  BKNG: 1629 bars, goodR=62.2%
+  BLK: 1629 bars, goodR=64.3%
+  BMY: 1628 bars, goodR=58.8%
+  BSX: 1629 bars, goodR=62.4%
+  BYND: 1549 bars, goodR=51.3%
+  C: 1629 bars, goodR=62.7%
+  CAT: 1629 bars, goodR=64.3%
+  CCI: 1629 bars, goodR=59.9%
+  CHTR: 1629 bars, goodR=59.7%
+  CMCSA: 1629 bars, goodR=60.5%
+  CME: 1628 bars, goodR=59.3%
+  CMG: 1629 bars, goodR=63.5%
+  COF: 1629 bars, goodR=62.9%
+  COIN: 1058 bars, goodR=60.8%
+  COP: 1629 bars, goodR=64.8%
+  COST: 1629 bars, goodR=63.0%
+  CRM: 1629 bars, goodR=62.0%
+  CRWD: 1521 bars, goodR=65.9%
+  CSCO: 1629 bars, goodR=58.7%
+  CVS: 1629 bars, goodR=63.7%
+  CVX: 1629 bars, goodR=59.8%
+  DAL: 1629 bars, goodR=64.5%
+  DASH: 1142 bars, goodR=62.5%
+  DDOG: 1441 bars, goodR=63.2%
+  DE: 1629 bars, goodR=63.2%
+  DHR: 1629 bars, goodR=62.4%
+  DIA: 1504 bars, goodR=62.4%
+  DIS: 1629 bars, goodR=60.3%
+  ELV: 867 bars, goodR=56.1%
+  EMR: 1627 bars, goodR=60.9%
+  EOG: 1629 bars, goodR=64.3%
+  EQIX: 1629 bars, goodR=55.0%
+  ETN: 1628 bars, goodR=61.9%
+  F: 1629 bars, goodR=61.5%
+  FANG: 1625 bars, goodR=65.0%
+  FDX: 1629 bars, goodR=66.6%
+  FTNT: 1629 bars, goodR=62.6%
+  GD: 1628 bars, goodR=60.1%
+  GE: 1629 bars, goodR=63.7%
+  GILD: 1628 bars, goodR=60.9%
+  GLD: 1498 bars, goodR=72.2%
+  GM: 1629 bars, goodR=62.6%
+  GME: 1629 bars, goodR=54.4%
+  GOOGL: 1629 bars, goodR=63.5%
+  GS: 1629 bars, goodR=63.7%
+  HD: 1629 bars, goodR=63.3%
+  HLT: 1629 bars, goodR=65.7%
+  HON: 1629 bars, goodR=59.2%
+  HYG: 1498 bars, goodR=58.4%
+  ICE: 1629 bars, goodR=59.5%
+  INTC: 1629 bars, goodR=60.4%
+  INTU: 1629 bars, goodR=65.3%
+  ISRG: 1629 bars, goodR=62.0%
+  ITW: 1629 bars, goodR=59.4%
+  IWM: 1495 bars, goodR=64.9%
+  JNJ: 1629 bars, goodR=61.0%
+  JPM: 1629 bars, goodR=65.9%
+  KLAC: 1629 bars, goodR=64.1%
+  LLY: 1629 bars, goodR=60.5%
+  LMT: 1629 bars, goodR=58.3%
+  LOW: 1629 bars, goodR=63.4%
+  LRCX: 1629 bars, goodR=66.3%
+  MA: 1629 bars, goodR=62.8%
+  MAR: 1629 bars, goodR=64.5%
+  MCD: 1629 bars, goodR=61.1%
+  MCHP: 1629 bars, goodR=59.7%
+  MDB: 1628 bars, goodR=61.0%
+  MDT: 1628 bars, goodR=59.5%
+  META: 1629 bars, goodR=64.1%
+  MGM: 1629 bars, goodR=61.0%
+  MMM: 1629 bars, goodR=61.6%
+  MRK: 1628 bars, goodR=61.7%
+  MRVL: 1629 bars, goodR=64.9%
+  MS: 1629 bars, goodR=62.2%
+  MSFT: 1629 bars, goodR=62.9%
+  MU: 1629 bars, goodR=66.7%
+  NET: 1455 bars, goodR=67.1%
+  NFLX: 1629 bars, goodR=60.9%
+  NKE: 1629 bars, goodR=62.4%
+  NOC: 1629 bars, goodR=61.4%
+  NOW: 1629 bars, goodR=64.8%
+  NVDA: 1629 bars, goodR=65.8%
+  O: 1629 bars, goodR=59.9%
+  ON: 1629 bars, goodR=66.8%
+  ORCL: 1629 bars, goodR=62.6%
+  OXY: 1629 bars, goodR=62.1%
+  PANW: 1629 bars, goodR=64.3%
+  PFE: 1629 bars, goodR=59.4%
+  PH: 1629 bars, goodR=62.1%
+  PLD: 1629 bars, goodR=56.4%
+  PLTR: 1192 bars, goodR=65.8%
+  PNC: 1629 bars, goodR=63.0%
+  PSA: 1629 bars, goodR=60.8%
+  PSX: 1626 bars, goodR=63.5%
+  PYPL: 1629 bars, goodR=59.8%
+  QCOM: 1629 bars, goodR=61.1%
+  QQQ: 1497 bars, goodR=67.5%
+  RBLX: 1081 bars, goodR=66.0%
+  REGN: 1629 bars, goodR=56.9%
+  ROKU: 1629 bars, goodR=61.6%
+  RTX: 1441 bars, goodR=60.9%
+  SBUX: 1629 bars, goodR=61.0%
+  SCHW: 1628 bars, goodR=59.7%
+  SHOP: 1629 bars, goodR=62.4%
+  SLB: 1629 bars, goodR=60.5%
+  SNAP: 1629 bars, goodR=59.2%
+  SNOW: 1201 bars, goodR=60.7%
+  SPG: 1629 bars, goodR=59.1%
+  SPOT: 1629 bars, goodR=63.6%
+  SPY: 1498 bars, goodR=63.2%
+  SYK: 1629 bars, goodR=62.9%
+  T: 1629 bars, goodR=59.6%
+  TEAM: 1629 bars, goodR=61.3%
+  TGT: 1629 bars, goodR=63.9%
+  TJX: 1629 bars, goodR=64.0%
+  TLT: 1497 bars, goodR=66.2%
+  TMO: 1629 bars, goodR=59.3%
+  TMUS: 1629 bars, goodR=57.4%
+  TSLA: 1629 bars, goodR=65.3%
+  TXN: 1629 bars, goodR=61.5%
+  UBER: 1543 bars, goodR=62.2%
+  UNH: 1629 bars, goodR=57.6%
+  UNP: 1629 bars, goodR=60.2%
+  USB: 1629 bars, goodR=60.9%
+  V: 1629 bars, goodR=62.1%
+  VLO: 1629 bars, goodR=64.1%
+  VRTX: 1629 bars, goodR=56.1%
+  VXX: 1496 bars, goodR=49.4%
+  VZ: 1629 bars, goodR=58.9%
+  WDAY: 1629 bars, goodR=62.2%
+  WFC: 1629 bars, goodR=61.8%
+  WMT: 1629 bars, goodR=63.0%
+  XLC: 1498 bars, goodR=66.8%
+  XLE: 1498 bars, goodR=66.4%
+  XLF: 1498 bars, goodR=64.6%
+  XLI: 1498 bars, goodR=64.2%
+  XLK: 1498 bars, goodR=67.4%
+  XLP: 1498 bars, goodR=60.8%
+  XLU: 1498 bars, goodR=58.5%
+  XLV: 1498 bars, goodR=58.5%
+  XLY: 1498 bars, goodR=65.3%
+  XOM: 1629 bars, goodR=65.4%
+  ZS: 1629 bars, goodR=63.4%
+  total: 252215 bars, goodR=62.0%
+
+  Model: XGBoost d5 t100
+  walk-forward CV (capturing out-of-fold predictions):
+    fold 1: train=100886, val=37784, acc=66.2%, p_mean=0.641, p_max=0.875
+    fold 2: train=138718, val=37784, acc=68.0%, p_mean=0.595, p_max=0.855
+    fold 3: train=176550, val=75617, acc=68.2%, p_mean=0.613, p_max=0.868
+  total OOF samples: 151185
+  calibration floor (Wilson LB, bottom decile): 0.3398
+
+  Stocks calibration breakpoints (raw -> calibrated):
+    0.1353 -> 0.3398
+    0.1829 -> 0.3398
+    0.1835 -> 0.3398
+    0.3347 -> 0.3398
+    0.3347 -> 0.3398
+    0.3548 -> 0.3398
+    0.3548 -> 0.3398
+    0.3549 -> 0.3398
+    0.3549 -> 0.3398
+    0.3696 -> 0.3398
+    0.3697 -> 0.3524
+    0.3768 -> 0.3524
+    0.3768 -> 0.3636
+    0.3769 -> 0.3636
+    0.3769 -> 0.3657
+    0.3810 -> 0.3657
+    0.3810 -> 0.3849
+    0.3873 -> 0.3849
+    0.3873 -> 0.4189
+    0.4049 -> 0.4189
+    0.4049 -> 0.4197
+    0.4394 -> 0.4197
+    0.4394 -> 0.4340
+    0.4468 -> 0.4340
+    0.4468 -> 0.4361
+    0.4487 -> 0.4361
+    0.4487 -> 0.4366
+    0.4494 -> 0.4366
+    0.4494 -> 0.4368
+    0.4626 -> 0.4368
+    0.4626 -> 0.4444
+    0.4630 -> 0.4444
+    0.4631 -> 0.4448
+    0.4638 -> 0.4448
+    0.4638 -> 0.4565
+    0.4669 -> 0.4565
+    0.4669 -> 0.4598
+    0.4698 -> 0.4598
+    0.4698 -> 0.4631
+    0.4738 -> 0.4631
+    0.4738 -> 0.4716
+    0.4964 -> 0.4716
+    0.4964 -> 0.4722
+    0.5039 -> 0.4722
+    0.5039 -> 0.4895
+    0.5049 -> 0.4895
+    0.5049 -> 0.4908
+    0.5091 -> 0.4908
+    0.5091 -> 0.5000
+    0.5092 -> 0.5000
+    0.5092 -> 0.5041
+    0.5297 -> 0.5041
+    0.5297 -> 0.5074
+    0.5382 -> 0.5074
+    0.5382 -> 0.5096
+    0.5608 -> 0.5096
+    0.5608 -> 0.5167
+    0.5854 -> 0.5167
+    0.5854 -> 0.5218
+    0.6136 -> 0.5218
+    0.6136 -> 0.5420
+    0.6183 -> 0.5420
+    0.6183 -> 0.5556
+    0.6192 -> 0.5556
+    0.6192 -> 0.5600
+    0.6194 -> 0.5600
+    0.6194 -> 0.5678
+    0.6251 -> 0.5678
+    0.6251 -> 0.5865
+    0.6284 -> 0.5865
+    0.6284 -> 0.5888
+    0.6347 -> 0.5888
+    0.6347 -> 0.5985
+    0.6363 -> 0.5985
+    0.6364 -> 0.6003
+    0.6472 -> 0.6003
+    0.6472 -> 0.6006
+    0.6490 -> 0.6006
+    0.6490 -> 0.6073
+    0.6518 -> 0.6073
+    0.6518 -> 0.6296
+    0.6532 -> 0.6296
+    0.6532 -> 0.6327
+    0.6552 -> 0.6327
+    0.6552 -> 0.6415
+    0.6600 -> 0.6415
+    0.6600 -> 0.6503
+    0.6634 -> 0.6503
+    0.6634 -> 0.6626
+    0.6709 -> 0.6626
+    0.6709 -> 0.6726
+    0.6787 -> 0.6726
+    0.6787 -> 0.6807
+    0.6828 -> 0.6807
+    0.6828 -> 0.6866
+    0.6850 -> 0.6866
+    0.6850 -> 0.6944
+    0.6877 -> 0.6944
+    0.6877 -> 0.6970
+    0.6878 -> 0.6970
+    0.6878 -> 0.7011
+    0.6968 -> 0.7011
+    0.6968 -> 0.7069
+    0.6971 -> 0.7069
+    0.6971 -> 0.7171
+    0.6979 -> 0.7171
+    0.6979 -> 0.7210
+    0.7034 -> 0.7210
+    0.7034 -> 0.7268
+    0.7097 -> 0.7268
+    0.7097 -> 0.7368
+    0.7102 -> 0.7368
+    0.7102 -> 0.7387
+    0.7146 -> 0.7387
+    0.7146 -> 0.7449
+    0.7233 -> 0.7449
+    0.7233 -> 0.7631
+    0.7339 -> 0.7631
+    0.7340 -> 0.7656
+    0.7357 -> 0.7656
+    0.7357 -> 0.7712
+    0.7379 -> 0.7712
+    0.7379 -> 0.7752
+    0.7405 -> 0.7752
+    0.7406 -> 0.7798
+    0.7559 -> 0.7798
+    0.7559 -> 0.7848
+    0.7590 -> 0.7848
+    0.7590 -> 0.7869
+    0.7664 -> 0.7869
+    0.7664 -> 0.7889
+    0.7725 -> 0.7889
+    0.7726 -> 0.7895
+    0.7726 -> 0.7895
+    0.7726 -> 0.8013
+    0.7739 -> 0.8013
+    0.7739 -> 0.8036
+    0.7784 -> 0.8036
+    0.7784 -> 0.8101
+    0.7824 -> 0.8101
+    0.7824 -> 0.8205
+    0.8115 -> 0.8205
+    0.8115 -> 0.8241
+    0.8168 -> 0.8241
+    0.8168 -> 0.8365
+    0.8226 -> 0.8365
+    0.8226 -> 0.8500
+    0.8299 -> 0.8500
+    0.8299 -> 0.8500
+    0.8323 -> 0.8500
+    0.8323 -> 0.8500
+    0.8329 -> 0.8500
+    0.8329 -> 0.8500
+    0.8418 -> 0.8500
+    0.8418 -> 0.8500
+    0.8520 -> 0.8500
+    0.8521 -> 0.8500
+    0.8586 -> 0.8500
+    0.8602 -> 0.8500
+    0.8749 -> 0.8500
+
+  Stocks raw distribution:    mean=0.615 median=0.671 p90=0.788 max=0.875
+  Stocks mapped distribution: mean=0.618 median=0.663 p90=0.820 max=0.850
+  Stocks actual goodR rate:   61.8%
+  reliability check (mapped prob bucket -> actual win rate):
+    [0.00, 0.30): n= 4253, actual=26.9%
+    [0.30, 0.50): n=47193, actual=42.6%
+    [0.50, 0.60): n=17205, actual=52.5%
+    [0.60, 0.70): n=11591, actual=65.0%
+    [0.70, 0.85): n=69152, actual=78.1%
+  wrote /Volumes/External/CryptoLens/marketscope-worker/src/ml-model-stock-h72t25.json (100 trees, xgboost, 160 cal breakpoints)

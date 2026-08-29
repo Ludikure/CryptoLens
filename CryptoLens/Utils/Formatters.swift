@@ -47,3 +47,12 @@ enum Formatters {
         return String(format: "%.0f", value)
     }
 }
+
+extension Double {
+    /// Round to a fixed number of decimal places. (Formerly declared in the now-removed
+    /// on-device indicator modules; kept here for the thin-client helpers that still use it.)
+    func rounded(toPlaces places: Int) -> Double {
+        let multiplier = pow(10.0, Double(places))
+        return (self * multiplier).rounded() / multiplier
+    }
+}

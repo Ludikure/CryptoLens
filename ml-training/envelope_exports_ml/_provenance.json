@@ -1,0 +1,389 @@
+{
+  "generatedFromDb": "marketscope.db",
+  "joinedAgainst": "../ml-training/csv_exports_v14",
+  "module": "exportEnvelope.ts",
+  "gitSha": null,
+  "mlSource": "../ml-training/phase2_ml_inject.csv",
+  "symbols": {
+    "AAVEUSDT": {
+      "rows": 10260,
+      "produced": 10599,
+      "v14Rows": 11003,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 64 vs 57.0300 — indicator window differs",
+      "longestBadRun": 180,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "ADAUSDT": {
+      "rows": 13769,
+      "produced": 14126,
+      "v14Rows": 14230,
+      "lastTs": 1776110400,
+      "truncatedAt": 1776124800,
+      "truncationReason": "price 0.2447 vs 0.2461 — local candle archive disagrees",
+      "longestBadRun": 144,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "ALGOUSDT": {
+      "rows": 13146,
+      "produced": 13485,
+      "v14Rows": 13889,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 61.9 vs 60.4300 — indicator window differs",
+      "longestBadRun": 180,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "ATOMUSDT": {
+      "rows": 13287,
+      "produced": 13635,
+      "v14Rows": 14212,
+      "lastTs": 1776283200,
+      "truncatedAt": 1776297600,
+      "truncationReason": "price 1.789 vs 1.7780 — local candle archive disagrees",
+      "longestBadRun": 114,
+      "droppedBlips": 3,
+      "droppedSample": [
+        {
+          "ts": 1635480000,
+          "reason": "price 38.14 vs 38.1700 — local candle archive disagrees"
+        },
+        {
+          "ts": 1635508800,
+          "reason": "hRsi 61.6 vs 61.6600 — indicator window differs"
+        },
+        {
+          "ts": 1635724800,
+          "reason": "hRsi 38.6 vs 38.5400 — indicator window differs"
+        }
+      ]
+    },
+    "AVAXUSDT": {
+      "rows": 10388,
+      "produced": 10737,
+      "v14Rows": 11142,
+      "lastTs": 1776283200,
+      "truncatedAt": 1776297600,
+      "truncationReason": "dRsi 52.7 vs 51.7600 — indicator window differs",
+      "longestBadRun": 72,
+      "droppedBlips": 4,
+      "droppedSample": [
+        {
+          "ts": 1776211200,
+          "reason": "price 9.35 vs 9.3600 — local candle archive disagrees"
+        },
+        {
+          "ts": 1776240000,
+          "reason": "hRsi 55.7 vs 55.6400 — indicator window differs"
+        },
+        {
+          "ts": 1776254400,
+          "reason": "hRsi 53.1 vs 53.0200 — indicator window differs"
+        },
+        {
+          "ts": 1776268800,
+          "reason": "hRsi 58.7 vs 58.6100 — indicator window differs"
+        }
+      ]
+    },
+    "AXSUSDT": {
+      "rows": 9750,
+      "produced": 10479,
+      "v14Rows": 10883,
+      "lastTs": 1770753600,
+      "truncatedAt": 1770768000,
+      "truncationReason": "atrPercentile 83 vs 85.0000 — indicator window differs",
+      "longestBadRun": 108,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "BNBUSDT": {
+      "rows": 13282,
+      "produced": 13641,
+      "v14Rows": 14230,
+      "lastTs": 1776096000,
+      "truncatedAt": 1776110400,
+      "truncationReason": "hRsi 64.9 vs 64.9600 — indicator window differs",
+      "longestBadRun": 55,
+      "droppedBlips": 1,
+      "droppedSample": [
+        {
+          "ts": 1776024000,
+          "reason": "price 592.19 vs 592.2400 — local candle archive disagrees"
+        }
+      ]
+    },
+    "BTCUSDT": {
+      "rows": 13755,
+      "produced": 14126,
+      "v14Rows": 14230,
+      "lastTs": 1775908800,
+      "truncatedAt": 1775923200,
+      "truncationReason": "price 73687.15 vs 73001.3000 — local candle archive disagrees",
+      "longestBadRun": 156,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "DOGEUSDT": {
+      "rows": 13138,
+      "produced": 13407,
+      "v14Rows": 13811,
+      "lastTs": 1778011200,
+      "truncatedAt": 1778025600,
+      "truncationReason": "dRsi 79.6 vs 77.2600 — indicator window differs",
+      "longestBadRun": 225,
+      "droppedBlips": 44,
+      "droppedSample": [
+        {
+          "ts": 1635566400,
+          "reason": "hRsi 54.5 vs 54.5600 — indicator window differs"
+        },
+        {
+          "ts": 1776024000,
+          "reason": "hRsi 42 vs 41.3700 — indicator window differs"
+        },
+        {
+          "ts": 1776038400,
+          "reason": "dRsi 45.2 vs 44.9400 — indicator window differs"
+        },
+        {
+          "ts": 1776052800,
+          "reason": "dRsi 45.2 vs 44.9400 — indicator window differs"
+        },
+        {
+          "ts": 1776067200,
+          "reason": "dRsi 45.2 vs 44.9400 — indicator window differs"
+        },
+        {
+          "ts": 1776081600,
+          "reason": "dRsi 45.2 vs 44.9400 — indicator window differs"
+        },
+        {
+          "ts": 1776096000,
+          "reason": "dRsi 45.2 vs 44.9400 — indicator window differs"
+        },
+        {
+          "ts": 1776110400,
+          "reason": "dRsi 45.2 vs 44.9400 — indicator window differs"
+        },
+        {
+          "ts": 1776124800,
+          "reason": "hRsi 57.2 vs 57.1200 — indicator window differs"
+        },
+        {
+          "ts": 1776139200,
+          "reason": "hRsi 57.5 vs 57.3600 — indicator window differs"
+        },
+        {
+          "ts": 1776153600,
+          "reason": "hRsi 60.8 vs 60.6800 — indicator window differs"
+        },
+        {
+          "ts": 1776168000,
+          "reason": "hRsi 65.5 vs 65.2500 — indicator window differs"
+        },
+        {
+          "ts": 1776268800,
+          "reason": "hRsi 64.6 vs 64.4900 — indicator window differs"
+        },
+        {
+          "ts": 1776283200,
+          "reason": "hRsi 57.8 vs 57.7400 — indicator window differs"
+        },
+        {
+          "ts": 1776369600,
+          "reason": "hRsi 69.1 vs 69.0000 — indicator window differs"
+        },
+        {
+          "ts": 1776384000,
+          "reason": "hRsi 61.3 vs 61.2300 — indicator window differs"
+        },
+        {
+          "ts": 1776398400,
+          "reason": "hRsi 62.3 vs 62.2400 — indicator window differs"
+        },
+        {
+          "ts": 1776412800,
+          "reason": "hRsi 64.4 vs 64.3400 — indicator window differs"
+        },
+        {
+          "ts": 1776427200,
+          "reason": "hRsi 69.4 vs 69.3400 — indicator window differs"
+        },
+        {
+          "ts": 1776628800,
+          "reason": "hRsi 38.1 vs 38.1600 — indicator window differs"
+        }
+      ]
+    },
+    "DOTUSDT": {
+      "rows": 10596,
+      "produced": 10947,
+      "v14Rows": 11351,
+      "lastTs": 1776196800,
+      "truncatedAt": 1776211200,
+      "truncationReason": "price 1.164 vs 1.1750 — local candle archive disagrees",
+      "longestBadRun": 84,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "EGLDUSDT": {
+      "rows": 10512,
+      "produced": 10851,
+      "v14Rows": 11255,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 61.4 vs 56.0900 — indicator window differs",
+      "longestBadRun": 234,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "ETHUSDT": {
+      "rows": 13270,
+      "produced": 13641,
+      "v14Rows": 14230,
+      "lastTs": 1775908800,
+      "truncatedAt": 1775923200,
+      "truncationReason": "price 2315.96 vs 2256.9600 — local candle archive disagrees",
+      "longestBadRun": 153,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "FILUSDT": {
+      "rows": 10260,
+      "produced": 10599,
+      "v14Rows": 11003,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 62.6 vs 61.8300 — indicator window differs",
+      "longestBadRun": 174,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "ICPUSDT": {
+      "rows": 9012,
+      "produced": 9351,
+      "v14Rows": 9755,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 62 vs 58.2300 — indicator window differs",
+      "longestBadRun": 108,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "LINKUSDT": {
+      "rows": 11220,
+      "produced": 11571,
+      "v14Rows": 14230,
+      "lastTs": 1776196800,
+      "truncatedAt": 1776211200,
+      "truncationReason": "price 9.07 vs 9.0600 — local candle archive disagrees",
+      "longestBadRun": 192,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "LTCUSDT": {
+      "rows": 13296,
+      "produced": 13641,
+      "v14Rows": 14230,
+      "lastTs": 1776283200,
+      "truncatedAt": 1776297600,
+      "truncationReason": "price 55.32 vs 54.9500 — local candle archive disagrees",
+      "longestBadRun": 324,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "MANAUSDT": {
+      "rows": 10680,
+      "produced": 11019,
+      "v14Rows": 11423,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 58.2 vs 54.7300 — indicator window differs",
+      "longestBadRun": 138,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "NEARUSDT": {
+      "rows": 10254,
+      "produced": 10605,
+      "v14Rows": 11009,
+      "lastTs": 1776196800,
+      "truncatedAt": 1776211200,
+      "truncationReason": "price 1.367 vs 1.3600 — local candle archive disagrees",
+      "longestBadRun": 138,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "SANDUSDT": {
+      "rows": 10632,
+      "produced": 10971,
+      "v14Rows": 11375,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 58.1 vs 52.8100 — indicator window differs",
+      "longestBadRun": 126,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "SOLUSDT": {
+      "rows": 10618,
+      "produced": 10989,
+      "v14Rows": 11393,
+      "lastTs": 1775908800,
+      "truncatedAt": 1775923200,
+      "truncationReason": "price 86.01 vs 84.8000 — local candle archive disagrees",
+      "longestBadRun": 90,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "THETAUSDT": {
+      "rows": 13296,
+      "produced": 13635,
+      "v14Rows": 14230,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 65.5 vs 67.1900 — indicator window differs",
+      "longestBadRun": 42,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "UNIUSDT": {
+      "rows": 10428,
+      "produced": 10767,
+      "v14Rows": 11171,
+      "lastTs": 1776369600,
+      "truncatedAt": 1776384000,
+      "truncationReason": "dRsi 53.4 vs 47.5200 — indicator window differs",
+      "longestBadRun": 150,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "VETUSDT": {
+      "rows": 13290,
+      "produced": 13635,
+      "v14Rows": 14230,
+      "lastTs": 1776283200,
+      "truncatedAt": 1776297600,
+      "truncationReason": "hRsi 62 vs 62.1700 — indicator window differs",
+      "longestBadRun": 216,
+      "droppedBlips": 0,
+      "droppedSample": []
+    },
+    "XRPUSDT": {
+      "rows": 13271,
+      "produced": 13641,
+      "v14Rows": 14230,
+      "lastTs": 1775923200,
+      "truncatedAt": 1775937600,
+      "truncationReason": "price 1.3546 vs 1.3630 — local candle archive disagrees",
+      "longestBadRun": 151,
+      "droppedBlips": 0,
+      "droppedSample": []
+    }
+  }
+}

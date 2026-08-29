@@ -1,19 +1,36 @@
 import Foundation
 
 /// Fetches ML probability + features from the Cloudflare Worker `/ml-predict` endpoint.
-/// Worker is the canonical live-serving implementation (see Phase 2 parity work);
-/// callers should prefer this over the local `MLScoring.predict()` path so notifications
-/// (which also run on worker cron) and in-app display stay in sync feature-for-feature.
+/// The worker is the single source of truth for displayed ML; notifications (worker cron)
+/// and in-app display stay in sync feature-for-feature.
 ///
 /// Cache semantics: worker returns the latest cron-cached prediction (TTL 5 min, written
 /// every minute for any symbol in any device's watchlist). A 404 means no cron has run
-/// for this symbol yet — caller should fall back to local prediction for that bar and
-/// retry on the next refresh.
+/// for this symbol yet — the UI shows "—" and retries on the next refresh.
 enum WorkerMLService {
 
+    struct BigMove: Decodable {
+        let prob: Double         // calibrated P(>= 4 ATR move in 24h)
+        let bucket: String       // "HIGH" / "ELEVATED" / "NORMAL"
+        let multiple: Double     // prob ÷ base rate (the "1.7x normal" the UI shows)
+    }
+
     struct Prediction {
+        /// RAW model output. Kept because the mandate tier and the `ML Bucket` line both read the
+        /// raw scale, and because it is what the model itself says.
         let probability: Double              // 24h@1.5 ATR — trade-quality gate
+        /// The LIVE-CALIBRATED value, which is what every envelope gate actually keys on.
+        ///
+        /// These two have drifted apart and the gap is large: the live base rate runs ~58% against
+        /// v14's 50.5% training base, so the PAV curve lifts raw upward, and the auto-FLAT at
+        /// calibrated 50 corresponds to raw < 30.3%. Showing `probability` next to a permitted setup
+        /// left no way to reconcile the badge with the decision — "ML 31, and it gave me a setup"
+        /// is the display being on a different scale from the gate, not a broken gate.
+        ///
+        /// nil when the worker could not fit a curve; the UI falls back to raw and says so.
+        let probabilityCalibrated: Double?
         let probabilityH72: Double?          // 72h@2.5 ATR — runner-hold persistence
+        let bigMove: BigMove?                // tail head: outsized-move risk (crypto-only)
         let timestamp: Date
         let isCrypto: Bool
         // Phase 1/2 additive heads (crypto-only; nil otherwise). See PLAN_OUTCOMES.md.
@@ -68,7 +85,9 @@ enum WorkerMLService {
 
         struct Body: Decodable {
             let probability: Double
+            let probabilityCalibrated: Double?
             let probabilityH72: Double?
+            let bigMove: BigMove?
             let timestamp: TimeInterval
             let isCrypto: Bool
             let probabilityMeta: Double?
@@ -82,7 +101,9 @@ enum WorkerMLService {
         }
         return Prediction(
             probability: body.probability,
+            probabilityCalibrated: body.probabilityCalibrated,
             probabilityH72: body.probabilityH72,
+            bigMove: body.bigMove,
             timestamp: Date(timeIntervalSince1970: body.timestamp / 1000),
             isCrypto: body.isCrypto,
             probabilityMeta: body.probabilityMeta,

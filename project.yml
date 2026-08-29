@@ -49,8 +49,6 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
         UIRequiresFullScreen: false
         # API keys removed from bundle — all calls go through worker proxy
-        BGTaskSchedulerPermittedIdentifiers:
-          - com.ludikure.CryptoLens.priceCheck
         UIBackgroundModes:
           - fetch
           - remote-notification
@@ -63,14 +61,57 @@ targets:
       path: MarketScope.entitlements
       properties:
         aps-environment: development
+        # The widget target has always declared this group and reads `widget_data` from it, but the
+        # main app never declared it — so the app wrote to standard UserDefaults, the widget read an
+        # empty group container, and the widget was permanently blank. The group is already
+        # registered in the Developer portal and present in BOTH the dev and store provisioning
+        # profiles for com.ludikure.CryptoLens (verified), so declaring it here is a no-op for
+        # signing. See Utils/WidgetDataWriter.swift for the writer.
+        com.apple.security.application-groups:
+          - group.com.ludikure.CryptoLens
     dependencies:
       - target: MarketScopeWidget
     scheme:
+      testTargets:
+        - MarketScopeTests
+        - MarketScopeUITests
       run:
         environmentVariables:
           - variable: IDEPreferLogStreaming
             value: "YES"
             isEnabled: true
+
+  # Unit tests: pure logic (the pinch axis decomposition) that XCUIElement.pinch can't exercise
+  # — it only spreads vertically, so the horizontal-zoom path has no UI-test coverage.
+  MarketScopeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - MarketScopeTests
+    dependencies:
+      - target: MarketScope
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens.tests
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+
+  # UI test target: drives REAL touches (pan / pinch / axis drags) against the chart on the
+  # simulator — the only way to verify the native gesture recognizer end-to-end without a
+  # physical device. Run: xcodebuild test -scheme MarketScope -only-testing MarketScopeUITests
+  MarketScopeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - MarketScopeUITests
+    dependencies:
+      - target: MarketScope
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ludikure.CryptoLens.uitests
+        CODE_SIGN_STYLE: Automatic
+        TEST_TARGET_NAME: MarketScope
+        GENERATE_INFOPLIST_FILE: YES
 
   MarketScopeWidget:
     type: app-extension

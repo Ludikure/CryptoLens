@@ -1,14 +1,21 @@
-// Shared LLM prompt builder — TS port of CryptoLens/Services/AnalysisPrompt.swift, so the web
-// app (and, after Phase 4, iOS) build one identical prompt instead of duplicating ~2,700 lines.
+// Shared LLM prompt builder. This is now the SINGLE SOURCE OF TRUTH for the analysis prompt:
+// both the web app and iOS (thin client) call /full-analysis, which builds the prompt here.
+// The old on-device Swift prompt builder (CryptoLens/Services/AnalysisPrompt.buildUserPrompt
+// + systemPrompt + the Claude/Gemini/DeepSeek local services) was DELETED once the live path
+// moved fully server-side — there is no longer a Swift counterpart to stay in parity with.
 //
-// systemPrompt is byte-extracted from the Swift source (scripts/extract_system_prompt.py →
-// prompt-system.json) for guaranteed parity. classifyArchetype / useTighterBands / parseSetups
-// are ported here. buildUserPrompt (the ~2,090-line pre-computed-flags core) is ported next.
+// systemPrompt text lives in prompt-system.json (now canonical — it was originally extracted
+// from the Swift source via scripts/extract_system_prompt.py, but that source is gone, so the
+// JSON is hand-maintained going forward; the extract script is defunct). classifyArchetype /
+// useTighterBands / parseSetups are implemented here.
 //
 // Post the 2026-05-30 A/B collapse, the treatment path is always active, so useTighterBands
 // uses the treatment rule (tighter-by-default, trendingSymbols opt out).
 
 import systemPrompts from './prompt-system.json';
+import { stopQuality } from './risk-engine';
+import { tailRiskInfo } from './ml-predict';
+import { evaluateEnvelope, type EnvelopeInput, type EnvelopeVerdict } from './envelope';
 
 export function systemPrompt(isCrypto: boolean): string {
   return isCrypto ? (systemPrompts as { crypto: string }).crypto : (systemPrompts as { stock: string }).stock;
@@ -76,8 +83,37 @@ function decodeSetups(jsonString: string): TradeSetup[] {
         tp2: typeof x.tp2 === 'number' ? x.tp2 : null,
         reasoning: typeof x.reasoning === 'string' ? x.reasoning : undefined,
         suggestedQty: typeof x.suggestedQty === 'number' ? x.suggestedQty : undefined,
-      }));
+      }))
+      // Geometry gate: the LLM occasionally emits a directionally-INVALID setup (e.g. a SHORT
+      // with its stop BELOW entry, on the same side as the targets — the stop lands in profit
+      // territory). Such a setup is unsizable (risk-per-unit points the wrong way) and would
+      // mis-register in the outcome tracker. Drop it rather than surface a broken trade — better
+      // to show no setup than one whose stop can't stop anything. Logged so we can see the rate.
+      .filter((s) => {
+        if (isValidSetupGeometry(s)) return true;
+        console.log(`[setup] dropped invalid ${s.direction} geometry: entry=${s.entry} stop=${s.stopLoss} tp1=${s.tp1} tp2=${s.tp2}`);
+        return false;
+      });
   } catch { return []; }
+}
+
+/// A setup is geometrically valid only when the stop sits on the LOSING side of entry and every
+/// target on the WINNING side — LONG: stop < entry < tp1(/tp2); SHORT: stop > entry > tp1(/tp2).
+export function isValidSetupGeometry(s: { direction: string; entry: number; stopLoss: number; tp1: number; tp2?: number | null }): boolean {
+  const dir = s.direction.toUpperCase();
+  const { entry, stopLoss: stop, tp1, tp2 } = s;
+  if (![entry, stop, tp1].every(Number.isFinite) || entry <= 0) return false;
+  if (dir === 'LONG') {
+    if (!(stop < entry && tp1 > entry)) return false;
+    if (tp2 != null && !(tp2 > entry)) return false;
+    return true;
+  }
+  if (dir === 'SHORT') {
+    if (!(stop > entry && tp1 < entry)) return false;
+    if (tp2 != null && !(tp2 < entry)) return false;
+    return true;
+  }
+  return false;  // unknown direction
 }
 export function parseSetups(text: string): TradeSetup[] {
   const fenced = text.match(/```json\n([\s\S]*?)\n```/);
@@ -284,15 +320,26 @@ function priceActionAnalyze(ind: PromptIndicator): { regime: string; momentum: M
     macdHistValue: last(recentHist) ?? 0, macdHistDirection, volumeTrend, volumeRatio: volRatio,
   };
 
-  // contextualizePatterns + buildSummaryText
+  // contextualizePatterns + buildSummaryText. Significance is DIRECTION-AWARE (2026-07-02):
+  // a bullish pattern AT SUPPORT (or bearish at resistance) is the classical high-significance
+  // read; the incongruent combination (bearish pattern at support etc.) is tagged
+  // counter_context instead of being promoted to 'high' — the pre-fix code boosted ANY pattern
+  // near ANY level, which is how "Evening Star at_support" got headlined in oversold tape.
+  const BULLISH_PATTERNS = new Set(['Hammer', 'Inverted Hammer', 'Morning Star', 'Bullish Engulfing']);
+  const BEARISH_PATTERNS = new Set(['Shooting Star', 'Hanging Man', 'Evening Star', 'Bearish Engulfing']);
+  const sigAtLevel = (pattern: string, position: 'at_support' | 'at_resistance'): string => {
+    const bull = BULLISH_PATTERNS.has(pattern), bear = BEARISH_PATTERNS.has(pattern);
+    if (!bull && !bear) return 'moderate';   // Doji etc. — location adds interest, not direction
+    return ((bull && position === 'at_support') || (bear && position === 'at_resistance')) ? 'high' : 'counter_context';
+  };
   const patterns: Array<{ pattern: string; position: string; level: number | null; significance: string }> = [];
   if (ind.candlePatterns.length) {
     const price = ind.price, atrV = ind.atr?.atr ?? price * 0.01, thr = atrV * 0.3, e20 = ind.ema20 ?? 0;
     for (const p of ind.candlePatterns) {
       let placed = false;
-      for (const s of ind.supportResistance.supports) { if (Math.abs(price - s) < thr) { patterns.push({ pattern: p.pattern, position: 'at_support', level: s, significance: 'high' }); placed = true; break; } }
+      for (const s of ind.supportResistance.supports) { if (Math.abs(price - s) < thr) { patterns.push({ pattern: p.pattern, position: 'at_support', level: s, significance: sigAtLevel(p.pattern, 'at_support') }); placed = true; break; } }
       if (placed) continue;
-      for (const r of ind.supportResistance.resistances) { if (Math.abs(price - r) < thr) { patterns.push({ pattern: p.pattern, position: 'at_resistance', level: r, significance: 'high' }); placed = true; break; } }
+      for (const r of ind.supportResistance.resistances) { if (Math.abs(price - r) < thr) { patterns.push({ pattern: p.pattern, position: 'at_resistance', level: r, significance: sigAtLevel(p.pattern, 'at_resistance') }); placed = true; break; } }
       if (placed) continue;
       if (e20 > 0 && Math.abs(price - e20) < thr) patterns.push({ pattern: p.pattern, position: 'at_ema20', level: e20, significance: 'moderate' });
       else patterns.push({ pattern: p.pattern, position: 'in_space', level: null, significance: 'low' });
@@ -309,7 +356,10 @@ function priceActionAnalyze(ind: PromptIndicator): { regime: string; momentum: M
   mom += `, MACD hist ${momentum.macdHistDirection}, Volume ${momentum.volumeTrend} (${f(momentum.volumeRatio, 1)}x)`;
   sl.push(mom);
   const meaningful = patterns.filter(p => p.significance !== 'low');
-  if (meaningful.length) sl.push('Patterns: ' + meaningful.map(p => p.level != null ? `${p.pattern} ${p.position} (${formatPrice(p.level)})` : `${p.pattern} ${p.position}`).join(', '));
+  if (meaningful.length) sl.push('Patterns: ' + meaningful.map(p => {
+    const base = p.level != null ? `${p.pattern} ${p.position} (${formatPrice(p.level)})` : `${p.pattern} ${p.position}`;
+    return p.significance === 'counter_context' ? `${base} [counter-context — pattern direction contradicts the location; discount it]` : base;
+  }).join(', '));
   return { regime: regimeObj.regime, momentum, summaryText: sl.join('\n') };
 }
 
@@ -377,6 +427,8 @@ export interface PromptIndicator {
   atrPercentile: number | null; atrPercentileLabel: string | null;
   // ML overlay (supplied by /full-analysis from the cron/ml-predict path; daily TF carries these)
   mlWinProbability?: number | null; mlPersistenceProbability?: number | null; mlDirectionUp?: number | null;
+  mlBigMoveProb?: number | null;  // tail head: P(>=4 ATR move in 24h), crypto-only
+  mlCrashProb?: number | null;    // validated crash model: P(>=10% drawdown in 10d), crypto-only
   mlConfident?: boolean | null; mlMetaDirection?: number | null; mlMetaProbability?: number | null; mlQ75?: number | null;
   // Optional stock display extras (not yet computed by the worker; emitted when present)
   smaCross?: { status: string; recentCross?: string | null } | null;
@@ -398,7 +450,8 @@ export interface StockInfo {
   epsEstimateCurrent?: number | null; epsEstimate90dAgo?: number | null; revisionDirection?: string | null; upRevisions30d?: number | null; downRevisions30d?: number | null;
   exDividendDate?: number | null; dividendRate?: number | null; exDividendWarning?: boolean | null;
   sectorETF?: string | null; relativeStrength1d?: number | null; outperformingSector?: boolean | null;
-  finnhubBuy?: number | null; finnhubHold?: number | null; finnhubSell?: number | null; beta?: number | null; newsHeadlines?: string[] | null;
+  finnhubBuy?: number | null; finnhubHold?: number | null; finnhubSell?: number | null; finnhubStrongBuy?: number | null;
+  marketCap?: number | null; beta?: number | null; newsHeadlines?: string[] | null;
 }
 export interface DerivativesData { fundingRatePercent: number; avgFundingRate: number; openInterestUSD: number; oiChange4h?: number | null; oiChange24h?: number | null; globalLongPercent: number; globalShortPercent: number; topTraderLongPercent: number; topTraderShortPercent: number; takerBuySellRatio: number; takerBuyVolume: number; }
 export interface PositioningSnapshot { fundingSentiment: string; oiTrend: string; crowding: string; crowdingCode: string; smartMoneyBias: string; takerPressure: string; squeezeRisk: { level: string; direction: string }; signals: Array<{ strength: string; message: string }>; }
@@ -409,18 +462,46 @@ export interface SpotPressure { takerBuyRatio: number; takerBuyLabel: string; cv
 interface OutcomeHistoryItem { direction: string; entry: number; outcome: string; mlProb?: number | null; conviction?: string | null; }
 interface ActiveSetup { direction: string; entry: number; risk: number; tp1: number; mlProbability?: number | null; entryHitTimeMs: number; maxFavorable: number; maxAdverse: number; tp1Hit: boolean; partialTaken: boolean; breakevenActivated: boolean; }
 
-export interface PromptState { regime?: string | null; killDur?: Record<string, number>; killDurCandleMs?: number | null; nakedPOC?: { poc: number; dateMs: number } | null; }
+export interface PromptState {
+  regime?: string | null; killDur?: Record<string, number>; killDurCandleMs?: number | null; nakedPOC?: { poc: number; dateMs: number } | null;
+  // #6 (prior-analysis delta) — carried so each run can lead with what CHANGED since the last
+  // analysis of this symbol (the antidote to same-y serial reads). prevMlWin/prevAnalysisMs are
+  // set pre-LLM; prevBottomLine is filled by the caller AFTER the LLM responds (extracted from the
+  // analysis text) and persisted back to KV, so the NEXT run sees it.
+  prevMlWin?: number | null; prevBottomLine?: string | null; prevAnalysisMs?: number | null;
+}
 interface PromptSettings { accountSize?: number; riskPercent?: number; conformalGateEnabled?: boolean; }
 
 export interface BuildPromptInput {
   symbol: string; nowMs: number; indicators: PromptIndicator[];
+  livePrice?: number | null;   // live ticker price — candles/indicators are CLOSED-bar and up to 4h stale
   sentiment?: CoinInfo | null; stockInfo?: StockInfo | null; derivatives?: DerivativesData | null;
   positioning?: PositioningSnapshot | null; stockSentiment?: StockSentimentData | null;
   economicEvents?: EconomicEvent[]; macro?: MacroSnapshot | null; weeklyContext?: string | null; spyContext?: string | null;
+  // Policy/macro catalyst headlines (src/news.ts). Context only — never an ML feature, never a
+  // direction input; `catalystActive` marks a PRIMARY-source release inside the last ~12h.
+  news?: { headlines: string[]; catalystActive: boolean; latestPrimaryAgeH: number | null } | null;
   spotPressure?: SpotPressure | null; dataQuality?: DataQuality | null; crossAsset?: CrossAssetContext | null;
   outcomeHistory?: OutcomeHistoryItem[];
   archetypeRecord?: { wins: number; losses: number; total: number } | null;   // E7 (from D1 trade_outcomes)
   activeSetups?: ActiveSetup[];                                                // C8 (active tracked trades)
+  volForecast?: import('./vol').VolForecast | null;                            // Phase 1: HAR-RV expected range
+  riskStates?: import('./risk-states').RiskState[];                            // Phase 5: discrete risk states
+  // Insight enrichments (2026-07-02) — all derived from data the system already stores:
+  mlCalibration?: { n: number; realizedPct: number; windowDays: number; bucketLabel: string } | null;  // live realized goodR for the CURRENT prediction's bucket (ml_calibration D1)
+  calibratedMlWin?: number | null;   // raw ML_WIN corrected by the live forward calibration — used by the auto-FLAT/quality gate so drift can't over-suppress
+  /**
+   * RAW-scale cut rejecting the weakest fraction of the live prediction distribution. REPLACES the
+   * envelope's fixed `calibrated < 50` floor when supplied, so recalibration cannot silently move
+   * the gate's selectivity. See `docs/research/ml-floor-coverage.md`.
+   */
+  mlCoverageCut?: number | null;
+  mlTrajectory?: { points: number[]; hours: number } | null;                   // sampled ML_WIN path over the last N hours, oldest→newest (score_history D1)
+  btcContext?: { mlWin: number | null; bigMoveBucket: string | null; persistence: number | null } | null; // BTC regime read for alt analyses (ml_preds:all KV)
+  volPricing?: { dvol: number; impliedMovePct: number; forecastMovePct: number } | null;  // options-implied vs model-forecast move (BTC/ETH, Deribit DVOL)
+  // Observed forced-liquidation flow (Binance forceOrder stream archive, crypto only).
+  // SAMPLED feed (Binance pushes <=1 event/s/symbol since 2021) - sums are lower bounds, not totals.
+  liquidations?: { h1LongUsd: number; h1ShortUsd: number; h24LongUsd: number; h24ShortUsd: number } | null;
   prevState?: PromptState; settings?: PromptSettings;
 }
 
@@ -429,7 +510,19 @@ export interface BuildPromptInput {
 // Stateful: reads prevState (regime/kill-duration/nakedPOC), returns the new state for the
 // caller to persist (KV on the worker, UserDefaults on iOS Phase 4).
 // ═══════════════════════════════════════════════════════════════════════════════════════════
-export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newState: PromptState } {
+export function buildUserPrompt(input: BuildPromptInput): {
+  prompt: string;
+  newState: PromptState;
+  /// The Conviction Envelope's actual verdict, not a re-parse of the rendered text. Null only if
+  /// the envelope block did not run at all. Returned because `HIGH_blocked_because` and friends are
+  /// rendered ONLY on non-FLAT bars — a replay that reads the prompt is blind on FLAT bars, which
+  /// are the majority and the interesting ones.
+  envelope: EnvelopeVerdict | null;
+  /// The inputs that produced it, so an export can record WHY without re-deriving anything.
+  envelopeInput: EnvelopeInput | null;
+  /// Removed-but-still-computed conditions, for research. Null outside their own domain.
+  diagnostics: Record<string, number | null>;
+} {
   const {
     symbol, nowMs, indicators, sentiment, stockInfo, derivatives, positioning, stockSentiment,
     economicEvents = [], macro, weeklyContext, spyContext, spotPressure, dataQuality, crossAsset,
@@ -440,7 +533,66 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
   const lines: string[] = [`Symbol: ${symbol}`];
   const L = (s = '') => lines.push(s);
   const isCryptoSym = symbol.toUpperCase().endsWith('USDT');
+
+  // LIVE PRICE anchor. Every candle/indicator in this prompt is computed on CLOSED bars
+  // (training parity — the in-progress bar is dropped), so the newest "price" the sections
+  // below reference can be up to 4h stale. Without this anchor the model writes triggers
+  // that are already past ("if price holds over X" when live price blew through X hours ago).
+  const lp = input.livePrice ?? null;
+  if (lp != null && lp > 0 && indicators.length > 0) {
+    const closedRef = indicators[indicators.length - 1].price || indicators[0].price;
+    const dPct = closedRef > 0 ? ((lp - closedRef) / closedRef) * 100 : 0;
+    L();
+    L('=== LIVE PRICE (authoritative current price) ===');
+    L(`LIVE price right now: ${formatPrice(lp)}. The candles/indicators below end at the last CLOSED bar `
+      + `(${formatPrice(closedRef)}, ${dPct >= 0 ? '+' : ''}${dPct.toFixed(2)}% from live).`);
+    L('Anchor ALL statements about current price, level proximity, triggers, and entries to the LIVE price. '
+      + 'If a level or trigger is already past at the live price, say so explicitly — never present it as pending.');
+  }
   const newState: PromptState = { regime: prevState.regime ?? null, killDur: { ...(prevState.killDur ?? {}) }, killDurCandleMs: prevState.killDurCandleMs ?? null, nakedPOC: prevState.nakedPOC ?? null };
+  // Hoisted so the envelope's verdict can be RETURNED rather than only rendered (2026-08-26).
+  // Three of the four lists are printed only on non-FLAT bars, so a caller that reads the prompt
+  // text sees nothing on exactly the bars a research replay cares most about.
+  let envelopeVerdict: EnvelopeVerdict | null = null;
+  let envelopeInput: EnvelopeInput | null = null;
+  /// Conditions that are still COMPUTED by the real rules but no longer feed any gate. Exported so
+  /// research can measure them without rebuilding them: `funding_supports_counter` and both
+  /// divergence rules were removed in Parts 6-7 on evidence since retracted, and re-deciding them
+  /// needs the real values. Note they are only defined on counter-trend-pullback bars, because the
+  /// whole kill block is wrapped in `if (oneHOpposes && oneH)` — that scoping IS the thing Part 7
+  /// got wrong, so it must survive into the export rather than be flattened.
+  const diagnostics: Record<string, number | null> = {
+    killFunding: null, killVolume: null, killMacro: null, killDivergence: null,
+  };
+
+  // #6 — SINCE LAST ANALYSIS: a snapshot of the previous run for this symbol so the LLM can lead
+  // with what CHANGED (the antidote to same-y serial reads). Emitted only when the prior state is
+  // present and fresh (<3 days). prevMlWin/prevAnalysisMs are stamped now; prevBottomLine is filled
+  // by the /full-analysis caller AFTER the LLM responds and persisted back, so the NEXT run sees it.
+  const curMlWin = indicators[0]?.mlWinProbability ?? null;
+  {
+    const pMs = prevState.prevAnalysisMs ?? null;
+    const pWin = prevState.prevMlWin ?? null;
+    const pBL = prevState.prevBottomLine ?? null;
+    const age = pMs != null ? nowMs - pMs : -1;
+    if (age > 0 && age < 86_400_000 * 3) {
+      const ageMin = Math.round(age / 60_000);
+      const ageStr = ageMin < 60 ? `${ageMin}m` : `${(ageMin / 60).toFixed(1)}h`;
+      L(); L('=== SINCE LAST ANALYSIS ===');
+      L(`Previous analysis: ${ageStr} ago.`);
+      if (pWin != null && curMlWin != null) {
+        const thenPct = Math.round(pWin * 100), nowPct = Math.round(curMlWin * 100), d = nowPct - thenPct;
+        L(`ML move-likelihood then → now: ${thenPct}% → ${nowPct}% (${d > 0 ? `rising +${d}pp` : d < 0 ? `falling ${d}pp` : 'flat'}).`);
+      }
+      if (pBL) L(`Previous Bottom Line: "${pBL}"`);
+      L('→ If something material changed (ML ≥15pp, regime flip, a flag newly fired/cleared, a level newly IN_PLAY), LEAD the Bottom Line with it. If not, say "largely unchanged" and keep the whole output short.');
+    }
+  }
+  // Keep the prior ML baseline when the current read is null (ml_preds cache miss) — otherwise
+  // one stale cache would erase the delta the next successful run should report.
+  newState.prevMlWin = curMlWin ?? prevState.prevMlWin ?? null;
+  newState.prevAnalysisMs = nowMs;
+  newState.prevBottomLine = prevState.prevBottomLine ?? null;
 
   if (dataQuality?.promptSection) { L(); L('=== DATA QUALITY ==='); L(dataQuality.promptSection); }
   if (crossAsset) {
@@ -452,11 +604,16 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
 
   if (indicators.length >= 2) {
     const daily = indicators[0], fourH = indicators[1], oneH = indicators.length > 2 ? indicators[2] : null;
-    let envAnyKilled = false, envDivergenceEscalated = false, envMacroRisk = 'NONE', envContinuationCount = 0, envAlignment = 'UNKNOWN', envNewsConflicts = false;
+    // `envDivergenceEscalated` removed 2026-08-25: nothing read it once the auto-FLAT was deleted.
+    let envAnyKilled = false, envMacroRisk = 'NONE', envContinuationCount = 0, envAlignment = 'UNKNOWN', envNewsConflicts = false;
+    let envChaseLevel = 'none';   // CHASE/EXHAUSTION level, hoisted so the Conviction Envelope can hard-FLAT a mature-aligned chase
     const isTreatment = true;
     let treatmentStochCrossDaily = 'none', treatmentStochCross4H = 'none', treatmentLongConfirmStatus = 'n/a';
     const treatmentLongConfirmReasons: string[] = [];
-    let envConformalNotConfident = false, envCryptoBearRegime = false;
+    // `envConformalNotConfident` removed 2026-08-25: it was declared `false` and never assigned
+    // anywhere, so `conformal_abstain_not_confident_cap_LOW` could not fire. Dead since the
+    // leak-era conformal head was retracted.
+    let envCryptoBearRegime = false;
 
     // CRYPTO REGIME guard
     if (isCryptoSym && daily.ema200 != null && daily.price > 0) {
@@ -496,6 +653,151 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L('Regime Changed: true');
     } else { L(`Regime: ${regime}`); L('Regime Changed: false'); }
 
+    // Phase 2b — ENVIRONMENT RISK (trend/volatility danger). Why this exists, verified on 141K
+    // clean bars (ml-training/retrain_diagnostic.py): ML_WIN is WELL-CALIBRATED even in the
+    // high-ADX/high-ATR tail (predicted within ~1-2pp of actual; if anything it slightly
+    // over-predicts there). It is NOT broken and does NOT "under-read" trends. The catch is that
+    // ML_WIN is ATR-NORMALIZED (goodR = >=1.5 ATR): when vol is already high, a 1.5-ATR bar is a
+    // LARGE absolute move, so a FURTHER such move is genuinely less likely (~42% in strong trends
+    // vs ~62% in calm). So a LOW ML_WIN in a violent trend is CORRECT but MISLEADING as a risk
+    // signal — the trend itself is the danger even though >=1.5-ATR-forward is unlikely. This flag
+    // is a SEPARATE, non-ATR-normalized trend-danger read (ADX + stretch) that leads the output so
+    // a correctly-low ML_WIN is not mistaken for "safe/quiet." (BTC 2026-06-01→03 was a true
+    // ~30-40% bar resolving 1 in an autocorrelated streak — a low-prob realization, not a defect.)
+    const adx4HVal = fourH.adx?.adx ?? 0;
+    const adxMax = Math.max(adxDaily, adx4HVal);
+    const dAtrVal = daily.atr?.atr ?? 0;
+    const stretchATR = (dAtrVal > 0 && daily.ema200 != null) ? Math.abs(daily.price - daily.ema200) / dAtrVal : 0;
+    const trendDir = maAlignment === 'bearish_stacked' ? 'down' : maAlignment === 'bullish_stacked' ? 'up' : 'mixed';
+    // stretchATR is ATR-normalized, so a COMPRESSED current ATR inflates it exactly when the
+    // tape is coiled rather than violent (the live "violent downtrend @ 20th-pct ATR in an
+    // active squeeze" self-contradiction). The flag LEVEL is kept (a deeply-extended coiled
+    // trend IS dangerous — expansion resumes the trend more often than not), but the WORDING
+    // is now computed from the ATR percentile instead of patched over in the system prompt.
+    const atrPctlDaily = daily.atrPercentile ?? null;
+    const volCompressed = atrPctlDaily != null && atrPctlDaily < 40;
+    let envRisk: string, envReason: string;
+    if (adxMax >= 40 || (regime === 'TRENDING' && stretchATR >= 3)) {
+      envRisk = 'HIGH';
+      envReason = volCompressed
+        ? `deeply extended ${trendDir}-trend but COILED (ADX ${f(adxMax, 0)}, price ${f(stretchATR, 1)} ATR from 200D, ATR ${f(atrPctlDaily!, 0)}th pct) — expansion risk: a vol release here most often resumes the trend; fading it or holding against it is dangerous`
+        : `violent ${trendDir}-trend (ADX ${f(adxMax, 0)}, price ${f(stretchATR, 1)} ATR from 200D) — momentum can carry far past prior extremes; fading it or holding against it is dangerous`;
+    } else if (adxMax >= 28 || regime === 'TRENDING' || (stretchATR >= 2 && regime !== 'RANGING')) {
+      envRisk = 'ELEVATED';
+      envReason = `directional ${trendDir}-trend in force (ADX ${f(adxMax, 0)}, ${f(stretchATR, 1)} ATR from 200D)${volCompressed ? ` — extended but coiled (ATR ${f(atrPctlDaily!, 0)}th pct), expansion + trend-continuation risk` : ' — trend-continuation risk'}`;
+    } else if (regime === 'TRANSITIONING' || stretchATR >= 1) {
+      envRisk = 'MODERATE';
+      envReason = `${regime.toLowerCase()} — expansion possible, no dominant trend`;
+    } else {
+      envRisk = 'LOW';
+      envReason = 'ranging / quiet — no dominant trend, mean-reversion regime';
+    }
+    // Learned big-move/tail head (crypto-only): P(>=4 ATR move in 24h). Supersedes the
+    // ADX/stretch heuristic as the big-move read when present, and can ESCALATE Environment
+    // Risk — a HIGH tail bucket in an otherwise-quiet tape is exactly the "ML_WIN says calm
+    // but an outsized move is brewing" case the heuristic can't see.
+    const bigMove = daily.mlBigMoveProb;
+    let bigMoveBucket: string | null = null;
+    if (bigMove != null) {
+      // Thresholds + base rate from the model JSON via tailRiskInfo (2026-07-02) — these were
+      // hardcoded here (0.064/0.079/0.10), duplicating ml-predict and drifting on retrain.
+      const tri = tailRiskInfo(bigMove);
+      bigMoveBucket = tri?.bucket ?? (bigMove >= 0.10 ? 'HIGH' : bigMove >= 0.079 ? 'ELEVATED' : 'NORMAL');
+      const xBase = tri?.multiple ?? (bigMove / 0.064);
+      const baseRate = xBase > 0 ? bigMove / xBase : 0.064;
+      L(`Big-Move Risk: ${bigMoveBucket} (model: ${f(bigMove * 100, 0)}% chance of a >=4 ATR move in 24h, ${f(xBase, 1)}x the ${f(baseRate * 100, 0)}% base). Direction-agnostic — an outsized move is more likely than normal, EITHER way. This is the learned tail gauge ML_WIN (>=1.5 ATR) cannot provide.`);
+      // Escalate Environment Risk if the tail head fires while the heuristic read low.
+      if (bigMoveBucket === 'HIGH' && (envRisk === 'LOW' || envRisk === 'MODERATE')) {
+        envRisk = 'ELEVATED'; envReason = `${envReason}; tail model flags HIGH outsized-move risk (${f(xBase, 1)}x base) despite a calmer trend read`;
+      } else if (bigMoveBucket === 'HIGH' && envRisk === 'ELEVATED') {
+        envRisk = 'HIGH'; envReason = `${envReason}; tail model also flags HIGH outsized-move risk`;
+      }
+    }
+    L(`Environment Risk: ${envRisk} — ${envReason}.`);
+
+    // CRASH RISK (2026-08-24). Distinct from Environment Risk above, which is a HEURISTIC read of
+    // trend danger from ADX/regime/stretch. This is a MEASURED model: P(price falls >=10% below
+    // here within 10 days), and it is the one signal in this project that survived every control
+    // (drawdown -76.6% -> -40.4%, replicated leave-one-symbol-out with placebos at ~0.05).
+    //
+    // The episodic caveat ships WITH the number, deliberately. The signal stayed quiet through five
+    // separate 20-28% drawdowns in 2023-25, so a low reading is NOT evidence of safety and the model
+    // must never treat it that way.
+    const crashP = daily.mlCrashProb;
+    if (crashP != null && Number.isFinite(crashP)) {
+      const pct = Math.round(crashP * 100);
+      // FIXED 2026-08-25: this line labelled the band off the SIZING curve's 0.30/0.50 breakpoints,
+      // so a 39% reading — BELOW the 41% base rate — printed as "Crash Risk: ELEVATED ... raise the
+      // bar for a new entry". A live BTC analysis said exactly that, in one sentence that both
+      // reported a below-average day and called it elevated.
+      //
+      // This is the SAME defect fixed in `crashWarning` on 2026-08-24 (where six symbols warned at
+      // 41/41/43/41/50/39%), and the fix was never propagated here. Root cause both times: a SIZING
+      // threshold reused as a WARNING threshold. They answer different questions and 0.30 is below
+      // the base rate, so as a warning it fires on an ordinary day.
+      //
+      // The two are now stated SEPARATELY, because both facts are true at 39%: the validated T8
+      // arm-D curve really does halve size above 0.30 (that stays — it is the measured finding),
+      // while 39% is genuinely unremarkable as a risk READING. Warning thresholds match crash.ts:
+      // base + 0.08 and base + 0.18.
+      const CRASH_BASE = 0.41;
+      const band = crashP >= CRASH_BASE + 0.18 ? 'HIGH' : crashP >= CRASH_BASE + 0.08 ? 'ELEVATED' : 'ORDINARY';
+      const vsBase = crashP >= CRASH_BASE
+        ? `${Math.round((crashP - CRASH_BASE) * 100)}pp ABOVE the ${Math.round(CRASH_BASE * 100)}% base rate`
+        : `${Math.round((CRASH_BASE - crashP) * 100)}pp BELOW the ${Math.round(CRASH_BASE * 100)}% base rate`;
+      const sizing = crashP > 0.50
+        ? 'The overlay has cut size to zero.'
+        : crashP > 0.30 ? 'The overlay halves size here (validated at 0.30, which sits below the base rate — so this is routine, not a warning).'
+          : 'No size reduction from this gauge.';
+      const action = band === 'HIGH'
+        ? 'Treat any new entry as needing exceptional evidence.'
+        : band === 'ELEVATED'
+          ? 'Raise the bar for a new entry; prefer waiting to sizing down further.'
+          : 'This reading is NOT a reason to raise the bar on an entry — do not cite it as one.';
+      L(`Crash Risk: ${band} — ${pct}% chance of a >=10% fall within 10 days, ${vsBase}. ${sizing} ${action}`);
+      L(`  Crash Risk is about DRAWDOWN, not direction — it never says which way price goes, and a `
+        + `high reading is not a SHORT signal. It is EPISODIC: it has stayed quiet through real `
+        + `20-28% falls, so ORDINARY is "no warning", NOT "safe". Never cite a low reading as `
+        + `support for a trade.`);
+    }
+    // Phase 1: HAR-RV expected range — the direction-agnostic "how big", calibrated bands.
+    const vf = input.volForecast;
+    if (vf?.horizons?.['24h']) {
+      const h = vf.horizons['24h'];
+      L(`Expected 24h Range: ${formatPrice(h.s1[0])}–${formatPrice(h.s1[1])} (1σ, ~68%) · ${formatPrice(h.s2[0])}–${formatPrice(h.s2[1])} (2σ, ~95%). Calibrated vol forecast (σ=${f(h.sigma * 100, 1)}%), direction-AGNOSTIC — the honest "how big", not which way. Bands are fat-tail-adjusted (empirical, not Gaussian).`);
+    } else if (stockInfo && daily.atr?.atr && daily.price > 0) {
+      // Stocks have no HAR-RV forecast (vol.ts is crypto-only — needs deep 1H history), but the
+      // stock system prompt instructs on EXPECTED RANGE — without a band the LLM risked
+      // hallucinating one. Emit an honest ATR-based approximation instead (2026-07-02).
+      const a = daily.atr.atr;
+      L(`Expected 24h Range (ATR-based approximation): ${formatPrice(daily.price - a)}–${formatPrice(daily.price + a)} (±1× daily ATR — a rough typical-day band, NOT a calibrated forecast; gaps can exceed it).`);
+    }
+    // OPTIONS-IMPLIED VOL (2026-07-02, BTC/ETH) — CONTEXT ONLY. The "buy a straddle when vol is
+    // cheap" edge was BACKTESTED AND REJECTED (options_straddle_test.py, 4yr): implied vol exceeds
+    // realized on average (positive vol-risk-premium → buying vol is structurally -EV), and the
+    // forecast>implied "cheap" read did NOT predict realized>implied (mildly backwards — it fires
+    // after a vol spike, right as vol mean-reverts). So this line is a REGIME read (how much
+    // turbulence the market is pricing), never a trade signal.
+    if (input.volPricing) {
+      const vp = input.volPricing;
+      const regime = vp.dvol >= 80 ? 'EXTREME' : vp.dvol >= 58 ? 'ELEVATED' : vp.dvol >= 40 ? 'NORMAL' : 'LOW';
+      L(`Options-Implied Vol (BTC/ETH, context): 30d DVOL ${f(vp.dvol, 0)}% (${regime}) — the options market is pricing a ±${f(vp.impliedMovePct, 2)}% typical day (model forecasts ±${f(vp.forecastMovePct, 2)}%). This is the market's expected turbulence, NOT a trade signal: buying this vol (straddles) is structurally negative-EV (vol-risk-premium), backtest-confirmed.`);
+    }
+    // Phase 5/8: discrete risk states (VALIDATED = vol-grounded, can lead; ctx = positioning context).
+    const rs = input.riskStates ?? [];
+    if (rs.length) {
+      L('Risk States: ' + rs.map(s => `${s.state}(${s.severity}${s.validated ? '' : ',ctx'})`).join(' · '));
+      for (const s of rs) L(`  - ${s.state} [${s.severity}${s.validated ? '' : ', context-only'}]: ${s.detail}`);
+    }
+    // Aligned with the ELEVATED gate (2026-07-02) — at ADX 30 the prompt used to say both
+    // "directional trend in force" (Environment Risk) and "range/transition regime" (here).
+    const trendDominates = adxMax >= 28 || (stretchATR >= 2 && regime !== 'RANGING');
+    if (trendDominates) {
+      L('ML_WIN Context: in this strong trend a low ML_WIN is CORRECT but MISLEADING — ML_WIN is ATR-normalized, so a >=1.5-ATR move on top of already-high vol is genuinely less likely (~42% vs ~62% in calm). Do NOT read a low ML_WIN here as "safe/quiet"; the trend itself is the danger. Lead the risk read from Environment Risk + structure, not ML_WIN.');
+    } else {
+      L('ML_WIN Context: range/transition regime — ML_WIN reads as a normal move-likelihood gauge.');
+    }
+
     // Phase 2a — Counter-trend + bias
     const dailyBias = daily.bias, fourHBias = fourH.bias, oneHBias = oneH?.bias ?? 'Neutral';
     const dailyBearish = has(dailyBias, 'Bearish'), dailyBullish = has(dailyBias, 'Bullish');
@@ -525,11 +827,21 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         // Sizing is gated ONLY by quality (ML_WIN). Direction is NOT predictable from ML
         // (validated ~chance), so the model can't size by direction — the side, if any, must
         // come from the LLM's own structural read, and is inherently a coin-flip-ish bet.
-        const mlWin = daily.mlWinProbability, qualityOK = mlWin >= 0.60;
+        // Sizing gates on the LIVE-CALIBRATED ML_WIN, the same quantity the Conviction Envelope
+        // uses (2026-08-25). It previously used the RAW value, so on a bar the envelope allowed at
+        // max_allowed:LOW this line printed a flat "POSITION SIZING: NO TRADE — ML_WIN < 60%" —
+        // observed live on BTCUSDT alongside a contradictory ML Bucket line. Unlike the TOP tier,
+        // this 0.60 threshold has no drift-independence argument behind it: it is a quality gate,
+        // and the gate the system honours is the calibrated one.
+        const rawWin = daily.mlWinProbability;
+        const mlWin = input.calibratedMlWin ?? rawWin;
+        const rawTxt = input.calibratedMlWin != null && iTrunc(rawWin * 100) !== iTrunc(mlWin * 100)
+          ? ` (raw ${iTrunc(rawWin * 100)}%, live-calibrated ${iTrunc(mlWin * 100)}%)` : '';
+        const qualityOK = mlWin >= 0.60;
         let mult: number, reason: string;
-        if (!qualityOK) { mult = 0.0; reason = 'ML_WIN < 60% — below quality threshold, no trade'; }
-        else if (mlWin >= 0.70) { mult = 0.75; reason = 'high move-quality (≥1.5 ATR move likely) but direction is a coin flip — size for a direction-uncertain bet (0.75x), or trade direction-agnostic (breakout either way). Only go full size if YOUR structural read gives a genuinely clear side'; }
-        else { mult = 0.5; reason = 'marginal quality + unknowable direction — half size or pass'; }
+        if (!qualityOK) { mult = 0.0; reason = `ML_WIN < 60%${rawTxt} — below quality threshold, no trade`; }
+        else if (mlWin >= 0.70) { mult = 0.75; reason = `high move-quality (≥1.5 ATR move likely)${rawTxt} but direction is a coin flip — size for a direction-uncertain bet (0.75x), or trade direction-agnostic (breakout either way). Only go full size if YOUR structural read gives a genuinely clear side`; }
+        else { mult = 0.5; reason = `marginal quality + unknowable direction${rawTxt} — half size or pass`; }
         const multTxt = mult === 0 ? 'NO TRADE' : `${g2(mult)}x base risk`;
         L(`POSITION SIZING: ${multTxt} — ${reason}. Cap 1.0x. ML_WIN is a VOLATILITY signal, not a directional one.`);
       }
@@ -541,7 +853,13 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         treatmentLongConfirmStatus = rsPass && drsPass ? 'PASS' : rsPass || drsPass ? 'PARTIAL' : 'FAIL';
         treatmentLongConfirmReasons.push(`relStrengthVsSpy=${f(relStrApprox, 2)}${rsPass ? '✓' : '✗(need>=1.0)'}`);
         treatmentLongConfirmReasons.push(`dRsiDelta=${f(dRsiDelta, 2)}${drsPass ? '✓' : '✗(need>=1.0)'}`);
-        const resultText = treatmentLongConfirmStatus === 'PASS' ? 'PASS — LONG conviction unrestricted' : treatmentLongConfirmStatus === 'PARTIAL' ? 'PARTIAL — cap LONG conviction at LOW' : 'FAIL — no LONG trade';
+        // FAIL no longer says "no LONG trade" — the auto-FLAT behind that sentence was removed
+        // 2026-08-25 (Part 8) after measuring −0.0070R on the very bars it governed. Leaving the
+        // old wording would instruct the model to stand aside on a rule the envelope no longer
+        // enforces, which is the 2026-08-22g failure mode: an input whose output contract lies.
+        const resultText = treatmentLongConfirmStatus === 'PASS' ? 'PASS — LONG conviction unrestricted'
+          : treatmentLongConfirmStatus === 'PARTIAL' ? 'PARTIAL — cap LONG conviction at LOW'
+          : 'FAIL — context only, NOT a block (tested: no measured edge either way)';
         L(`LONG_CONFIRMATION: ${treatmentLongConfirmReasons.join(' | ')} → ${resultText}`);
       } else {
         L('LONG_CONFIRMATION: n/a (crypto or missing data — gate inactive)');
@@ -583,8 +901,29 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (derivatives) { const fr = derivatives.fundingRatePercent; if (dailyBearish && fr < -0.01) killFunding = true; if (dailyBullish && fr > 0.01) killFunding = true; }
       killMacro = economicEvents.some(e => e.isHighImpact && e.isUpcoming && (e.date - nowMs) > 0 && (e.date - nowMs) < 4 * 3600 * 1000);
 
-      const anyKilled = killDivergence || killVolume || killFunding || killMacro;
+      // `killDivergence` no longer contributes to ANY_KILLED (2026-08-25). It is still COMPUTED and
+      // still REPORTED below, because it is informative context for the model — it just no longer
+      // hard-FLATs the analysis, having been directly tested and found to gate nothing (twelve
+      // variant tests, zero passes; every LONG lift negative). The other three kill conditions are
+      // untouched: counter-move volume and funding are structural, and macro guards an exogenous
+      // event rather than claiming prediction.
+      // `killFunding` removed from ANY_KILLED 2026-08-25 (envelope-rules.md Part 7). It blocked bars
+      // averaging +0.0911R against a +0.0624R baseline on the SHORT side and kept +0.0506R — the
+      // same block-the-best-bars signature as biases_MIXED, alignment_not_full and the divergence
+      // rules. On LONG it was +0.0132 at 6/9: consistent, but under the +0.02 magnitude bar.
+      //
+      // It is a PREDICTION CLAIM — that funding paying the counter side makes the counter move more
+      // likely — and by the Part 6 principle a prediction claim has to be earned. Still computed and
+      // reported in the DERIVATIVES block as positioning context; it just no longer hard-FLATs.
+      //
+      // `killVolume` stays: noise rather than inverted, and it fires on 1.2% of bars, so removing it
+      // would change almost nothing. "Does nothing measurable" is not "proven wrong".
+      const anyKilled = killVolume || killMacro;
       envAnyKilled = anyKilled;
+      diagnostics.killFunding = killFunding ? 1 : 0;
+      diagnostics.killVolume = killVolume ? 1 : 0;
+      diagnostics.killMacro = killMacro ? 1 : 0;
+      diagnostics.killDivergence = killDivergence ? 1 : 0;
 
       // Phase 3 — Kill duration tracking (candle-anchored)
       const lastTracked = prevState.killDurCandleMs ?? null;
@@ -603,15 +942,14 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       }
       newState.killDur = durState;
 
-      const divergenceEscalated = (durState.divergence ?? 0) >= 6;
-      envDivergenceEscalated = divergenceEscalated;
       const killParts: string[] = [];
-      if (killDivergence) killParts.push(`divergence_against_bias(${durState.divergence ?? 1} candles)`);
+      // RSI divergence is NOT listed here. It was removed from ANY_KILLED on 2026-08-25 after direct
+      // testing, and listing a non-blocking item under a heading called "Kill Conditions" is
+      // contradictory — a tag saying "does not block" is weaker governance than not being there.
+      // (CVD divergence, a different signal in the whale-trap flag, is untested and untouched.)
       if (killVolume) killParts.push(`counter_move_volume_exceeds(${durState.volume ?? 1} candles)`);
-      if (killFunding) killParts.push(`funding_supports_counter(${durState.funding ?? 1} candles)`);
       if (killMacro) killParts.push('macro_event_within_4h');
       L(`Kill Conditions: ${killParts.length ? killParts.join(', ') : 'none'}, ANY_KILLED=${anyKilled}`);
-      L(`Divergence Escalated: ${divergenceEscalated}`);
     }
 
     // Phase 5 — Macro event window
@@ -625,11 +963,17 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       envMacroRisk = macroRisk;
     } else { L('Macro Risk: NONE'); envMacroRisk = 'NONE'; }
 
-    // Phase C1 — Parabolic
-    if (daily.candles.length >= 1 && daily.price > 0) {
-      const priorDailyClose = last(daily.candles)!.close;
+    // Phase C1 — Parabolic. NB: on the worker `daily.price` IS the last daily close
+    // (dropInProgress everywhere), so the pre-2026-07-02 "daily.price − last(candles).close"
+    // was identically 0 and this flag NEVER fired (the deleted iOS original compared the live
+    // ticker against the last close). Use the freshest closed price (1H close when present)
+    // vs the PRIOR daily close — the move over the most recent ~24h of closed data.
+    if (daily.candles.length >= 2 && daily.price > 0) {
+      const oneHPx = indicators.length > 2 ? indicators[2].price : 0;
+      const freshPrice = oneHPx > 0 ? oneHPx : daily.price;
+      const priorDailyClose = daily.candles[daily.candles.length - 2].close;
       if (priorDailyClose > 0) {
-        const pct24h = (daily.price - priorDailyClose) / priorDailyClose * 100;
+        const pct24h = (freshPrice - priorDailyClose) / priorDailyClose * 100;
         const threshold = stockInfo ? 3.0 : 5.0;
         if (pct24h >= threshold) L(`Parabolic Risk: ELEVATED_LONG (24h move +${f(pct24h, 1)}% > ${f(threshold, 0)}% — mean-reversion bias next 48h, cap conviction MODERATE on longs, tighten TP1)`);
         else if (pct24h <= -threshold) L(`Parabolic Risk: ELEVATED_SHORT (24h move ${f(pct24h, 1)}% < -${f(threshold, 0)}% — mean-reversion bias next 48h, cap conviction MODERATE on shorts, tighten TP1)`);
@@ -716,6 +1060,61 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L(`Exhaustion Signals (4H, vs ${direction} momentum): ${exhaustion.length ? `${exhaustion.length} — ${exhaustion.join(', ')}` : '0 — none'}`);
       L(`Continuation Signals (4H, with ${direction} momentum): ${continuation.length ? `${continuation.length} — ${continuation.join(', ')}` : '0 — none'}`);
       envContinuationCount = continuation.length;
+
+      // Phase C7b — CHASE / EXHAUSTION guard (F-1). Direction-AGNOSTIC "are you about to
+      // buy the top / short the bottom?" check, aimed at the single most common retail loss:
+      // entering AFTER a move has already run, at the extreme, where early entrants distribute
+      // to late chasers. Synthesizes signals already gathered above (extension from the 200D
+      // mean, stretched oscillators, running into a level in the chase direction, and the
+      // exhaustion tally) into ONE loud, plain-language risk read. The "chase direction" is the
+      // prevailing 4H momentum (bullish → buying a rally; bearish → shorting a sell-off).
+      const chaseDir = bullish4H ? 'LONG' : 'SHORT';
+      const dAtrChase = daily.atr?.atr ?? 0;
+      const stretch = (dAtrChase > 0 && daily.ema200 != null) ? Math.abs(daily.price - daily.ema200) / dAtrChase : 0;
+      const rsiHot = bullish4H
+        ? ((daily.rsi ?? 0) >= 70 || (fourH.rsi ?? 0) >= 72)
+        : ((daily.rsi ?? 100) <= 30 || (fourH.rsi ?? 100) <= 28);
+      const stochHot = bullish4H
+        ? ((daily.stochRSI?.k ?? 0) >= 85 || (fourH.stochRSI?.k ?? 0) >= 85)
+        : ((daily.stochRSI?.k ?? 100) <= 15 || (fourH.stochRSI?.k ?? 100) <= 15);
+      // Running INTO a level in the chase direction (resistance/VAH just above for longs;
+      // support/VAL just below for shorts) — the place a tired move is most likely to reject.
+      const pxChase = fourH.price;
+      const levelBand = 0.6 * (fourH.atr?.atr ?? dAtrChase);
+      let intoLevel = false, levelPx = 0;
+      if (levelBand > 0) {
+        if (bullish4H) {
+          const above = [...fourH.supportResistance.resistances, ...daily.supportResistance.resistances, daily.volumeProfile?.vah ?? NaN]
+            .filter(v => Number.isFinite(v) && v >= pxChase && v - pxChase <= levelBand);
+          if (above.length) { intoLevel = true; levelPx = Math.min(...above); }
+        } else {
+          const below = [...fourH.supportResistance.supports, ...daily.supportResistance.supports, daily.volumeProfile?.val ?? NaN]
+            .filter(v => Number.isFinite(v) && v <= pxChase && pxChase - v <= levelBand);
+          if (below.length) { intoLevel = true; levelPx = Math.max(...below); }
+        }
+      }
+      let chaseScore = 0;
+      if (stretch >= 2) chaseScore++;
+      if (rsiHot) chaseScore++;
+      if (stochHot) chaseScore++;
+      if (intoLevel) chaseScore++;
+      if (exhaustion.length >= 1) chaseScore++;
+      // HIGH requires the CORE ingredient of a chase (an already-extended OR visibly-exhausting
+      // move) plus confirmation, so two oscillators alone can't trip it.
+      const coreChase = stretch >= 2 || exhaustion.length >= 2;
+      const chaseLevel = (coreChase && chaseScore >= 3) ? 'HIGH' : (chaseScore >= 2 ? 'ELEVATED' : 'none');
+      envChaseLevel = chaseLevel;   // hand to the Conviction Envelope
+      if (chaseLevel !== 'none') {
+        const verb = bullish4H ? 'BUYING THE TOP' : 'SHORTING THE BOTTOM';
+        const parts: string[] = [];
+        if (stretch >= 2) parts.push(`price is ${f(stretch, 1)} ATR from its 200D mean (extended)`);
+        if (rsiHot) parts.push(`RSI is ${bullish4H ? 'overbought' : 'oversold'}`);
+        if (stochHot) parts.push(`Stoch is at an extreme`);
+        if (intoLevel) parts.push(`it is running into ${bullish4H ? 'resistance' : 'support'} at ${formatPrice(levelPx)}`);
+        if (exhaustion.length >= 1) parts.push(`${exhaustion.length} exhaustion signal${exhaustion.length > 1 ? 's' : ''} firing (${exhaustion.join(', ')})`);
+        L(`CHASE / EXHAUSTION RISK: ${chaseLevel} — entering ${chaseDir} here risks ${verb}. ${parts.join('; ')}.`);
+        L(`  This is the classic retail trap: a ${bullish4H ? 'rally' : 'sell-off'} that has ALREADY run is where early entrants distribute to late chasers. If the user wants ${chaseDir} exposure, the lower-risk play is to WAIT — for a pullback${intoLevel ? ` (the ${bullish4H ? 'resistance' : 'support'} at ${formatPrice(levelPx)} is more likely to reject than break here)` : ''} or for a fresh ${bullish4H ? 'higher-low' : 'lower-high'} to form — NOT to enter at the extreme. ${chaseLevel === 'HIGH' ? 'Surface this PROMINENTLY in the Risk Map (lead with it). ' : 'Surface this in the Risk Map. '}In "If You Take a Position", if a ${chaseDir} setup is still permitted, state plainly that it is a CHASE, and the Entry you publish — in the table AND in the JSON block — MUST be that pullback level as a CONDITIONAL, named to the price. Do NOT publish the current extreme as the entry while recommending a pullback in prose: the JSON is the only part of your output anything downstream reads, so a setup that contradicts your own stated preference is the version the user is shown. If no valid pullback level exists to name, emit no setup at all. (This is a CONSISTENCY requirement, not a claim that pullback entries pay better — that claim was retracted, see ENTRY METHOD.)`);
+      }
     }
 
     // Phase C9 — Bias Feasibility asymmetry
@@ -846,6 +1245,15 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       L(`Vol Regime: ATR_PERCENTILE_${pctInt} → ${implication}`);
     }
 
+    // SHALLOW PULLBACK BAND — REMOVED 2026-08-25. It computed the 0.2-0.5 ATR entry band in prices
+    // to enforce the ENTRY DISCIPLINE rule. That rule was retracted the same day: `level_entry.py`
+    // began its fill window at T+1h while the feature row's `price` is the CLOSE of the bar
+    // spanning T..T+4h, so a pullback that had already happened inside the signal bar counted as a
+    // fill. Corrected on the same 290,791 opportunities the effect INVERTS on shorts
+    // (+0.0660R -> -0.0296R, 9/9 periods -> 0/9) and vanishes on longs (+0.0919R -> +0.0009R).
+    // Emitting a band that enforces a rule which measures negative is worse than emitting nothing.
+    // See docs/research/envelope-rules.md, "PARTS 4-5 RETRACTED".
+
     // Phase E3 — Structure levels (neutral)
     if (fourH.marketStructure && fourH.marketStructure.levelTests.length && daily.price > 0 && fourH.atr?.atr && fourH.atr.atr > 0) {
       const ms = fourH.marketStructure, atr = fourH.atr.atr, currentPrice = daily.price, flipThreshold = atr * 0.15;
@@ -860,6 +1268,30 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
         structureEntries.push(`${direction} ${formatPrice(level.price)} [${tags.join(',')}]`);
       }
       if (structureEntries.length) L(`Structure Levels (4H, within 2× ATR of price): ${structureEntries.join(' | ')}`);
+
+      // CASCADE ZONE (2026-08-22) — measured, not assumed. Per-event liquidation data
+      // (docs/research/liquidation-map.md) shows price spends only ~1.2% of its time beyond the
+      // prior 7-day extreme, yet ~40% of ALL forced-liquidation notional prints there:
+      //
+      //     32 symbols measured. MAJORS median 34.6x long / 30.5x short; ALTS median 30.2x /
+      //     26.0x. Range 13x (AAVE short) to 66x (TRX long). 24h-VWAP control: 1.1-2.2x in every
+      //     cell — the metric CAN return "nothing structural", which is why the 30x is credible.
+      //     Alts run slightly LOWER than majors, so thin books do not amplify the effect.
+      //
+      // Intensity is time-normalised, so this is NOT the tautology "longs die when price falls":
+      // it is forced flow per unit of time spent at that price, ~30-40x its baseline.
+      //
+      // STRICTLY CONDITIONAL. It says what waits there IF price arrives — nothing about whether
+      // price will go. The "liquidity magnet" claim is untested and the wording below must not
+      // imply it, because that would be a direction call and direction is a coin flip here.
+      // The actionable use is STOP PLACEMENT: a stop just past a multi-day extreme sits in the
+      // densest liquidation zone on the chart.
+      const sevenDayHigh = Math.max(...(fourH.candles ?? []).slice(-42).map((c: any) => c.high ?? 0));
+      const sevenDayLow = Math.min(...(fourH.candles ?? []).slice(-42).map((c: any) => c.low ?? Infinity));
+      if (Number.isFinite(sevenDayHigh) && Number.isFinite(sevenDayLow) && sevenDayHigh > 0 && sevenDayLow > 0) {
+        L(`CASCADE ZONES (measured): beyond ${formatPrice(sevenDayLow)} (7d low) and beyond ${formatPrice(sevenDayHigh)} (7d high).`);
+        L(`  Forced-liquidation density past a 7-day extreme runs ~20-45x its time-weighted baseline (median ~30x; measured on per-event data across 32 crypto symbols, both sides — majors ~35x, alts ~30x, and every symbol above 13x). Two uses, both CONDITIONAL on price getting there: (a) a stop placed just beyond one of these sits in the densest liquidation zone on the chart — prefer the far side of it or accept it will likely be swept; (b) if price does break one, expect acceleration rather than a clean retest. This says NOTHING about whether price will travel there — do not present it as a target, a magnet, or a direction call.`);
+      }
     }
 
     // Phase E — stock-only context flags
@@ -881,70 +1313,206 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       }
       if (si.earningsDate != null && si.earningsDate > nowMs) {
         const days = Math.floor((si.earningsDate - nowMs) / 86400000);
-        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW (gap risk 5-20%, stop will not hold)`);
-        else if (days <= 7) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_MODERATE (skip if 4H momentum opposes thesis)`);
-        else if (days <= 14) L(`Earnings Proximity: ${days}d to earnings — flag in Risk Factors, no conviction cap`);
+        // MEASURED 2026-08-25 (Part 8) on 487k stock opportunities, 159 symbols, 2020-2026 — the
+        // first envelope condition validated on its OWN stated mechanism rather than merely
+        // surviving an EV null. Baseline P(overnight gap >= 2 ATR inside the hold window) away from
+        // earnings is 8.05%; inside these windows it is 33% / 47% / 33% — 4.06x / 5.88x / 4.13x,
+        // in 9/9 half-year periods each, with cluster CIs [3.68,4.43] / [5.46,6.30] / [3.86,4.39].
+        //
+        // RE-MEASURED 2026-08-26 (Phase 2 C2); the previously published figures were OVERSTATED.
+        // Part 8 gave 7.08x / 7.03x / 4.99x against a 7.4% baseline. Three inputs differ — corrected
+        // anchor, full 300-bar warm-up, and a baseline of >14d bars rather than all bars — and the
+        // gap is not attributable to any one of them. The VERDICT is unchanged, every window clears
+        // the 1.5x bar by a wide margin, but the prompt was quoting numbers that were too large.
+        //
+        // The ORDERING also flipped: 3-7d is now highest, not 0-2d. That is NOT an ATR artifact —
+        // ATR is flat across the windows (1.94-2.00 against a 2.070 baseline) and the ordering
+        // survives an ATR-free gap threshold. No mechanism is offered for it. The numbers are in the prompt because "gap risk" as a
+        // bare phrase invites the model to weigh it against a chart pattern; "42% of stops gap
+        // straight through" does not.
+        // The "43% of stops fill beyond the stop, averaging 1.4R lost" clause was removed
+        // 2026-08-26: it came from `stock_gap_fill.py`, which re-prices stops on the retracted
+        // lookahead anchor. The GAP RATES below survive that retraction — they are computed from
+        // `maxGapATR`, a window-shift-robust comparison of gap frequency near vs far from earnings,
+        // not from any entry simulation — but they are re-run in Phase 2 C2 regardless.
+        if (days <= 2) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_LOW. MEASURED (re-run 2026-08-26): 33% of bars see an overnight gap >= 2 ATR against an 8.1% baseline away from earnings — 4.1x, in 9 of 9 half-year periods. A gap that size jumps clean over a 2 ATR stop, so the stop cannot be relied on through the report. This is a variance fact, not a direction call.`);
+        else if (days <= 7) L(`Earnings Proximity: ${days}d to earnings — CONVICTION_CAP_MODERATE. MEASURED (re-run 2026-08-26): gap >= 2 ATR on 47% of bars, 5.9x the away-from-earnings baseline and the HIGHEST of the three windows, 9/9 periods. Skip if 4H momentum opposes thesis.`);
+        else if (days <= 14) L(`Earnings Proximity: ${days}d to earnings — flag in Risk Factors, no conviction cap. MEASURED (re-run 2026-08-26): 33% of bars, still 4.1x the baseline gap rate, because a multi-day hold opened this far out often straddles the report anyway.`);
       }
     }
 
     // Phase C10 — Conviction Envelope
     {
-      const mlPct = daily.mlWinProbability != null ? iTrunc(daily.mlWinProbability * 100) : null;
+      // The rule bodies live in `src/envelope.ts` (2026-08-26). They were extracted because three
+      // of the four verdict lists are computed here and then discarded on a FLAT bar — nothing
+      // outside this builder could observe `highBlocks` / `moderateBlocks` / `downgrade`, which is
+      // why every measurement of them so far reconstructed the rules in Python instead. The
+      // exporter and the research layer now call the same function this does.
       const staleCount = dataQuality?.missingEnrichments.length ?? 0;
-      const autoFlat: string[] = [];
-      if (mlPct != null && mlPct < 50) autoFlat.push(`ML_WIN_${mlPct}%<50`);
-      if (envAnyKilled) autoFlat.push('ANY_KILLED=true');
-      if (envDivergenceEscalated) autoFlat.push('divergence_escalated_6+_candles');
-      // biases_MIXED → auto-FLAT. (The old "Stoch agreement overrides this" exemption was
-      // removed — Stoch direction is noise, so it can't rescue a mixed-bias setup.)
-      if (envAlignment === 'MIXED') autoFlat.push('biases_MIXED');
-      if (envMacroRisk === 'IMMINENT') autoFlat.push('macro_IMMINENT');
-      if (isTreatment) {
-        if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'FAIL') autoFlat.push('treatment_long_confirm_FAIL');
-        const isStock = !!stockInfo;
-        if (isStock && alignedDirection === 'SHORT' && envAlignment === 'ALIGNED_BEARISH') {
-          const mlOk = (mlPct ?? 0) >= 70, stochOk = treatmentStochCross4H === 'bearish', regimeOk = regime === 'TRENDING';
-          if (!(mlOk && stochOk && regimeOk)) {
-            const reasons: string[] = [];
-            if (!mlOk) reasons.push('ML<70'); if (!stochOk) reasons.push('STOCH_CROSS_4H≠bearish'); if (!regimeOk) reasons.push('regime≠TRENDING');
-            autoFlat.push(`treatment_short_gate_stocks(${reasons.join(',')})`);
-          }
-        }
-      }
-      const highBlocks: string[] = [];
-      if (envAlignment !== 'ALIGNED_BULLISH' && envAlignment !== 'ALIGNED_BEARISH') highBlocks.push(`alignment_${envAlignment}_not_full`);
-      if (envContinuationCount < 3) highBlocks.push(`continuation_${envContinuationCount}/3+_required`);
-      if (mlPct != null && mlPct < 70) highBlocks.push(`ML_WIN_${mlPct}<70`);
-      if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON') highBlocks.push(`macro_${envMacroRisk}_not_ON_HORIZON`);
-      if (envNewsConflicts) highBlocks.push('news_thesis_conflict');
-      const moderateBlocks: string[] = [];
-      if (envContinuationCount < 2) moderateBlocks.push(`continuation_${envContinuationCount}/2+_required`);
-      if (mlPct != null && mlPct < 60) moderateBlocks.push(`ML_WIN_${mlPct}<60`);
-      if (envMacroRisk !== 'NONE' && envMacroRisk !== 'ON_HORIZON' && envMacroRisk !== 'UPCOMING') moderateBlocks.push(`macro_${envMacroRisk}_exceeds_NEARBY`);
-      if (isTreatment) {
-        if (alignedDirection === 'LONG' && treatmentLongConfirmStatus === 'PARTIAL') moderateBlocks.push('treatment_long_confirm_PARTIAL_cap_LOW');
-        const transitioningHighOk = regime === 'TRANSITIONING' && envAlignment === 'ALIGNED_BULLISH' && (mlPct ?? 0) >= 65 && (treatmentLongConfirmStatus === 'PASS' || treatmentLongConfirmStatus === 'n/a');
-        if (transitioningHighOk) { for (let i = highBlocks.length - 1; i >= 0; i--) if (highBlocks[i].startsWith('continuation_') || highBlocks[i].startsWith('ML_WIN_')) highBlocks.splice(i, 1); }
-      }
-      const downgrade: string[] = [];
-      if (staleCount >= 2) downgrade.push(`data_stale_${staleCount}_sources`);
-      if (oneHOpposes) downgrade.push('counter_trend_pullback_cap_MODERATE');
-      if (envCryptoBearRegime) downgrade.push('crypto_bear_regime_LONG_cap_MODERATE_halve_size');
-      if (envConformalNotConfident) moderateBlocks.push('conformal_abstain_not_confident_cap_LOW');
-      if (stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs) {
-        const days = Math.floor((stockInfo.earningsDate - nowMs) / 86400000);
-        if (days <= 2) moderateBlocks.push(`earnings_in_${days}d_cap_LOW`);
-        else if (days <= 7) highBlocks.push(`earnings_in_${days}d_cap_MODERATE`);
-        else if (days <= 14) downgrade.push(`earnings_in_${days}d_downgrade_one_tier`);
-      }
-      const maxAllowed = autoFlat.length ? 'FLAT' : highBlocks.length === 0 ? 'HIGH' : moderateBlocks.length === 0 ? 'MODERATE' : 'LOW';
+      const envIn: EnvelopeInput = {
+        rawMlWin: daily.mlWinProbability ?? null,
+        calibratedMlWin: input.calibratedMlWin ?? null,
+        staleCount,
+        anyKilled: envAnyKilled,
+        macroRisk: envMacroRisk,
+        newsConflicts: envNewsConflicts,
+        alignment: envAlignment,
+        alignedDirection,
+        continuationCount: envContinuationCount,
+        isCrypto: isCryptoSym,
+        isStock: !!stockInfo,
+        isTreatment,
+        regime,
+        longConfirmStatus: treatmentLongConfirmStatus,
+        oneHOpposes,
+        cryptoBearRegime: envCryptoBearRegime,
+        // Resolved here so the envelope itself has no notion of "now" — a pure function is what
+        // makes a historical replay honest.
+        daysToEarnings: stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs
+          ? Math.floor((stockInfo.earningsDate - nowMs) / 86400000) : null,
+        mlCoverageCut: input.mlCoverageCut ?? null,
+      };
+      const env = evaluateEnvelope(envIn);
+      envelopeInput = envIn; envelopeVerdict = env;
+      const { rawMlPct, mlPct, calibLifted, autoFlat, highBlocks, moderateBlocks, downgrade, maxAllowed } = env;
       L('Conviction Envelope:');
       L(`  max_allowed: ${maxAllowed}`);
-      if (autoFlat.length) { L(`  auto_FLAT_active: ${autoFlat.join(', ')}`); L('  → Output NO SETUP regardless of any other reasoning'); }
+      if (calibLifted) L(`  note: raw ML_WIN ${rawMlPct}% would auto-FLAT, but the live forward calibration corrects it to ~${mlPct}% (bucket realizes higher than the drifted model predicts) — NOT auto-FLAT on ML alone.`);
+      if (autoFlat.length) {
+        L(`  auto_FLAT_active: ${autoFlat.join(', ')}`);
+        L('  → Output NO SETUP regardless of any other reasoning');
+        // Reframe the low-ML-in-a-trend case so the output isn't a demoralizing "nothing here":
+        // ML_WIN measures a SHARP (>=1.5 ATR/24h) move; a slow trend grind is a low-ML_WIN state
+        // BY DESIGN, and "no vol-edge entry" is NOT "no trend / stand down".
+        //
+        // 2026-07-24 — the hatch fires when EVERY auto-FLAT reason is a QUALITY-gate reason
+        // (ML_WIN under the bar, or the ML-gated biases_MIXED block) rather than a real hazard.
+        // It previously required the reason set to be EXACTLY one `ML_WIN_*` entry, which made it
+        // unreachable in the single most common FLAT case — `biases_MIXED_and_ML_<70` — so a slow
+        // mixed-bias trend emitted a bare "NO SETUP" on every bar with none of the context below.
+        // Measured by replaying this builder over BTC 07-13→07-25 (73 4H bars, real candles): 71
+        // bars FLATted, 63 of them on biases_MIXED alone, Environment Risk ELEVATED on every
+        // single one, and NOT ONE emitted this line — a week of silence through a +7.5% 4H
+        // advance whose daily bias never confirmed. Hazard reasons (ANY_KILLED, macro_IMMINENT,
+        // divergence_escalated, chase_into_extended_aligned_trend) still suppress the hatch:
+        // those are genuine stand-down states where "the trend is intact, riding it is your call"
+        // would be actively dangerous. `biases_MIXED_(ML_unavailable)` is deliberately EXCLUDED —
+        // with no ML value we cannot characterise move likelihood at all.
+        const isQualityGateReason = (r: string) => r.startsWith('ML_WIN_') || r.startsWith('biases_MIXED_and_ML_');
+        const onlyQualityGate = autoFlat.every(isQualityGateReason);
+        if (onlyQualityGate && (envRisk === 'ELEVATED' || envRisk === 'HIGH')) {
+          // The mixed-bias variant of this line was removed 2026-08-25 along with the
+          // `biases_MIXED_and_ML_<70` rule that produced its trigger. `mixedGated` could no longer
+          // be true, so that branch was unreachable — dead code that still compiled, which is the
+          // pattern that has bitten this codebase repeatedly this week.
+          L(`  FRAMING: this FLAT is "no volatility-edge entry" (ML_WIN gauges a sharp >=1.5-ATR move, unlikely here), NOT "quiet / nothing happening" — Environment Risk is ${envRisk} and the ${trendDir}-trend is intact. Riding an existing trend is a separate decision this tool does not gate; say so plainly instead of a flat "stand aside". Do NOT imply the tape is safe.`);
+        }
+        // Catalyst framing on a CHASE flat (2026-08-22). The chase guard fires on extended +
+        // exhaustion, and its evidence is real (trend_direction_test.py: a mature aligned trend
+        // carries ~0% forward EV). But its implicit model is a move that ran out of buyers, and a
+        // policy repricing is a different animal — the whole range resets rather than mean-reverts.
+        // This does NOT open the gate: the FLAT stands, because "a catalyst exists" is a heuristic
+        // with no walk-forward evidence behind it and loosening a validated guard on narrative
+        // would be exactly the mistake this project's graveyard is full of. What it fixes is the
+        // MESSAGE — a chase FLAT otherwise suppresses the framing hatch entirely and emits a bare
+        // NO SETUP, which reads as "nothing here" on the one day the tape is repricing hardest.
+        // RETARGETED 2026-08-25 (Part 10). This fired on `autoFlat.includes('chase_...')`, which can
+        // no longer be true — the chase auto-FLAT is gone. The framing itself is still worth having,
+        // so it now keys on the chase READING, and its tail no longer orders a NO SETUP: on an
+        // extended bar the correct output is a conditional entry at the pullback band, not silence.
+        if (input.news?.catalystActive && envChaseLevel === 'HIGH') {
+          L(`  FRAMING (catalyst): a PRIMARY-source policy release landed ~${input.news.latestPrimaryAgeH}h ago (see POLICY / MACRO HEADLINES). An extended move WITH a fresh policy catalyst behind it is a repricing, not buyer exhaustion — the whole range can reset rather than mean-revert. Two consequences: do NOT treat the extension itself as a reason to stand aside, and do NOT assume price must return to the pullback band just because it is extended. Set the conditional entry at the band and accept that it may never fill. If the user already holds a position in the trend direction, this is explicitly NOT an exit signal.`);
+        }
+      }
       else {
         if (highBlocks.length) L(`  HIGH_blocked_because: ${highBlocks.join(', ')}`);
         if (moderateBlocks.length) L(`  MODERATE_blocked_because: ${moderateBlocks.join(', ')}`);
         if (downgrade.length) L(`  downgrade_one_tier_if_LLM_decides: ${downgrade.join(', ')}`);
+        // Must-offer-entry rule (2026-08-21). During the Aug-2026 62k→80k BTC run, every
+        // quantitative gate was open (replayed: 34/34 bars envelope-CLEAN at ML 80) yet the
+        // analyses still declined to construct a setup — "extended, wait for the retest" prose
+        // rendered as NO ENTRY EDGE through a +25% move. When the system's own stack says its
+        // strongest tradeable state is active, declining is no longer an allowed output: the
+        // honest form of caution is a CONDITIONAL entry at a named level, not silence.
+        // ── The mandate's ML tier (rewritten 2026-08-21c) ────────────────────────────────────
+        // The first cut floored this gate at the live calibration CEILING, which was circular:
+        // applyCalibration clamps at that ceiling, so `calibrated <= ceiling` holds by
+        // construction and requiring `calibrated >= ceiling` admitted only bars at the very top
+        // point of the fitted curve. Measured both ways: on the coarse Aug curve it demanded raw
+        // >= 0.760 and on the box's real fitted curve raw >= 0.792 — BOTH stricter than the plain
+        // raw >= 0.70 the change was meant to widen, i.e. the remedy was narrower than the
+        // problem. The floor also swung 68<->70 purely on which sparse buckets cleared n >= 40.
+        //
+        // So the tier is now read off the RAW model scale, where "top bucket" is a fixed,
+        // documented, drift-independent quantity: v14 reliability has raw 70-85 realizing 75.9%
+        // (crypto) / 73.8% (stocks) at 76.6% top-decile precision, and the ML Bucket line below
+        // already calls raw >= 70 "TOP" — so this now agrees with it instead of quietly using a
+        // second scale. The live calibration keeps its job (correcting the auto-FLAT/quality gate
+        // that was over-suppressing) and additionally acts as a VETO here: if the forward data
+        // says these bars no longer realize even the notify threshold, the model's self-reported
+        // top tier has decayed and nothing is mandated.
+        // Veto at the FAVORABLE boundary of the prompt's own ML Bucket taxonomy (>=70 TOP, >=60
+        // FAVORABLE, >=50 MARGINAL, <50 no-trade): if a bar the model calls TOP no longer clears
+        // even FAVORABLE on graded forward data, the tier has decayed and nothing is mandated.
+        // Deliberately NOT set at the notify threshold — on the box's real curve raw-70 bars
+        // calibrate to ~65.6, so a 65 veto would trip on ordinary mild drift rather than decay.
+        const MANDATE_RAW_PCT = 70, MANDATE_LIVE_VETO_PCT = 60;
+        const inTopTier = rawMlPct != null && rawMlPct >= MANDATE_RAW_PCT;
+        const liveVetoes = mlPct != null && mlPct < MANDATE_LIVE_VETO_PCT;
+        // Both numbers get quoted wherever the mandate speaks — one prompt was otherwise printing
+        // "ML_WIN 68%" (calibrated) next to "ML Bucket: TOP (ML_WIN 80%)" (raw) with no way to
+        // tell they are the same bar on two scales.
+        const mlBoth = mlPct != null && mlPct !== rawMlPct ? `ML_WIN raw ${rawMlPct}% (live-calibrated ${mlPct}%)` : `ML_WIN ${rawMlPct}%`;
+        // Exclusions — states where forcing a setup would be actively wrong. These are NOT
+        // auto-FLATs (the tape may still be tradeable by the user's own judgment); they only
+        // suspend the MANDATE, leaving the LLM its normal discretion.
+        const mandateBlocks: string[] = [];
+        if (staleCount >= 2) mandateBlocks.push(`data_stale_${staleCount}_sources`);   // the missing feeds are exactly the ones that would close this window
+        if (stockInfo?.earningsDate != null && stockInfo.earningsDate > nowMs && Math.floor((stockInfo.earningsDate - nowMs) / 86400000) <= 2) mandateBlocks.push('earnings_within_2d');
+        if (liveVetoes) mandateBlocks.push(`live_calibration_${mlPct}%_below_${MANDATE_LIVE_VETO_PCT}`);   // model says top tier, forward data disagrees
+        const mandateOK = mandateBlocks.length === 0;
+        // Precedence: the mandate compels an ENTRY, never a conviction tier or a direction, and
+        // never overrides a hazard flag. Appended to both windows so a co-emitted counter-order
+        // (BB_EXTREME "DO NOT short", news conflict, bear-regime LONG cap, a LOW max_allowed)
+        // has a stated resolution instead of two absolutes the model resolves arbitrarily.
+        const precedence = ` PRECEDENCE: this compels an ENTRY, not a tier and not a side — obey every other flag on top of it (max_allowed caps conviction; a "DO NOT short"/news-conflict/regime-cap line means satisfy this with the OTHER side, a tighter conditional trigger, or reduced size — never by ignoring that flag). If a flag genuinely forbids every entry in this direction, say so explicitly in one line and give the conditional entry for the case that resolves it.`;
+        const alignedWindow = envAlignment.startsWith('ALIGNED_BULLISH') || envAlignment.startsWith('ALIGNED_BEARISH');
+        if (alignedWindow && inTopTier) {
+          const wDir = envAlignment.startsWith('ALIGNED_BULLISH') ? 'LONG' : 'SHORT';
+          // HIGHER_TF_ONLY = daily+4H agree, 1H opposing/neutral — i.e. an active pullback. That
+          // is the entry bar this remedy names, so it is IN the window, not excluded from it.
+          const pullbackNote = envAlignment.endsWith('_HIGHER_TF_ONLY') ? ' The 1H is counter to the higher timeframes — that IS the pullback, so anchor the entry to it rather than treating it as a reason to wait.' : '';
+          if (mandateOK) {
+            L(`  HIGH_CONVICTION_WINDOW: biases aligned ${wDir}, ${mlBoth} — the model's TOP tier (raw >= ${MANDATE_RAW_PCT}) — and NO auto-FLAT reason is active — the system's strongest tradeable state. A concrete ${wDir} setup is MANDATORY: immediate entry if price sits at a valid level, otherwise a CONDITIONAL entry at the nearest validated pullback level or breakout trigger (name the exact price). Outputting NO SETUP or "wait and see" without an Entry/Stop/TP table is NOT an acceptable response in this window — if you judge price extended, that judgment belongs in the CONDITION of the entry, not in declining to provide one.${pullbackNote}${precedence}`);
+          } else {
+            L(`  HIGH_CONVICTION_WINDOW_SUSPENDED: aligned ${wDir} at ${mlBoth} would mandate a setup, but ${mandateBlocks.join(' + ')} — the inputs that would normally CLOSE this window are missing or a gap event is imminent, so a forced entry would be a blind one. Normal discretion applies; say plainly why you are standing aside rather than implying the tape is quiet.`);
+          }
+        }
+        if (envAlignment === 'MIXED' && inTopTier) {
+          // The MIXED window bypasses the stock-SHORT gate, which is scoped to full alignment.
+          // Harmless while declining was allowed; load-bearing once a tail forbids NO SETUP — so
+          // the MANDATE tail is withheld in those states while the informational window still prints.
+          //
+          // `chaseUnguarded` is DELIBERATELY KEPT after Part 10 removed the chase auto-FLAT. Part 10
+          // tested the chase reading as a bar FILTER and found it noise; it did NOT test it as a
+          // suppressor of a mandate that FORBIDS declining. Those are different questions, and the
+          // asymmetric cost points the same way it did for `treatment_long_confirm`: leaving a
+          // conservative brake on a rule that forces output is cheap, removing it on an untested
+          // inference is not. The comment is corrected rather than the behaviour.
+          const chaseUnguarded = envChaseLevel === 'HIGH';
+          const stockShortUnguarded = !!stockInfo && has(daily.bias, 'Bearish');
+          const mixedMandate = mandateOK && !chaseUnguarded && !stockShortUnguarded;
+          // The withheld case must carry the SUSPENDED token, not just prose: the system-prompt
+          // rules that force a JSON setup and require the position section match on the WINDOW
+          // token and carve out "(not SUSPENDED)". A parenthetical "Setup NOT mandated here"
+          // left both rules firing, so the model was told a NO SETUP was acceptable AND that the
+          // JSON array must carry one — in the chase state the 2026-07-02 symmetry fix blocks.
+          const label = mixedMandate ? 'MIXED_HIGH_ML_WINDOW' : 'MIXED_HIGH_ML_WINDOW_SUSPENDED';
+          const tail = mixedMandate
+            ? ` A concrete structure-led setup is MANDATORY in this window (CONDITIONAL at the nearest valid level if none is IN_PLAY) — do NOT output NO SETUP.${precedence}`
+            : ` (Setup NOT mandated here: ${[...mandateBlocks, ...(chaseUnguarded ? ['chase_risk_HIGH'] : []), ...(stockShortUnguarded ? ['stock_short_gate_does_not_apply_in_MIXED'] : [])].join(' + ')} — normal discretion, and a NO SETUP is acceptable if you say why.)`;
+          L(`  ${label}: timeframes disagree but ${mlBoth} is in the model's TOP tier (raw >= ${MANDATE_RAW_PCT}) — statistically the BEST big-move cell (non-aligned bars carry ~2x the >=1.5-ATR move rate of aligned trends; measured on 1.37M clean bars). Direction is NOT implied: trade only a structure-led setup (4H reversal or range-edge level with tight invalidation), counter-trend bands apply, cap MODERATE. Do not frame this as trend-following and do not cite "wait for alignment" — by the time TFs align, the move is statistically spent.${tail}`);
+        }
         L('  LLM_judgment_required: failure_mode_specific_not_generic, thesis_intact_check');
         L('  → Pick conviction within max_allowed. You may NOT output a tier above max_allowed.');
       }
@@ -952,23 +1520,92 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
 
     // Phase C5 — ML Bucket
     if (daily.mlWinProbability != null) {
+      // FIXED 2026-08-25: this banded on the RAW ML_WIN while the Conviction Envelope gates on the
+      // LIVE-CALIBRATED one, so a single prompt could say
+      //     Conviction Envelope: max_allowed: LOW ... NOT auto-FLAT on ML alone   (calibrated 60%)
+      //     ML Bucket: UNFAVORABLE (ML_WIN 44%) — NO TRADE regardless of directional clarity  (raw)
+      // — a categorical NO TRADE directly contradicting the gate two lines above it. Observed live
+      // on BTCUSDT. Same defect the mandate lines were fixed for on 2026-08-22 ("one prompt
+      // printing ML_WIN on two scales with no annotation"); the fix was never propagated here.
+      //
+      // The TIER stays on the RAW scale deliberately — the mandate reads `rawMlPct >= 70` and the
+      // 2026-08-22 fix aligned it to THIS line's "TOP" label precisely so the two stop disagreeing.
+      // Banding the tier on the calibrated value would re-split them. What changes is the DIRECTIVE:
+      // a quality descriptor must not issue a categorical NO TRADE that overrules the gate, and both
+      // numbers are now rendered whenever they differ so no cross-scale comparison can happen
+      // silently.
       const mlPct = iTrunc(daily.mlWinProbability * 100), isStock = !!stockInfo;
+      const calPct = input.calibratedMlWin != null ? iTrunc(input.calibratedMlWin * 100) : null;
+      const shown = calPct != null && calPct !== mlPct
+        ? `ML_WIN raw ${mlPct}% (live-calibrated ${calPct}%)` : `ML_WIN ${mlPct}%`;
       let bucket: string;
-      if (isStock && mlPct >= 85) bucket = `STOCK_TOP (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes, relaxed_confluence: 2_ok`;
-      else if (mlPct >= 70) bucket = `TOP (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes`;
-      else if (mlPct >= 60) bucket = `FAVORABLE (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: no`;
-      else if (mlPct >= 50) bucket = `MARGINAL (ML_WIN ${mlPct}%) — direction-agnostic move quality, conviction ceiling MODERATE, counter-trend qualified: no`;
-      else bucket = `UNFAVORABLE (ML_WIN ${mlPct}%) — NO TRADE regardless of directional clarity`;
+      if (isStock && mlPct >= 85) bucket = `STOCK_TOP (${shown}) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes, relaxed_confluence: 2_ok`;
+      else if (mlPct >= 70) bucket = `TOP (${shown}) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: yes`;
+      else if (mlPct >= 60) bucket = `FAVORABLE (${shown}) — direction-agnostic move quality, conviction ceiling HIGH, counter-trend qualified: no`;
+      else if (mlPct >= 50) bucket = `MARGINAL (${shown}) — direction-agnostic move quality, conviction ceiling MODERATE, counter-trend qualified: no`;
+      else bucket = `UNFAVORABLE (${shown}) — weakest quality tier on the raw scale`
+        + (calPct != null && calPct >= 50
+            ? `. NOTE: the live forward calibration corrects this bar to ${calPct}%, and the Conviction Envelope — which gates on the CALIBRATED value — is the authority on whether a trade is allowed. Do NOT read this tier as a veto; read max_allowed.`
+            : `. The Conviction Envelope is the authority on whether a trade is allowed — read max_allowed, not this tier.`);
       L(`ML Bucket: ${bucket}`);
+    } else {
+      // Missing-ML was previously SILENT (every ML section just disappeared, including the
+      // ML<50 auto-FLAT) — the LLM had no way to know the quality signal was absent vs good.
+      L('ML Bucket: UNAVAILABLE (prediction cache stale) — no quality signal this run; treat as no statistical edge to enter and cap aggressiveness. Say "ML unavailable", never estimate a number.');
+    }
+
+    // Live calibration (2026-07-02): the realized goodR rate for the CURRENT prediction's bucket,
+    // measured forward on ml_calibration D1 — turns ML_WIN from an assertion into an audited number.
+    // n>=20 so a thin bucket can't mislead.
+    if (input.mlCalibration && input.mlCalibration.n >= 20) {
+      const c = input.mlCalibration;
+      L(`ML Calibration (live, audited): bars predicted ${c.bucketLabel} realized a >=1.5-ATR move ${f(c.realizedPct, 0)}% of the time over the last ${c.windowDays}d (n=${c.n}). Weight ML_WIN by this measured rate, not the raw number.`);
+    }
+
+    // ML_WIN trajectory (2026-07-02): the sampled path from score_history — a building path means
+    // a vol regime forming; a decaying one means the move is already spent. Context the
+    // instantaneous number can't carry.
+    if (input.mlTrajectory && input.mlTrajectory.points.length >= 3) {
+      const pts = input.mlTrajectory.points;
+      const deltaPp = (pts[pts.length - 1] - pts[0]) * 100;
+      const trend = deltaPp >= 5 ? 'RISING — vol regime building' : deltaPp <= -5 ? 'FALLING — move likelihood decaying' : 'flat';
+      L(`ML_WIN ${input.mlTrajectory.hours}h path: ${pts.map(p => Math.round(p * 100)).join('→')}% (${trend}).`);
+    }
+
+    // BTC regime context for alts (2026-07-02): alts were analyzed blind to BTC; alt beta
+    // amplifies any BTC move regardless of the alt's own chart.
+    if (input.btcContext && isCryptoSym && symbol.toUpperCase() !== 'BTCUSDT') {
+      const b = input.btcContext;
+      const parts: string[] = [];
+      if (b.mlWin != null) parts.push(`ML_WIN ${iTrunc(b.mlWin * 100)}%`);
+      if (b.bigMoveBucket && b.bigMoveBucket !== 'NORMAL') parts.push(`Big-Move ${b.bigMoveBucket}`);
+      if (b.persistence != null) parts.push(`persistence ${iTrunc(b.persistence * 100)}%`);
+      if (parts.length) L(`BTC CONTEXT: ${parts.join(', ')} — alt beta amplifies any BTC move; a BTC flush or squeeze drags this symbol regardless of its own chart. Fold BTC's state into the risk read.`);
     }
 
     // ML Persistence (72h)
     if (daily.mlPersistenceProbability != null) {
       const p72Pct = iTrunc(daily.mlPersistenceProbability * 100);
-      const guidance = p72Pct >= 70 ? 'HIGH (≥70%) — full 72h hold viable, TP2 at 4-5× ATR(4H), runner targets the upper multiplier, trail 1-1.5× ATR after TP1'
-        : p72Pct >= 60 ? 'MODERATE (60-69%) — TP2 at 3-4× ATR(4H), 48h hold target, take partial 50% at TP1 + trail the runner 1× ATR'
-        : p72Pct >= 50 ? 'WEAK (50-59%) — TP2 at 2-3× ATR(4H) max, 24h hold, take TP1 at +1R-1.5R and trail tightly (0.7× ATR) or exit at BE after TP1'
-        : 'LOW (<50%) — do NOT hold for TP2. Take TP1 fast (+1R-1.5R) or pass the setup if TP1 < 1.5R. Persistence model expects mean-reversion before 2.5 ATR.';
+      // Labels are stated against the TARGET'S OWN BASE RATE, not against 50%. The old ladder called
+      // 50-59% "WEAK" — a band that straddles the base rate, so an entirely average bar read as
+      // sub-par and biased the model toward shorter holds and tighter trails on the most common
+      // reading there is. Same defect class as the crash band: absolute thresholds applied to a
+      // probability whose base is not 50%. **The management guidance is unchanged** — only the
+      // words describing the number moved; the ladder was tuned for trade management and that
+      // tuning was never in question.
+      //
+      // FIXED 2026-08-25 (second review): the base rate was hardcoded at 54% — the CRYPTO figure —
+      // in a block guarded only on `mlPersistenceProbability != null`, and a stock h72t25 model
+      // ships. Measured on the v14 regens: P(fwdMaxFavR72H >= 2.5) is **54.1% crypto** but **60.8%
+      // stocks**. So on a stock a 60-69% reading printed "ABOVE AVERAGE vs a 54% base" while
+      // sitting AT OR BELOW its real base, telling the model to hold longer and trail wider on a
+      // sub-par bar — reintroducing on stocks the exact defect this change fixed on crypto.
+      const p72Base = stockInfo ? 61 : 54;
+      const vs = (band: string) => `${band} (vs a ${p72Base}% base for this market)`;
+      const guidance = p72Pct >= p72Base + 16 ? vs('WELL ABOVE AVERAGE') + ' — full 72h hold viable, TP2 at 4-5× ATR(4H), runner targets the upper multiplier, trail 1-1.5× ATR after TP1'
+        : p72Pct >= p72Base + 6 ? vs('ABOVE AVERAGE') + ' — TP2 at 3-4× ATR(4H), 48h hold target, take partial 50% at TP1 + trail the runner 1× ATR'
+        : p72Pct >= p72Base - 4 ? vs('AVERAGE') + ' — an ORDINARY reading, not a weak one — TP2 at 2-3× ATR(4H) max, 24h hold, take TP1 at +1R-1.5R and trail tightly (0.7× ATR) or exit at BE after TP1'
+        : vs('BELOW AVERAGE') + ' — do NOT hold for TP2. Take TP1 fast (+1R-1.5R) or pass the setup if TP1 < 1.5R. Persistence model expects mean-reversion before 2.5 ATR.';
       L(`ML Persistence (72h ≥2.5 ATR): ${p72Pct}% — ${guidance}`);
     }
 
@@ -1191,6 +1828,85 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     if (d.takerBuySellRatio !== 1.0 || d.takerBuyVolume > 0) L(`Taker Buy/Sell: ${f(d.takerBuySellRatio, 2)} — ${p.takerPressure}`);
     if (p.squeezeRisk.level !== 'NONE') L(`Squeeze Risk: ${p.squeezeRisk.level} ${p.squeezeRisk.direction}`);
     if (p.signals.length) { L('Signals:'); for (const sig of p.signals) L(`- [${sig.strength}] ${sig.message}`); }
+
+    // F-2 — WHALE TRAP detector. Repackages crowding + smart-money divergence + stretched
+    // funding + CVD divergence into ONE plain-language verdict that NAMES the trap: when the
+    // retail crowd is piled onto one side and the conditions for a flush/squeeze against them are
+    // stacking up, entering on the crowd's side means joining the cohort most likely to be
+    // liquidated. RISK read, never a direction call. Crypto-only (needs derivatives).
+    const retailLong = d.globalLongPercent, retailShort = d.globalShortPercent;
+    const crowdLong = p.crowdingCode === 'crowdedLong' || retailLong >= 60;
+    const crowdShort = p.crowdingCode === 'crowdedShort' || retailShort >= 60;
+    if (crowdLong || crowdShort) {
+      const crowdSide = crowdLong ? 'LONG' : 'SHORT';
+      const fr = d.fundingRatePercent;
+      const haveTop = d.topTraderLongPercent !== 50 || d.topTraderShortPercent !== 50;
+      // Smart money leaning AGAINST the retail crowd is the strongest tell.
+      const smartAgainst = haveTop && (crowdLong ? d.topTraderShortPercent > d.topTraderLongPercent
+                                                  : d.topTraderLongPercent > d.topTraderShortPercent);
+      // Funding extreme in the crowd's direction = the crowd is paying to hold a stretched bet.
+      // ±0.03 (2026-07-02): 0.01%/8h is the exchange BASELINE — the enrichment's own scale calls
+      // >0.01 "Positive (normal)" and reserves "Elevated" for >0.05. At ±0.01 this tell was nearly
+      // free whenever the crowd leaned one way, and the "stretched — paying to hold" text
+      // contradicted the Funding Rate line printed above it.
+      const fundingStretched = crowdLong ? fr > 0.03 : fr < -0.03;
+      // CVD diverging against the crowd (distribution under longs / accumulation under shorts).
+      const cvdAgainst = spotPressure ? (crowdLong ? spotPressure.cvdTrend === 'Falling'
+                                                   : spotPressure.cvdTrend === 'Rising') : false;
+      const oiBuilding = (d.oiChange24h ?? 0) > 2 || p.oiTrend === 'Building';
+      const tells: string[] = [];
+      if (smartAgainst) tells.push(`top traders are leaning ${crowdLong ? 'SHORT' : 'LONG'} — opposite the crowd`);
+      if (fundingStretched) tells.push(`funding is ${crowdLong ? 'positive' : 'negative'} & stretched (${f(fr, 3)}% — the crowd is paying to hold)`);
+      if (cvdAgainst) tells.push(`spot CVD is ${crowdLong ? 'falling (distribution into the rally)' : 'rising (accumulation into the drop)'}`);
+      if (oiBuilding) tells.push('open interest is building (more fuel for a cascade)');
+      if (tells.length >= 2) {
+        const flush = crowdLong ? 'long flush / liquidation cascade DOWN' : 'short squeeze UP';
+        const retailPct = crowdLong ? iTrunc(retailLong) : iTrunc(retailShort);
+        L();
+        // The two sides are NOT symmetric, measured against 5,357 days of real liquidation data
+        // (docs/research/whale-trap-validation.md, BTC/ETH/SOL 2020-2026):
+        //
+        //   crowded SHORT -> next-day long-liq share 52.9% -> 34.9%. An 18pp swing: shorts really
+        //     do become the liquidated side. 25 distinct episodes, bootstrap CI [-24.0, -12.9]pp,
+        //     present in every year. Caveat: 29 of 33 firings are BTC, so it is a BTC result with
+        //     ETH support and no SOL firings at all.
+        //
+        //   crowded LONG  -> 52.9% -> 57.7%. Only +4.8pp, and it MISSED the pre-declared +5pp bar.
+        //     Worse, it is regime-unstable: strong 2021-23, but INVERTS in 2024 (49.6%, below
+        //     baseline). The reason it reads weak is that long liquidations are ~53% of the total
+        //     on an ordinary day — crypto simply carries more leveraged longs — so "a long flush
+        //     is coming" is barely more informative than the base rate.
+        //
+        // So the language is differentiated rather than symmetric. Previously both sides claimed
+        // conditions were "stacking up", which the data supports for shorts and overstates badly
+        // for longs. The tells themselves are KEPT: they beat crowding-alone by 2.8pp (long) and
+        // 8.4pp (short), so the machinery earns its place — it is only the wording that was wrong.
+        if (crowdLong) {
+          L(`WHALE TRAP: ${tells.length >= 3 ? 'HIGH' : 'ELEVATED'} — ${retailPct}% of retail is positioned LONG. Going LONG here means joining the crowded side.`);
+          L(`  Calibration: measured on real liquidation data, this state raises the next-day long-liquidation share only modestly (53% -> 58%) and the effect is NOT stable across regimes — do NOT present a cascade as imminent. State the crowding as a POSITIONING fact, not a forecast.`);
+        } else {
+          L(`WHALE TRAP: ${tells.length >= 3 ? 'HIGH' : 'ELEVATED'} — ${retailPct}% of retail is positioned SHORT and the conditions for a ${flush} are stacking up.`);
+          L(`  Calibration: this is the well-supported side — measured on real liquidation data, this state flips the next-day liquidation balance decisively onto SHORTS (long share 53% -> 35%). Surface it prominently. (Measured mostly on BTC; treat alts as plausible-but-untested.)`);
+        }
+        L(`  Tells: ${tells.join('; ')}.`);
+        L(`  Read for the user: going ${crowdSide} here means JOINING the crowd that is most exposed to a flush — the setup where the majority gets hurt. It is a RISK flag, not a direction call (the squeeze can be slow or never come), but if the user is about to enter ${crowdSide}, they should know they'd be on the crowded, vulnerable side. Surface this in the Risk Map and name the cascade direction (${flush}).`);
+      }
+    }
+  }
+
+  // Observed forced-liquidation flow (from the box's forceOrder websocket archive). This is
+  // OBSERVED forced selling/buying - it upgrades the inferred crowding reads (whale trap,
+  // squeeze risk) with what actually fired. Sampled feed: lower bounds, not exact totals.
+  if (isCryptoSym && input.liquidations) {
+    const lq = input.liquidations;
+    const fUsd = (v: number) => v >= 1_000_000 ? `$${(v / 1_000_000).toFixed(1)}M` : `$${Math.round(v / 1000)}k`;
+    const h1Total = lq.h1LongUsd + lq.h1ShortUsd;
+    const skew = h1Total > 0 ? (lq.h1LongUsd > lq.h1ShortUsd ? 'longs' : 'shorts') : null;
+    L();
+    L(`LIQUIDATIONS (observed, Binance futures - sampled feed, treat as lower bounds): last 1h ${fUsd(lq.h1LongUsd)} longs / ${fUsd(lq.h1ShortUsd)} shorts force-closed; 24h ${fUsd(lq.h24LongUsd)} / ${fUsd(lq.h24ShortUsd)}.`);
+    if (skew && h1Total >= 500_000) {
+      L(`  Interpretation: heavy one-sided ${skew === 'longs' ? 'LONG liquidations = forced SELLING already hit the tape (cascade risk if support breaks; exhaustion/capitulation if it holds)' : 'SHORT liquidations = forced BUYING already hit the tape (squeeze fuel burning off)'}. Recent-flow context, NOT a direction signal.`);
+    }
   }
 
   // Spot pressure
@@ -1200,6 +1916,19 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
     L(`Taker Buy Ratio (24h): ${f(sp.takerBuyRatio, 2)} (${sp.takerBuyLabel})`);
     L(`CVD 24h: ${f(sp.cvd24h, 1)} (${sp.cvdTrend})`);
     if (sp.bookRatio != null && sp.bookLabel) L(`Order Book: ${f(sp.bookRatio, 2)} (${sp.bookLabel})`);
+  }
+
+  // Policy / macro catalyst headlines (2026-08-22). Context, NOT a signal — see src/news.ts.
+  // Placed before the economic calendar because the calendar covers SCHEDULED releases while
+  // these are the unscheduled catalysts (a regulator ruling, a Treasury action, legislation)
+  // that repriced the tape without ever appearing on a calendar.
+  if (input.news?.headlines?.length) {
+    L(); L('=== POLICY / MACRO HEADLINES (context, not a trade signal) ===');
+    for (const h of input.news.headlines) L(`  ${h}`);
+    L('  Interpretation: use these ONLY to explain WHY the tape is behaving as it is and to size event risk.');
+    L('  They are NOT direction: headlines are priced in seconds by machines, long before this analysis runs,');
+    L('  and no headline here has been shown to predict the next move. Never raise conviction on a headline alone,');
+    L('  and never contradict the pre-computed flags because of one.');
   }
 
   // Economic events
@@ -1266,16 +1995,21 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
   const atrForRR = indicators.length > 2 ? indicators[2].atr?.atr : indicators[1]?.atr?.atr;
   if (currentPrice && atrForRR != null) {
     const atr = atrForRR;
+    // ONE price anchor for all level geometry: the LIVE price when available (the closed-bar
+    // `currentPrice` can be up to 4h stale intra-bar, and the LIVE PRICE section declares live
+    // authoritative). Every proximity/atrDistance below — tagged-level display AND the candidate-
+    // setup entry filter — measures from this same anchor.
+    const refPx = (lp != null && lp > 0) ? lp : currentPrice;
     const allLevels: TaggedLevel[] = [];
     const prox = (dist: number) => dist <= 1.0 ? 'IN_PLAY' : dist <= 2.0 ? 'NEARBY' : 'DISTANT';
     for (const ind of indicators) {
       const prefix = ind.label, srStrength = prefix.includes('Daily') ? 2.5 : prefix.includes('4H') ? 2.0 : 1.5;
-      for (const s of ind.supportResistance.supports) { const dist = Math.abs(currentPrice - s) / Math.max(atr, 0.0001); allLevels.push({ price: s, type: `${prefix} support`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
-      for (const r of ind.supportResistance.resistances) { const dist = Math.abs(currentPrice - r) / Math.max(atr, 0.0001); allLevels.push({ price: r, type: `${prefix} resistance`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
-      if (ind.vwap != null) { const dist = Math.abs(currentPrice - ind.vwap) / Math.max(atr, 0.0001); allLevels.push({ price: ind.vwap, type: `${prefix} VWAP`, proximity: prox(dist), atrDistance: dist, strength: 2.0, freshness: 0.5, candlesAgo: 0, isStructural: false }); }
+      for (const s of ind.supportResistance.supports) { const dist = Math.abs(refPx - s) / Math.max(atr, 0.0001); allLevels.push({ price: s, type: `${prefix} support`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
+      for (const r of ind.supportResistance.resistances) { const dist = Math.abs(refPx - r) / Math.max(atr, 0.0001); allLevels.push({ price: r, type: `${prefix} resistance`, proximity: prox(dist), atrDistance: dist, strength: srStrength, freshness: 1.0, candlesAgo: 0, isStructural: false }); }
+      if (ind.vwap != null) { const dist = Math.abs(refPx - ind.vwap) / Math.max(atr, 0.0001); allLevels.push({ price: ind.vwap, type: `${prefix} VWAP`, proximity: prox(dist), atrDistance: dist, strength: 2.0, freshness: 0.5, candlesAgo: 0, isStructural: false }); }
       if (ind.volumeProfile) {
         for (const [label, price] of [['POC', ind.volumeProfile.poc], ['VAH', ind.volumeProfile.vah], ['VAL', ind.volumeProfile.val]] as Array<[string, number]>) {
-          const dist = Math.abs(currentPrice - price) / Math.max(atr, 0.0001);
+          const dist = Math.abs(refPx - price) / Math.max(atr, 0.0001);
           allLevels.push({ price, type: `${prefix} ${label}`, proximity: prox(dist), atrDistance: dist, strength: label === 'POC' ? 3.5 : 3.0, freshness: 1.0, candlesAgo: 0, isStructural: false });
         }
       }
@@ -1284,7 +2018,7 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (ind.marketStructure) {
         const tfWeight = ind.label.includes('Daily') ? 1.5 : ind.label.includes('4H') ? 1.0 : 0.5;
         for (const level of ind.marketStructure.levelTests) {
-          const dist = Math.abs(currentPrice - level.price) / Math.max(atr, 0.0001);
+          const dist = Math.abs(refPx - level.price) / Math.max(atr, 0.0001);
           const freshnessText = level.candlesAgo <= 3 ? 'fresh' : level.candlesAgo <= 10 ? 'recent' : 'old';
           const levelStrength = Math.min(Math.min(level.tests, 5) * tfWeight, 5.0);
           const levelFreshness = level.candlesAgo <= 3 ? 1.0 : level.candlesAgo <= 10 ? 0.5 : 0.0;
@@ -1312,13 +2046,45 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       const minCandlesAgo = Math.min(...members.map(m => m.candlesAgo));
       const anyStructural = members.some(m => m.isStructural);
       const typeStr = members.length === 1 ? anchor.type : members.map(m => m.type).join(' + ');
-      const dist = Math.abs(currentPrice - anchor.price) / Math.max(atr, 0.0001);
+      // Distance/proximity anchored to the LIVE price (refPx), not the closed bar: the LIVE PRICE
+      // section declares live authoritative, and this atrDistance/proximity feeds BOTH the TAGGED
+      // LEVELS display AND the CANDIDATE SETUPS entry filter below — one anchor, one geometry.
+      // (Previously the display re-anchored to live while the setups kept closed-bar proximity,
+      // so a single prompt carried two contradictory distances for the same level.)
+      const dist = Math.abs(refPx - anchor.price) / Math.max(atr, 0.0001);
       clustered.push({ price: anchor.price, type: typeStr, proximity: prox(dist), atrDistance: dist, strength: totalStrength, freshness: bestFreshness, candlesAgo: minCandlesAgo, isStructural: anyStructural });
     }
     const uniqueLevels = clustered;
     if (uniqueLevels.length) {
+      // Each level is tagged ABOVE / BELOW live and the list is ordered high→low so the model
+      // reads the geometry correctly and never mislabels a one-sided cluster as a "squeeze":
+      // the previous bare list let it call two below-price supports "squeezed between", which is
+      // geometrically wrong.
       L(); L('=== TAGGED LEVELS ===');
-      for (const level of uniqueLevels.slice(0, 15)) L(`${formatPrice(level.price)} (${level.type}) [${level.proximity}, ${f(level.atrDistance, 1)}x ATR, str=${f(level.strength, 1)}]`);
+      L(`(ABOVE / BELOW is each level's side of the LIVE price ${formatPrice(refPx)} — resistance sits ABOVE, support BELOW. `
+        + `Only call price "between"/"squeezed"/"pinned"/"caught" when at least one ABOVE level AND one BELOW level bracket it. `
+        + `A cluster entirely on one side means price is sitting ABOVE it or BELOW it — not squeezed. Name the actual bracketing levels, not just any two.)`);
+      L(`(Distances here are in 1H ATR. The SHALLOW PULLBACK BAND above is in 4H ATR — a different, `
+        + `larger unit. NEVER convert between them: to judge whether a level is a valid entry, compare `
+        + `its PRICE against the band's PRICES, never its "x 1H-ATR" figure against the band's 0.2-0.5.)`);
+      // Cap by NEAREST-to-live (the actionable levels), then display high→low. Slicing the
+      // high→low sort kept the 15 highest prices and silently dropped the nearest below-live
+      // supports — exactly the levels the bracketing directive above depends on.
+      const nearest = [...uniqueLevels].sort((a, b) => a.atrDistance - b.atrDistance).slice(0, 15);
+      const sortedForDisplay = nearest.sort((a, b) => b.price - a.price);   // high → low
+      for (const level of sortedForDisplay) {
+        const side = level.price >= refPx ? 'ABOVE live' : 'BELOW live';
+        // "1H ATR" is spelled out because this prompt carries THREE quantities called ATR — daily,
+        // 4H and 1H — differing by ~2x at any moment ($2,248 / $1,282 / $669 on 2026-08-25). This
+        // section and the CANDIDATE SETUPS geometry use the 1H ATR (`atrForRR`), while the SHALLOW
+        // PULLBACK BAND uses the 4H ATR, because that is the unit the Parts 4-5 entry measurement
+        // was made in (`atrPercent`, which is 4H). Both are correct for their purpose and the
+        // collision is only in the NAME — but an unlabelled "0.5x ATR" invites converting a level
+        // into the band's units and getting a number ~1.9x wrong. It fooled me on 2026-08-25 into
+        // reporting a compliant 0.50-ATR entry as a 0.99-ATR violation; the model can make the same
+        // mistake, and unlike me it will not check.
+        L(`${formatPrice(level.price)} [${side}] (${level.type}) [${level.proximity}, ${f(level.atrDistance, 1)}x 1H-ATR from live, str=${f(level.strength, 1)}]`);
+      }
     }
 
     if (indicators.length >= 2) {
@@ -1355,7 +2121,33 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
             else { const below = uniqueLevels.filter(l => l.price < entry.price).sort((a, b) => b.price - a.price); stop = (below[0]?.price ?? entry.price) - atr * 0.5; }
           }
           let adjustedStop = stop;
-          const minStopDist = atr * 2.0;
+          // MINIMUM STOP DISTANCE, direction-dependent since 2026-08-26.
+          //
+          // LONG uses 4 ATR, SHORT stays at 2. Pre-declared in docs/research/stop-width.md and tested
+          // with reward:risk HELD FIXED at 1.25, so only the stop width varies — widening the stop
+          // widens the target with it, which is what was measured. Changing the ratio would be a
+          // different and untested intervention.
+          //
+          //   LONG net R by stop floor:  -0.0342 (2 ATR)  ->  -0.0109 (3)  ->  +0.0020 (4)
+          //   4-vs-2 ATR: +0.0362R, 95% CI [+0.0245, +0.0484], 10 of 10 half-year periods positive
+          //   spanning the 2022 bear and the 2023-24 bull, on 55,752 bars / ~3,097 effective.
+          //   The GROSS series climbs too (-0.0048 -> +0.0168), so it is not fee dilution — about
+          //   59% of the gain is the stop and 41% is paying proportionally less fee.
+          //   SHORT measured FLAT across the whole sweep, so it is deliberately unchanged.
+          //
+          // Mechanism: a 2 ATR stop is inside the noise. On high-ML bullish bars the measured
+          // outcome was P(2 ATR stop hit) 26.9% against P(2.5 ATR target hit) 14.4% — the trade was
+          // being stopped before it had room, which is why longs lost regardless of ML.
+          //
+          // NOT an edge: this takes longs from reliably losing to roughly break-even (~+$20/trade at
+          // a $28k account risking 2%). It closes a leak.
+          //
+          // 1R IS DEFINED BY THE STOP, so a wider floor means a proportionally SMALLER position for
+          // the same dollar risk. `suggestedQty` below is `riskDollars / risk` and adjusts by
+          // construction — but anyone sizing by NOTIONAL will not, and at 4 ATR the same contract
+          // count carries roughly twice the risk.
+          const minStopMultiple = effectiveDirection === 'SHORT' ? 2.0 : 4.0;
+          const minStopDist = atr * minStopMultiple;
           if (Math.abs(entry.price - adjustedStop) < minStopDist) adjustedStop = effectiveDirection === 'SHORT' ? entry.price + minStopDist : entry.price - minStopDist;
           const risk = Math.abs(entry.price - adjustedStop);
           if (!(risk > 0)) continue;
@@ -1364,17 +2156,87 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
           const suggestedQty = riskDollars / risk;
           const qtyStr = suggestedQty >= 1 ? f(suggestedQty, 0) : f(suggestedQty, 4);
           const isWideBand = useTighterBands(symbol), isCrypto = isCryptoSym;
+          // TARGETS SCALE WITH THE STOP, because that is the structure that was tested.
+          //
+          // `stop-width.md:44`: "The reward:risk ratio is NOT changed — widening the stop widens the
+          // target with it, which is what was tested." The stop floor shipped on 2026-08-26; this
+          // half did not. Every ATR-distance band and fallback below was tuned when the floor was
+          // 2 ATR, and they are ABSOLUTE distances — so raising the LONG floor to 4 ATR halved every
+          // reward:risk instead of holding it, which is the opposite of the tested intervention.
+          //
+          // The consequence was total, not marginal. `viable` needs TP1 R:R >= 0.5, and every TP1
+          // band caps distance at 2.0 ATR, so TP1 R:R <= 2/stopAtr. At a 4 ATR floor that is <= 0.5
+          // exactly — reachable only at a measure-zero point. Measured on the real BTC tape: 0 of 3
+          // LONG candidates viable, 1 of 3 SHORT. And `prompt-system.json` says "Emit a setup ONLY
+          // if a Viable risk-defined level exists", so ordinary LONG setups could not be emitted at
+          // all. Fourth instance of this project's recurring defect — a threshold compared against a
+          // quantity whose attainable RANGE was never re-checked after something moved.
+          //
+          // The scale is a UNITS fix, not a re-tune: it is exactly 1.0 at a 2 ATR stop, so every
+          // band keeps the value it was tuned with, stocks (1.5 ATR floor) are untouched via the
+          // clamp, and the ATR fallback's reward:risk becomes invariant at the 0.75 it always had.
+          // Keyed on the FLOOR that changed, not on the realised stop.
+          //
+          // Keying it on `risk` re-tuned bars the 2026-08-26 floor change never touched: a 5.4 ATR
+          // structural stop on the real BTC tape pushed the TP2 fallback to 8.1 ATR and an 8 ATR
+          // stop to 12 ATR, targets `excursion-model.md` measures as unreachable inside a 72h
+          // horizon. It also fired on SHORT, which the stop-width test says is deliberately
+          // unchanged. The floor is the quantity that moved, so it is the quantity that scales.
+          //
+          // A genuinely wide STRUCTURAL stop with nearby levels does have poor reward:risk, and
+          // `viable` reporting false there is the correct answer, not a defect to engineer around.
+          const stopScale = Math.max(1, minStopMultiple / 2.0);
+          const sc = (b: [number, number]): [number, number] => [b[0] * stopScale, b[1] * stopScale];
           let tp1RRBand: [number, number], tp1ATRBand: [number, number], idealTP1RR: number;
-          if (isCounterTrend) { tp1RRBand = [0.8, 1.5]; tp1ATRBand = [0.5, 2.0]; idealTP1RR = 1.0; }
-          else if (isWideBand) { tp1RRBand = [0.5, 1.0]; tp1ATRBand = [1.0, 2.0]; idealTP1RR = 0.75; }
-          else { tp1RRBand = [1.0, 1.7]; tp1ATRBand = [0.8, 2.0]; idealTP1RR = 1.3; }
+          if (isCounterTrend) { tp1RRBand = [0.8, 1.5]; tp1ATRBand = sc([0.5, 2.0]); idealTP1RR = 1.0; }
+          else if (isWideBand) { tp1RRBand = [0.5, 1.0]; tp1ATRBand = sc([1.0, 2.0]); idealTP1RR = 0.75; }
+          else { tp1RRBand = [1.0, 1.7]; tp1ATRBand = sc([0.8, 2.0]); idealTP1RR = 1.3; }
           let tp2RRBand: [number, number], tp2ATRBand: [number, number], idealTP2RR: number;
-          if (isCounterTrend) { tp2RRBand = [1.3, 2.5]; tp2ATRBand = [1.0, 3.5]; idealTP2RR = 1.8; }
+          if (isCounterTrend) { tp2RRBand = [1.3, 2.5]; tp2ATRBand = sc([1.0, 3.5]); idealTP2RR = 1.8; }
           else if (isWideBand) {
-            if (isCrypto) { tp2RRBand = [0.75, 1.75]; tp2ATRBand = [2.0, 3.5]; idealTP2RR = 1.5; }
-            else { tp2RRBand = [0.75, 1.5]; tp2ATRBand = [2.0, 3.0]; idealTP2RR = 1.25; }
-          } else { tp2RRBand = [1.3, 4.0]; tp2ATRBand = [1.5, 5.0]; idealTP2RR = 2.5; }
+            if (isCrypto) { tp2RRBand = [0.75, 1.75]; tp2ATRBand = sc([2.0, 3.5]); idealTP2RR = 1.5; }
+            else { tp2RRBand = [0.75, 1.5]; tp2ATRBand = sc([2.0, 3.0]); idealTP2RR = 1.25; }
+          } else { tp2RRBand = [1.3, 4.0]; tp2ATRBand = sc([1.5, 5.0]); idealTP2RR = 2.5; }
+
+          // FALLBACK REWARD:RISK, per branch, stated as numbers rather than derived from an ATR
+          // multiple that had to be divided by the stop to mean anything.
+          //
+          // These are the OLD effective values: the previous fallback was `base * stopScale * atr`
+          // with `stopScale = risk/(2*atr)`, which is algebraically `base/2` in R — already
+          // stop-invariant. Keeping them means only what HAD to change changes.
+          //
+          // `viableFloor` is what TP1 is judged against a few lines down, and the old TP1 fallbacks
+          // could not clear it: non-wideBand placed TP1 at 0.6R against a 1.0 bar and counter-trend
+          // at 0.75R against 0.8, so those two branches could never emit a setup at ANY stop width —
+          // including the 2 ATR floor that predates all of this.
+          const viableFloor = isCounterTrend ? 0.8 : isWideBand ? 0.5 : 1.0;
+          const fallbackTP1R = isWideBand ? 0.75 : isCounterTrend ? 0.75 : 0.6;
+          const fallbackTP2R = (isWideBand && isCrypto) ? 1.5 : 1.25;
           const directionalLevels = effectiveDirection === 'SHORT' ? uniqueLevels.filter(l => l.price < entry.price) : uniqueLevels.filter(l => l.price > entry.price);
+          // Placed in R, not in ATR.
+          //
+          // The ATR-multiple fallbacks could not satisfy their own R:R bands. Non-wideBand puts TP1
+          // at 1.2 ATR and then demands `finalTP1RR >= 1.0`, which needs 1.2 ATR >= the whole stop —
+          // false at the 4 ATR floor (R:R 0.60) and false at the OLD 2 ATR floor too (also 0.60).
+          // So for the 18 `trendingSymbols` every candidate has always fallen back to a target that
+          // fails viability, and `prompt-system.json` says "Emit a setup ONLY if a Viable
+          // risk-defined level exists". The 2026-08-27 scaling fix repaired only the wideBand path,
+          // where the numbers happened to coincide, and its test used BTCUSDT so it never saw this.
+          //
+          // Anchoring the fallback at the band's own ideal R:R makes it satisfy the band and the
+          // viability bar at ANY stop width, with no scale factor involved. At the geometry these
+          // bands were tuned on it lands where the ATR multiple already did (wideBand crypto: 0.75R
+          // and 1.5R = 3 ATR and 6 ATR against a 4 ATR stop), so it is a re-expression of the
+          // intent rather than a re-tune.
+          const rFallback = (rr: number, label: string, snap = true): { price: number; type: string } => {
+            const dist = rr * risk;
+            const fp = effectiveDirection === 'SHORT' ? entry.price - dist : entry.price + dist;
+            if (!snap) return { price: fp, type: `ATR target (${label})` };
+            let nearest: TaggedLevel | null = null, nd = Infinity;
+            for (const l of uniqueLevels) { const dd = Math.abs(l.price - fp); if (dd < nd) { nd = dd; nearest = l; } }
+            if (nearest && Math.abs(nearest.price - fp) / Math.max(atr, 0.0001) <= 0.5) return { price: nearest.price, type: `ATR target (${label}) → ${nearest.type}` };
+            return { price: fp, type: `ATR target (${label})` };
+          };
           const tp1Score = (level: TaggedLevel): number | null => {
             const reward = Math.abs(level.price - entry.price), rr = reward / risk, atrDist = reward / Math.max(atr, 0.0001);
             if (!(rr >= tp1RRBand[0] && rr <= tp1RRBand[1] && atrDist >= tp1ATRBand[0] && atrDist <= tp1ATRBand[1])) return null;
@@ -1384,42 +2246,77 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
           };
           let tp1: TaggedLevel | null = null, tp1Best = -Infinity;
           for (const l of directionalLevels) { const sc = tp1Score(l); if (sc != null && sc > tp1Best) { tp1Best = sc; tp1 = l; } }
-          const tp1RR = tp1 ? Math.abs(tp1.price - entry.price) / risk : 0;
+
+          // TP1 IS RESOLVED HERE, BEFORE ANYTHING DERIVES FROM IT.
+          //
+          // It used to be resolved ~30 lines below, so `tp1RR` was 0 whenever no LEVEL qualified —
+          // which is always on the non-wideBand path — and `tp2MinRR` collapsed to `tp2RRBand[0]`.
+          // On that path `tp2RRBand[0]` is 1.3, numerically identical to `idealTP1RR`, so the
+          // fallback TP1 landed exactly inside TP2's admissible zone while both anti-collision
+          // guards compared against `entry.price` instead of a TP1 that did not exist yet.
+          // Measured on the real fixture: TIAUSDT emitted `TP1 $72,330.00 … TP2 $72,330.00`, one
+          // price on two rungs, `Viable: true`, under a header telling the model not to recalculate.
+          // The fallback is placed AT the floor, so the 0.5-ATR snap to a nearby level can only pull
+          // it under. Take the snap only when it still clears — otherwise the fallback that exists
+          // to guarantee viability is the thing that destroys it, which measured live: a TIAUSDT
+          // row snapped 1.00R -> 0.94R against a 1.0 bar and reported `Viable: false`.
+          const tp1FallbackR = Math.max(fallbackTP1R, viableFloor);
+          const tp1Fb = () => {
+            const snapped = rFallback(tp1FallbackR, `${f(tp1FallbackR, 2)}R`);
+            if (Math.abs(snapped.price - entry.price) / risk >= viableFloor) return snapped;
+            return rFallback(tp1FallbackR, `${f(tp1FallbackR, 2)}R`, false);
+          };
+          const resolvedTP1 = tp1 ? { price: tp1.price, type: tp1.type } : tp1Fb();
+          const tp1RR = Math.abs(resolvedTP1.price - entry.price) / risk;
           const tp2MinRR = Math.max(tp2RRBand[0], tp1RR + 0.3);
           const tp2Score = (level: TaggedLevel): number | null => {
             const reward = Math.abs(level.price - entry.price), rr = reward / risk, atrDist = reward / Math.max(atr, 0.0001);
             if (!(rr >= tp2MinRR && rr <= tp2RRBand[1] && atrDist >= tp2ATRBand[0] && atrDist <= tp2ATRBand[1])) return null;
-            if (Math.abs(level.price - (tp1?.price ?? entry.price)) / Math.max(atr, 0.0001) < 0.5) return null;
-            if (tp1) { if (effectiveDirection === 'SHORT' ? !(level.price < tp1.price) : !(level.price > tp1.price)) return null; }
+            if (Math.abs(level.price - resolvedTP1.price) / Math.max(atr, 0.0001) < 0.5) return null;
+            if (effectiveDirection === 'SHORT' ? !(level.price < resolvedTP1.price) : !(level.price > resolvedTP1.price)) return null;
             const rrFit = Math.max(0, 1.0 - Math.abs(rr - idealTP2RR) / idealTP2RR);
-            const clearance = computeClearance(tp1?.price ?? entry.price, level.price, uniqueLevels);
+            const clearance = computeClearance(resolvedTP1.price, level.price, uniqueLevels);
             return 1.5 * level.strength + 1.0 * rrFit + 1.0 * clearance + 0.5 * level.freshness;
           };
           let tp2: TaggedLevel | null = null, tp2Best = -Infinity;
           for (const l of directionalLevels) { const sc = tp2Score(l); if (sc != null && sc > tp2Best) { tp2Best = sc; tp2 = l; } }
-          const atrFallback = (multiplier: number, label: string): { price: number; type: string } => {
-            const fp = effectiveDirection === 'SHORT' ? entry.price - atr * multiplier : entry.price + atr * multiplier;
-            let nearest: TaggedLevel | null = null, nd = Infinity;
-            for (const l of uniqueLevels) { const dd = Math.abs(l.price - fp); if (dd < nd) { nd = dd; nearest = l; } }
-            if (nearest && Math.abs(nearest.price - fp) / Math.max(atr, 0.0001) <= 0.5) return { price: nearest.price, type: `ATR target (${label}) → ${nearest.type}` };
-            return { price: fp, type: `ATR target (${label})` };
-          };
-          let finalTP1Price: number, finalTP1Type: string;
-          if (tp1) { finalTP1Price = tp1.price; finalTP1Type = tp1.type; }
-          else { const fbMult = isWideBand ? 1.5 : isCounterTrend ? 1.5 : 1.2; const fb = atrFallback(fbMult, `${f(fbMult, 1)}× ATR`); finalTP1Price = fb.price; finalTP1Type = fb.type; }
+          const finalTP1Price = resolvedTP1.price, finalTP1Type = resolvedTP1.type;
           let finalTP2Price: number, finalTP2Type: string;
           if (tp2) { finalTP2Price = tp2.price; finalTP2Type = tp2.type; }
           else {
-            const adaptiveTP2 = (isCrypto && settings.conformalGateEnabled === true && daily.mlQ75 != null) ? Math.min(3.5, Math.max(2.0, daily.mlQ75)) : null;
-            const tp2FallbackMult = adaptiveTP2 ?? ((isWideBand && isCrypto) ? 3.0 : 2.5);
-            const fb = atrFallback(tp2FallbackMult, `${f(tp2FallbackMult, 1)}× ATR`); finalTP2Price = fb.price; finalTP2Type = fb.type;
+            // `fallbackTP2R` is the OLD effective R, not `idealTP2RR`. The previous rewrite used the
+            // ideal and silently doubled two branches — non-wideBand TP2 1.25R -> 2.5R and
+            // counter-trend 1.25R -> 1.8R — under a comment calling itself "a re-expression of the
+            // intent rather than a re-tune", an equivalence that held only on the wideBand cell that
+            // was checked. Only TP1 HAD to move, because its old value failed its own viability bar.
+            const tp2R = Math.max(fallbackTP2R, tp2MinRR);
+            const fb = rFallback(tp2R, `${f(tp2R, 2)}R`); finalTP2Price = fb.price; finalTP2Type = fb.type;
+          }
+          // LAST-RESORT LADDER GUARD. `rFallback` snaps to a level within 0.5 ATR and a selected TP2
+          // level can sit closer than intended, so the ordering is asserted on the FINAL prices
+          // rather than assumed from the way they were chosen.
+          const tp1Dist = Math.abs(finalTP1Price - entry.price);
+          if (Math.abs(finalTP2Price - entry.price) <= tp1Dist + 0.05 * risk) {
+            const forced = rFallback(tp1RR + 0.3, `${f(tp1RR + 0.3, 2)}R`, false);
+            finalTP2Price = forced.price; finalTP2Type = forced.type;
           }
           const finalTP1RR = Math.abs(finalTP1Price - entry.price) / risk, finalTP2RR = Math.abs(finalTP2Price - entry.price) / risk;
           const targetLines = [`${formatPrice(finalTP1Price)} (${finalTP1Type}) R:R=${f(finalTP1RR, 2)}`, `${formatPrice(finalTP2Price)} (${finalTP2Type}) R:R=${f(finalTP2RR, 2)}`];
-          const viable = finalTP1RR >= (isCounterTrend ? 0.8 : isWideBand ? 0.5 : 1.0);
+          const viable = finalTP1RR >= viableFloor;
           const setupLabel = isCounterTrend ? 'COUNTER-TREND' : 'TREND';
           const confirmation = isCounterTrend ? 'WICK_REJECTION_CLOSE_BACK_ACROSS_LEVEL' : regime === 'TRENDING' ? 'VOLUME_1.2X_OR_SECOND_TEST' : 'NONE';
-          candidates.push(`[${setupLabel}] Entry ${formatPrice(entry.price)} (${entry.type}) | Stop ${formatPrice(adjustedStop)} | Risk ${formatPrice(risk)} (${qtyStr} units @ ${formatPrice(riskDollars)} risk) | TP1: ${targetLines[0]} | TP2: ${targetLines[1]} | Confirmation: ${confirmation} | Viable: ${viable}`);
+          // Stop quality (2026-07-02): risk-engine's reflection-principle noise-hit probability —
+          // P(pure noise alone wicks this stop within 24h) at the HAR-RV σ. Built + tested since
+          // Phase 3 but never wired to the analysis path; aimed at the wicked-stop retail loss.
+          let stopQ = '';
+          const sigma24 = input.volForecast?.horizons?.['24h']?.sigma;
+          if (sigma24 && sigma24 > 0) {
+            const q = stopQuality(entry.price, adjustedStop, sigma24);
+            if (Number.isFinite(q.noiseHit)) {
+              stopQ = ` | Stop noise-hit ~${Math.round(q.noiseHit * 100)}% (${q.rating}${q.rating === 'TIGHT' ? ' — noise alone likely wicks this stop; widen it or skip' : ''})`;
+            }
+          }
+          candidates.push(`[${setupLabel}] Entry ${formatPrice(entry.price)} (${entry.type}) | Stop ${formatPrice(adjustedStop)} | Risk ${formatPrice(risk)} (${qtyStr} units @ ${formatPrice(riskDollars)} risk) | TP1: ${targetLines[0]} | TP2: ${targetLines[1]} | Confirmation: ${confirmation}${stopQ} | Viable: ${viable}`);
         }
         if (candidates.length) { L(); L('=== CANDIDATE SETUPS (pre-computed R:R — do not recalculate) ==='); for (const c of candidates) L(c); }
       }
@@ -1520,14 +2417,15 @@ export function buildUserPrompt(input: BuildPromptInput): { prompt: string; newS
       if (!recent.length) continue;
       L(`${ind.label} (last ${recent.length}, newest first, format: [O, H, L, C, Vol]):`);
       const rev = [...recent].reverse();
+      // All bars are CLOSED — every feed path applies dropInProgress. The old "(forming)" tag on
+      // the newest bar told the LLM the very bar its patterns/kills fired on "may still change".
       rev.forEach((c, i) => {
-        const forming = i === 0 ? ' (forming)' : '';
-        L(`${i + 1}. [${formatPrice(c.open)}, ${formatPrice(c.high)}, ${formatPrice(c.low)}, ${formatPrice(c.close)}, ${f(c.volume, 0)}]${forming}`);
+        L(`${i + 1}. [${formatPrice(c.open)}, ${formatPrice(c.high)}, ${formatPrice(c.low)}, ${formatPrice(c.close)}, ${f(c.volume, 0)}]`);
       });
       L();
     }
   }
 
-  return { prompt: lines.join('\n'), newState };
+  return { prompt: lines.join('\n'), newState, envelope: envelopeVerdict, envelopeInput, diagnostics };
 }
 

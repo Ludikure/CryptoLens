@@ -10,7 +10,7 @@
 
 import {
   Candle, computeRSI, computeMACD, computeBollingerBands, computeVWAP, detectDivergence,
-  computeOBVTrend, computeADLineTrend, computeVolumeProfile, computeATR, emaArray, r2,
+  computeOBVTrend, computeADLineTrend, computeVolumeProfile, computeATR, emaArray, r2, rPrice,
 } from './scoring-full';
 import { scoreSnapshot, CRYPTO_PARAMS, STOCK_PARAMS, type ScoringSnapshot } from './scoring-ios';
 
@@ -95,8 +95,8 @@ function supportResistance(highs: number[], lows: number[], closes: number[], at
   for (let i = 2; i < Math.min(lookback, highs.length - 2); i++) {
     const idx = highs.length - 1 - i;
     if (idx < 2 || idx >= highs.length - 2) continue;
-    if (highs[idx] > highs[idx - 1] && highs[idx] > highs[idx - 2] && highs[idx] > highs[idx + 1] && highs[idx] >= highs[idx + 2]) resistances.push(r2(highs[idx]));
-    if (lows[idx] < lows[idx - 1] && lows[idx] < lows[idx - 2] && lows[idx] < lows[idx + 1] && lows[idx] <= lows[idx + 2]) supports.push(r2(lows[idx]));
+    if (highs[idx] > highs[idx - 1] && highs[idx] > highs[idx - 2] && highs[idx] > highs[idx + 1] && highs[idx] >= highs[idx + 2]) resistances.push(rPrice(highs[idx]));
+    if (lows[idx] < lows[idx - 1] && lows[idx] < lows[idx - 2] && lows[idx] < lows[idx + 1] && lows[idx] <= lows[idx + 2]) supports.push(rPrice(lows[idx]));
   }
   const current = last(closes) ?? 0;
   const tol = atr > 0 ? atr * 0.15 : (current || 1) * 0.003;
@@ -148,7 +148,7 @@ function marketStructure(candles: Candle[], lookback = 3, atr = 0) {
 // ── Fibonacci — port of Fibonacci.computeFromSwings / compute ──
 function fibLevels(hi: number, lo: number, up: boolean) {
   const d = hi - lo;
-  const r = (x: number) => r2(x);
+  const r = (x: number) => rPrice(x);
   return up
     ? [['0.0 (swing high)', hi], ['0.236', hi - 0.236 * d], ['0.382', hi - 0.382 * d], ['0.5', hi - 0.5 * d], ['0.618', hi - 0.618 * d], ['0.786', hi - 0.786 * d], ['1.0 (swing low)', lo]].map(([n, p]) => ({ name: n as string, price: r(p as number) }))
     : [['0.0 (swing low)', lo], ['0.236', lo + 0.236 * d], ['0.382', lo + 0.382 * d], ['0.5', lo + 0.5 * d], ['0.618', lo + 0.618 * d], ['0.786', lo + 0.786 * d], ['1.0 (swing high)', hi]].map(([n, p]) => ({ name: n as string, price: r(p as number) }));
@@ -159,7 +159,7 @@ function fibFromSwings(swingHighs: number[], swingLows: number[], closes: number
   const trend = structureLabel.includes('bullish') ? 'uptrend' : structureLabel.includes('bearish') ? 'downtrend' : (current > (hi + lo) / 2 ? 'uptrend' : 'downtrend');
   const levels = fibLevels(hi, lo, trend === 'uptrend');
   const nearest = levels.reduce((a, b) => (Math.abs(b.price - current) < Math.abs(a.price - current) ? b : a));
-  return { trend, swingHigh: r2(hi), swingLow: r2(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
+  return { trend, swingHigh: rPrice(hi), swingLow: rPrice(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
 }
 function fibAbsolute(highs: number[], lows: number[], closes: number[], lookback = 50) {
   if (closes.length < lookback) return null;
@@ -169,10 +169,18 @@ function fibAbsolute(highs: number[], lows: number[], closes: number[], lookback
   const up = rl.indexOf(lo) < rh.indexOf(hi);
   const levels = fibLevels(hi, lo, up);
   const nearest = levels.reduce((a, b) => (Math.abs(b.price - current) < Math.abs(a.price - current) ? b : a));
-  return { trend: up ? 'uptrend' : 'downtrend', swingHigh: r2(hi), swingLow: r2(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
+  return { trend: up ? 'uptrend' : 'downtrend', swingHigh: rPrice(hi), swingLow: rPrice(lo), levels, nearestLevel: nearest.name, nearestPrice: nearest.price };
 }
 
-// ── Candle patterns — port of CandlePatterns.detect ──
+// ── Candle patterns — port of CandlePatterns.detect + trend-context gates (2026-07-02) ──
+// The classical reversal patterns require a preceding move to reverse. The pre-fix port
+// distinguished Hammer/Hanging Man (and Inverted Hammer/Shooting Star) by candle COLOR only,
+// and the 3-bar stars had no prior-trend requirement — producing geometric nonsense like
+// "Evening Star at support in oversold" (live user report; classically that location is
+// Morning-Star territory). Trend context = 5-bar net close change ending just before the
+// pattern; when there aren't enough bars to establish it, trend-gated patterns are skipped.
+// NOTE: display/prompt path only — the candle-pattern ML features live in scoring-full.ts
+// (last3Green/last3Red/wick features) and are untouched, so model parity is unaffected.
 function candlePatterns(o: number[], h: number[], l: number[], c: number[]) {
   const out: Array<{ pattern: string; signal: string }> = [];
   if (c.length < 3) return out;
@@ -181,16 +189,25 @@ function candlePatterns(o: number[], h: number[], l: number[], c: number[]) {
   if (range <= 0) return out;
   const bodyPct = body / range, upper = h[n] - Math.max(o[n], c[n]), lower = Math.min(o[n], c[n]) - l[n];
   const po = o[n - 1], pc = c[n - 1], prevBody = Math.abs(pc - po);
+  const upBefore = (k: number) => k - 5 >= 0 && c[k] > c[k - 5];
+  const downBefore = (k: number) => k - 5 >= 0 && c[k] < c[k - 5];
   if (bodyPct < 0.1) out.push({ pattern: 'Doji', signal: 'Indecision — potential reversal' });
-  if (lower > 2 * body && upper < body * 0.5 && c[n] >= o[n]) out.push({ pattern: 'Hammer', signal: 'Bullish reversal signal' });
-  if (upper > 2 * body && lower < body * 0.5 && c[n] >= o[n]) out.push({ pattern: 'Inverted Hammer', signal: 'Potential bullish reversal' });
-  if (upper > 2 * body && lower < body * 0.5 && c[n] < o[n]) out.push({ pattern: 'Shooting Star', signal: 'Bearish reversal signal' });
-  if (lower > 2 * body && upper < body * 0.5 && c[n] < o[n]) out.push({ pattern: 'Hanging Man', signal: 'Bearish reversal signal' });
+  // Wick shapes: the SHAPE picks the family; the PRECEDING TREND picks the name + direction
+  // (a long lower wick is a bullish hammer after a decline, a bearish hanging-man warning
+  // after an advance) — candle color is not the classical discriminator.
+  const lowerWickShape = lower > 2 * body && upper < body * 0.5;
+  const upperWickShape = upper > 2 * body && lower < body * 0.5;
+  if (lowerWickShape && downBefore(n - 1)) out.push({ pattern: 'Hammer', signal: 'Bullish reversal signal (after decline)' });
+  if (lowerWickShape && upBefore(n - 1)) out.push({ pattern: 'Hanging Man', signal: 'Bearish warning (after advance)' });
+  if (upperWickShape && downBefore(n - 1)) out.push({ pattern: 'Inverted Hammer', signal: 'Potential bullish reversal (after decline)' });
+  if (upperWickShape && upBefore(n - 1)) out.push({ pattern: 'Shooting Star', signal: 'Bearish reversal signal (after advance)' });
   if (pc < po && c[n] > o[n] && c[n] > po && o[n] < pc && body > prevBody) out.push({ pattern: 'Bullish Engulfing', signal: 'Strong bullish reversal' });
   if (pc > po && c[n] < o[n] && c[n] < po && o[n] > pc && body > prevBody) out.push({ pattern: 'Bearish Engulfing', signal: 'Strong bearish reversal' });
   const o3 = o[n - 2], c3 = c[n - 2];
-  if (c3 < o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] > o[n] && c[n] > (o3 + c3) / 2) out.push({ pattern: 'Morning Star', signal: 'Bullish reversal (3-bar)' });
-  if (c3 > o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] < o[n] && c[n] < (o3 + c3) / 2) out.push({ pattern: 'Evening Star', signal: 'Bearish reversal (3-bar)' });
+  if (c3 < o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] > o[n] && c[n] > (o3 + c3) / 2 && downBefore(n - 3))
+    out.push({ pattern: 'Morning Star', signal: 'Bullish reversal (3-bar, after decline)' });
+  if (c3 > o3 && Math.abs(pc - po) < Math.abs(c3 - o3) * 0.3 && c[n] < o[n] && c[n] < (o3 + c3) / 2 && upBefore(n - 3))
+    out.push({ pattern: 'Evening Star', signal: 'Bearish reversal (3-bar, after advance)' });
   return out;
 }
 
@@ -217,7 +234,7 @@ function bollingerBandsFull(closes: number[], period = 20, k = 2) {
   const mid = w.reduce((a, b) => a + b, 0) / period;
   const variance = w.reduce((a, b) => a + (b - mid) ** 2, 0) / period;
   const sd = Math.sqrt(variance);
-  return { ...scalar, upper: r2(mid + k * sd), middle: r2(mid), lower: r2(mid - k * sd) };
+  return { ...scalar, upper: rPrice(mid + k * sd), middle: rPrice(mid), lower: rPrice(mid - k * sd) };
 }
 
 export interface FullIndicatorOpts {
@@ -254,7 +271,7 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
   const patterns = candlePatterns(opens, highs, lows, closes);
 
   const ema20A = emaArray(closes, 20), ema50A = emaArray(closes, 50), ema200A = emaArray(closes, 200);
-  const ema20 = ema20A.length ? r2(last(ema20A)!) : null, ema50 = ema50A.length ? r2(last(ema50A)!) : null, ema200 = ema200A.length ? r2(last(ema200A)!) : null;
+  const ema20 = ema20A.length ? rPrice(last(ema20A)!) : null, ema50 = ema50A.length ? rPrice(last(ema50A)!) : null, ema200 = ema200A.length ? rPrice(last(ema200A)!) : null;
   const volRatio = volumes.length >= 20 ? r2((last(volumes) ?? 0) / (volumes.slice(-20).reduce((a, b) => a + b, 0) / 20)) : null;
 
   // EMA regime + position
@@ -318,9 +335,9 @@ export function computeFullIndicators(candles: Candle[], opts: FullIndicatorOpts
   return {
     timeframe: opts.timeframe, label: opts.label, price: current,
     atrPercentile, atrPercentileLabel,
-    rsi, stochRSI: stoch.result, macd: { histogram: r2(macdHist), crossover: crossStr(macd.crossover) },
+    rsi, stochRSI: stoch.result, macd: { histogram: rPrice(macdHist), crossover: crossStr(macd.crossover) },
     adx: adx?.result ?? null, bollingerBands: bb,
-    atr: { atr: r2(atrVal), atrPercent: r2(atrVal / current * 100) },
+    atr: { atr: rPrice(atrVal), atrPercent: r2(atrVal / current * 100) },
     ema20, ema50, ema200, vwap, fibonacci: fib, supportResistance: sr, candlePatterns: patterns,
     volumeRatio: volRatio, divergence, bias, bullPercent, biasScore: score,
     marketStructure: ms, volScalar, volumeProfile: vp,

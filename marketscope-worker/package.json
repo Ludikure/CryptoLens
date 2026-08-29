@@ -3,19 +3,35 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test": "tsc --noEmit && vitest run",
     "test:watch": "vitest",
-    "deploy": "wrangler deploy",
-    "predeploy": "vitest run",
+    "deploy": "echo '\\n  \u270b No Cloudflare deploy. The backend runs on TrueNAS (the box at marketscope.ludikure.org);\\n  the Cloudflare Worker was deleted 2026-06-28 (its cron + KV caused the KV-limit incident).\\n  To ship worker changes: copy src/ to the box (scp), `docker build -t marketscope:1.0 .`, then\\n  Stop/Start the marketscope app in the TrueNAS UI. See CLAUDE.md.\\n' && exit 1",
     "backtest": "tsx scripts/backtest.ts",
     "augment": "tsx scripts/augment-csv.ts",
     "persistence": "tsx scripts/persistence-analysis.ts",
-    "parity": "tsx scripts/parity-diff.ts"
+    "parity": "tsx scripts/parity-diff.ts",
+    "build:server": "esbuild server/server.ts --bundle --platform=node --format=esm --external:better-sqlite3 --external:undici --external:node-cron --external:ws --banner:js=\"import{createRequire as __cr}from'module';import{fileURLToPath as __fu}from'url';import{dirname as __dn}from'path';const require=__cr(import.meta.url);const __filename=__fu(import.meta.url);const __dirname=__dn(__filename);\" --outfile=dist/server.mjs",
+    "start:server": "node dist/server.mjs",
+    "dev:server": "tsx server/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "https-proxy-agent": "^9.1.0",
+    "node-cron": "^3.0.3",
+    "undici": "^6.21.1",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260827.1",
+    "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^20.11.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.24.2",
     "p-limit": "^7.3.0",
     "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
     "vitest": "^1.6.0"
   }
 }

@@ -75,6 +75,19 @@ struct TradeSetup: Codable, Identifiable {
         self.reasoning = reasoning
     }
 
+    /// Id-carrying init for server-sourced setups (GET /tracked-setups). The server mints the
+    /// uuid at registration; keeping it makes `TrackedSetup.id` stable across refreshes
+    /// (Identifiable — SwiftUI list diffing depends on it).
+    init(id: UUID, direction: String, entry: Double, stopLoss: Double, tp1: Double, tp2: Double? = nil, reasoning: String = "") {
+        self.id = id
+        self.direction = direction
+        self.entry = entry
+        self.stopLoss = stopLoss
+        self.tp1 = tp1
+        self.tp2 = tp2
+        self.reasoning = reasoning
+    }
+
     var risk: Double { abs(entry - stopLoss) }
 
     func rrRatio(for tp: Double) -> Double {
@@ -85,50 +98,6 @@ struct TradeSetup: Codable, Identifiable {
     var rrTP1: Double { rrRatio(for: tp1) }
     var rrTP2: Double? { tp2.map { rrRatio(for: $0) } }
 
-    /// Generate price alerts for this setup.
-    func toAlerts(symbol: String, currentPrice: Double) -> [PriceAlert] {
-        var alerts = [PriceAlert]()
-        let groupId = UUID()
-
-        func alertCondition(for target: Double) -> PriceAlert.Condition {
-            currentPrice > target ? .below : .above
-        }
-
-        alerts.append(PriceAlert(
-            symbol: symbol,
-            targetPrice: entry,
-            condition: alertCondition(for: entry),
-            note: "\(direction) entry",
-            setupId: groupId
-        ))
-
-        alerts.append(PriceAlert(
-            symbol: symbol,
-            targetPrice: stopLoss,
-            condition: alertCondition(for: stopLoss),
-            note: "\(direction) stop loss",
-            setupId: groupId
-        ))
-
-        alerts.append(PriceAlert(
-            symbol: symbol,
-            targetPrice: tp1,
-            condition: alertCondition(for: tp1),
-            note: "\(direction) TP1",
-            setupId: groupId
-        ))
-        if let tp2 = tp2 {
-            alerts.append(PriceAlert(
-                symbol: symbol,
-                targetPrice: tp2,
-                condition: alertCondition(for: tp2),
-                note: "\(direction) TP2",
-                setupId: groupId
-            ))
-        }
-
-        return alerts
-    }
 }
 
 // MARK: - Trade Outcome
@@ -153,12 +122,26 @@ struct TradeOutcome: Codable {
     var pendingExpiresAt: Date?    // 12h after creation for conditional setups
     var reEvalResult: ReEvalResult?
 
+    /// TERMINAL state — the trade is fully done and excursion tracking should STOP.
+    /// True only on a hard close: invalidated, expired, stop hit, or TP2 hit.
+    /// `tp1Hit` is deliberately NOT terminal — after TP1 the runner continues (stop
+    /// trails to break-even) until TP2 or the stop resolves it.
+    ///
+    /// ⚠️ Use THIS (never `isCounted`) for loop-termination / "stop tracking" checks.
+    /// The two differ on purpose: a 2026-05-09 regression used `isCounted` here, which
+    /// is true on `tp1Hit` alone, so every post-TP1 bar skipped tracking and 23/24
+    /// winners never registered TP2. Keep `resolved` = `stopHit || tp2Hit` (+ terminal
+    /// states); do not fold `tp1Hit` into it.
     var resolved: Bool {
         state == .invalidated || state == .expired ||
         stopHit || tp2Hit
     }
 
-    /// Whether this setup should be counted in win/loss statistics.
+    /// Whether this setup should be COUNTED in win/loss statistics — a different
+    /// question from whether it's `resolved`. True once an active setup has reached any
+    /// outcome-bearing milestone (`tp1Hit` included, since a TP1 hit is a recordable win
+    /// even while the runner is still live). Intended ONLY for stats/active-list filters
+    /// — NOT for loop termination (use `resolved` for that; see the warning above).
     var isCounted: Bool {
         state == .active && (stopHit || tp1Hit || tp2Hit)
     }
@@ -227,6 +210,18 @@ struct FlatOutcome: Codable {
         self.symbol = symbol; self.priceAtFlat = price
         self.timestamp = Date(); self.reason = reason
         self.refreshCount = 0; self.falseFlat = nil
+    }
+
+    /// Full init for server-sourced FLAT rows (GET /tracked-setups). The server grades FLATs at
+    /// a fixed +24h horizon; `refreshCount` is stamped 3 when resolved so the dashboard's
+    /// `falseFlat != nil` / evaluated filters keep working unchanged.
+    init(symbol: String, priceAtFlat: Double, timestamp: Date, reason: String,
+         priceAfter: Double?, falseFlat: Bool?) {
+        self.symbol = symbol; self.priceAtFlat = priceAtFlat
+        self.timestamp = timestamp; self.reason = reason
+        self.priceAfter3Refreshes = priceAfter
+        self.refreshCount = falseFlat != nil ? 3 : 0
+        self.falseFlat = falseFlat
     }
 }
 

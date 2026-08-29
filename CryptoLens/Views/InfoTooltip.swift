@@ -9,7 +9,7 @@ struct InfoTooltip: View {
     var body: some View {
         Button { showTooltip = true } label: {
             Image(systemName: "info.circle")
-                .font(.system(size: 12))
+                .font(Theme.caption)
                 .foregroundStyle(.tertiary)
         }
         .buttonStyle(.plain)

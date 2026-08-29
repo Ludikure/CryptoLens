@@ -67,15 +67,18 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 |---|---|---|---|
 | `/` `/health` | GET | none | Liveness check |
 | `/register` | POST | X-App-ID only (IP rate-limited 3/24h) | Issue auth token for a new device; idempotent for existing device_id with valid token |
-| `/alerts` | POST/GET/DELETE | required | Sync alerts list to D1 / fetch active / clear |
 | `/pending-setups` | POST/GET | required | Register conditional setups for entry-zone touch monitoring |
 | `/watchlist` | POST | required | Set symbols to monitor + ML thresholds (symbols are sanitized + uppercased) |
 | `/analyze` | POST | required (60/min rate-limited) | Proxy AI provider call (Claude/Gemini/DeepSeek) with allowlist enforcement |
 | `/outcomes` | POST/PUT/GET | required | Trade outcome capture, update closed-trade, fetch device history (optional symbol/model_version/prompt_version filters) |
+| `/tracked-setups` | GET | required | Full per-device server-resolved setup/FLAT lifecycle rows (2026-07-09 cutover) — the iOS dashboard's data source. Registered by `/full-analysis`, resolved by the cron (`outcome-tracking.ts`) |
+| `/liquidations` | GET | required | Per-symbol observed forced-liquidation aggregates + recent events (box websocket collector, 2026-07-10). Sampled feed — lower bounds |
 | `/scores` | GET | required | Per-device score history (ML probability time series) |
 | `/notifications` | GET | required | Per-device push notification log |
 | `/performance` | GET | required | Per-symbol win/loss aggregate stats |
 | `/ml-predict?symbol=…` | GET | required | Read ML prediction from `ml_preds:all` KV (5-min TTL, written by cron). Returns `{symbol, probability, probabilityH72, features, timestamp, isCrypto}` |
+| `/notify-debug` `?symbol=…` | GET | required | Why no notification fired. Serves the cron's OWN recorded gate decisions (`notify_debug:all` KV, 15-min TTL) plus per-device gates (push token, watchlist, `notif_claims`, `autorun` guard). `blockedBy` names the FIRST closed gate; null = all open |
+| `/auto-analysis?symbol=…` | GET | required | Cached result of a server-side auto-run (`autoanalysis:<symbol>` KV, 1h TTL, written by `runAutoAnalysis`). Same shape as `/full-analysis` + `at`; 404 when nothing cached. Read-only (no claim/delete) — iOS tracks consumption locally in `autoanalysis_seen_<SYM>` |
 | `/ml-models/version` | GET | required | Model JSON metadata (version, features, trees, uploaded date) |
 | `/history` | GET/POST | required (POST: 5/5min rate-limit) | D1 candle archive read / upload from app backtest |
 | `/macro` | GET | required | FRED economic data proxy |
@@ -91,14 +94,14 @@ Auth gate at `index.ts:158` routes through D1 validation for every endpoint EXCE
 | `/sentiment` | GET | none (public) | Fear & Greed proxy (cached 10min) |
 | `/darkpool?symbol=…` | GET | none (IP rate-limited 60/min) | FINRA dark pool ratio + Z-score |
 | `/direction-accuracy` | GET | required | Live forward track record of the dual-gate direction model (universe-wide, not per-device). Overall accuracy + by-confidence-band + recent graded signals + pending count. Reads `direction_signals` D1 |
-| `/ml-calibration` | GET | required | Live calibration of the ML *quality* model: realized goodR rate by predicted-probability bucket. Drift detector. Reads `ml_calibration` D1 |
+| `/ml-calibration` | GET | required | Live calibration of the ML *quality* model: realized goodR rate by predicted-probability bucket. Drift detector. Reads `ml_calibration` D1. `?market=crypto\|stock` filters to one model AND returns `curve` — the fitted live mapping (2026-08-21 PAV refit) the gates actually apply |
 | `/cron-health` | GET | none (public) | Dead-man's-switch: returns **503** when the cron heartbeat is stale (>10 min), 200 otherwise. Point an external uptime monitor here. Reads `cron:heartbeat` KV |
+| `/basis` | GET | required | Cash-and-carry monitor (2026-08-23): live Coinbase dated nano-futures basis vs spot, annualized, net of fees, with liquidity gating and the margin-call buffer. **READ-ONLY — public market data, no orders, no trade-enabled credentials.** `?fee=` overrides the per-side assumption (default **0.0007** = the user's measured Coinbase Advanced 2 derivatives taker, futures legs only — the COVERED form against BTC already held; buying the spot leg costs 0.250%/side at the same tier). See `docs/research/funding-carry.md` |
 | `/debug/features` | GET | required | Read `debug:<sym>_features` KV for parity investigation |
 | `/debug/backfill-derivatives` | POST | required (X-App-ID gated) | One-off derivatives backfill from Binance to D1 |
 
 **Cron-only operations (no endpoint):**
 - `checkAllDeviceScores` (orchestrator) → `computeSymbolPredictions` (symbol pass, writes `ml_preds:all` etc.) → `processDeviceNotifications` (per-device gating + APNs)
-- `checkAllDeviceAlerts` (price-alert evaluation, `Promise.allSettled` for fault isolation)
 - `archiveShortInterest` (daily FINRA pull → `short_interest_history` D1)
 - `cleanupStaleDevices` (daily, 30-day inactivity sweep)
 - `dedupe_old_setups` (in pending-setup loop)
@@ -120,7 +123,11 @@ Migrations under `marketscope-worker/migrations/*.sql`. **Note:** Some columns a
 | `short_interest_history` | 004 | symbol+date PK, short_volume, total_volume, short_ratio, short_zscore | `idx_short_lookup(symbol, date DESC)` |
 | `notif_claims` | 005 | push_token+symbol PK, expires_at | `idx_notif_claims_expires(expires_at)` |
 | `pending_setups` | OOB (lazy `CREATE IF NOT EXISTS` at `index.ts:219`) | id PK, device_id, symbol, direction, entry, atr, ml_at_registration, expires_at, registered_at, notified | `idx_pending_setups_symbol`, `idx_pending_setups_device` (both lazy) |
+| `tracked_setups` | OOB (lazy `ensureTrackedSetupsTable`, `outcome-tracking.ts`) | id TEXT PK (uuid), device_id, symbol, is_crypto, kind ('setup'\|'flat'), direction, entry/stop_loss/tp1/tp2, reasoning, price_at_setup, atr, ml_at_registration, conviction, model_version, prompt_version, archetype, setup_type, state, terminal, entry_hit(+_at), stop_hit, tp1_hit, tp2_hit, breakeven_activated, partial_taken, max_favorable, max_adverse, outcome, invalid_reason, flat_reason, false_flat, price_after, pending_expires_at, registered_at, resolved_at, last_checked_at, outcome_row_id | `idx_tracked_open(terminal, symbol)`, `idx_tracked_device(device_id, registered_at DESC)` |
 | `direction_signals` | OOB (lazy `CREATE IF NOT EXISTS`, `ensureDirectionSignalsTable`) | id PK, symbol, fired_at, entry_price, ml_win, p_up, predicted_dir, model_version, is_crypto, resolve_at, resolved, exit_price, fwd_return, actual_dir, correct | `idx_dirsig_unresolved(resolved, resolve_at)`, `idx_dirsig_symbol(symbol, fired_at DESC)` (both lazy) |
+| `liquidations` | OOB (lazy, `server/liquidations.ts`) | id PK, symbol, ts (ms), side ('long'\|'short' — the LIQUIDATED side), price, qty, notional | `idx_liq_symbol(symbol, ts DESC)`, `idx_liq_ts(ts)` |
+| `oi_snapshots` | OOB (lazy CREATE in the cron, since 2026-06-03) | symbol+timestamp PK, open_interest, mark_price, funding_rate, long_percent, basis_pct — dense ~20-min snapshots for the future homemade liquidation heatmap | `idx_oi_snap(symbol, timestamp DESC)` |
+| `depth_snapshots` | OOB (lazy CREATE in the cron, since 2026-07-10) | symbol+timestamp PK, mid, best_bid/ask, bid/ask USD depth within ±0.5/1/2% of mid, per-side actual span pct (truncation self-describing) — ~20-min cadence, crypto only | `idx_depth_snap(symbol, timestamp DESC)` |
 | `ml_calibration` | OOB (lazy `CREATE IF NOT EXISTS`, `ensureCalibrationTable`) | id PK, symbol, is_crypto, logged_at, entry_price, atr_price, predicted_prob, resolve_at, resolved, fav_r, good_r | `idx_cal_unresolved(resolved, resolve_at)`, `idx_cal_symbol(symbol)` (both lazy) |
 
 **Schema drift items** (low-severity, but flagged): `trade_outcomes.prompt_version`, four `derivatives_history.large_*` columns, and the entire `pending_setups` table aren't in any migration file. Consolidation to a `006_schema_drift.sql` is in the postponed-work doc.
@@ -170,7 +177,7 @@ The cron writes are batched to avoid KV write amplification: pre-2026-05 the cro
 - **Symbol selection** is unified in `AnalysisService.switchToSymbol()` — both `ContentView` and `FavoritePillsView` delegate to it. It handles cancellation of in-flight requests.
 - **Indicator computation** happens in `IndicatorEngine.computeAll()` — pure functions, no side effects. Includes full MACD/ADX/volume ratio series for chart sub-panels. **In-progress candle is dropped at the top of `computeAll`** (if `last.time + interval > now`) so live price ticks don't mutate indicators between refreshes. Same logic mirrored in `marketscope-worker/src/index.ts` via `dropInProgress()`. **Chart candles are trimmed to last 50** in `computeAll` — use `fullDailyCandles` (returned from `fetchAndCompute`) for ML features, not `tf1.candles`.
 - **`AnalysisHistoryStore`** serializes all disk I/O on a dedicated `DispatchQueue`.
-- **`OutcomeTracker`** tracks trade setup outcomes (entry/SL/TP hits, max excursions) and FLAT/kill outcomes (false conservatism detection). Persists to `~/Library/Caches/trade_outcomes/`. Syncs resolved outcomes to D1 via `/outcomes` endpoint.
+- **`OutcomeTracker`** is a READ-ONLY display store since the 2026-07-09 cutover: the box registers every setup/FLAT at analysis time and resolves them on its per-minute cron (`marketscope-worker/src/outcome-tracking.ts`); iOS pulls `GET /tracked-setups` via `refresh()` and caches a snapshot in `~/Library/Caches/trade_outcomes/server_*.json` (legacy per-symbol archives merge in as terminal history).
 - **Cache:** `AnalysisService` caches results per-symbol in memory (`resultsBySymbol`) and on disk (`~/Library/Caches/analyses/`). `loadCache` is `nonisolated` to avoid blocking main thread.
 
 ### Pre-Computed Flags (Swift → LLM)
@@ -205,13 +212,17 @@ The app pre-computes authoritative flags passed to the LLM in the `PRE-COMPUTED 
 6. Post-analysis: setups registered with `OutcomeTracker`, FLAT outcomes tracked
 7. Each refresh: `OutcomeTracker.trackSetupOutcomes()` and `trackFlatOutcomes()` check prices
 
-### Chart Rendering
+### Chart Rendering (LWC v5, 2026-07-08)
 
-`CandlestickChartView` uses **SwiftUI Canvas** for all rendering (candlesticks, grid, EMAs, S/R, Bollinger, selection). Sub-chart panels (RSI, MACD, StochRSI, ADX, Volume) also use Canvas. Gestures are a single unified `DragGesture(minimumDistance: 0)`:
-- Quick horizontal swipe (movement before 0.3s) → horizontal pan
-- Hold 0.3s then drag → crosshair scrub (Apple Stocks style)
-- Vertical movement → passes through to parent ScrollView
-- Pinch → zoom (separate MagnificationGesture)
+The price chart is **TradingView Lightweight Charts v5.2** in a persistent `WKWebView` (`ChartWebViewStore.shared`, one instance for the app lifetime; `Resources/chart/chart.html` + vendored `lightweight-charts.standalone.production.js`). **v5 native panes**: ONE chart hosts the main pane + each enabled indicator sub-pane (RSI/MACD/Stoch/ADX), all sharing one time scale — no per-pane chart instances, no range-sync layer (that was the v4 multi-pane jank). Pane separators are native + draggable.
+
+**Gestures are handled INSIDE the page** (no UIKit recognizers, no Swift→JS per-touch bridge — Swift only disables WebKit's interfering double-tap/long-press recognizers and drives the ⟲ reset):
+- One finger on bars → free 2D pan, native LWC (`horzTouchDrag` + `vertTouchDrag`; a capture-phase touchstart flips the price scale to manual so vertical pan engages, and a bare TAP restores autoscale on release)
+- Two fingers → time zoom, custom DOM pinch (Euclidean spread, `PINCH_AMP` amplification; LWC's native pinch is OFF — it had a slow startup threshold)
+- One finger on the price axis → price zoom via the `#priceGrip` DOM strip → `IPriceScaleApi.get/setVisibleRange` (v5 API, ≥5.0.7; anchored on last close — LWC's touch layer doesn't drive the price axis)
+- Time-axis drag → native LWC axis scaling; ⟲ reset chip → `nativeReset()`
+
+A unified touch-state machine in chart.html owns gesture bookkeeping with staleness failsafes (eaten touchend from tab switches can't wedge data updates, the pinch, the grip, or autoscale). Data pushes are deferred while a finger is down and flushed on release. `ChartGesturesUITests` pixel-diffs every gesture with real synthesized touches on the simulator.
 
 ### Market Data Providers
 
@@ -229,7 +240,7 @@ The app pre-computes authoritative flags passed to the LLM in the `PRE-COMPUTED 
 
 ### Navigation
 
-4-tab layout in `ContentView`: Chart (0), Market (1), Analysis (2), Alerts (3). Tabs 0-2 share a `NavigationStack`; tab 3 (`AlertsView`) gets its own `NavigationStack` from `ContentView`. **Do not add a NavigationStack inside AlertsView.**
+Tabs in `ContentView`: Now (verdict-first landing), Chart, Market, Record. **The Alerts tab and the entire price-alert feature were removed 2026-08-24** — unused since creation. Symbol-scoped tabs share one chrome via `symbolScopedTab`; Record opts out.
 
 ## System Prompt Architecture
 
@@ -269,40 +280,37 @@ Economic events split into RECENTLY RELEASED (with actuals, beat/miss) and UPCOM
 
 ### Overview
 
-Direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within 24H. The LLM determines direction from momentum; ML answers "trade or not?"
+Direction-agnostic `goodR = fwdMaxFavR >= 1.5` — probability of a ≥1.5 ATR favorable move within the forward window. **That window is counted in BARS, not hours, and the two markets differ by 5× (measured 2026-08-26, plan step 4.4):** 6 bars is exactly **24h on crypto** but a median of **120h (5 days) on stocks**, because a stock 4H bar is ET-session aggregated. The 72h persistence head is likewise 72h on crypto and **312h (13 days) on stocks**. Consequences: the stock model predicts a ~5-day excursion, and **no crypto↔stock comparison of any forward metric is valid** — which independently invalidates Part 8's cross-market replication claim. Not converted (that would change every stock label and force a retrain); `fwdSpanHours` now records the actual elapsed hours per row so the units are a fact rather than an inference. The LLM determines direction from momentum; ML answers "trade or not?"
 
-- **Crypto model (v11, retrained 2026-05-28):** LightGBM depth=4, 150 trees — 77 symbols, 136,551 bars, **62% WF accuracy** (folds 61.6/61.8/62.6). On identical fresh data, v11 beats v10 by +3.6 pp raw accuracy and +16.1 pp on the trade-critical top bucket (76.3% vs 60.2% for v10). The lower WF headline vs v10's stated 73.4% is because v10's number was measured on its own training data, not on fresh data — apples-to-oranges. See `marketscope-worker/scripts/evaluate-model.ts` for the apples-to-apples comparison.
-- **Stock model (v13, retrained 2026-05-29):** XGBoost depth=5, 100 trees — 159 symbols, 228,487 bars, **64.7% WF accuracy** (folds 63.4/64.5/66.2), top bucket **79.9%**. On identical fresh data, v13 beats v12 by +6.8 pp raw accuracy and +4.0 pp top bucket reliability. v12's stated 66.8% / 75.5% were measured on v12's own training data — same caveat as crypto.
-- **Features:** 111
+- **Crypto model (v14, retrained 2026-07-06):** LightGBM depth=4, 150 trees — 77 symbols, 145,045 daily-downsampled bars from the full-coverage derivatives regen (`csv_exports_v14`), **WF AUC 0.674** (folds 0.672/0.670/0.678), top-decile precision 76.6%. Config challengers (d5/d6-class) and the pruned-71 feature set all failed the pre-declared ship bar → incumbent config on the FULL (110-feature) set shipped.
+- **Stock model (v14, retrained 2026-07-06):** XGBoost depth=5, 100 trees — 159 symbols, 252,215 bars (`csv_exports_v14_stocks`), **WF AUC 0.686** (folds 0.678/0.687/0.693), top-decile 78.3%. d6-class challengers again beat prod in 3/3 folds (Δ+0.0042..+0.0043 — second consecutive retrain) but stayed under the +0.005 ship bar → incumbent shipped. If a third retrain repeats this, consider revising the bar.
+- **Features:** 110 (111-feature serving contract minus `volScalarML`, an r=1.000 duplicate of `atrPercentile`; the worker evaluates trees by feature name, so the trimmed training list is serving-safe)
 - **Target:** `goodR = fwdMaxFavR >= 1.5` (max favorable excursion in ATR multiples)
 - **Training:** Walk-forward CV (3-fold expanding window), purged 48-bar gap, daily downsampled, time-decay sample weighting (last year 3x, last 2 years 2x)
 - **Calibration:** Isotonic regression fit on out-of-fold predictions, capped at 0.85.
 - **Serving architecture (post-Phase 5, 2026-05-04):** Worker is the **single source of truth** for displayed ML and notifications. iOS reads from `/ml-predict?symbol=…` (cron-cached, 5-min KV TTL); local `MLScoring.predict` is retained only for `BacktestEngine` (training canonical). No local fallback in production — UI shows nothing if cache is missing.
-- **Inference:** Native Swift tree evaluator reads same JSON as worker (no CoreML). Worker `mlPredict()` (`marketscope-worker/src/ml-predict.ts`) uses identical tree evaluation logic. Worker↔BacktestEngine parity is asserted at 1e-7 absolute tolerance via `marketscope-worker/test/parity-vs-backtest.test.ts` (345/345 passing as of 2026-05-29 under v11/v13).
+- **Inference:** Native Swift tree evaluator reads same JSON as worker (no CoreML). Worker `mlPredict()` (`marketscope-worker/src/ml-predict.ts`) uses identical tree evaluation logic. Worker↔BacktestEngine parity is asserted at 1e-7 absolute tolerance via `marketscope-worker/test/parity-vs-backtest.test.ts` (fixture ML values refreshed for v14, 2026-07-06; 425/425 total worker tests green).
 
-### Calibrated Reliability (measured on /tmp/retrain_{crypto,stocks} regen data, full population)
+### Calibrated Reliability (v14, out-of-fold on the 2026-07 full-coverage regen)
 
-v11 crypto (819,231 bars, 50.5% baseline goodR):
+v14 crypto (145,045 bars, 50.5% baseline goodR; calibration floor 0.2498):
 
 | Predicted Range | Crypto Actual | Samples |
 |----------------|---------------|---------|
-| < 30% | 23.6% | 77,359 |
-| 30-50% | 40.2% | 318,198 |
-| 50-60% | 56.0% | 216,906 |
-| 60-70% | 66.4% | 114,163 |
-| 70-85% | **76.3%** | 92,605 |
+| < 30% | 23.7% | 6,356 |
+| 30-50% | 39.4% | 32,656 |
+| 50-60% | 55.9% | 23,153 |
+| 60-70% | 64.1% | 15,189 |
+| 70-85% | **75.9%** | 9,136 |
 
-v13 stocks (455,131 bars, 55.0% baseline goodR):
+v14 stocks (252,215 bars, 57.0% baseline goodR; calibration floor 0.3193 — no bucket below 30%):
 
 | Predicted Range | Stock Actual | Samples |
 |----------------|---------------|---------|
-| < 30% | 22.4% | 30,358 |
-| 30-50% | 41.2% | 191,358 |
-| 50-60% | 59.5% | 53,646 |
-| 60-70% | 70.0% | 109,674 |
-| 70-85% | **79.9%** | 70,095 |
-
-For reference: v10 crypto on the same data hit top-bucket 60.2% (32% of bars in top bucket, overpredicting). v12 stocks on the same data hit top-bucket 75.9%. The new models issue fewer high-confidence signals but each one wins more often.
+| 30-50% | 38.9% | 63,141 |
+| 50-60% | 55.0% | 11,419 |
+| 60-70% | 66.5% | 31,651 |
+| 70-85% | **73.8%** | 43,256 |
 
 ### Feature Groups (111 total)
 
@@ -355,15 +363,19 @@ For reference: v10 crypto on the same data hit top-bucket 60.2% (32% of bars in 
 | `marketscope-worker/src/scoring-full.ts` | Worker 111-feature computation (sector ETF mapping, VP from last 30 candles) |
 | `marketscope-worker/test/parity-vs-backtest.test.ts` | 1e-7 fixture-driven worker↔BacktestEngine parity (`npm test`) |
 | `marketscope-worker/test/fixtures/backtest-canonical/*.json` | I/O snapshots produced by `BacktestEngine` "Capture Parity Fixture" button |
-| `ml-training/calibrate_v13_stocks.py` | Active stock training script — XGBoost d5 t100, reads `csv_exports_v13/`, writes both worker + iOS JSONs |
-| `ml-training/calibrate_v11_crypto.py` | Active crypto training script — LightGBM d4 t150, reads `csv_exports_v11/`, writes both worker + iOS JSONs |
-| `ml-training/calibrate_v12_stocks.py` | Predecessor stock script (kept for reference; reads `csv_exports_v12/`) |
-| `ml-training/csv_exports_v11/` | 77-symbol crypto CSVs from Node-CLI regen (2026-05-28). Gitignored. |
-| `ml-training/csv_exports_v13/` | 159-symbol stock CSVs from Node-CLI regen (2026-05-29). Gitignored. |
-| `ml-training/csv_exports_v12/` | Predecessor 159-symbol stock CSVs (2026-05-04). Kept for v12 reproducibility. |
+| `ml-training/calibrate_v14.py` | Active training script (both markets) — `crypto\|stocks [--ship]`, challenger evaluation under the audit ship bar, staging in `models_v14/`, ship copies to worker + iOS |
+| `ml-training/calibrate_horizon.py` | 72h persistence retrain — writes worker `ml-model-{market}-h72t25.json` DIRECTLY (running it IS shipping) |
+| `ml-training/train_tail_head.py` | Tail head (crypto big-move) — embeds `heads.tail` into the shipped ml-model-crypto.json; run AFTER the main --ship |
+| `ml-training/calibrate_v13_stocks.py` / `calibrate_v11_crypto.py` / `calibrate_v12_stocks.py` | Predecessor scripts (kept for reference) |
+| `ml-training/csv_exports_v14/` | 77-symbol crypto CSVs, full-coverage derivatives regen (2026-07-05/06). Gitignored. Canonical. |
+| `ml-training/csv_exports_v14_stocks/` | 159-symbol stock CSVs, same regen. Gitignored. Canonical. |
+| `ml-training/csv_exports_v11_fixed/` `csv_exports_v13/` `csv_exports_v12/` | Predecessor CSV sets (leak-fixed v11, v13/v12 stocks). Kept for reproducibility. |
 | `ml-training/calibrate_v9.py` | Legacy combined crypto+stock script — name is stale (was used to bootstrap v10 crypto model) |
 | `ml-training/model_comparison.py` | Hyperparameter comparison (XGBoost d3-5 × t100-200 + LightGBM) |
 | `ml-training/finra_dark_pool.py` | Downloads FINRA RegSHO daily files, computes short volume Z-scores |
+| `ml-training/news_backfill.py` | Reconstructs a historical policy-event list from the Fed yearly press-release archives (dates are encoded in the release URLs; listing pages only, no article bodies) |
+| `ml-training/news_catalyst_test.py` | Tests whether policy-catalyst proximity predicts `goodR` — REJECTED (clean null; the apparent −10.8pp was a day-of-week artifact). See `docs/research/news-catalyst-test.md` |
+| `ml-training/level_rejection_direction.py` | Tests whether a confirmed rejection at a major S/R level predicts 3-4 bar direction — REJECTED (coin flip, gross EV below Binance fees, 0-2/6 folds). Reuses `level_validation.py` detection. See graveyard |
 | `ml-training/earnings_backfill.py` | Downloads historical earnings via yfinance |
 
 ### ML in Live Predictions
@@ -406,11 +418,15 @@ Per-cron flow (every minute via `scheduled()` handler):
 |---|---|---|
 | Timing | **Real-time** (fires the cron tick a 4H close crosses up) | **Real-time** |
 | Days | Every day | Every day (no weekday gate — market-closed bars just don't cross) |
-| Threshold | ML rising-edge >= 70% | ML rising-edge >= 70% |
+| Threshold | calibrated ML level >= 65% (2026-08-21; level not edge since 2026-08-06) | calibrated ML level >= 65% |
 | Direction primitive | bias-aligned OR dStochCross (union, skip conflicts) | bias-aligned OR dStochCross (union, skip conflicts) |
 | Cooldown | 3.5 hours per (push_token, symbol) | 3.5 hours per (push_token, symbol) |
 
-**Real-time gate (2026-05-30):** the notification fires the instant a cross is detected (`if (!pred.crossed || !pushToken) continue` in `processDeviceNotifications`), gated only by the 3.5h cooldown. The previous fixed notify-window gate (8/12/16/20/23:30 ET crypto; 8/12/16 ET weekday stocks) silently **dropped** crosses landing off-window rather than deferring them: `mlProb` only moves on a 4H close and `crossed` is true for a single cron tick (`prevMl` = previous minute, cron runs `* * * * *`), so any 4H close outside a window was missed entirely. With crypto closing 24/7, most signals were lost. Quiet-hours is delegated to the user's iOS Focus/DND. The `computeNotifyFlags`/`NotifyFlags`/`NOTIFY_TZ` window machinery was removed.
+**Envelope precheck (2026-07-11):** an ML rising-edge alone no longer pages the user — before notifying, the symbol pass builds the REAL analysis prompt from the candles it already has and parses the Conviction Envelope's `auto_FLAT_active:` line (`envelopePrecheck` + `parseAutoFlatReasons` in `src/index.ts` — zero drift with the actual analysis by construction). If the envelope would auto-FLAT (chase into extended trend, kills, macro IMMINENT, mixed biases below the calibrated gate…), the cross is SUPPRESSED — but per the 2026-05-30 notify-window lesson it DEFERS rather than drops: the suppressed cross (KV `notif_suppressed:all`, 24h expiry) is re-checked every tick and fires the moment the envelope clears with ML still ≥ threshold; it cancels silently if ML fades below threshold first. The precheck runs without enrichment (no derivatives/stock inputs) so it can only UNDER-suppress, never over-suppress; precheck errors fail open (notify). The calibrated-ML blend is shared via `fetchMlCalibration` (extracted from `runFullAnalysisCore`). **Extended to ALL proactive push types (2026-07-11b):** one `pred.envelopeFlat` verdict per symbol per tick now also gates the risk-state transition push (COMPRESSION heads-up — skipped outright; it fires in exactly the coiled tape that auto-FLATs) and the entry-zone-reached push (skipped WITHOUT marking `notified`, so it re-checks each tick and fires when the envelope clears while price is still in the zone). The precheck therefore also runs for symbols with new HIGH risk states or live pending setups. `/health` now returns `build` (the GIT_SHA baked in via workflow build-arg → Dockerfile ENV) so a TrueNAS deploy is remotely verifiable.
+
+**Automated analysis push (2026-07-14):** a surviving ML-cross no longer sends a bare "ML 73%" ping — it now runs the FULL LLM analysis server-side (`runAutoAnalysis` in `src/index.ts`, called `void`-detached from `processDeviceNotifications` so a 30-90s call never blocks the minute cron; the box is a persistent process so it outlives the pass) and pushes the **Bottom Line** instead, titled "setup ready" when a concrete setup came out. It also auto-registers the setups into `tracked_setups` (fully autonomous outcome tracking — no app open needed) and caches the result to KV `autoanalysis:<symbol>` (1h) for the app to pick up on open (iOS pickup = fast-follow). Scope = the device's synced watchlist (the trigger loop is `for (symbol of watchlist)`). Fixed to Sonnet 5 + extended thinking (auto-runs don't see the per-request model the app sends; the user's standing pick). Cost-bounded: the 3.5h `notif_claims` cooldown + a per-symbol `autorun:<sym>` KV guard (cooldown TTL) cap it at ~one LLM run per symbol per 3.5h. Best-effort — any failure falls back to the bare move-likelihood push so a cross is never lost.
+
+**Real-time gate (2026-05-30):** the notification fires the instant a cross is detected (`if (!pred.crossed || !pushToken) continue` in `processDeviceNotifications`), gated only by the 3.5h cooldown (and, since 2026-07-11, the envelope precheck above). The previous fixed notify-window gate (8/12/16/20/23:30 ET crypto; 8/12/16 ET weekday stocks) silently **dropped** crosses landing off-window rather than deferring them: `mlProb` only moves on a 4H close and `crossed` is true for a single cron tick (`prevMl` = previous minute, cron runs `* * * * *`), so any 4H close outside a window was missed entirely. With crypto closing 24/7, most signals were lost. Quiet-hours is delegated to the user's iOS Focus/DND. The `computeNotifyFlags`/`NotifyFlags`/`NOTIFY_TZ` window machinery was removed.
 
 **Direction primitive (2026-05-30):** `notificationDirection(biasAlignment, dStochCross)` in `marketscope-worker/src/index.ts`. Returns +1 (LONG), −1 (SHORT), or 0 (skip). Bars where bias and Stoch disagree are skipped. Backtest (direction_primitive_sweep, 4.4 yr): union captured 12× more total R on stocks and 1.9× on crypto top-10 vs bias-aligned-alone, with per-trade EV nearly identical. Bias-and-Stoch are largely orthogonal on stocks (53% agreement when both fire) but 88% correlated on crypto.
 
@@ -429,7 +445,7 @@ Cooldown is keyed by `push_token`, not `device_id` — iOS rotates `device_id` o
 - Batch export: separate "Crypto Only" / "Stocks Only" buttons
 - 1-second delay between stock symbols to avoid rate limiting
 - Stock daily features (`gapPercent`, `gapFilled`, `gapDirectionAligned`, `relStrengthVsSpy`, `relStrengthVsSector`, `iwmSpyRatio`, `beta`, `fiftyTwoWeekPct`, `distToFiftyTwoHigh`) read from a **post-drop** daily slice (`dailySliceForFeatures`) — pre-fix these used `dailyCandles[dailyIdx-1]` which pointed at today's in-progress bar, leaking intraday data into training that live cron (which drops in-progress) could never reproduce. Live cross-asset slices (`spyClosed`, `iwmClosed`, `sectorClosed`) are also `dropInProgress`-applied.
-- Active training: `ml-training/calibrate_v11_crypto.py` reads `csv_exports_v11/` (77-symbol crypto, 2026-05-28 regen); `ml-training/calibrate_v13_stocks.py` reads `csv_exports_v13/` (159-symbol stocks, 2026-05-29 regen). Both regens were done via the Node-CLI runner `marketscope-worker/scripts/runBacktest.ts`; the iOS BacktestEngine path is no longer used for production CSV generation.
+- Active training: `ml-training/calibrate_v14.py crypto|stocks` reads `csv_exports_v14/` (77-symbol crypto) + `csv_exports_v14_stocks/` (159 stocks), both from the 2026-07-05/06 full-coverage derivatives regen via the Node-CLI runner `marketscope-worker/scripts/runBacktest.ts`; the iOS BacktestEngine path is no longer used for production CSV generation.
 
 ### Backtester Symbols
 
@@ -472,9 +488,11 @@ Crypto LGB d4 t150, stocks XGB d5 t100 (deeper/more-trees showed diminishing ret
 - **Regime badge**: TRENDING/RANGING/TRANSITIONING capsule on price header
 - **Event countdown**: Live countdown timer to next high-impact economic event
 
-## Outcome Feedback Loop
+## Outcome Feedback Loop (server-side since 2026-07-09)
 
-The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist with the current model_version: 11 for crypto, 13 for stocks). Shows win/loss rate by direction and last 3 outcomes with ML probability. LLM instructed to calibrate confidence based on patterns. Outcomes stored in D1 `trade_outcomes` table with `model_version` column; each `TrackedSetup` also carries a `promptVersion` field (see A/B Testing Infrastructure) so we can compare populations by system iteration as well as by model.
+The FULL setup lifecycle runs on the box (`marketscope-worker/src/outcome-tracking.ts`): `/full-analysis` registers every parsed setup (or the FLAT decision) into `tracked_setups` at analysis time, and the cron's `resolveTrackedSetups` pass advances them every ~5 min against 15m crypto klines / 1h stock candles (entry touch, +1R break-even, same-bar open-proximity ambiguity, 12h pending expiry with simplified re-eval, 7d untriggered prune, FLAT graded at +24h `|move| > 1.5%`). Counted terminals (tp2_win/tp1_win/partial_be/loss ONLY) are inserted into `trade_outcomes` — outcomes resolve whether or not the app is ever opened. `TRACKED_MODEL_VERSION` / `TRACKED_PROMPT_VERSION` in outcome-tracking.ts are the version registry of record.
+
+The LLM prompt includes recent resolved trade outcomes for the current symbol (if >= 3 exist matching the worker's model_version filter — IN(10,11,12,14) crypto / IN(12,13,14) stock as of v14), and reads Active Trade State from its own `tracked_setups` (body.activeSetups is a legacy-app fallback only). LLM instructed to calibrate confidence based on patterns.
 
 ## A/B Testing Infrastructure (2026-05-29; collapsed 2026-05-30)
 
@@ -518,7 +536,7 @@ Per-symbol EV analysis on `csv_exports_v11/` + `csv_exports_v13/` (n=237) showed
 
 ## Counter-Trend Reversal Setup
 
-Backtesting (850K+ crypto, 192K+ stock bars) shows counter-trend setups (4H reverses vs daily) have 73-86% goodR vs 38-43% for aligned. Prompt allows counter-trend reversal when ML_WIN >= 70%, with tighter targets (TP1 1.0 ATR, TP2 2.0 ATR) and MODERATE conviction cap.
+Re-validated CLEAN 2026-07-06 (`ml-training/mixed_flat_test.py`, v14 regen — the original 73-86% numbers were leak-era): non-aligned bars (daily/4H conflict or neutral) carry ~2× the goodR rate of aligned bars — crypto 61/59% vs 33/30%, stocks 70/71% vs 39/35%; flat across trend age. Direction stays a coin flip in every state (P(up24) 48-53%). Prompt allows counter-trend reversal when ML_WIN >= 70%, with tighter targets (TP1 1.0 ATR, TP2 2.0 ATR) and MODERATE conviction cap. Since 2026-07-06 the Conviction Envelope's `biases_MIXED` auto-FLAT is ML-gated (fires only when ML < 70) so this playbook is actually reachable — see the 2026-07-06 decision entry.
 
 ## Direction Primitive Architecture (2026-05-30)
 
@@ -546,18 +564,2028 @@ The worker decides whether to notify based on the union primitive. The iOS promp
 
 ## Known Remaining Issues (Low Severity)
 
-- No certificate pinning on network calls
-- Missing App Group entitlement on main app target (widget can't share data)
-- Worker: APNs tries sandbox first then production (doubles latency). Transient-error fallback was improved 2026-05-30 (only conclusive token-level errors like 410 Unregistered now break the loop; 429/5xx still attempt prod). JWT now cached for 50 min per cron (was rebuilt per send pre-2026-05-30).
-- Parity fixtures (BTC/ETH/TSLA at 2026-05-04) still in use under v11/v13 — `expected.mlProbability` values were updated in-place via `marketscope-worker/scripts/update-fixture-ml.ts`. Feature-level parity assertions are still measured against the 2026-05-04 feature snapshots; capturing fresh fixtures at a current date is a low-priority follow-up.
-- Backtester: crypto regen ~7h at concurrency 8 (Binance rate-limit cascade); stocks regen ~3.5h across two passes (Yahoo TCP drops at concurrency 8). Section H/K of `/Volumes/External/Downloads/marketscope-postponed-work.md` documents the concurrency tuning + raw candle cache opportunity.
-- 72h persistence model (threshold 2.5 ATR) not yet retrained on fresh data — section F of postponed-work doc.
-- Schema drift: `derivatives_history` table has 4 columns (`large_buy_vol`, `large_sell_vol`, `large_buy_count`, `large_sell_count`) added out-of-band; `trade_outcomes.prompt_version` similarly added without a migration file. A fresh D1 created from `migrations/*.sql` alone would fail INSERTs. Migration file consolidation is a low-priority follow-up.
-- Derivatives D1 archive runs ~9× per day per symbol vs the intended 6.85× (3.5h gate). The `deriv_archive:all` KV blob occasionally evicts across overlapping crons, resetting per-symbol last-archive times. Storage cost minor (~700 extra rows/day across 76 symbols); fix is to move the per-symbol gate state from KV to D1.
+Four of the eight items here were fixed 2026-07-24 (see the decision entry below): the redundant
+`pending_setups` table, the missing App Group entitlement, the APNs sandbox-first latency, and the
+derivatives archive over-writing. Schema drift is closed by `migrations/007_schema_drift.sql`. What
+remains:
+
+- **No certificate pinning on network calls — deliberate WON'T-DO, not a backlog item.** Verified
+  2026-07-24: `marketscope.ludikure.org` serves a **90-day Google Trust Services cert** (issuer
+  `GTS WE1`, CN=ludikure.org, e.g. Jun 5 → Sep 3 2026) via the cloudflared tunnel. Pinning the leaf
+  SPKI would brick every install at each auto-renewal (~quarterly, silently, with no server-side
+  signal); pinning the intermediate or root is weaker AND still breaks whenever Cloudflare rotates
+  CA (it issues from both GTS and Let's Encrypt and can switch without notice). The asset being
+  protected is a device auth token to a single-user hobby backend, already over TLS with a public CA
+  — so pinning trades a real, recurring self-inflicted-outage risk for a marginal reduction in an
+  already-remote CA-compromise threat. Revisit only if the backend moves to a cert whose rotation we
+  control.
+- Parity fixtures (BTC/ETH/TSLA at 2026-05-04) still in use under v14 — `expected.mlProbability`
+  values were updated in-place via `marketscope-worker/scripts/update-fixture-ml.ts`. Feature-level
+  parity assertions are still measured against the 2026-05-04 feature snapshots. **Low value, and
+  it needs you:** fixtures are captured by the DEBUG-only "Capture Parity Fixture" button in
+  BacktestView on a simulator, then hand-copied out of the sim container — it can't be automated
+  headlessly. And parity is computed from each fixture's OWN candle slices, so a stale capture date
+  doesn't weaken the 1e-7 assertion; it only means the fixtures don't cover recent market
+  conditions. Worth doing when you're next in the simulator anyway, not before.
+- Backtester: crypto regen ~7h at concurrency 8 (Binance rate-limit cascade); stocks regen ~3.5h
+  across two passes (Yahoo TCP drops at concurrency 8). Section H/K of
+  `/Volumes/External/Downloads/marketscope-postponed-work.md` documents the concurrency tuning +
+  raw candle cache opportunity. **Genuinely open**, but it's a multi-hour perf project whose only
+  honest validation is a full regen, so it wants a dedicated session.
+- ~~72h persistence model not yet retrained on fresh data~~ — RESOLVED 2026-06-05: retrained crypto
+  on leak-clean `csv_exports_v11_fixed` (stock was leak-spared, reproduced identically). See the
+  2026-06-05 decision entry.
+
+## ⏰ Dated action items
+
+- **2026-09-03 — drop `ICXUSDT` and `STORJUSDT` from `ARCHIVE_CRYPTO`** (`marketscope-worker/src/index.ts`).
+  Binance delists them that day (surfaced by the exchange-announcements feed, 2026-08-23; ICX also
+  carries a Monitoring Tag). After the delist the cron burns a slot per minute per symbol fetching
+  candles that never update and scoring stale prices — fault-isolated, so nothing breaks, it just
+  runs quietly wrong. Leave them in until the date so the archive captures the final tape.
+  **Do NOT remove them from `csv_exports_v14` or any future training set** — see the note below.
 
 ## Recent Architectural Decisions
 
 Reverse-chronological log of major architectural changes. New sessions should scan from the top — most recent context is most relevant for understanding the current system state.
+
+### 2026-08-28h — Paper trader shipped: MarketScope signal → simulated order → real Coinbase book
+
+User: *"To do this diligently, bot is needed. No one can be watching the app all the time"*, then
+proposed the better architecture — simulate orders against Coinbase's REAL market data with a
+virtual portfolio, no live orders. Built and deployed the same night (`587f3367`).
+
+**What it is** (`server/paper-trader.ts` + `src/paper/{book,contracts,sim,intents}.ts`): every 4H
+close +3m UTC it calls **`buildOpportunityBook()` — the `/opportunities` handler's core, extracted
+so the bot runs EXACTLY the code the app runs** — applies the same 0.05R floor and greed cancel the
+app applies, and sells into the live Coinbase bids, sized in whole contracts off the FILLED price.
+Continuously, every public trade print drives stops and targets; a 15s clock drives 72h exits;
+every event is persisted (`paper_positions`/`paper_events`) and pushed. Restarts restore from D1.
+
+**Why this beats the shadow mode I proposed:** it measures the two costs the backtest cannot —
+spread and depth at your size, stop slippage when price runs through, on the venue you would
+actually trade. Coinbase's "sandbox" is NOT this: its own docs say *"all responses are static and
+pre-defined"* — a wire-format test, not paper trading.
+
+**Fill rules, all conservative:** a stop TRIGGERS on a print at/above it and FILLS by walking the
+asks, never better than the triggering print (a print at P proves the market traded at P); a
+target fills only once prints at/under it accumulate OUR size — a touch is not a fill; fees are
+the measured 0.07%/side plus Coinbase's flat $0.12/contract/side. Stated limitation: a paper order
+removes no liquidity and holds no queue priority — optimistic in exactly one direction.
+
+**The venue as it actually is**, verified against the products API: BTC/ETH have the 2030
+perp-style nanos (`BIP-20DEC30-CDE` 0.01 BTC, `ETP-20DEC30-CDE` 0.1 ETH); **SOL/XRP/ADA exist only
+as monthly dated futures** (×5, ×500, ×1000 — front month, never one expiring inside the hold);
+**DOGE has no US product**. The true perps for all six are on INTX, closed to US persons, and are
+never selected. Market data is public: `wss://advanced-trade-ws.coinbase.com` `level2` +
+`market_trades`, no key — **the box's threat model is unchanged**.
+
+**Live 40 seconds after deploy:** feed healthy, 1,425 messages, all five books ready with real
+spreads — BTC 1.9 bps, ETH 4.1, XRP 8.6, SOL 10.5, **ADA 14.8** (thin, as its $540k/day volume
+predicted; the walk will price it). `GET/POST /paper`: state, open with live marks, closed, Tier 1
+stats beside the +0.22R backtest reference, feed health; enable/disable, clearHalt, closeId,
+runNow. Halts new entries at −25% drawdown and pages. `PAPER_TRADER=0` disables at boot.
+
+Also: `pushToActiveDevices()` exported for server-side processes. 16 new tests; 909 green. **The
+decision point stands** (memory `forward-log-decision-2026-11`): compare paper to backtest around
+late November. **iOS (2026-08-29):** the Record tab now LEADS with a "Paper bot" section reading
+`/paper` — equity and change since start, feed/contract/last-run status, the closed record beside
+the +0.22R reference (marked "too few to judge" under 10), open positions with live marks and a
+Close button, the last five closes, an enable toggle and clear-halt. Paper money never takes the
+green real positions take. First two signal runs (04:03 and 08:03 UTC): 0 accepted, every symbol
+auto-FLAT on ML_WIN < 50 — correctly idle in the same quiet market the Scan tab shows.
+
+### 2026-08-28g — An LLM choosing take/skip: rejected on 1,825 blinded proposals, and the card number beat it
+
+User: *"Can we backtest something like this but instead of me acting use AI to determine if trade
+should be taken?"* Yes — and it is the better test, because n stops being the problem: the live
+journal needs ~200 trades a side, this got 1,825 in one evening for ~$14.
+
+Pre-declared (`docs/research/llm-selection-test.md`, prompt verbatim, four amendments recorded
+before any call). Population = exactly what the scanner would have shown, blinded (no symbol,
+date or price). Judges: take-all, the EV number already on the card (top half), DeepSeek v4-pro,
+Claude Sonnet 5 — both LLMs at temperature 0, thinking off, same dossier.
+
+| arm | coverage | mean net R | gap vs take-all | CI (day-clustered) | periods+ |
+|---|---:|---:|---:|---|---:|
+| take-all | 100% | +0.324 | — | — | — |
+| **card number** | 50% | **+0.444** | **+0.120** | [−0.028, +0.277] | **8/10** |
+| DeepSeek TAKE | 30% | +0.331 | +0.007 | [−0.186, +0.216] | 7/10 |
+| Sonnet TAKE | **5%** | +0.301 | −0.023 | [−0.428, +0.401] | — |
+
+**Both fail every applicable criterion.** DeepSeek's picks are indistinguishable from the
+population in both directions. Sonnet took 90 of 1,825 — after being told in the prompt that the
+structure nets +0.2R and that skipping everything is abstention — and its 90 did slightly worse.
+Its skip reasons are textbook mean-reversion ("4H oversold, bounce risk", "bullish structure
+against the thesis"), which this project has measured as non-predictive nine separate ways.
+**The excursion model's own EV beat both**: a model trained on 110 features outperforms a language
+model reading a printout of them.
+
+**Instrument defects caught by piloting, before spending:** v4-pro is a reasoning model and
+returned empty content on 5/5 rows at a 200-token cap (thinking disabled for both); Sonnet skipped
+3/3 on the original base-rate sentence ("1 in 10 reach the target") because it read a low hit rate
+as a losing trade without multiplying through 5R — the sentence now states the net EV, recorded as
+an amendment made after seeing pilot output; the 4H candle file starts 2021-12 and silently dropped
+all of 2021H1 on the first build; `fundingRateRaw` is already in percent and was ×100'd again.
+
+Predictions: 1 held (neither clears), 2 **failed** (no abstention signal either), 3 sign right but
+magnitude wrong (card +0.12 vs +0.02–0.05 predicted), 5 half-failed (Sonnet 5% coverage).
+Exploratory and NOT a finding: DeepSeek's ≥70%-confidence skips averaged +0.16R vs +0.53R for its
+low-confidence skips — its certainty about skipping tracks worse rows even though its picks carry
+nothing. A different hypothesis for a different pre-declared test.
+
+**Nothing ships.** The scanner keeps ranking on net EV, the take/skip decision stays with the
+user, and the journal measures it. Research-layer only, no redeploy. Also noted: the worker's
+DeepSeek allowlist still names `deepseek-reasoner`/`deepseek-chat`; the API now serves
+`deepseek-v4-flash`/`v4-pro`.
+
+### 2026-08-28f — Phase 3 shipped: the journal, and the first attribution the app has ever produced
+
+User: *"Ok build phase 3."* Corrected spec §42 calls it *"the highest-value item in the spec: it
+is what catches abstention-vs-selection."* Definitions were pre-declared in
+`docs/research/journal-attribution.md` and committed BEFORE the first entry existed.
+
+**The gap, measured before building.** The system graded what it PROPOSED (271 tracked rows) and
+had no record of what the user DID: the manual-close endpoint had never been called, `notes` was
+empty on all 61 outcomes, every `pnl_percent` was 0. Scanner rows were never logged at all.
+
+**Worker (`src/journal.ts`, 20 tests, 913 green):**
+- `opportunity_log` — every scanner row a device was shown, deduped per 4H bar, graded at +72h on
+  the box's own 1h archive at the structure it was priced at. **Same-bar target-and-stop counts as
+  the STOP** (1h bars cannot order intrabar; the conservative reading cannot flatter the record).
+  Sub-floor rows are logged with `shown=0` — a future test of the floor, not a proposal.
+- `journal_entries` — fill, size, note, exit. A `setup` entry links to its `tracked_setups` row by
+  geometry (the analysis response mints different ids); an `opportunity` entry to that bar's row.
+- Attribution — **Tier 1 only (§25)** per population (proposed / taken / skipped): expectancy, win
+  rate, MFE/MAE, profit factor, fee burden, **effective n by overlapping-window clustering** (§21
+  applied to trades), monthly consistency. The two numbers: **selection** = E[R|taken] −
+  E[R|proposed], **abstention** = E[R|skipped], each with a seeded bootstrap CI; **execution drag**
+  separates "picked badly" from "entered badly".
+- **Verdict rule: no verdict word until taken ≥ 10 AND skipped ≥ 10 graded trades.** It will say
+  "not enough data" for months, which is the correct output.
+- Realised R for a system-managed setup follows the composite-band execution the cron simulates:
+  loss −1 · partial_be +0.5 · tp1_win +½·RR₁ · tp2_win +½·RR₁ + ½·RR₂ — gross, and labelled so.
+- Endpoints `POST/PUT/DELETE/GET /journal`, `GET /attribution`. `/opportunities` logs detached;
+  the cron grades due rows beside `resolveTrackedSetups`, fault-isolated.
+- One defect caught by the suite, not in prod: `computeAttribution` assumed `tracked_setups`
+  existed, and it is created lazily — a fresh box or a device that never ran an analysis would
+  have 500'd.
+
+**iOS:** "I took this" on the trade card (source `opportunity`) and "Took it" on the verdict card
+(source `setup`) → `JournalEntrySheet`, fill prefilled from the proposal, size from
+`PositionSizer`, the stop KEPT from the proposal because it is what R is measured against. The
+Record tab opens with **Your record** above the system's — three population lines, the verdict
+line once the bar is met, and until then exactly what the data supports. Your trades list with
+Close (exit + how it ended) and swipe-to-delete. `-startTab record` DEBUG launch arg for
+screenshots.
+
+**Deployed via `tools/release-box-image.sh`** — first real use after the proof: 913 green,
+built on the box, `/health` serving `981235d7`, gluetun untouched.
+
+**The first attribution the app has ever produced, on the live device:** 15 setups proposed
+(~8 independent), 14 graded, **expectancy −0.19R gross — and all 15 skipped**, because nothing
+was ever journaled. So the one thing the record can say today is that *not* taking the system's
+setups has cost nothing. That is the abstention half of the question, answered on day one; the
+selection half starts counting at the first "I took this".
+
+### 2026-08-28e — The scan card grades rows instead of ranking them (third attempt, first one that worked)
+
+User, for the third time: *"The scan screen is still confusing to me. I don't understand what is a
+good trading opportunity from bad one."* The first two attempts rewrote COPY. They failed because
+the problem was what the row CLAIMED.
+
+**The screen ranked rows by net expected R and led with a dollar figure**, which asserts the model
+can order candidates by quality. It measurably cannot — the book's own caveat, which the app was
+already receiving, says the edge is *"+0.109R gross with a median of zero — mostly nothing,
+occasionally a large hit"*, profitable in 1 of 5 rising-market periods, at a **7.6%** base hit
+rate. +0.05R vs +0.09R is inside that noise, so no wording could make those rows feel different.
+
+**Meanwhile the sharpest honest discriminator was in the payload and thrown away.**
+`model.heads.{long,short}.shippable` — the short head passes all five ship criteria, the long head
+**fails three of five** (*"cross-sectional AUC 0.5421 below the 0.55 floor, a 30-bar-LAGGED model
+scores 0.5427, so the head adds nothing over stale information"*). `WorkerOpportunitiesService`
+decoded `longAuc`/`shortAuc`/`baseWinRate` and never decoded `heads`, so **a row built on a model
+that failed its own test rendered identically to one built on a model that passed.**
+
+Rows now lead with a GRADE — WELL SUPPORTED / QUALIFIED / UNPROVEN — over the named binary facts
+that produced it, with the money demoted to *"+$29 average — but 92% of these lose the full stop"*
+(both halves from the row). Deliberately not a score: §15 deleted the weighted 0-100 because
+summing incommensurable things invents precision, and a grade whose every input is shown beside it
+does not reintroduce that — the user can see which facts produced the label and reject any one.
+UNPROVEN renders GREY, per the colour law: "adds nothing over stale data" is absence of knowledge,
+not hazard; caution stays for a modelled row with a live warning.
+
+**A defect I introduced and caught only by screenshotting.** The first version put fee share on the
+row. At a 0.171% round trip against a 1-2.5% stop that lands near half the gross on EVERY row, so
+it warned on all of them, said nothing about which was better, and dragged every row to QUALIFIED —
+reproducing the exact complaint. It is a FRAME fact and is now stated once above the rows, with a
+row mentioning fees only above 65%. Fixing that alone made the rows discriminate: LINK WELL
+SUPPORTED vs SOL QUALIFIED (crash risk elevated, size cut). **The file's own header already said
+"every caveat that applies to all rows equally is stated ONCE, above them"** — I wrote that and
+then broke it.
+
+Also: `answerText` now derives from the best grade present, so the headline cannot say "Two trades
+worth taking" over two rows that both warn.
+
+iOS-only — needs a rebuild+install. No worker change, no redeploy.
+
+### 2026-08-28d — Deploying the box is now one command, run from here
+
+User: *"ludikure truenas user can create docker images. Instead of you asking me to redeploy,
+you should be able to do it"*, then *"we should start building images locally. We are already
+doing it for wmata app."* Both correct — an SSH key named `claude-code-macmini-truenas` and a
+known host at `192.168.50.140` had been set up and never used, and the wmata repo already had
+the pattern at `82905b9`.
+
+**`tools/release-box-image.sh` + `tools/nas-deploy-app.py`**, ported from there. One command:
+run the full suite → `git archive` the COMMIT (never the working tree) over SSH → build on the
+box as `marketscope:<short-sha>-local` → smoke-check the baked `GIT_SHA` → `midclt app.update`
+with `pull_policy: never` (config backed up first) → wait for a healthy container → verify
+`/health.build` **from outside the box**. Proven end-to-end on `27ff998`: 874 green, built,
+deployed, `ix-marketscope-marketscope-1` healthy on the local tag, `/health` serving it.
+
+**The workflow's test gate survives in a different shape and that was the point.** The
+2026-08-26 entry records that the image job had NO test step and was *"the channel through which
+every broken prompt reached production this week"*. Moving the build off Actions must not
+re-open it, so a red suite ships nothing and the archive-the-commit rule keeps an unstaged file
+from riding along.
+
+**Three adaptations from the wmata version, all forced by differences here:**
+1. **This app has TWO services** — `marketscope` and the `gluetun` sidecar whose `PROXIED_HOSTS`
+   routing the Binance feeds depend on. The service is named explicitly, everything else is left
+   byte-identical, and the health wait matches `ix-<app>-<service>-` rather than a substring, or
+   **gluetun's line would satisfy the wait while marketscope was still down**.
+2. **No release tags here** (the workflow builds per-push), so it takes a commit-ish defaulting
+   to HEAD and refuses a non-HEAD commit unless `--skip-tests` is passed — otherwise the local
+   suite would test a different tree than ships.
+3. **`--ghcr` reverts** to the registry copy with `pull_policy: always`. GHCR is kept
+   deliberately: it is the only offsite immutable record, and the fallback when the box is
+   unreachable from this Mac. A local-only tag under `pull_policy: always` makes the app attempt
+   a pull nothing can serve and leaves it with no container — that is why the switch needs
+   `never`, and it cannot be done from the Apps UI at all.
+
+**Known gap, stated rather than traded away:** the CI gate ran on `ubuntu-latest` (amd64); this
+runs the suite on the Mac (arm64) and builds on the box (amd64). `better-sqlite3` is the only
+native dep and is rebuilt inside the Docker build, so exposure is small but not zero. Closing it
+needs a test stage in the Dockerfile — the runtime image is pruned with `npm prune --omit=dev`,
+so vitest is not in it.
+
+Cost: ~250 MB of box disk per image and nothing prunes them; the script lists what has
+accumulated after every build.
+
+### 2026-08-28c — Trend channels rejected: the slope is worse than no slope, and worth nothing when fitted
+
+User asked about sloping channels. **Never tested** — zero hits in the vault, the graveyard,
+the code or the 110 features. It is the most-used piece of chart TA this project had never
+measured.
+
+Pre-declared that this was NOT the ninth repeat: the previous eight all asked "which VISITED
+price is special" and always answered *none*, leaving one fact standing — traded prices hold
+~5-7pp better than untraded ones. A trendline's projected value is generally a price the
+market has **never traded**, so it cannot inherit that effect, and a positive result would
+imply a real coordination mechanism. **Recorded in advance that my null prior was weaker here
+than in any of the previous eight.** It was the wrong call, and instructively so.
+
+Decisive control: a HORIZONTAL line at the same anchor pivot — the incumbent.
+
+| comparison | crypto | stock |
+|---|---|---|
+| channel vs horizontal | **−1.12pp** [−1.36, −0.86] | **−1.75pp** [−2.17, −1.33] |
+| periods positive | **0 of 10** | 1 of 10 (n=64 stub) |
+| paired, both arms resolved | −0.33pp [−0.62, −0.05] | −0.81pp [−1.28, −0.34] |
+| channel vs **random slope** | −0.21pp [−0.48, +0.07] | **+0.03pp** [−0.40, +0.45] |
+
+**The sloped line is significantly WORSE than a flat line through the same pivot, on both
+markets, in 19 of 20 half-year periods** — the first of nine level tests where the tested
+object underperforms the incumbent rather than merely matching it.
+
+**This is the trap in its purest form.** A fitted trendline beats a *random line* by +4.09pp
+on crypto and +4.23pp on stocks. Measured against nothing — which is how chart TA is normally
+"verified" — that is a large, consistent, real-looking effect, and presumably why the
+technique is universally believed. Against the control that matters it loses. **The anchor
+pivot does all the work; the slope subtracts.**
+
+**The fitted slope carries no information at all**: indistinguishable from a randomly drawn
+slope through the same anchor on both markets (+0.03pp on stocks). The skill the technique is
+sold on — drawing the line correctly through the right two pivots — measures at zero.
+
+Also: a projected line is **21-24% less often reached** than the horizontal from identical
+anchors, so it is less often actionable as well as less reliable. Regression channels lose to
+horizontal too. Decay with projection distance is level staleness, not slope drift — both arms
+decay in lockstep, so the gap is flat.
+
+**Method note.** The sloped outcome function is a reconstruction of `LV.forward_outcome`, so
+per the 2026-08-25j rule the script **refuses to run** unless it reproduces the original
+exactly at slope 0 (2,800 cases, 0 mismatches). Two of my own harness defects were caught
+before trusting the output: a hardcoded projection distance that would have made the decay
+table degenerate, and the fact that the two arms need not resolve the same events — a
+projected line can be unreachable while the horizontal at the same anchor is hit — which
+would have made the pooled gap partly a selection artifact. The paired subset is now reported
+alongside and is the honest number.
+
+**No code change.** The app builds horizontal swing levels and has no channel concept; the
+LLM system prompt never mentions trendlines, channels, wedges or triangles either (grep
+verified — the `sloping` hits are the 200D EMA). The value is preventive: a channel overlay is
+an obvious-looking feature request, and this is the measurement saying it would make the level
+layer worse. `docs/research/level-trend-channels.md`,
+`ml-training/level_channel_test.py`. Research-layer only, no redeploy.
+
+### 2026-08-28b — Monthly extremes rejected too; and a variance estimator that hid its own result
+
+User asked for monthly to be tested after the daily-close rejection. Matched control: the
+trailing-W-bar extreme anchored at a NON-month-end bar, same window length — the same object,
+differing only in whether the window ends on a calendar boundary.
+
+| market | arm | gap vs matched | 95% CI | periods+ |
+|---|---|---:|---|---:|
+| crypto | monthly HIGH | +1.68pp | [−0.03, +3.53] | 6/9 |
+| crypto | monthly LOW | **−2.19pp** | [−3.67, **−0.64**] | 3/9 |
+| crypto | monthly CLOSE | −0.68pp | [−1.66, +0.26] | 6/9 |
+| stock | monthly HIGH | −0.62pp | [−1.41, +0.20] | **2/9** |
+| stock | monthly LOW | −0.39pp | [−1.42, +0.58] | 4/9 |
+| stock | monthly CLOSE | +0.95pp | [−0.01, +1.88] | 6/9 |
+
+Five of six NOT SUPPORTED. **The one inconclusive cell fails the pre-declared ship bar on its
+own point estimate** — under +2.0pp, 6/9 not 7/9, opposite sign on stocks.
+
+**Crypto monthly LOWS hold significantly WORSE than a matched non-calendar low.** Both crypto
+extremes sit below even the random-line control. Consistent with the momentum thesis — on a
+24/7 tape a widely-watched extreme is where the stops are.
+
+**The stock month-end close is ~90% an effect already identified yesterday.** A month-end close
+is always an afternoon bar; the control is ~50% afternoon; the +1.70pp afternoon-vs-morning
+effect therefore predicts +0.85pp of the observed +0.95pp, leaving ~0.10pp for the month.
+Crypto decomposes identically via the hour-20 bucket.
+
+**A variance estimator that would have buried its own significant result.** The first run used
+a Kish design effect clustered on (symbol, period). On the sparse monthly arms — ~1,200 events
+over ~675 cells — most cells fell under the minimum-count filter, the between-block variance
+went unstable, and it reported **eff_n of 21 and CIs of ±15pp**, i.e. "hopelessly
+underpowered". A symbol-level block bootstrap gives eff_n ~1,500-2,400 and ±1.8pp, and
+**crypto monthly LOW moves from inconclusive to decisively negative**. Caught before
+publishing. Standing note: a design-effect estimate needs enough events per block to be
+stable; a bootstrap does not.
+
+**Power was stated BEFORE running** (3,846 crypto / 8,578 stock symbol-months against the
+~3,200 eff_n needed for +2pp) along with the verdict rule — CI upper bound under +2.0pp is
+NOT SUPPORTED, a CI spanning it is INCONCLUSIVE, never "no effect". That rule is what makes
+the one surviving cell reportable as inconclusive rather than quietly rounded to zero.
+
+**Eighth level-selection metric to measure flat or inverted.** Standing conclusion:
+*prices the market recently traded at hold ~5-7pp better than prices it has not, and no way of
+choosing which traded price — calendar, structure, ratio or volume — has ever measured better
+than the others.* Research-layer only, no code change, no redeploy.
+`docs/research/level-monthly-extremes.md`, `ml-training/level_monthly_test.py`.
+
+### 2026-08-28 — Daily-close levels rejected: a three-month-old "actionable find" was a control artifact
+
+User asked whether reversals cluster at weekly/monthly extremes. Weekly WAS tested
+(`level_validation_htf.py`, 2026-05-31) — weekly highs are **+0.3pp over random on crypto,
+i.e. noise**; monthly never was. But the same table's headline claim, that **daily closes are
+the strongest level class** and "the one genuinely actionable find", had been sitting
+**NOT YET IMPLEMENTED — pending decision** for three months. Verified it. It does not hold.
+
+The control was random lines 0.5-3.0 ATR from price, so a daily close differed from it in
+**three** ways at once — a visited price, distance 0 at formation, and a day boundary — and
+only the third was the hypothesis. **The same confound that killed the Fibonacci class**
+(Finding 5: fib looked strong until controlled against random ratios in the same legs).
+
+Decisive contrast, which matches all three at once: evaluate EVERY 4H close as a level
+through identical logic, then split on whether its bar is the last of the day. Exhaustive,
+perfectly matched, no sampling noise.
+
+| | daily close | other 4H close | gap | periods+ |
+|---|---:|---:|---:|---:|
+| crypto | 91.36% | **91.62%** | **−0.26pp** | 4/10 |
+| stock | 85.65% | 83.99% | +1.66pp | 10/10 |
+
+**An arbitrary 4H close beats the random control by +6.95pp — more than the daily close
+(+6.69) and more than the 4H swing the app actually uses (+5.13).** All six hour-of-day
+buckets sit in a 0.85pp band with the boundary hour second worst. Pre-declared bar (≥2.0pp
+crypto AND ≥7/9 periods AND same sign both markets) fails on all three.
+
+**The stock gap is real at 10/10 and is not a calendar effect.** By within-session position
+it is the **afternoon bar vs the morning bar** (+1.70pp, reproducing the gap almost exactly)
+— the morning bar carries the open, the gap and the session's peak volatility. Predicted in
+advance that a genuine effect should be *stronger* on stocks, which have a real session
+close, than on crypto, where the boundary is an arbitrary UTC cut on a 24/7 tape. It is —
+and that asymmetry is what identifies the mechanism as the session, not the calendar.
+
+**Seventh level-selection metric to measure flat**, after test-count, flip-role, timeframe,
+Fibonacci ratio, formation volume and volume-at-price. Standing conclusion, now reached from
+a third direction: *prices the market recently traded at hold ~7pp better than prices it has
+not, and which traded price you pick has never mattered.*
+
+Also corrected: every `vs random` figure in Finding 4 rests on a control of **n≈1,750**
+(2σ ≈ ±1.7pp), so the weekly-high-vs-weekly-low ordering inside it was never a ranking.
+
+**Nothing shipped and no production behaviour was wrong** — levels remain swing-pivot-only,
+which this now supports. Research-layer only, no code change, no redeploy.
+`docs/research/level-daily-close.md`, `ml-training/level_daily_close_test.py`.
+
+### 2026-08-27d — Two review rounds on the same day's work: 15 + 15 findings, one of them mine-and-new
+
+Two max-effort reviews of the Phase 1/2 commits. Every finding acted on was verified by execution
+first. The headline is uncomfortable and worth stating plainly: **round one's fix introduced the bug
+round two led with.**
+
+**TP1 and TP2 collapsed onto the IDENTICAL price** — `TP1: $72,330.00 … TP2: $72,330.00 … Viable:
+true`, on 6 of 48 candidate rows, under a comment asserting it was impossible. `tp2MinRR` derived
+from a `tp1RR` that was 0 whenever no LEVEL qualified (always, on the non-wideBand path), so it
+collapsed to `tp2RRBand[0]` = 1.3 — numerically identical to non-wideBand `idealTP1RR` — and both
+anti-collision guards degraded to comparing against `entry.price`. **TP1 is now resolved before
+anything derives from it**, the guards key on the resolved price, and a final ladder assertion runs
+on the FINAL prices rather than trusting how they were chosen.
+
+**The same rewrite silently re-tuned two branches** while calling itself "a re-expression of intent
+rather than a re-tune": non-wideBand TP2 1.25R → 2.5R and counter-trend 1.25R → 1.8R. The old
+fallback was `base * stopScale * atr` with `stopScale = risk/(2·atr)` — algebraically `base/2` in R,
+already stop-invariant — so the equivalence held only on the wideBand cell that was checked.
+`fallbackTP1R`/`fallbackTP2R` are now named constants at the OLD values; only TP1 moved, because its
+old values (0.6R non-wideBand, 0.75R counter-trend) could not clear their own viability bars of 1.0
+and 0.8 **at any stop width, including the 2 ATR floor that predates all of this**.
+
+**`Number('')` is 0, not NaN** — so the `Number(null)` fix closed one hole and left three: `?fee=`,
+bare `?fee`, and `?fee=%20` all still priced at zero cost. `?equity=abc` was worse: NaN serialises as
+JSON `null`, Swift's `positionUsd: Double` is non-optional, so the whole Book failed to decode and
+the LAUNCH tab rendered empty with no error. One strict `num()` parser now covers all three params.
+
+**Six of thirty findings were the same failure mode the commit message itself names** — a threshold
+compared against a quantity whose attainable range was never re-checked after something moved. The
+fee guard, the equity guard, both band intersections, `tp2MinRR`, and the viability bar.
+
+Also fixed: R-to-money used `maxRiskPerTrade` (the CAP) where the row's realised `riskFraction`
+belongs — a 39% overstatement on a crash-cut row, printed directly above the correct number on the
+same card; `totals` described every accepted candidate rather than the rows on screen, and the guard
+added in round one suppressed the correlation warning instead of correcting it (now computed
+server-side over `shown`); `rejected` was served and decoded and rendered nowhere; `OutcomeTracker
+.refresh()` gated the primary content on a secondary fetch; and `structure.id`/`limits.id` did not
+move with their overrides, so the journal recorded two different books identically.
+
+**Two tests could not observe what they were named for.** `expect(src).not.toMatch(/tp2Multiple…/)`
+names a symbol that has NEVER existed in `prompt.ts`, so the test called "the reward:risk ratio is
+NOT changed alongside it" passed unconditionally while this very change moved it. And
+`target-scaling.test.ts` asserted `TP1 R:R >= 0.5` against a real bar of 1.0 on non-wideBand — 2x
+loose, so a `Viable: false` row passed green. Both now run per-branch at each branch's own floor.
+
+**Standing lesson, now twice-earned:** run the real builder on a NON-DEFAULT symbol. Both rounds
+found defects invisible to BTCUSDT, because `envelopeFor` defaults to it and the wideBand numbers
+happen to coincide there. 874/874 green.
+
+### 2026-08-27c — Joint stop × target: rejected, and the reward:risk lever is the bigger one
+
+The test §9 demanded ([[stop-target-joint]], pre-declared at e286e31). Both sides **NOT SUPPORTED** —
+each fails period consistency at **5 of 10** half-year windows, which the pre-declaration named as
+the thing that makes a result a regime finding rather than a geometry finding. Shipped stops and
+targets unchanged.
+
+| | magnitude (bar +0.0200) | periods (bar 6/9) | gross | eff n |
+|---|---|---|---|---|
+| SHORT 2A@1.5R → **1A@5R** | **+0.0340** CI [+0.0132,+0.0559] PASS | **5/10 FAIL** | +0.0692 | 4,444 |
+| LONG 4A@1.5R → **3A@5R** | +0.0186 FAIL | **5/10 FAIL** | +0.0236 | 3,097 |
+
+**The prediction recorded before running was half right, and the wrong half matters.** I expected the
+magnitude bar to fail on both sides; SHORT's passed, clearly, and died elsewhere.
+
+**What the map shows, none of it shipped.** (a) **The R:R gradient DOMINATES the stop gradient and
+nothing had measured it** — at a fixed 2 ATR LONG stop, 0.75R → 5.0R is worth **+0.056R**, larger
+than the entire 2→4 ATR stop-width effect (+0.0362R) that is the vault's best-validated result. Every
+cell improves monotonically in R:R, on every stop, on both entries; the project has been optimising
+the smaller lever. (b) The app's shipped SHORT geometry sits in the **worst region of its own grid**
+(2A@1.5R = −0.0149; the whole 2 ATR row is negative until R:R 3.0). (c) **The scanner's 1 ATR @ 5R is
+the single best SHORT cell** (+0.0191) — the two geometries in the product are the best short cell and
+a poor one, which makes reconciling them a decision rather than a tidy-up. (d) SHORT **pullback entry
+is negative in every cell** (−0.0220 to −0.0526) against a market entry reaching +0.0191,
+independently reproducing the 2026-08-26 finding that entry discipline inverts on SHORT.
+
+**A defect in the shared payoff module, found by running it.** `_payoff.align_arms` de-duplicated the
+KEY set and then LEFT-merged each arm undeduplicated, so one repeated `(symbol, timestamp)`
+multiplies the row set by 2 **per arm** — `2**n`. `csv_exports_v14/AVAXUSDT.csv` has exactly one, at
+2026-05-06 00:00:00. **Silent in both directions, which is what hid it:** at this test's 98 arms it is
+an instant `SIGKILL` (exit 137, no traceback — it reads as a hang, and cost three restarts before I
+checked the exit code); at the 12 arms `phase3_stop_width_test.py` uses it does not crash at all, it
+would simply weight one bar 4,096 times. **The shipped stop-width result was re-run with the fix and
+reproduces EXACTLY** (+0.0362R, CI [+0.0245,+0.0484], 10/10, 55,752 bars, all five criteria PASS), so
+that finding is clean and the defect never reached a published number. Duplicates are now dropped and
+REPORTED rather than silently multiplied.
+
+### 2026-08-27b — LONG setups have been unemittable since the 4 ATR stop shipped (Phase 2)
+
+Phase 2 opened on the risk engine and the first thing it found was a live outage. **`stop-width.md`
+raised the LONG stop floor to 4 ATR on 2026-08-26 — the single best-validated result in the vault,
+10/10 periods across a bear and a bull — and in doing so it silently made every ordinary LONG setup
+impossible to emit.**
+
+The mechanism is arithmetic, not judgement. `viable` requires `TP1 distance / risk >= 0.5`, and all
+three TP1 variants cap `tp1ATRBand` at **2.0 ATR**, so `finalTP1RR <= 2 / stopAtr` unconditionally.
+At a 4 ATR floor that ceiling IS the threshold, so `Viable: true` survives only at a measure-zero
+point. `prompt-system.json` says in three places *"Emit a setup ONLY if a Viable risk-defined level
+exists … Otherwise empty array"*, so the JSON block came back empty. Only a mandate window
+(`HIGH_CONVICTION_WINDOW` / `MIXED_HIGH_ML_WINDOW`) could still force one through.
+
+Measured on the real BTC tape through `test/helpers/envelope.ts`: **LONG 0 of 3 candidates viable,
+SHORT 1 of 3.** TP1 R:R came out 0.18 / 0.26 / 0.35.
+
+**The code did the opposite of what its own research says it does.** `stop-width.md:44`: *"The
+reward:risk ratio is NOT changed — widening the stop widens the target with it, which is what was
+tested."* The stop widened; the targets are absolute ATR distances tuned when the floor was 2 ATR,
+so reward:risk HALVED instead of holding. This is exactly the corrected spec's §9 — **stop and
+target INTERACT, and a change to one voids measurements of the other** — going unapplied to the
+change that motivated writing it down.
+
+**Fix: `stopScale = max(1, stopAtr / 2)` multiplies every ATR-DISTANCE band and both ATR fallbacks.**
+The R:R bands are already stop-relative and are untouched, as are the level-spacing tolerances. It
+is a UNITS fix, not a re-tune: exactly 1.0 at a 2 ATR stop, so every band keeps the value it was
+tuned with, stocks (1.5 ATR floor) are unaffected by the clamp, and the ATR fallback's reward:risk
+becomes invariant at the 0.75 it always had by construction. After: **LONG 3/3 viable, SHORT 3/3**;
+TP1 R:R 0.60/0.75/0.75, TP2 1.50/1.50/1.69 — the ~1.25-1.5 structure that was actually tested. The
+SHORT row sitting exactly on its 2 ATR floor is byte-identical, which is the no-op property holding.
+
+**Fourth instance of this project's recurring defect class** — after the 2026-08-22 calibration
+ceiling, the `conformal_abstain` flag that was declared and never assigned, and `continuation < 3`
+which had never once fired satisfiably on a stock. The shared fingerprint is now unmistakable: **a
+threshold compared against a quantity whose attainable RANGE was never re-checked after something
+moved.** A 0% or 100% rate is the tell, and asserting it is cheap. `test/target-scaling.test.ts`
+pins the invariant behaviourally rather than pinning the numbers, so a future band re-tune cannot
+reintroduce it. 870/870 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-27 — Phase 1 of the redesign: the scanner replaces the symbol-first landing screen
+
+The app opens on **Scan** ("is there anything worth doing right now?") instead of a symbol
+switcher. `ChartTabContent` becomes the **Symbol** tab; `NavigationCoordinator.Tab` names the tags
+and `symbol` KEEPS 0, so a tapped push still lands on the symbol screen rather than being silently
+redirected by a renumbering. New: `Views/OpportunitiesView.swift`, `Views/TradeCardView.swift`,
+`Utils/OpportunityCopy.swift`. Design: `design/trade-opportunities/`.
+
+**`docs/redesign-spec-corrections.md` is new and is the governing document for this whole
+programme** — it overrides the base spec wherever they disagree, and it had no durable home before
+today. Four of its ten defects are one kind: a measured number applied outside the population it
+was measured on, the same class as the 2026-08-25 entry-discipline retraction. What it changed
+here: §15 deletes the weighted 0-100 score, so the trade card is a CHECKLIST and nothing is summed;
+§20 ranks on net expected R shown in R; §2E makes the PROVISIONAL regime label a rule rather than a
+footnote; §6's short edge is **mood-conditioned**, so in greed the answer line says "but not in
+this mood" rather than presenting it as available. A5's condition ("at move likelihood 55%+")
+travels with those numbers wherever they appear — they are not general short expectancy.
+
+**Worker: additive fields on `/opportunities`** (865/865 green) — `floorR`, `scanned`, `nearMiss`,
+`fearGreed`, `structure`, `crashReadings`, per-row `feeBurdenR` / `grossExpectedValueR` /
+`branches`, `model.baseWinRate`. Two were computed and thrown away: the closest sub-floor candidate,
+and the fee — 0.081R against a 0.154R gross is **52% of the edge** and had never been displayed.
+`crashReadings` exists because warnings fire on the MARGIN over the 41% base rate, so on an ordinary
+day there are none, and a gauge that renders nothing most days teaches the user it is broken.
+`AssetInput.features` was USED but never DECLARED, so it typed as `any` on the one input that
+decides both the excursion curve and the crash overlay. **Needs a box redeploy**; until then the app
+renders the subset the current box serves.
+
+**The 2026-08-25 contradiction is reopened deliberately, with the reconciliation that was missing.**
+That entry deleted the book's trade cards because it proposed an ADA SHORT beside an ADA LONG SETUP.
+Three things are different: `/opportunities` now runs the real envelope precheck and drops anything
+the analysis would auto-FLAT; the two are no longer on the same screen; and where they still differ
+on direction the row says so. `DrawdownRiskCard` is deleted rather than left compiling — the gauge
+owns those warnings, and the HIGH message renders verbatim because `crash.ts` builds the episodic
+caveat into it.
+
+**Three defects found by installing and screenshotting, none of which a build catches:** a symbol
+switcher and a "BTC ⌄" title across the top of the one screen in the app that is not symbol-scoped;
+"+0.050R" for a threshold, which is precision the number does not have; and green on a target price
+and on a +5R branch payout, breaking the colour law that keeps green meaning money that already
+exists. `WorkerOpportunitiesService.demoBook()` renders the rare populated state from worker-shaped
+JSON — decoded, not constructed, so it asserts the DTO against the real key names. **It needs
+`-configuration Debug`: the install command documented above builds Release and strips `#if DEBUG`
+silently.**
+
+### 2026-08-26c — Envelope tests converted from source regexes to behaviour (Phase 0.4)
+
+The four files that asserted on `prompt.ts` SOURCE TEXT — `continuation-gate`, `stock-gates`,
+`divergence-demoted`, `entry-discipline` — now execute the envelope through
+`test/helpers/envelope.ts` instead. Blocking work: those regexes pin an implementation spelling, so
+they pass when behaviour is wrong, fail when it is right but written differently, and would fight
+both the Phase 3 gate re-decisions and the Phase 1.8 `evaluateEnvelope` extraction.
+
+**What behavioural coverage bought immediately:** the ladder bug (2026-08-26b) surfaced on the
+helper's first run, and writing the macro tests turned up that **`NEARBY` is a 2-hour band**
+(`hoursUntil <= 2 ? IMMINENT : <= 4 ? NEARBY : <= 12 ? UPCOMING`) — narrow enough that a probe at
+2h and 5h misses it entirely, which is how it stayed untested. All four macro tiers are now pinned.
+
+**`BIAS.counterTrendPullback` is the one that matters for future work.** The Kill Conditions block is
+wrapped in `if (oneHOpposes && oneH)`, so `ANY_KILLED` — and therefore *every* kill condition — only
+exists on counter-trend-pullback bars. Nothing renders it otherwise; `Kill Conditions:` is simply
+absent from an aligned prompt. **Any measurement of a kill rule that evaluates it on every bar is
+scoped to a population an order of magnitude larger than the rule's own domain**, which is exactly
+what Part 7 did to both of its kill rows.
+
+**Evidence status is now stated in each file** rather than implied: Part 6's and Part 8's EV arms are
+UNSUPPORTED (retracted column), Part 8's LONG_CONFIRMATION arms are **not re-runnable at all** without
+an export change (the live day-over-day daily-RSI delta is exported under no name), and Part 9's
+stock degeneracy + crypto coverage facts survive because they are code and distribution facts rather
+than payoff claims. The tests pin CURRENT behaviour so Phase 3 re-decides deliberately — they are not
+a claim any removal was proven right.
+
+Source-level assertions are kept only where the property genuinely is source: absence of dead code,
+and exact prompt WORDING. 776/776 green.
+
+### 2026-08-26b — The conviction ladder skipped a rung: every moderateBlock was inert at high ML
+
+Found on the FIRST run of the new behavioural test helper, which is the argument for the helper.
+
+```ts
+// before
+autoFlat.length ? 'FLAT' : highBlocks.length === 0 ? 'HIGH' : moderateBlocks.length === 0 ? 'MODERATE' : 'LOW'
+```
+
+`highBlocks` cap conviction at MODERATE and `moderateBlocks` cap it at LOW — their own labels say so
+(`earnings_in_5d_cap_MODERATE` vs `earnings_in_1d_cap_LOW`). But the expression tests `highBlocks`
+FIRST, so **any moderateBlock was silently ignored whenever no highBlock fired** — precisely the
+high-ML case where a cap matters most.
+
+Measured on the real fixture: a stock **one day from earnings** reported `max_allowed: HIGH`
+alongside its own `earnings_in_1d_cap_LOW`. The model is instructed *"You may NOT output a tier above
+max_allowed"*, so the operative half was the wrong one — and **the earnings 0-2d gate is the single
+condition in this system validated on its own stated mechanism** (7.08× the baseline gap rate, 8/8
+periods). It was being overridden to the TOP tier. `continuation<2` (crypto SHORT) and
+`treatment_long_confirm_PARTIAL` were equally inert.
+
+Fixed to a monotone ladder: `FLAT → LOW → MODERATE → HIGH`, checking `moderateBlocks` before
+`highBlocks`. If MODERATE is disallowed, HIGH cannot be allowed.
+
+**`test/helpers/envelope.ts` is the new behavioural seam.** It builds a REAL prompt from the real BTC
+tape and parses the envelope's actual verdict — all four block lists plus `max_allowed`, where the
+old tests were regexes over `prompt.ts` SOURCE TEXT that never executed the envelope at all. Those
+regexes pin an implementation spelling: they pass when behaviour is wrong, fail when behaviour is
+right but written differently, and during the 2026-08-25 corrections they fought every change six at
+a time. The parser throws if the envelope block is missing, so a rename fails loudly instead of
+turning every assertion vacuous. `test/envelope-ladder.test.ts` pins the monotonicity invariant as a
+property across seven states rather than as one example. 767/767 green.
+
+### 2026-08-26 — Phase 0: my retraction was wrong too; and the image build never ran the tests
+
+An adversarial design review of the remediation plan caught the retraction committing the same class
+of error it was written to fix. **`close[base+3]` and `open[base+4]` are the same instant** (verified
+at 2.79e-07), so the first future bar is `base+4` and scans must run `arange(0, H)` from it. My
+re-run used `arange(1, …)` — an hour late, discarding the highest-hazard bar of every trade.
+
+| | as shipped (leaky) | my retraction | **true** |
+|---|---:|---:|---:|
+| SHORT gain | +0.0660 (9/9) | −0.0296 (0/9) | **−0.0123 (2/9)** |
+| LONG gain | +0.0919 (9/9) | +0.0009 (7/9) | **+0.0216 (8/9)** |
+
+**Entry discipline is direction-dependent**: it inverts on SHORT and survives on LONG at 8/9 periods.
+Two caveats keep it un-shipped — both LONG arms are NEGATIVE in absolute terms (a pullback makes a
+losing proposition less bad), and the period count is on non-independent samples (72h hold at 4h
+spacing ⇒ ~18 rows share each outcome). The prompt now states the corrected numbers and that **no
+entry-method rule is in force**.
+
+**The number has now been hand-computed three times and produced three answers** — +0.0919, +0.0009,
++0.0216 — each reported confidently. The defect is not any one calculation; it is that a load-bearing
+number was computed in a throwaway script at all. **No further one-off simulation may justify a
+production change.**
+
+**The real hole, and it is the important part of this entry:
+`.github/workflows/build-box-image.yml` had NO test step.** It checked out, built and pushed to
+`:latest`; the 758-test suite only ever ran on a developer machine, by choice. `CLAUDE.md` documents
+a `predeploy` hook, but that belongs to `wrangler deploy`, which this box does not use. **That is the
+channel through which every broken prompt reached production this week.** A `test` job now gates
+`build-and-push` via `needs:` — a red suite means no image.
+
+Also swept from live prompt text: the reason string `aligned_bearish_stock_SHORT_measured_-0.11R`
+(the number came from the retracted column; the gate stands for now on the anchor-independent fact
+that its escape hatch fired 7 times in four years) and the earnings claim "43% of stops fill BEYOND
+the stop" (same anchor). The earnings **gap rates** survive — they compare gap frequency near vs far
+from earnings, which a few bars of window shift does not move.
+
+Full remediation plan: `~/.claude/plans/jolly-crunching-crown.md`. 758/758 green.
+
+### 2026-08-25j — PARTS 4-5 RETRACTED: entry discipline was a 4-hour lookahead
+
+A second max-effort review attacked the MEASUREMENT code rather than the shipped code. Six findings,
+**five confirmed by re-running — and one invalidates the headline finding of the whole programme.**
+
+**The defect.** `level_entry.py` starts its fill window at `base + 1`, where `base` is the hourly bar
+opening at the feature row's timestamp T. But that row's `price` is the **CLOSE of the bar spanning
+T..T+4h** — verified by nearest-match against the klines, offset **+3** fitting at 4.6e-04 against
+2.4e-03 for the next best. The row is evaluated at T+4h; the simulation filled from T+1h. **A
+pullback that had already happened inside the signal bar counted as a fill.**
+
+| | market | pullback | gain | fill | periods+ |
+|---|---:|---:|---:|---:|---:|
+| **as shipped** SHORT | −0.0036 | +0.0624 | **+0.0660** | 88.3% | **9/9** |
+| **corrected** SHORT | −0.0001 | −0.0297 | **−0.0296** | 76.5% | **0/9** |
+| **as shipped** LONG | −0.0709 | +0.0210 | **+0.0919** | 92.2% | **9/9** |
+| **corrected** LONG | −0.0670 | −0.0661 | **+0.0009** | 79.6% | 7/9 |
+
+**It fully inverts on SHORT and vanishes on LONG.** The fill-rate drop 88%→76% is the leak's
+fingerprint — a tenth of all "fills" were prices the strategy could never have traded.
+
+**Removed from production:** the `ENTRY DISCIPLINE` block in BOTH markets' `prompt-system.json`
+(replaced by an explicit retraction forbidding the model from citing the withdrawn numbers), and the
+computed `SHALLOW PULLBACK BAND`. **Now unsupported:** Part 10's chase removal (argued partly as
+"ENTRY DISCIPLINE forbids chasing, so the guard is moot"), Part 8's stock replication (same script),
+and every "40-60× the gating layer" claim.
+
+**Four other confirmed measurement defects, each of which drove a live change:**
+`chase_stop_test.py` selects the day CONTAINING t — **83.3% of bars read their own in-progress day**
+(0% at 00:00, 100% at every other 4H boundary), which is what removed the chase auto-FLAT;
+`envelope_sweep.py` reconstructed `funding_supports_counter` as the **exact logical complement** of
+the live rule (`sign(funding) == −bias` vs `prompt.ts:868`'s `== sign(bias)`, disjoint sets), which
+is what deleted `killFunding` from `ANY_KILLED`; `envelope_whole.py` used
+`cont = |momentumAlignment| ∈ {0,1}`, so both tier gates fire on **100.0000%** of rows and Part 2's
+arms collapse to {LOW, FLAT} — **that is the "envelope NOT VERIFIED" verdict the entire Parts 6-10
+programme was built on**; and `level_entry_controls.py`'s "CHASE" arm keeps the pullback fill test
+(`low <= entry`) with the entry ABOVE price, so it fills instantly — a market entry with forced
+slippage, which produced the −0.129R/−0.195R numbers shipped in both prompts.
+
+**Part 7 had already flagged `momentumAlignment` as the wrong variable** ("PROXY BROKEN — not
+tested"). That correction was never propagated back to Part 2.
+
+**Fixed (certain, shipped-and-false):** the ML Persistence ladder hardcoded a **54%** base — crypto's
+— in a block with no market gate, while a stock h72t25 model ships. Real base: **54.1% crypto, 60.8%
+stocks**, so a stock at 60-69% printed "ABOVE AVERAGE" while at or below its base. Now per-market.
+
+**Deliberately NOT reverted:** the gate removals are *unsupported*, not *proven wrong*, and
+re-adding gates whose own evidence is equally broken would be a second unvalidated change.
+
+**The lesson.** Five measurement defects, all reaching production, none caught by tests — because the
+worker tests are source-text regexes over `prompt.ts` and **the research layer has no parity harness
+at all**, while the ML pipeline has one asserting worker↔backtest agreement at 1e-7. Every defect was
+found by re-running a script or hand-diffing a reconstruction against `prompt.ts`. **New rule: any
+reconstruction of a live rule must be asserted against that rule on shared inputs before its result
+is used, and any simulation indexing price paths from a feature timestamp must state and test which
+bar that timestamp denotes.** 758/758 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-25i — Part 11 RETRACTED same day: the shipped gate did not follow from the measurement
+
+A max-effort review of `83e56a5` returned **15 findings**; three are disqualifying. I verified each
+myself before acting. **Code reverted (765/765 green); the measurements stand, the implementation
+built on them did not follow from them.**
+
+1. **Measured unconditional, shipped conditional.** Control 2 gates EVERY bar and reads the SHORT
+   payoff — `m = w & (d.ml >= t)`, no bias filter anywhere. So 41.3% is 41.3% *of all bars*.
+   Production applied the cut only where `alignedDirection === 'SHORT'`, whose ML runs lower —
+   realised selectivity **~24%**, inside the band this same research calls *worse than no gate*.
+2. **The transfer argument was a cross-model artifact and its mechanism was backwards.** I justified
+   coverage-over-absolute with "0.55 admits 41.3% of backtest bars but 36.3% of live ones". The
+   script fits a **local LightGBM**; production is **v14 with its embedded isotonic** — different
+   models, so the gap says nothing about base rates. And a higher base rate pushes predictions UP,
+   admitting MORE above 0.55, not fewer. **The shipped artifact was never the tested artifact:**
+   Control 2 swept ABSOLUTE thresholds, and the pre-declared rule had returned ABSOLUTE.
+3. **It blocked LONG on the best LONG bars.** Scoped to SHORT but pushed to `autoFlat`, which emits
+   "Output NO SETUP regardless of any other reasoning". Blocked bars average **+0.0725R on LONG vs a
+   +0.0107R all-bar mean, 6/8 periods** — the block-the-best-bars signature used four days earlier
+   to kill `biases_MIXED`. I shipped the exact defect this research was written to eliminate.
+
+Each of these was independently sufficient: the **three-verdict contradiction re-created one commit
+after fixing it** (raw-scale auto-FLAT beside "NOT auto-FLAT on ML alone" beside "POSITION SIZING:
+0.5x"); the **FRAMING hatch silently killed** (`isQualityGateReason` doesn't match the new prefix —
+the 2026-07-24 week-of-silence failure); the **notify precheck never receiving the cut**, destroying
+its zero-drift-by-construction property; **no `isCryptoSym` guard**, so a 24-crypto-symbol
+measurement gated 159 stocks whose calibration data is too thin to fit a curve at all; and a shipped
+comment citing **274,079** opportunities when the run held **191,935**.
+
+**The lesson:** I answered "which parameterization?" and then shipped an artifact no arm had
+evaluated, on a subpopulation no arm had measured, using a gate class (`autoFlat`) whose blast radius
+I never checked. Fifteen findings is not a patch list — it is a change that was not ready, and the
+ten prior parts of `envelope-rules.md` exist precisely to stop rules like it from shipping.
+
+**What survives and is worth redoing properly:** a fixed ABSOLUTE `ML >= 0.55` applied to ALL bars
+beats no-gate on the SHORT payoff by **+0.0257R at 7/8 periods**. Re-testing must condition the
+measurement on the population the gate would actually govern, use `highBlocks` rather than
+`autoFlat`, scope to crypto, and pass the value through the precheck.
+
+### 2026-08-25h — Part 11: no, don't recalibrate — the live layer already does. The THRESHOLDS were the bug
+
+User asked "do we need to recalibrate?" after seeing the app show ML 45 while the analysis reasoned
+on 60. **No.** `src/calibration.ts` refits the PAV curve from `ml_calibration` D1 on every use over
+a rolling 90 days — it is self-updating and it already absorbed the drift; the 60% IS that
+correction. And no retrain either: the pre-declared 2026-08-14 ladder says compressed-but-monotonic
+→ recalibrate, and the curve is monotone (one 0.6pp wiggle on n=3,459/1,565) with a real ~30pp
+spread from bottom bucket (41.6%) to top (71.4%).
+
+**What actually broke: recalibrating moved the SCALE while the cutoffs on it stayed fixed.** Live
+base rate is **58.3%** against v14's **50.5%** training base, so:
+
+| gate | needs raw | fires on |
+|---|---:|---:|
+| ML auto-FLAT (calibrated < 50) | < 30.3% | **8.0%** of bars (was meant to be 45%) |
+| FAVORABLE (calibrated ≥ 60) | ≥ 44.1% | **66.0%** of bars |
+
+**A ~5× loosening nobody decided.** Same defect class as the crash band, the persistence ladder and
+the continuation gate — absolute thresholds against a base rate that moved.
+
+**Fitting the threshold destroys it.** Walk-forward parameter selection (fit on earlier periods,
+apply to held-out) loses to NO GATE in all four cells: argmax chased slices admitting **0.2-4.5%**
+of bars, one returning **−0.5342R** out of sample, and the coverage arm kept converging on q=1.00 —
+the optimizer choosing "no gate" itself.
+
+**A FIXED, never-fitted gate works — on SHORT only:**
+
+| gate | coverage | SHORT vs no-gate | periods+ | LONG vs no-gate |
+|---|---:|---:|---:|---:|
+| ML ≥ 0.50 | 52.0% | +0.0177 | 7/8 | −0.0175 |
+| **ML ≥ 0.55** | **41.3%** | **+0.0257** | **7/8** | −0.0247 |
+| ML ≥ 0.65 | 20.1% | **−0.0044** | 3/8 | −0.0213 |
+
+First ML gate configuration in the vault to clear the standing bar against a **no-gate** control
+rather than against the envelope. LONG fails at every threshold — the **sixth** direction-dependent
+envelope condition. And thresholds above ~30% coverage are WORSE than no gate, which puts the
+notify threshold (calibrated 65) past the point where gating stops helping.
+
+**Shipped as SELECTIVITY, not as a number**, because the transfer is quantified: `0.55` admits 41.3%
+of backtest bars but only **36.3%** of live ones, and reproducing the measured selectivity needs raw
+**≥ 0.479** today. New `coverageCut()` derives the cut from the live prediction distribution each
+run (reusing `fetchLiveCalBuckets`, no extra query), so it cannot drift again. The coverage is FIXED
+at 0.41 and must never be re-optimised — that is what the walk-forward arms proved destroys it.
+**LONG keeps its existing loose floor**: the accidental ~8% turns out to be about right for a side
+where no threshold helps, an accident that landed on the right answer and is now kept deliberately.
+
+Regime caveat recorded as for `alignment_not_full` and `continuation`: the window is a crypto bear
+and SHORT is the better side ungated (+0.1028 vs +0.0139). 7/8 across both directions of that regime
+is strong, but the mechanism may be regime. 770/770 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-25g — Part 10: the chase guard is noise, and a tighter stop makes entry discipline MORE valuable
+
+Two questions a live BTC analysis raised. 274,079 opportunities, 24 symbols, both pre-declared at
+ce81648 with predictions recorded in advance. **One prediction held, one was wrong.**
+
+**Q1 — the chase guard earns nothing, at EITHER entry style.** Reconstructed faithfully from
+`prompt.ts` (with `intoLevel` and CVD missing from the feature set, which can only make it fire
+LESS, declared up front):
+
+| entry | SHORT lift | LONG lift |
+|---|---:|---:|
+| MARKET | −0.0005 (4/9) | +0.0022 (5/9) |
+| **PULLBACK** | −0.0017 (3/9) | −0.0005 (4/9) |
+
+Noise in all four cells; the robust `stretch>=2` arm is **INVERTED on LONG** (−0.0067, 3/9). This
+does not contradict Part 4, it narrows it: Part 4 rehabilitated the guard because chase bars punish
+the **CHASING** arm (−0.129R/−0.195R at 0/9), which is still true and now **moot**, because
+`ENTRY DISCIPLINE` forbids chasing outright. The guard defended a move the app can no longer make
+while blocking 27% of bars from producing the best action in the system.
+
+**`chase_into_extended_aligned_trend` REMOVED from auto-FLAT. The READING stays** — the loud
+CHASE/EXHAUSTION line, the pullback directive, the Risk Map instruction are untouched. Same
+treatment as divergence in Part 6: the reading survives, the gate does not.
+
+**Q2 — the entry edge does not merely survive the app's tighter stop, it GROWS. My prediction was
+wrong.** TP2 fixed at 2.5 ATR, fees scaling with the stop:
+
+| stop | SHORT mkt → pullback | gain | LONG mkt → pullback | gain |
+|---:|---|---:|---|---:|
+| **1.25** (≈ the app) | −0.0247 → **+0.1029** | **+0.1276** | −0.1515 → **+0.0194** | **+0.1710** |
+| 2.00 (researched) | +0.0023 → +0.0684 | +0.0661 | −0.0775 → +0.0165 | +0.0940 |
+| 3.00 | −0.0011 → +0.0400 | +0.0411 | −0.0490 → +0.0102 | +0.0591 |
+
+**9/9 periods at every stop, both sides.** I predicted the gain would shrink as the stop tightened;
+it roughly **triples** from 3.0 to 1.0 ATR. The mechanism is plain in hindsight: entering 0.25 ATR
+better is 12.5% of the risk distance at a 2.0 ATR stop but **20% at 1.25**, so a tighter stop makes
+the entry price worth more. The pullback arm barely moves while the market arm collapses.
+
+**The absolute level answers what the pre-declaration flagged as most serious:** at the app's
+geometry the pullback arm is positive on both sides, so the shipped trade is profitable — and a
+MARKET entry there is **−0.15R on LONG**, making "never enter at market" considerably more important
+than Parts 4-5 implied, not less.
+
+**The product consequence is the point.** A chase-HIGH bar previously computed the pullback band,
+told the user to wait for it, and emitted `[]` — while `index.ts:3443` monitors only
+`kind='setup' AND state='pending'`, so a FLAT row was never watched. The app named a price 0.33%
+away with no mechanism to say it arrived. It can now emit a CONDITIONAL setup at the band, which
+registers, gets monitored by the cron, and fires the entry-zone push.
+
+Two follow-on cleanups: the catalyst FRAMING line keyed on `autoFlat.includes('chase_...')`, now
+permanently false, so it was retargeted to the chase READING and its "Still output NO SETUP" tail
+removed. `chaseUnguarded` on the MIXED mandate is **deliberately kept** — Part 10 tested the reading
+as a bar FILTER, not as a suppressor of a rule that FORBIDS declining, and those are different
+questions. 760/760 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-25f — Part 9: `continuation` had never once fired satisfiably on a stock
+
+Closes the last testable envelope condition, and finds a defect by reading the code rather than
+running anything. `envContinuationCount` sums exactly **three** 4H signals — volume confirmation
+(fires 5%), EMA stack (50%), and funding support. Signal 3 needs `derivatives`, and `index.ts:492`
+is `isCrypto ? fetchDerivativesEnrichment(...) : Promise.resolve(null)`.
+
+> **P(count = 3) is 0.87% on crypto and 0.0000% on stocks.** `continuation < 3` fired on **100.0% of
+> stock bars** — HIGH conviction has been structurally unreachable for the entire stock universe
+> since the rule shipped.
+
+**Third unreachable-gate defect here** (after the 2026-08-22 calibration-ceiling mandate and the
+`conformal_abstain` flag that was declared and never assigned). The shared fingerprint: **a threshold
+compared against a quantity whose attainable RANGE was never checked.** A 0% or 100% fire rate is the
+tell, and asserting it is cheap.
+
+| condition | side | fires | lift | periods+ | verdict |
+|---|---|---:|---:|---:|---|
+| `< 3` | crypto SHORT | 99.1% | **+0.1345** | 7/9 | **FAILS coverage** — 0.87% kept vs a 20% floor |
+| `< 3` | crypto LONG | 99.1% | −0.0981 | 3/9 | INVERTED |
+| `< 2` | **crypto SHORT** | 77.5% | **+0.0303** | **6/9** | **EARNS IT** (22.5% kept) |
+| `< 2` | crypto LONG | 77.5% | −0.0284 | 3/9 | INVERTED |
+| `< 2` | stocks | 97.4% | +0.014 / +0.019 | 3/9, 7/9 | fails — 2.56% coverage |
+
+**The `< 3` SHORT lift is the largest number in the vault and is deliberately NOT adopted** — 2,523
+kept bars is precisely the thin-slice trap the coverage floor exists to catch, and Part 3 was already
+burned by an ADOPT carried by one fold. Action: **`< 3` removed entirely; `< 2` scoped to crypto
+SHORT**, the same direction-scoping as `alignment_not_full` and for the same reason.
+
+**The Part 9 prediction was stated in advance and held.** Part 9 declared before looking that
+`continuation` should be *"inverted or noise on LONG"* per the Part 2 ATR-normalisation mechanism.
+LONG measured inverted on both thresholds at 3/9. Fifth condition to behave this way, and the first
+where the mechanism **predicted** rather than merely explained.
+
+**A correction to my own Part 8 write-up.** It claimed the earnings gate "delivers 100% of its
+theoretical maximum" lift. True but **tautological** — `lift ≡ fire_rate × penalty` is an algebraic
+identity for every gate. The non-trivial statement is what that implies about the BAR: a +0.02R lift
+bar silently demands `penalty ≥ 0.02 / fire_rate`, i.e. **0.93R at 2% coverage and 1.67R at 1.2%** —
+standards no realistic guard meets. The Parts 1-7 bar is only meaningful above ~20% coverage.
+
+**Retroactive re-check of every sparse condition: nothing re-opens.** `counter_move_volume_exceeds`
+survives on a statistic that could have overturned it (penalty +0.005 SHORT at 4/9, −0.033 LONG).
+`funding_supports_counter` was flagged by my re-open rule and **should not have been** — the rule
+omitted a sparsity requirement, and at 29.2% coverage the lift metric expresses that condition fine
+(+0.0132, simply below the bar). Recorded as a bug in the criterion: a "finding" from it would have
+been the fifth near-miss artifact in this document.
+
+**Notable behaviour change:** removing `continuation < 3` makes HIGH conviction reachable on stocks
+for the first time. Stock conviction is now governed by the remaining blocks (LONG-only alignment,
+ML_WIN, macro, news, earnings) — the intended design, which the unreachable gate had been masking.
+
+**The envelope after nine parts.** *Measured-positive:* ML thresholds, the chase guard,
+`alignment_not_full` (LONG), `continuation < 2` (crypto SHORT), the aligned-bearish stock SHORT ban,
+and all three earnings windows. *Exogenous guards kept on principle:* macro ×3, news conflict, data
+staleness. *Inert but harmless:* the volume kill, the 1H-opposes downgrade, `crypto_bear_regime`,
+`long_confirm PARTIAL`. *Removed across Parts 1-9:* `biases_MIXED`, `alignment_not_full` on SHORT,
+both divergence rules, `funding_supports_counter`, `conformal_abstain`, `treatment_long_confirm_FAIL`,
+the stock short-gate escape hatch, `continuation < 3`, and `continuation < 2` on LONG and stocks.
+
+**17 of ~20 conditions are now directly tested.** 744/744 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-25e — Part 8: the "untestable" stock gates were testable, and earnings is the first condition to PASS
+
+Part 7 filed four conditions as untestable — *"stocks only; no stock intraday paths in
+`vision_backfill`"*. **That described a directory, not a data gap.** The stock hourly bars have been
+in the box's own candle archive since **2019-01-07** (AAPL 13,063 bars, deeper than any crypto
+symbol), and a 1.0 GB snapshot of that archive is sitting in the working tree. **159 symbols,
+487,155 opportunities, joining at 97.6%** — no tunnel, no `/history` fan-out, no new data source.
+**Second time in two days that "untestable" meant "I did not look."** The rule this earns: name the
+specific missing data and where it would come from, or it is not a data gap.
+
+**The entry finding replicates out of sample.** Parts 4-5 measured entry discipline on crypto only:
+
+| entry | SHORT | LONG |
+|---|---:|---:|
+| at MARKET | −0.0794R | +0.0562R |
+| **0.25 ATR PULLBACK** | **−0.0333R** | **+0.0810R** |
+
++0.046 / +0.025 against crypto's +0.066 / +0.092. Same sign, same order, different asset class.
+**The only finding this project has that replicates across markets**, and still ~20-40× the gating layer.
+
+**A simulator limitation I built in, found here, corrected.** Every payoff script in Parts 1-7
+prices a stopped trade at **exactly −1R**. Real stops do not fill there when price gaps through them
+overnight — so the EV arm could not see gap damage *by construction*, and its earnings null was an
+artifact rather than evidence. Re-priced at the honest fill (the breaching bar's OPEN):
+
+| window | gapped through | idealR | **realR** | cost of the assumption |
+|---|---:|---:|---:|---:|
+| LONG 0-2d | **42.7%** | +0.0296 | **−0.1565** | **−0.186R** |
+| LONG 3-7d | 30.6% | +0.0864 | −0.0222 | −0.109R |
+| LONG >14d | 16.8% | +0.0833 | +0.0629 | −0.020R |
+| SHORT 0-2d | **44.6%** | −0.0100 | **−0.6933** | **−0.683R** |
+
+The average stopped SHORT within two days of earnings loses **2.43R against a 1R budget**. **Parts
+1-7 stand**: the same measurement on crypto gives **0.3% gap-through, −0.0013R across all stops** —
+a 24/7 tape has no session boundary to gap across. Stocks-only correction.
+
+**Earnings gates: the first envelope condition validated on its OWN stated mechanism.** The code
+says *"gap risk, stop will not hold"* — a variance claim, and by the Part 6 principle an EV null
+cannot refute an exogenous-event guard, so it was tested directly. Baseline P(gap ≥ 2 ATR) = 7.4%:
+
+| window | P(gap ≥ 2 ATR) | ratio | periods+ |
+|---|---:|---:|---:|
+| 0-2d | 0.5217 | **7.08×** | **8/8** |
+| 3-7d | 0.5181 | **7.03×** | **9/9** |
+| 8-14d | 0.3680 | **4.99×** | **9/9** |
+
+Three to five times the pre-declared 1.5× bar, every period — **including 8-14d, which the
+pre-declaration called "least plausible on its face"** and which survives because a multi-day hold
+opened that far out still straddles the report. All three kept, with the measured numbers now
+**in the prompt**: "gap risk" as a bare phrase invites the model to weigh it against a chart pattern;
+"43% of stops fill beyond the stop" does not.
+
+**An arithmetic correction to the harness.** The earnings arms still score "noise" on global lift
+(+0.006). That is the metric's ceiling, not a verdict: max lift is `fire_rate × (kept − blocked)`,
+and for LONG 0-2d that is `0.0215 × 0.213 = 0.0046` against an observed **+0.0046** — **100% of its
+theoretical maximum**. The Parts 1-7 bar is only meaningful above ~20% coverage; below it, the right
+statistics are per-blocked-bar penalty and period consistency.
+
+**Two stock gates changed.** `treatment_long_confirm_FAIL` **removed** — 4/9 periods, +0.0007R
+global, **−0.0070R on the LONG bars it governs**: a hard auto-FLAT with no benefit and a mild
+inversion, the same profile as `biases_MIXED`. Its PARTIAL cap is **kept** (+0.0074R, 6/9, and a
+soft cap costs far less when wrong — the asymmetric action tracks the asymmetric cost, not a claim
+either was demonstrated). `treatment_short_gate_stocks` **keeps its ban, loses its escape hatch**:
+of 43,904 applicable bars, ML≥70 fired on 1.4%, Stoch bearish 11.5%, TRENDING 32.0% — **all three
+together on 0.02%, seven bars in four years, averaging −0.2082R, worse than the 43,897 it blocked**.
+The ban is well supported (−0.1123R blocked vs a −0.0457R stock-SHORT average, 8/9). Also fixed the
+line that still read `FAIL — no LONG trade` after the block was gone — the 2026-08-22g failure mode
+in reverse.
+
+**Of ~20 envelope conditions, 16 are now directly tested.** 738/738 green. Worker-only — **needs a
+box redeploy**.
+
+### 2026-08-25d — Part 7: swept every remaining testable envelope condition
+
+Enumerated the envelope's untested surface rather than assuming it. **Zero conditions clear the bar
+on either side**, and two more are inverted.
+
+| condition | SHORT lift | LONG lift | action |
+|---|---:|---:|---|
+| **`funding_supports_counter`** (kill) | **−0.0119** (3/9) | +0.0132 (6/9) | **removed from `ANY_KILLED`** |
+| **`structureAlignment` weak** | **−0.0098** (4/9) | +0.0124 (6/9) | not a standalone rule; noted |
+| `counter_move_volume_exceeds` (kill) | +0.0001 | −0.0004 | **kept** — inert, fires 1.2% of bars |
+| `1H opposes daily` (downgrade) | +0.0028 | −0.0026 | noise |
+| macro proxy (VIX high) | +0.0066 | −0.0084 | not the real rule; says nothing about it |
+| `continuation < 2` / `< 3` | — | — | **PROXY BROKEN — not tested** |
+
+`funding_supports_counter` blocked bars averaging **+0.0911R** against a **+0.0624R** baseline. Like
+divergence it is a PREDICTION claim (funding paying the counter side makes the counter move likelier)
+and by the Part 6 principle that must be earned. **`ANY_KILLED` is now `killVolume || killMacro`.**
+
+**A failed reconstruction, reported as such:** `continuation < 2/3` fired on 100% of bars because
+`momentumAlignment` ranges −1..+1, making `|mom| < 2` trivially true. A 100% fire rate is the tell
+that a proxy is wrong, not that a condition is universal — recorded NOT TESTED rather than reporting
+the resulting `nan`.
+
+**The envelope after Parts 1-7.** Kept: ML_WIN thresholds (the only component with positive lift),
+`chase_into_extended_aligned_trend` (the only one with positive *evidence*, via Part 4),
+`alignment_not_full` on LONG only, the inert volume kill, and every untestable exogenous-event guard
+(macro, earnings, news, staleness). Removed: `biases_MIXED`, `alignment_not_full` on SHORT, both
+divergence rules, `funding_supports_counter`, `conformal_abstain`. **Every removal claimed predictive
+power and measured inverted; every retention is measured-positive, exogenous-event cover, or inert.**
+731/731 green.
+
+### 2026-08-25c — Envelope surgery: removed what measured inverted, demoted what claims prediction
+
+Acting on the user's rule — *"remove what is proven to be wrong, include what is proven to be
+correct"* — against `docs/research/envelope-rules.md`. **Removed only what was directly tested;
+every untested guard is untouched.**
+
+| condition | evidence | action |
+|---|---|---|
+| `biases_MIXED_and_ML<70` | blocked bars averaging **+0.0503R** vs a +0.0197R baseline, 2/9 periods | **removed** |
+| `alignment_not_full` | SHORT −0.0276R at 3/9 (kept the losers); LONG +0.0264R at 6/9 | **scoped to LONG** |
+| `conformal_abstain_not_confident` | flag declared `false`, never assigned — could not fire | **removed** |
+| `divergence_escalated_6+_candles` | 12 variant tests, 0 passes; every LONG lift negative | **removed** |
+| `divergence_against_bias` (kill) | same | **demoted to CONTEXT** — no longer feeds `ANY_KILLED` |
+
+**The principle that decided which guards stay**, worth recording because it governs future calls:
+`macro_IMMINENT` and earnings guard an **exogenous event** and never claimed predictive power, so a
+null EV test does not refute them. The divergence rules **claim prediction**, and a claim of
+prediction must be earned. Same for counter-move volume and funding, which are structural — both
+untouched.
+
+**The divergence finding, after a correction the user's question forced:** divergence PERSISTS, so
+bars are not independent observations — a daily episode lasts **~44 bars**, over a week. At episode
+level the daily result collapses from +1.43pp at p = 4.0e−04 to **+0.73pp at p = 0.32 (noise)**,
+while the 4H cells (~7 bars/episode) survive at p < 0.001 and point exactly where classical TA says.
+So there was never a two-timeframe contradiction to explain — the daily was autocorrelation. **The
+decision is unchanged on the grounds that always carried it**: the 4H reversal trade measured
+−0.0048R at 4/9 periods, and a +2.24pp shift on a 49.3% base is a 51.5% coin against a 0.032R fee.
+A genuine directional signal too small to trade. **Fourth time in three days that dependent
+observations nearly produced a finding** — any claim from this dataset must state its effective n.
+
+**Divergence is now out of EVERY gating structure**, not merely tagged inside one — a "does not
+block" label under a heading called `Kill Conditions` is weaker governance than not being there. The
+kill-list entry, the `Divergence Escalated` line and `envDivergenceEscalated` are all gone (nothing
+read the last once the auto-FLAT went).
+
+The raw per-timeframe `Divergence:` reading **stays** in the indicator block: removing one indicator
+because it happens to have been tested, while RSI/MACD/ADX sit there equally untested, would be
+inconsistent. The real risk — that the model's training literature treats divergence as a strong
+reversal signal — is addressed where it belongs, with an `RSI DIVERGENCE — CALIBRATION NOTE` in both
+system prompts carrying the episode-corrected numbers and an explicit *"do NOT cite it as evidence
+for a direction"*. **CVD divergence in the whale-trap flag is a different, untested signal and is
+untouched.** Removing the mixed rule also orphaned its FRAMING variant
+(`mixedGated` could no longer be true) — deleted rather than left compiling. 730/730 green.
+
+### 2026-08-25b — The value was in the ENTRY LEVEL all along (Parts 4-5)
+
+Parts 1-3 found no gate that generalises. Part 4 asked why, and the answer was that **every one of
+those tests entered at the bar close** — the worst possible entry, and the only arm negative on both
+sides. Gates were being asked to rescue an entry method that loses by construction.
+
+Measured on 290,000 opportunities, net of fees, **counting setups that never filled as zero**:
+
+| entry | SHORT | LONG | periods+ |
+|---|---:|---:|---:|
+| at MARKET | −0.004R | −0.071R | — |
+| **~0.25 ATR PULLBACK** | **+0.062R** | **+0.021R** | **9/9** |
+| CHASING 0.25 ATR | −0.129R | −0.195R | **0/9** |
+
+**Roughly 40-60× the entire gating apparatus** (the envelope and the best evidence-selected gate set
+each beat random by +0.0012R).
+
+**All three controls hold.** Delaying 12h then entering at market gives +0.0003R (2/9) — the benefit
+is the LEVEL, not patience. Requiring price to trade THROUGH the level rather than touch it costs a
+third and leaves 9/9. And the adverse arm is near-perfectly symmetric at −0.125R on BOTH sides, 0/9 —
+a simulation bug would not produce that.
+
+**Part 5: SHALLOW beats STRUCTURAL, which simplifies the app.** Swing-24h/72h entries returned
++0.007R/+0.002R against the mechanical +0.062R, at 1/9 periods. Not a depth effect — a mechanical
+0.50 ATR arm (comparable to swing-24h's 0.63) returned +0.0555R and filled 65% against swing's 26%.
+**Fill rate dominates**: a recent swing low is a price the market ALREADY rejected, so reaching it
+again needs a move that invalidates the setup's premise. The analysis layer's level-picking is
+**not load-bearing**.
+
+**Shipped:** an `ENTRY DISCIPLINE` block in both markets' `prompt-system.json` carrying the measured
+numbers and three rules — never enter at current price (output NO SETUP instead), place entries on a
+SHALLOW 0.2-0.5 ATR pullback rather than a deep "significant" level, and treat an **unfilled setup as
+a success** so the model never widens toward price. `test/entry-discipline.test.ts` pins all of it.
+Also rehabilitates `chase_into_extended_aligned_trend`: Part 1 dismissed it as a bar filter under
+market entry, but it defends exactly the −0.125R arm. 725/725 green.
+
+### 2026-08-25 — The envelope failed verification; the app stopped contradicting itself
+
+User: *"The app is a mess now, it tells me not to trade, trade long, trade short at the same time."*
+A screenshot showed ADA with the Opportunity Book saying SHORT, the analysis card saying LONG SETUP,
+and the analysis PROSE saying "this is a chase, wait for a pullback". Three instructions, one symbol,
+one screen. All three causes were real and distinct.
+
+**1. The Conviction Envelope is NOT VERIFIED** (`docs/research/envelope-rules.md`, pre-declared at
+52b386b/397ac3d, measured at the app's real geometry — 2 ATR stop, TP2 1.25R — not the 5R research
+structure it never governed). Measured end-to-end as the sizing function it actually is:
+
+> **The envelope beats a coverage-matched RANDOM gate by +0.0012R.**
+
+It cuts exposure to 8.5% of bars to gain +0.0028R/unit over trading everything, and almost none of
+that is its reasoning. **The ML component ALONE beats the full envelope fourfold** (+0.0121R at 26%
+exposure). On LONGS it is *worse than random* and **its own inverse beats it**. Fails all four
+pre-declared criteria under both size mappings.
+
+Mechanism: the alignment gates **keep the worse bars**. `biases_MIXED` blocks bars averaging
++0.0503R against a +0.0197R baseline; `alignment_not_full` blocks +0.0288R bars and KEEPS −0.0079R
+ones. Not a weak filter — an inverted one, applied at 91.5% sparsity. Confirms the user's read that
+"timeframes rarely align and when they do the move happened", but corrects the mechanism: outcome is
+**flat across trend age**, so aligned is uniformly bad (compression, ATR-normalised) rather than
+bad-because-late. **No code changed** — the untestable guards (kills, macro, earnings, news) are
+absent from every arm and prevent specific harms rather than raise EV.
+
+**2. Two recommendation systems, unreconciled.** `VerdictCard` and `OpportunityFeedCard` rendered
+side by side with nothing making them agree, and neither is verified. `OpportunityFeedCard` is
+**deleted**; `DrawdownRiskCard` keeps only its crash warnings — the one component with replicated
+out-of-sample evidence, and one that says nothing about direction so it cannot contradict anything.
+The AI analysis is now the single place a trade is proposed. `/opportunities` stays as a read-only
+research endpoint.
+
+**3. A pullback entry rendered as an actionable one.** "LONG SETUP" in green with entry $0.2140 while
+price was $0.2210. The card and the prose actually agreed; the HEADLINE did not. New `waiting` state:
+`WAIT FOR LONG ENTRY`, caution-coloured (never the direction colour — green reads as "go"), hourglass
+glyph, and a plain line: *"Price is $0.2210 — this setup only starts at $0.2140. Nothing to do until
+it gets there."* 0.15% band stops it flickering at the money.
+
+### 2026-08-24b — Price alerts removed entirely (unused since creation)
+
+User: *"I do not need alerts feature and tab. It has been unused since it was created."* Removed from
+both sides after tracing every dependency first.
+
+**iOS deleted:** `AlertsView.swift`, `AlertsStore.swift`, `PriceAlert.swift`, and
+`BackgroundRefreshManager.swift` — that last one existed *solely* to poll prices for alerts, so it had
+no other reason to exist. Also removed: the tab, `TradeSetup.toAlerts()`, `PushService.syncAlerts`,
+`ConnectionStatus.alertSync` (no writer left), the Settings auto-alert toggle, and the
+`BGTaskSchedulerPermittedIdentifiers` declaration in both `project.yml` and `Info.plist`.
+
+**Worker deleted:** the three `/alerts` handlers and `checkAllDeviceAlerts`, which ran **every minute
+for every device**. The `alerts` D1 table is deliberately LEFT IN PLACE — dropping it is destructive
+and gains nothing; it simply stops being written.
+
+**The coupling was safer than it looked:** the analysis path could auto-create alerts from setups,
+but only behind `auto_alerts_enabled`, which defaults to `false`. So nothing that mattered was wired
+through it.
+
+**Lesson from the removal itself:** three brace-unbalancing regexes broke the build, one of which ate
+`TradeSetup`'s struct boundary and took `TradeOutcome`'s declaration with it. Deleting Swift by
+regex is a bad idea — the fix was `git checkout` plus a brace-depth walk to find the function's real
+end. 713 worker tests green, iOS build green.
+
+### 2026-08-24 — Excursion + crash models shipped; the crash overlay was never in the app
+
+Two models trained, validated against pre-declared bars, and wired end-to-end. Full write-ups:
+`docs/research/excursion-model.md`, `docs/research/crash-overlay.md`.
+
+**The crash overlay — the most validated finding in the vault — was not in the product at all.** No
+model file, `crashProbability: null`, and a sizing curve whose own description read "NOT fitted, NOT
+validated". Now shipped as `ml-model-crash-crypto.json` (870,093 bars, 77 symbols, target frozen from
+T2: `P(fall >= 10% within 10 days)`; WF AUC 0.596; calibration monotone 26.0 → 38.1 → 53.7%).
+`VALIDATED_CURVE` replaces `PLACEHOLDER_CURVE` with T8 arm D exactly. **The zero at high probability
+is deliberate**: T15 measured that an exposure floor removes the benefit in proportion, so the
+safer-looking version is the worse one — a test pins the floor's absence. Warnings lead the
+Opportunity card, fire even when nothing is tradeable, and every message states the EPISODIC caveat
+(the signal sat silent through five 20-28% drawdowns).
+
+**The prompt now carries it too — both halves.** `Crash Risk:` line in `buildUserPrompt` plus a
+matching contract in BOTH markets' `prompt-system.json`, because the 2026-08-22g lesson was that an
+input without an output instruction is a silent no-op. The stock prompt is explicitly told the model
+is crypto-only so its absence is never read as LOW. `test/crash-prompt.test.ts` pins both halves.
+
+**Excursion model** (`ml-model-excursion-crypto.json`) replaces `provisionalCurve`. Three findings:
+(a) real barrier rates sit **~10pp BELOW** the driftless benchmark `1/(1+R)` at every R (5R: 6.6% vs
+16.7%) because a 72h horizon truncates — so the old extrapolation was optimistic everywhere;
+(b) `expectedValueR`'s binary formula was **wrong by +0.50R at 5R** — 20-25% of trades hit neither
+barrier and exit at the horizon averaging +1.43R, an outcome the formula had no room for;
+(c) ranking is real (cross-sectional AUC 0.62, verified as genuine asset selection — the market-wide
+feature block alone scores exactly 0.5000 within a timestamp) but **profitability is regime-dependent**:
+1 of 5 rising-market periods, corr(EV, BTC return) −0.509.
+
+**Two silent defects caught, both of which would have shipped.** LightGBM bakes its own
+`feature_names` into the dump and they override anything passed in, so fitting on `f_`-prefixed
+columns made every live lookup miss and return **a constant** — no error anywhere, caught only
+because three very different feature dicts gave identical probabilities. And isotonic's top grid
+point reached 0.60 at 5R (9× base) resting on ONE sparse bucket, which would have implied a +3R
+expected value; both exporters now cap at the highest rate a 500-sample bucket actually realised.
+
+**A control-design error worth remembering:** the regime control's first version tested `mean > 0`
+and PASSED on a single outlier period (+0.768R of five). Without it the mean is −0.054R. Five
+observations cannot support a mean; the sign count fails cleanly.
+
+**And the stop is a noise magnet.** `DEFAULT_STRUCTURE.stopAtrMultiple = 1.0` stops out **73.9% of
+long trades in bull markets**. Per trade in rising blocks: no stop +0.639%, 1 ATR −0.344%, 2 ATR
++0.083%, 3 ATR +0.272%, 4 ATR +0.327%. Deliberately NOT changed — one measurement is not a
+pre-declared test — but it is the top candidate for the next one. Related: BTC buy-and-hold
+2023-01→2025-10 was **+590%** while the equal-weight 24-symbol basket compounded to **−83.1%** over
+4.5 years. "Long crypto" was only right if it meant BTC.
+
+### 2026-08-23d — Twenty pre-declared tests: direction closed for good, crash signal characterised, `/basis` shipped
+
+A single research session that produced **one shipped feature and a great deal of closed territory**.
+Full arc in `docs/research/README.md` (new section); start at [[what-we-tried]].
+
+**Shipped (worker-only, needs a box redeploy):** `GET /basis` — cash-and-carry monitor over Coinbase
+dated nano futures. **Read-only by design**: public market data, no orders, no trade-enabled
+credentials. 14 tests, 574/574 green. Motivation: it is the only mechanism tested that requires no
+directional forecast, and the basis ranges 4-40% annualized so the hard part is *noticing* when it
+pays. Honest limits recorded in `funding-carry.md` — ~8% net on total capital in the COVERED form
+(selling futures against BTC already held); **dead if the spot leg must be bought**, since Coinbase
+retail spot fees of 0.40-0.60%/side consume a ~1.07% basis; and it needs ~$100k to yield ~$700/month.
+
+**The crash overlay is the one surviving signal, and it now has a precise characterisation.** It cuts
+BTC drawdown from −76.6% to −40.4% (Calmar 1.74 vs 0.48), beats shuffled/lagged/realised-vol/200D
+controls, and **replicates leave-one-symbol-out on ETH/SOL/XRP with placebos collapsing to ~0.05**
+(9 of 15 crash clusters are asset-specific, so it is not one correlated bet counted four times).
+But: protection is **episodic** — absent through five 20-28% drawdowns in 2023-25; value is
+**anticipatory**, living in a 20-30 day lead that any confirmation filter destroys; and the ~35×/year
+turnover is **structural, not tunable** — four separate attempts to make it cheaper (confirmation,
+new-capital-only, a floor, continuous sizing) each removed the benefit in proportion.
+
+**Attribution:** the signal lives in the TREND/MOMENTUM feature block (−0.0501 AUC when removed, ~8×
+any other group). **Realised volatility alone captures most of it** — 0.612 against the model's 0.634
+on six untouched assets, so the ML's genuine residual is **+0.022 AUC (6/6 fresh assets)**, real but
+modest, and not reproducible by any simple linear index (two orthogonal projections both failed).
+
+**Two findings that are actionable but deliberately NOT acted on**, because each rests on one
+measurement and acting now would be the post-hoc tuning this vault forbids:
+1. **The 26 price-structure features are net NOISE** — removing them improved AUC, top-decile
+   precision and Brier simultaneously. A pre-declared simplification test is the right way to bank it.
+2. **Tail shape was never in the feature set.** No skew, kurtosis, downside asymmetry or
+   tail-frequency measure exists in the 110 features — for a model whose target is "will there be a
+   10% drawdown", that is the most glaring untested feature class, and it needs no new data source.
+
+**No app behaviour changed and no live bug was found.** Every defect caught this session (a lookahead
+in the persistence mask, a degenerate contribution schedule, a wrong statistical null, a
+non-independence error) was in a research script, not in shipped code.
+
+### 2026-08-23c — ICX / STORJ delisting: remove from LIVE scoring, KEEP in training (survivorship)
+
+Two opposite decisions, recorded because the training one is counterintuitive.
+
+**Training: KEEP.** The vault's standing caveat is that the dataset contains only survivors — the
+2026-05-30 crypto-regime entry: *"the ML edge stays +EV in 2022-bear folds, but only on symbols that
+survived — the dataset has no delisted tokens, so a real leveraged bear is an unmodeled tail risk."*
+ICX (14,230 bars from 2020-01) and STORJ (11,465 from 2021-04) are about to become **the first
+non-survivors the dataset has ever held**, including the decline that preceded delisting. Stripping
+them would restore a survivors-only dataset — deepening precisely the weakness that is already
+documented. Their labels come from real prices and their features were valid while they traded. The
+one honest caveat: the delisting announcement itself is an exogenous shock no technical feature can
+predict, so the final few bars teach noise — a handful out of ~25,000, not worth truncating.
+
+**Opportunity:** tag them delisted. If more accumulate, the model's behaviour on assets that later
+died becomes measurable — the survivorship test the vault currently lists as unmodeled. This is the
+seed of that dataset, so do not throw the first two samples away.
+
+**Live scoring: REMOVE on 2026-09-03** (see the dated action item at the top of this section).
+Opposite logic: a dead symbol costs a cron slot every minute, scores stale prices, and could page
+the user about an untradeable instrument.
+
+### 2026-08-23b — Binance exchange announcements: the first PER-INSTRUMENT news source (and it found a live delisting)
+
+**No VPN needed — I gave up at the wrong door.** The public announcements page sits behind a
+Cloudflare challenge (202, no body), and I recorded it as unreachable. The CMS API behind it answers
+plainly: `bapi/composite/v1/public/cms/article/list/query`, HTTP 200, clean JSON, from a US IP with
+no proxy. A challenge page is not proof a source is closed.
+
+**It immediately surfaced something nothing else in the stack would have:**
+> Binance Will Delist **ICX, SCRT, STORJ** on 2026-09-03 — and **ICX and STORJ are both live in
+> `ARCHIVE_CRYPTO`**, scored by the cron every minute and present in the v14 training data. ICX also
+> carries a fresh Monitoring Tag (Binance's pre-delisting warning).
+
+**Why this source is categorically different from the rest.** Fed minutes describe the backdrop;
+these are facts about the INSTRUMENT being traded — a delisting removes the symbol, a funding-rate
+change alters carry, a tick-size change alters execution, a hard fork halts the wallet. A funding
+change even shifts the liquidation math the cascade zones describe. Catalogs taken: Listing (48),
+News (49), Maintenance (157), Delisting (161). Skipped: Activities and Airdrop, which are marketing.
+
+**Per-symbol ranking, which is what stops it becoming noise.** Binance publishes ~80 relevant items
+at a time and is a PRIMARY source, so plain "primaries first, newest first" would have filled all six
+prompt slots with routine listing announcements and pushed out both the FOMC minutes and the
+delisting. `fetchRecentNews` now takes the analysed symbol, drops exchange notices that name a
+DIFFERENT instrument, keeps market-wide ones (tick-size sweeps, API changes), and ranks a
+symbol-matching exchange notice ABOVE other primaries. So "Binance Will Delist ICX" reaches the ICX
+analysis and never clutters BTC's.
+
+**Action needed (not code):** ICX and STORJ delist 2026-09-03. Decide whether to drop them from
+`ARCHIVE_CRYPTO` now or let their data go stale. They are also in `csv_exports_v14`, so any future
+retrain inherits two symbols that will no longer exist — a mild survivorship wrinkle worth noting
+against the vault's standing caveat that the dataset has no delisted tokens.
+
+560/560 green (3 new). Worker-only — **needs a box redeploy**.
+
+### 2026-08-23 — Federal Register added as a news source; White House tried and dropped
+
+**Federal Register is the best input the feed has.** It is the official record of US rulemaking
+across EVERY agency (SEC, CFTC, Treasury, OCC, FinCEN) in one queryable feed, and it filters AT THE
+SOURCE via `conditions[term]=digital+asset` rather than being keyword-gated after the fact — a
+categorically cleaner input than an outlet. Live check: 24 parsed, 18 kept, including *"Regulation
+Crypto Assets"*, *"GENIUS Act Regulations on Payment Stablecoin Issuance"*, and Cboe exchange
+filings. **It also recovers the Treasury gap indirectly**: Treasury still has no working RSS (both
+documented paths fail again), but Treasury rulemaking publishes here — and a Treasury action is what
+actually moved the tape in the Aug-2026 run.
+
+**whitehouse.gov/presidential-actions TRIED AND DROPPED.** It parsed fine (30 items) but kept
+*"Nominations Sent to the Senate"* — twice — which is precisely the administrative noise stripped
+out of the Fed feed. And it is redundant: presidential documents publish IN the Federal Register
+(verified: a "digital asset" query returns 30 presidential docs including crypto/fintech EOs), so a
+crypto executive order arrives through the FR feed already source-filtered. Better signal, one fewer
+feed.
+
+**`congress` and `senate` removed from the policy vocabulary** — as bare terms they were what
+admitted the routine nominations. Crypto legislation still matches on `legislation`, `regulation`,
+`lawmaker`, `clarity act`, all of which carry subject matter rather than procedure.
+
+**Checked and rejected:** The Block (works, but a third outlet adds volume not signal — outlets run
+~50% noise even after tuning); ECB press (returns 1 item, wrong endpoint — worth revisiting since
+the vault flags US-centricity as a limitation); White House `/briefing-room` and `/news` (404 and
+noise respectively); **Binance announcements** (Cloudflare-protected, no feed — a real loss, since
+leverage-tier changes and delistings are per-symbol actionable in a way macro news is not).
+
+**Elon Musk / social:** not added. X's API is paid and heavily restricted, no reliable free feed
+exists, and the value would be narrative-only for statements CoinDesk and Cointelegraph already
+report within minutes. Given catalyst proximity measured a clean null ([[news-catalyst-test]]), a
+harder-to-obtain catalyst source does not change the calculus.
+
+Feeds now: `fed, sec, cftc, fedreg, coindesk, ctelegraph`. 557/557 green. Worker-only — **needs a
+box redeploy**.
+
+### 2026-08-22k — ROOT CAUSE of the dead liquidation collector: Binance decommissioned the URL on 2026-04-23
+
+The collector shipped **2026-07-10 — eleven weeks AFTER Binance permanently decommissioned the legacy `wss://fstream.binance.com/ws/` endpoint format (2026-04-23)**. It never captured an event and never could have. The dead endpoint still ACCEPTS connections and simply never pushes data, which is exactly the "open but silent" state observed. Fixed to `wss://fstream.binance.com/market/ws/!forceOrder@arr` (`LIQ_WS_URL` still overrides).
+
+**Everything else investigated on 2026-08-22 was real detail and none of it was the cause.** Recorded because the wrong turns are the instructive part:
+- *"undici's WebSocket ignores the dispatcher"* — WRONG, and it was my own broken instrumentation: `openedAfterMs` was computed at resolution rather than at the `open` event, so every path reported ~the 10s timeout and the paths looked identical. With the timing fixed, proxied opens take 1362-1412ms vs 622ms direct — a clean ~2.2x, i.e. the proxy was working all along. The switch to `ws` + HttpsProxyAgent was therefore unnecessary; it is kept because it is at least as reliable, but it fixed nothing.
+- *"the Swiss exit region is Binance-geoblocked"* — WRONG. REST returns **200 from that same Zurich IP**. A country block would fail both, and Binance signals geo-restriction with **451**, not silence.
+- *"the collector is wedged"* — TRUE but secondary; the boot-time error fired with no `close` after it, so `scheduleReconnect` never ran. Fixed, and the watchdog now covers non-open states. It would have retried forever into a dead URL.
+
+**The tell I had and didn't read:** REST worked continuously while the websocket was silent. `fapi.binance.com` (REST) and `fstream.binance.com` (WS) are different hosts with independent lifecycles — so "REST works, WS doesn't" pointed at the WS ENDPOINT, not at the network path. I spent the investigation on egress instead.
+
+The probe now compares the legacy and new URLs side by side through the same proxy with the same client, so the box settles it on the next run: `wsViaProxy DELIVERING` + `legacyViaProxy` silent proves the URL; both silent means the exit IP after all. That test cannot be run from a US dev machine — the geoblock silences every stream there, which is why all four URLs returned zero locally and the local test was uninformative.
+
+557/557 green. Worker-only — **needs a box redeploy**, and this is the one that should finally start capture.
+
+### 2026-08-22j — Proved the news reaches the model, then split "what it was TOLD" from "what it CONCLUDED" (iOS)
+
+User: *"I ran ai analysis, it gave no info about the news"* — again, after the system-prompt fix. This time it was NOT a bug.
+
+**`promptOnly` already existed** (`runFullAnalysisCore`, `body.promptOnly === true`) — a dry-run returning the REAL built prompt with no LLM call. I nearly built a duplicate debug endpoint before finding it. It answers this class of question in ~5s for free, and is the tool to reach for whenever "is this input actually reaching the model?" comes up. Result on BTCUSDT: **`POLICY / MACRO HEADLINES` present, all six items**, including the Treasury-buyback story. The news IS sent.
+
+The model stayed silent because the guidance shipped hours earlier tells it to: *"if nothing in the block plausibly explains this tape, say NOTHING about news."* That run's tape was "largely unchanged since the last check (47m ago), ML flat at 49%", coiled at the POC — and the freshest primary item was 77h old. Nothing explained it, so nothing was said. **Correct behaviour**, and the guard against exactly the post-hoc "X rose because Y" narration the measured null (`news-catalyst-test.md`) says carries no information.
+
+**But the product was still wrong**, and this is the generalisable bit: *"the model may cite news when it explains the move"* and *"show me what's happening in the world"* are DIFFERENT features, and only the first was built. On a quiet day the second is invisible, and the user cannot distinguish working-as-designed from broken — which is why this question came up twice and cost a paid analysis to answer.
+
+Fix (iOS): `WorkerNewsService` + `NewsCard` on the Now tab, reading the same `/news` rows the prompt gets from the same `fetchRecentNews`. Always visible when items exist, whether or not the analysis cited any. Primaries ranked first and marked "official"; a `LIVE CATALYST` pill when `catalystActive`; top-3 collapsed with expand; and the card says **"Background for the read — not a trade signal. Measured: policy timing doesn't predict the next move."** on its face, so the split is legible: what the model was TOLD is here, what it CONCLUDED is the analysis. Best-effort — any failure hides the card rather than surfacing an error. Re-fetches on symbol change since scope differs (crypto = macro + crypto sources; stocks = macro primaries only). iOS build green — **needs a rebuild+install**; no worker change.
+
+### 2026-08-22i — Collector switched to `ws` + HttpsProxyAgent (code fix, NOT the compose change)
+
+The probe's verdict pointed at `network_mode: service:gluetun`, but reading the real `truenas-compose.yml` changed the call. That compose has a deliberate design — `PROXIED_HOSTS` routes ONLY the exchange hosts through the VPN while Claude/APNs/Yahoo/Finnhub go direct — and `network_mode` discards it, forcing all egress through Switzerland AND putting the whole backend behind gluetun's killswitch. That converts a VPN drop from "one dataset degrades" into "the app and its ingress are down". It also requires moving the 8787 publish to gluetun plus `FIREWALL_INPUT_PORTS`.
+
+**The defect is narrow, so the fix should be too:** undici's `WebSocket` ignores `options.dispatcher`. The `ws` package honors `agent`, and `https-proxy-agent` performs a real CONNECT tunnel through gluetun's `:8888`. The collector now uses `new WsClient(wsUrl, { agent: new HttpsProxyAgent(proxyUrl) })`. Two runtime deps added (`ws`, `https-proxy-agent`) to a near-zero-dep project — the one genuine argument for the compose route instead; `ws` is externalized in the esbuild bundle and survives `npm prune --omit=dev` as a runtime dependency.
+
+**The probe now runs BOTH clients** (`undiciViaProxy` vs `wsViaProxy` vs `direct`) so the next deploy proves the diagnosis rather than assuming it, and its `hint` names the fix for each outcome: `wsViaProxy DELIVERING` = fixed; `OPEN-BUT-SILENT` on both = the tunnel is fine but Switzerland is geoblocked, rotate `SERVER_COUNTRIES`; `REJECTED-AT-UPGRADE` = gluetun refuses CONNECT for wss, fall back to the compose change. Verified locally that `ws`'s `addEventListener` surface matches what the collector uses (`.data`, `.code`, `.message`). 557/557 green.
+
+**Note:** `truenas-compose.yml` holds live credentials and is correctly gitignored (`marketscope-worker/.gitignore:5`) — never committed, not on GitHub. Checked, because the file's own header warns against exactly that.
+
+### 2026-08-22h — Liquidation probe verdict: the box egresses from the US and undici's WebSocket ignores the proxy
+
+`GET /health?probe=liquidations` settled it in one run. **The fix is infrastructure, not code.**
+
+| path | egress | REST | WebSocket |
+|---|---|---|---|
+| direct | **US / Virginia** | 200 | opens, 0 messages |
+| via proxy | **CH / Zurich** | 200 | opens, 0 messages |
+
+Two conclusions. (1) `fetch` honors the `ProxyAgent` dispatcher — the CH egress proves it, and it is why REST derivatives capture has always worked. (2) **`WebSocket` does NOT**: both paths behave identically, which cannot happen if one were really dialing from Zurich and the other from Virginia. So every websocket attempt has been leaving from the box's US IP, and **Binance accepts a websocket from a US address and then serves no data** — reproduced independently from a US dev machine, where a `btcusdt@aggTrade` control stream (many events/sec) also opened and delivered nothing.
+
+**The fix: put the container on gluetun's network** (`network_mode: service:gluetun`) and drop `BINANCE_PROXY_URL`. That makes the container's own IP the Swiss one, so the websocket needs no proxy support at all — removing the dependency on undici's WS-dispatcher behaviour entirely, and simplifying the REST path as a side effect. No code change can substitute: undici cannot be made to proxy a websocket it does not proxy.
+
+**Two more bugs the probe exposed:**
+- **The collector was WEDGED, not merely failing.** Live status showed `state: 'starting'`, `attempts: 0`, `lastError: "non-101 status code"` — the boot-time `error` fired, **no `close` followed**, so `scheduleReconnect` never ran and nothing retried, ever. The handler's comment asserting "close always follows error" is false for this failure. Worse, yesterday's watchdog only acted on `state === 'open'`, so it could not rescue this either. The watchdog now covers NON-open states: stuck >2 min with no connection forces a fresh `connect()`.
+- **A measurement bug in my own probe:** `openedAfterMs` was computed at resolution rather than at the `open` event, so every path reported ~the 10s timeout — hiding exactly the latency difference that reveals whether the proxy is in the path. Now captured at the event.
+
+557/557 green. Worker-only — needs a redeploy, but **the redeploy alone will not fix capture**; the compose change is what matters.
+
+### 2026-08-22g — The analyses ignored the headlines: an input with no output contract
+
+User ran an analysis and got nothing about the news. Diagnosed immediately and it is my error, of the SAME CLASS as the mandate's JSON-contract gap: I added POLICY / MACRO HEADLINES to the USER prompt (`prompt.ts`) and never touched the SYSTEM prompt, which is what defines the output sections and how to use each input. So the model received the block, had no section to put it in, no instruction to use it, and correctly said nothing. The five output sections (Bottom Line / The Tape / Risk Map / If You Take a Position / What to Watch) have no news slot, and SHORT mode emits only two of them.
+
+**Lesson worth generalising: adding an input is half a change.** An input the output contract doesn't mention is a silent no-op — and this is now twice in one week (the mandate could be satisfied in prose while the JSON block emitted `[]`; the headlines arrived with nowhere to go). Any future prompt input needs a matching output instruction in `prompt-system.json`, plus a test asserting it.
+
+Both market prompts now carry: (a) name a headline in ONE clause inside `## The Tape` when it plausibly explains the current tape — deliberately NOT a sixth section, which would undo the 2026-06-29 skeleton collapse; (b) lead the Bottom Line with a fresh, material PRIMARY-source item; (c) **say NOTHING about news when nothing in the block explains this tape** — never reach for a headline, never write "X rose because Y" when the causal link is the model's own inference. The guidance cites the measured null (`news-catalyst-test.md`, 986 Fed releases) so the model is told explicitly that a headline is never grounds to raise conviction, take a side, or override a pre-computed flag: **explanation, not evidence**. A fresh primary headline also now counts as a material change for the FULL-vs-SHORT mode switch — a live catalyst is not a quiet day. 557/557 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-22f — Liquidation collector had captured NOTHING for six weeks: the socket opens, Binance serves no data, nothing detects it
+
+Status check on derivatives capture turned up the worst kind of failure. **REST capture is healthy** — BTC's live derivatives features are all populated (funding 0.01, oiChangePct +0.11, takerRatio 1.025, longPct 49.8, basisPct 0.033), confirming the v14 coverage fix holds. **The websocket liquidation collector has zero rows across BTC/ETH/SOL over 90 days** — nothing since it shipped 2026-07-10.
+
+**Root cause, found by experiment rather than by reading logs.** The code is correct: `startLiquidationCollector` is wired at `server.ts:53`, the table is created before connecting, undici 6.26 genuinely honors `options.dispatcher` (verified in `node_modules`). So I ran the real path against Binance: `!forceOrder@arr` reported **open=true, 0 messages in 20s** — and so did a `btcusdt@aggTrade` CONTROL stream, which alone should deliver many events per second. **Binance accepts the websocket from a geoblocked IP and then serves nothing.**
+
+That is invisible to this collector by construction: no `error` fires and no `close` fires, and the reconnect path only triggers on those two events. So it logs `[liq] connected` exactly once and sits mute forever — **the container logs look healthy the entire time**, which is why `grep '[liq]'` would not have found it either.
+
+- **Liveness is now judged on DATA, not connection state.** A watchdog (`SILENT_TIMEOUT_MS` 5 min, checked every 30s) force-closes and reconnects any socket that is "open" but has delivered nothing — the clock deliberately runs from CONNECT, not from last message, since the whole failure is a socket that never delivers a first event. Across all USDⓈ-M symbols, five minutes of total silence cannot be a quiet market.
+- **`/health` now reports collector state** (`state`, `messages`, `quietSec`, `silentResets`, `lastError`, and a `healthy` flag computed from data flow). Exposed via a `globalThis` hook set by `server/liquidations.ts` so the portable `src/` worker code keeps no Node-only import. Rationale: for a NON-BACKFILLABLE series, a dead collector must be visible without shell access — `/liquidations` returning `[]` is indistinguishable from a quiet market, and that ambiguity is precisely what cost six weeks.
+
+**What was lost is unrecoverable** (Binance removed the REST endpoint years ago; the stream is the only source) — ~6 weeks including the 62k→80k run, when cascade data is most informative. Bounded, though: this series never fed the model or gated a trade. It was accumulating toward the homemade liquidation heatmap (`oi_snapshots` = where positions opened, `liquidations` = where they died, `depth_snapshots` = the resting walls) and a future cascade-asymmetry WF test — both of which need many months regardless, so the clock restarts rather than ends.
+
+**Still open:** whether the box's gluetun exit is itself in a Binance-geoblocked region. The watchdog converts a permanent silent failure into a visible retrying one, but if the exit region is the problem, retrying will not fix it — `/health.liquidations.silentResets` climbing with `messages: 0` after the redeploy is the tell, and the fix would be a gluetun exit-country change. Also unverified: `oi_snapshots` and `depth_snapshots` have no endpoint. They are cron-driven over the working REST path so are probably fine — but "probably" is exactly what was assumed about liquidations, and they deserve the same health surface. 556/556 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-22e — Crypto-outlet gate tuned against the live feeds (~50% → ~90% precision)
+
+With the regulator noise gone, outlets fill most of the 6 slots most days (Fed `monetary` is only ~15 releases/year), so outlet quality IS the feature's quality. Measured the gate against the live CoinDesk + Cointelegraph feeds and tuned it — every rule below is a response to a real headline, not a guess.
+
+**The confirmation that mattered:** the actual catalyst behind the missed rally is in the feed and passes — *"How a Treasury buyback tweak helped bitcoin surge 25% to nearly $80,000 in days"* and *"Treasury's latest measure isn't QE or YCC. Still, bitcoin is skyrocketing."*
+
+Four fixes, kept set went 13/25 → 10/25 (CoinDesk) and 13/30 → 10/30 (Cointelegraph) while RECOVERING real stories:
+- **`treasury` is ambiguous in crypto media** — it usually means a company holding BTC, not the department. It was admitting *"crypto stocks soaring as miners, treasury companies jump"* and *"Strategy Bitcoin treasury hits breakeven"* on a word that exists to catch bond policy. New `VOID_CONTEXT` voids that sense on narrow phrasings (`treasury compan`, `bitcoin treasury`, `treasury holding`…) while both genuine Treasury-policy articles still match.
+- **Recap veto, judged on the TITLE alone.** `RECAP_PATTERNS` (live updates / moving average / analysts split / bears get…) drop an item unless its title also names a POLICY action. Title-scoping was essential: *"Bitcoin breaks above 200-day moving average"* and *"Here's what happened in crypto today"* escaped the veto on a stray "treasury" in their **summaries**. Summaries are teasers and digests; the title is what a story is about. (That headline is also something the app computes itself, from candles, more accurately.)
+- **Missing legal/legislative vocabulary added** — the gate had been DROPPING real news: *"South Korean lawmakers seek expanded FIU powers"*, *"Pass the Clarity Act"*, *"Capital.com … after affiliate wins licence"*. Added lawmaker/parliament/congress/senate/court/sued/tax/licence/clarity act/executive order, plus `approval` — voided against the Fed's bank-merger boilerplate (`approval of application`) so it recovers *"Japan's first crypto approval in four years"* without re-admitting National Westminster.
+- **Word-boundary matching** replaces substring matching, retiring the `'sec '` / `'ban '` trailing-space hacks (which failed at end-of-title) and the `bill`/`billion` collision.
+
+Regression tests pin every one of these against the real headlines. 556/556 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-22d — First live output killed the "primaries pass on provenance" rule
+
+Box redeployed; `GET /news?force=1` confirmed **egress works — all feeds reachable through gluetun** (the one risk that could have made the whole feature a non-starter). But the first real prompt view was bad, and in an instructive way. Top three slots, ranked ABOVE everything else because primaries sort first:
+
+> `[Federal Reserve, official] approval of application by National Westminster Bank Plc`
+> `[CFTC, official] ICYMI: Members of the Innovation Advisory Committee Join Chairman Selig...`
+> `[CFTC, official] Seeks Public Comments on Proposed Elimination of SEF Order Book Requirement`
+
+Bank M&A, a photo-op, and rulemaking minutiae — on every BTC analysis. **My "a Fed release is a catalyst by definition" assumption was wrong, and the backfill had already said so**: 2020-2026 the Fed published 301 bcreg + 214 enforcement + 180 other + 114 orders against just 177 monetary. Provenance means AUTHORITATIVE, not market-moving.
+
+- **Fed items now gate on the URL category slug** (`.../pressreleases/monetary20241203a.htm`) — authoritative, free, and better than any keyword guess. `monetary` auto-passes (FOMC copy is deliberately understated, so a keyword gate would drop the most important releases); `orders`/`bcreg`/`enforcement` must earn their slot.
+- **Two vocabularies, because the source classes need different questions.** For a regulator: "is this about markets at all?" → asset words answer it. For a crypto outlet: every headline says "bitcoin", so asset words answer nothing → only EVENT words do. A single shared vocabulary made the outlet gate WEAKER (it re-admitted "Bitcoin surges past $80K") — caught by tests before deploy, not after. Agency names count as subject matter for an outlet but are suppressed inside that agency's own feed (`SELF_TERMS`).
+- **Two live bugs found by the deploy:** SEC kept **0 of 25** items — it publishes every few days and the 3-day storage cap discarded every release; storage is now 14d with a split prompt window (primaries 7d, outlets 48h), since a major ruling still explains a tape three days later while outlet copy goes stale fast. And **US Treasury was dropped**: no public RSS responds at any documented path (all 302 to an empty body or fail). A permanently-red feed is worse than an absent one.
+- Regression tests pin the exact noise headlines that shipped, so the rule cannot quietly revert.
+- **The tightened rule alone did nothing** — verified on the next deploy: ingestion immediately fell to 1-of-20 (Fed) and 0-of-10 (CFTC), yet the prompt still served the same bank-merger and ICYMI headlines. The gate ran at INGESTION ONLY, so rows an older, looser rule had admitted sat in D1 for their full 14-day retention. A write-time-only filter silently makes every future rule change take two weeks to land. New `pruneIrrelevant()` re-applies the current gate to everything stored on each poll and deletes what no longer qualifies (the Fed category slug is recoverable from the stored URL, so the full gate is reconstructible from what we keep). Self-healing: any later vocabulary edit takes effect on the next poll. Prune count is reported by `GET /news` and the cron log. 550/550 green. Worker-only — **needs another box redeploy**.
+
+### 2026-08-22c — Tested it: policy catalysts do NOT predict volatility (and the scary negative was my own artifact)
+
+User asked whether similar news historically predated moves — the right question to ask about a feature that shipped explicitly unvalidated. Design pre-declared in `docs/research/news-catalyst-test.md` BEFORE any number was computed; result filed in `rejected-hypotheses.md`.
+
+**Backfill is feasible and cheap:** the Fed publishes yearly press-release archives with the date encoded in every URL (`monetary20241203a.htm`), so `ml-training/news_backfill.py` reconstructs the event list from ~20 listing-page requests — no article bodies, no HTML date parsing. Got **986 Fed releases 2020-2026, 177 of them `monetary`**. Labels came from `csv_exports_v14` (leak-audited, so the test inherits audited definitions rather than recomputing them).
+
+**Result: clean null.** Pre-declared bar was +3.0pp goodR lift at 0-24h on FED_MONETARY with ≥5/7 positive years; actual **−0.8pp, 4/7 → NOT SUPPORTED**. Catalyst proximity is NOT a v15 feature candidate. Forward up/down excursions were symmetric (+2.71% vs +2.50%), consistent with direction being a coin flip everywhere else.
+
+**The part worth remembering is the trap.** The naive comparison said Fed releases SUPPRESS volatility — FED_ALL 0-24h **−10.8pp at z=−10.4**, which is exactly the kind of number that gets written up as a discovery. It is entirely a day-of-week artifact: BTC goodR runs Mon 57.9 / Fri 34.8 / Sat 24.6 / Sun 59.1 (a 34pp swing, consistent with `dayOfWeek` being crypto's top permutation feature). Releases are dated on weekdays; the conservative end-of-day timestamp pushes the measurement window onto the FOLLOWING day, which for most releases is Friday or Saturday — the two worst days; meanwhile a ">72h from any event" baseline systematically excludes weekends (83% weekday vs a calendar-neutral 71%). Day-of-week-stratified, the effect vanishes: **−0.57pp** (FED_MONETARY), **−1.68pp** (FED_ALL), **+1.20pp** (0-48h). **Methodology rule now recorded: any event study on crypto must stratify by day-of-week before believing an effect** — every economic, regulatory and corporate calendar clusters on weekdays, so this artifact is available in all of them.
+
+**What it changes:** nothing about the shipped news feature, which was labelled context/narrative and never an edge — this confirms that label rather than contradicting it. The catalyst framing on chase-FLAT bars remains a message-quality change with no predictive evidence behind it, which is how it is worded and gated (it does not open the FLAT). H3 (do chase-FLATs age badly on catalyst days) was NOT run: pre-declared underpowered at ~50 FOMC events, and with H2 null its prior is lower still — running it would only have produced a number the design already committed to calling anecdote.
+
+### 2026-08-22b — Policy/macro catalyst headlines (own RSS ingestion, no paid feed)
+
+User: *"the problem is that we don't have any news, like the stuff about government crypto legalization or bond policy"* — after asking whether SEC EDGAR would help (it wouldn't: corporate filings can't carry Treasury or legislative catalysts, and quarterly fundamentals are horizon-mismatched against a 24h ATR target).
+
+**The gap, verified:** crypto analyses already receive FRED macro (rates/yields) and the full economic calendar — `fetchMacroEnrichment` and `fetchEconomicEvents` run for both markets — but `newsHeadlines` hangs off `stockInfo` (`prompt.ts:452`, gated at 1083/1597) and `fetchStockEnrichment` only runs when `!isCrypto`. So crypto had **zero narrative input**: it could see that yields moved and that FOMC was Wednesday, never that a regulator ruled or a bill passed. Regulatory/legislative catalysts appear on no economic calendar at all.
+
+**New `src/news.ts` — RSS ingestion, not scraping.** Feeds exist to be machine-read; titles + summaries only, article bodies never fetched or stored (no ToS/copyright question, and the model only needs the headline). Six feeds, weighted to PRIMARY sources because the catalysts that matter originate there: Federal Reserve, US Treasury, SEC, CFTC (verified live: Fed 200/20 items, SEC 200/25, Cointelegraph 200/30), plus CoinDesk + Cointelegraph. Free, no key — Finnhub's paywall was moot since the primaries are what you actually want.
+
+- **The real risk is noise, not plumbing.** Crypto media is mostly price recaps and price-target op-eds, and an LLM over-weights dramatic phrasing placed beside validated pre-computed flags. Gate: primaries pass on provenance alone; outlets must match a curated catalyst vocabulary (Fed/Treasury/FOMC/rate/SEC/CFTC/ETF/legislation/ban/approval…) that **deliberately excludes price-move language** ("surges", "rally", "all-time high") — the tape already says that, far more precisely. 48h lookback, 6-headline cap, primaries ordered first. **No sentiment scoring, ever** — a homemade bullish/bearish number is the exact shape this project's graveyard is full of.
+- **Prompt section is explicitly labelled context, not signal**, and instructs: never raise conviction on a headline, never contradict a pre-computed flag on one, headlines are priced in seconds by machines long before the analysis runs.
+- **The one interaction with teeth — and it does NOT open a gate.** When the chase guard auto-FLATs an extended aligned trend AND a primary-source release landed within ~12h, the prompt emits a catalyst FRAMING line: a policy repricing is not the buyer-exhaustion the guard is built to catch, so the FLAT is about ENTRY TIMING, not a claim the move is over — and explicitly not an exit signal for an existing position. The FLAT still stands: `trend_direction_test.py` evidence backs the guard, "a catalyst exists" has no walk-forward evidence, and loosening a validated guard on narrative would be the classic mistake. This fixes the MESSAGE (a chase FLAT suppresses the framing hatch and emits a bare NO SETUP on the day the tape reprices hardest).
+- Scope: crypto sees macro + crypto feeds; stocks see macro primaries only (they already carry Finnhub company news). Cron polls every 15 min (KV-gated, fault-isolated, per-feed try/catch); analyses read D1, so the poll costs no per-analysis request. `GET /news` reports per-feed health + the exact prompt view; **`GET /news?force=1` polls inline** — that is how to verify egress *from the box* (gluetun), since some publishers block VPN/datacenter IPs and my feed tests ran from a dev machine.
+- Two parser bugs the tests caught before deploy: feeds routinely **double-escape** entities (`&amp;quot;`), needing two decode passes; and CDATA must be unwrapped BEFORE tag-stripping or `<[^>]*>` eats the opener and orphans `]]>` into the headline.
+
+**Honesty, recorded deliberately:** this cannot be backtested — no ship bar, no walk-forward fold, no way to measure "did the narrative help". It is a context/risk-framing change and must not be cited as an edge. `news_items` does feed one future experiment: with catalyst days now recorded, we can eventually measure whether chase-guard FLATs on catalyst days were wrong — but that needs forward data. 545/545 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-22 — Second review round: the mandate's ML tier was SELF-REFERENTIAL (my fix was narrower than the bug), + 7 more
+
+A second max-effort review of `c96ff13` returned 8 further findings, and **corrected the previous entry's headline fix**. All fixed; 533/533 green. **The mandate gate must never be derived from the calibration ceiling — that is the trap.**
+
+- **`mandateFloor = max(65, min(70, ceilPct))` was circular.** `applyCalibration` CLAMPS at `calibrationCeiling`, so `calibrated <= ceiling` holds by construction — flooring the gate AT the ceiling admitted only bars sitting on the curve's top point, and `max(65, …)` was dead code (when `ceilPct < 65`, nothing can pass at all). Measured with the real fitted curves: the mandate demanded **raw ≥ 0.760** on the coarse Aug curve and **raw ≥ 0.792** on the box's actual curve — BOTH stricter than the plain `raw ≥ 0.70` the whole change set out to widen. The floor also swung 68↔70 purely on which sparse buckets cleared `n >= 40`. **Now: the tier is read off the RAW scale at 70** — a fixed, documented, drift-independent quantity (v14: raw 70-85 realizes 75.9% crypto / 73.8% stocks, 76.6% top-decile precision) that also agrees with the `ML Bucket` line's own "TOP" label instead of quietly using a second scale. The live curve keeps its two real jobs: correcting the auto-FLAT/quality gate, and acting as a **veto** — if a self-declared TOP bar no longer clears the FAVORABLE band (calibrated < 60) on graded forward data, the tier has decayed and nothing is mandated. Veto deliberately set at 60, not the notify threshold: raw-70 bars calibrate to ~65.6 on the live curve, so a 65 veto would trip on ordinary drift. `calibrationCeiling` is out of the prompt path entirely; it now drives one **unreachable-gate guard log** (`[calibration] WARNING <market> curve tops out at X% — below the notify threshold`), which is the one silent total-failure mode this design can produce.
+- **One prompt was printing ML_WIN on two scales with no annotation** — the window quoting calibrated ("68%") ~25 lines from `ML Bucket: TOP (ML_WIN 80%)` (raw), reading as a malfunction. Mandate lines now render `ML_WIN raw 80% (live-calibrated 66%)`.
+- **The withheld MIXED mandate is now a TOKEN, not a parenthetical.** Both system-prompt rules carve out "(not SUSPENDED)" but match on the window token, so a prose "(Setup NOT mandated here…)" left them firing — telling the model a NO SETUP was acceptable AND that the JSON must carry a setup, in the chase state the 2026-07-02 symmetry fix blocks. Emits `MIXED_HIGH_ML_WINDOW_SUSPENDED:` now (the `:` also keeps the `[mandate-violation]` detector from matching the suspended form).
+- **`entryReached`'s 0.1% "market entry" shortcut leaked into the PENDING path** when I extracted it. `classifySetupType` routes "on a 4H close above Y" to conditional by KEYWORD regardless of distance, so a trigger 0.03% above price took the shortcut and flipped active on the first replayed bar — the exact phantom-loss class the extraction was written to kill, for the form the mandate makes common. The shortcut is now opt-in (`allowMarketShortcut`), passed only by the active path.
+- **Pending wall-clock rules ran BEFORE the candle replay.** The 12h expiry and the ≥1h re-eval key on `nowMs` and `return` early, while the touch test walks historical `points` — and `resolveTrackedSetups` deliberately backfills ~10 days of downtime. So after a deploy/outage, a setup that provably triggered inside its window (and may have run to TP1) was recorded `expired`/never-triggered. Candle evidence is now evaluated first, bounded to `pendingExpiresAt` so a post-window touch still isn't a trigger. Same class as the 2026-07-24 `stepFlat` horizon fix, which had corrected it for FLATs only.
+- **The precheck memo cached FAILURES.** `envelopePrecheck` returns `null` on a throw, `null` is fail-OPEN for all three proactive pushes, and the memo key only moves on a new bar — so one transient KV hiccup froze "envelope clear" for up to ~4h, paging the user and burning Sonnet-5 auto-analyses on genuinely auto-FLAT bars. Only non-null verdicts are cached now (keeps the 1,440→~24 saving; failures self-heal next tick as before).
+- **`notificationBiasAlignment`'s silent `catch { return 'neutral' }`** made a compute failure indistinguishable from a genuine Neutral read in the very field `/notify-debug` reports — the endpoint built because "silence looks identical whichever gate is closed". Now logs `[score] <SYM> bias alignment failed, degrading to neutral`.
+- **A test that tested nothing:** `drops buckets below CAL_MIN_BUCKET_N` asserted `> 0.6` and passed identically with the filter deleted (0.6859 vs 0.6304). That value is the curve ceiling, so it is load-bearing — now pinned by equality against the unpolluted fit plus `curve[last].n === 382`.
+
+### 2026-08-21c — Review hardening of the mandate: the JSON contract, the calibration ceiling, and the breakout entry-touch
+
+Max-effort review of `30d7303` returned 15 findings; all fixed (528/528 green). The load-bearing ones, because each would have let the original failure recur:
+
+- **The mandate never reached the machine-readable contract.** `prompt-system.json` still said "Emit a setup ONLY if a Viable risk-defined level exists … Otherwise empty array", so the model could satisfy the prose mandate with a conditional Entry/Stop/TP table AND legitimately emit `[]` — and `parseSetups` reads only the fenced JSON, so downstream saw NO SETUP: the same silence, now wearing a compliant-looking analysis. Both markets' JSON rule, the `## If You Take a Position` gate, and the stand-aside fallback now carry the window exception.
+- **The 70 gate could go universe-wide unreachable** — first fix was itself wrong, see the 2026-08-22 entry below. (Original reasoning: `applyCalibration` clamps at the live curve's top bucket, which sat at ~69, so a hard 70 would silently kill both windows.)
+- **Breakout conditionals false-fired the entry-touch** (`outcome-tracking.ts`). The PENDING path's test was direction-only (`isLong ? low <= entry : high >= entry`), so a mandated "on a 4H close above Y" LONG — entry ABOVE price — was marked entered by the first bar and then usually stopped out on drift, inserting a phantom LOSS into `trade_outcomes`. The ACTIVE path had it right all along; both now share one exported `entryReached()` helper so they cannot drift again. Pre-existing bug, promoted to load-bearing by a mandate that produces conditionals routinely.
+- **Where forcing a setup would be wrong, the mandate now SUSPENDS rather than fires:** stocks 0-2d from earnings (the system prompt's earnings stand-aside was a direct contradiction), and `staleCount >= 2` (the missing feeds are exactly the ones that would close the window — losing enrichment made a forced entry MORE likely, on the blindest read). The MIXED window withholds its mandate tail under chase-HIGH or an unguarded stock-SHORT, since those protections are scoped to full alignment; and `treatment_long_confirm_FAIL` (a LONG-only check keyed off the daily bias) no longer auto-FLATs a MIXED bar. A `PRECEDENCE:` clause states how to resolve co-emitted counter-orders (BB_EXTREME, news conflict, regime caps): satisfy the mandate with the other side, a tighter trigger, or smaller size — never by ignoring the flag.
+- **Scale hygiene + observability:** `SymbolPrediction.notifyProb` carries the calibrated value so nothing compares raw against a calibrated threshold again — this fixed the entry-zone push (was `raw < 0.55`, which permanently killed the push for setups born at calibrated 65-69, i.e. exactly the ones the lowered threshold creates; now `ENTRY_ZONE_ML_FLOOR = ML_THRESHOLD - 0.10`), the rising-edge log, `/notify-debug`'s self-contradictory `blockedBy`, and the push copy. `runFullAnalysisCore` now logs `[mandate-violation]` / `[mandate-ok]` when a window was active, distinguishing "model declined" from "prose table, empty JSON" — recurrence is greppable instead of needing another replay script.
+- **Cost/noise, honestly:** the threshold comment's "the setup gate bounds pushes" claim was stale (2026-08-08c made a DECLINED analysis push). Now a decline BELOW the mandate band defers silently instead of pushing, so the widened 65-69 band buys analysis coverage without "nothing to do" notifications. The envelope precheck is memoized module-scope on `(symbol, 4H bar, ML)` and takes the pass-level calibration curve, ending ~1,440 redundant full prompt builds + synchronous 90-day D1 aggregates per in-band symbol per day.
+
+### 2026-08-21b — Must-offer-entry rule: at high conviction, declining to construct a setup is no longer an allowed output (+ notify threshold 70→65)
+
+Follow-up to the same incident after the user sharpened it: *"the ML was showing 80 but the app was saying stay put"* / *"that is not really protecting me"*. Replayed the REAL prompt builder over the rally with ML pinned at 80 (same method as 2026-07-24; enrichment-free, so a lower bound): **34/34 4H bars Aug 16→21 were envelope-CLEAN** — no chase guard, no mixed-bias FLAT, nothing mechanical said stay put. So at ML 80 the blocker was the LAST layer: the LLM's own discretionary read ("extended, wait for the retest" → NO SETUP), exactly the pattern the 2026-08-08c box-data investigation found (trigger fires → analysis declines → silence). The defensive philosophy held at every layer; when all gates opened, nothing REQUIRED the system to hand the user a trade.
+
+- **`HIGH_CONVICTION_WINDOW` (prompt.ts, envelope else-branch):** when biases are ALIGNED, calibrated ML_WIN ≥ 70, and NO auto-FLAT reason is active, the prompt now emits a directive making a concrete setup MANDATORY — immediate entry at a valid level, otherwise a CONDITIONAL entry at a named pullback level/breakout trigger. "Extended" is required to become the entry CONDITION, not a reason to decline. The **`MIXED_HIGH_ML_WINDOW`** line (2026-07-06) gains the same mandate tail (structure-led, still capped MODERATE). `prompt-system.json` (both markets) reinforces: NO SETUP is not an acceptable output inside either window.
+- **Notify threshold `ML_THRESHOLD` 0.70 → 0.65** — on the CALIBRATED scale the honest PAV map only exceeds 70 at raw ≥ ~79 (a few bars a month), while the live 60-70 band realizes ~66%. 65 looks at the band the forward data says is worth looking at; push volume + LLM cost stay bounded by the setup gate, the 3.5h `notif_claims` claim and the `autorun` guard. Note the auto-analyses triggered in the 65-69 band can still legitimately decline (the mandate starts at 70) — those send the "conditions favorable · no setup" push with the model's reason (2026-08-08c), which is the designed outcome.
+- Fixture extended with the 1H leg; `test/high-conviction-window.test.ts` pins on the REAL tape: envelope CLEAN + `HIGH_CONVICTION_WINDOW` + "LONG setup is MANDATORY" at ML 80, absent at 55. 517/517 green. Worker-only — **needs a box redeploy**.
+
+### 2026-08-21 — Missed 62k→80k rally diagnosed: TWO gates were closed — live calibration refit (PAV) + direction gate moved off the simplified scorer
+
+User: *"crypto went up almost to 80K from 62-64 range and the app did not do anything… going up for 3 days straight."* Box verified current (`c05f3a8`) and cron healthy first — this was NOT a stale deploy. Measured the window (Kraken-independent this time: the box's own `/candles/crypto`, ATR(14) Wilder on 4H): **27 of 37 bars from Aug 14-20 were goodR bars**, with forward-24h favorable excursions of 5-20 ATR on Aug 18-19 — while BTC's raw ML read **39%** even at peak momentum. Two independent gates were closed the whole way; both fixed:
+
+1. **Live calibration refit (executes step 2 of the 2026-08-14 ladder).** `/ml-calibration` (9,090 graded): predicted 25→77 realizing **41→69** — compressed but monotonic (one 1pp wiggle) → per the pre-declared rule this is **recalibrate**, not retrain. The 35/65 blend kept 35% of the stale raw scale, so raw 39% gated as ~52.9% when the live realized rate was ~60%. New `src/calibration.ts`: fine (5pp) prediction buckets from `ml_calibration` D1 (90d, **per market** — the old notify curve applied the crypto curve to stock symbols too) → weighted PAV monotone fit → piecewise-linear apply, clamped to the observed ends. Replaces the blend in ALL THREE consumers via the shared helpers (`fetchLiveCalBuckets` + `fetchMlCalibration` in index.ts): the envelope gate, the precheck, and the symbol pass's notify threshold. Self-updating — refit from D1 each use, so regime shifts are absorbed without retraining. Prompt's audited-bucket display line unchanged in shape.
+2. **Direction gate moved onto the faithful scorer.** The cron gated direction on the simplified `computeScore` (scoring.ts), whose RSI>70 penalty (−3) outweighs crypto's price-position weight (+1) — so the harder a rally runs the more bearish it leans. Replayed on the real tape: it scored the +7% Aug 19 breakout day **BEARISH** (RSI 74) and the follow-through Neutral (RSI 84, score +3 vs threshold 4), while `/indicators` (scoring-ios) showed the user Bullish / Strong Bullish — alignment "conflict"/"neutral", `notificationDirection` = 0, gate closed for the entire move. New exported `notificationBiasAlignment` computes bias via `computeFullIndicators` (the scorer the app displays — agreement by construction; scoring-ios's RSI rule is regime-aware and reads high-RSI-in-uptrend as momentum, not fade). `computeScore` now has zero callers in index.ts (kept for its Candle type + any script use). Regression test pins the REAL captured Aug-2026 BTC tape (`test/fixtures/btc-rally-2026-08.json`): faithful → `aligned_bullish`, simplified → documented NOT-bullish on the same candles. `metaDirection` (meta-head conditioning) inherits the fix — and training's bias came from the Swift scorer, so this also removes a train/serve skew.
+
+**Honest caveat, deliberately NOT changed here:** with the live top bucket realizing ~69%, an honest map cannot produce a calibrated value ≥ 70 — so the three 70-keyed gates (notify threshold, the `biases_MIXED` ML≥70 hatch, the counter-trend playbook) may be unreachable until the live curve's top improves or the thresholds are revisited. That is the honest read (the blend's 70+ passes were partly stale-scale artifacts). Threshold choice is a product decision — flagged as the open follow-up, not smuggled into a recalibration. NB the mixed-market curve above understates the per-market picture; the new `?market=` param on `/ml-calibration` shows the actual per-market fits post-deploy.
+
+514/514 tests green (14 new: PAV fit/apply + the fixture regression). Worker-only — **needs a box redeploy**.
+
+### 2026-08-14 — "Should we retrain?" — No: the notify gate was on RAW ML while the envelope used CALIBRATED (+ a July measurement error corrected)
+
+User: *"we are routinely missing moves of a few thousand dollars for BTC — should we retrain?"* Measured before answering (120 days of BTC 4H, Kraken; ATR(14) Wilder on 4H, matching how the label's `atrFor4H` is derived):
+
+| | |
+|---|---|
+| mean ATR(4H) | $757 |
+| goodR24 base rate (≥1.5 ATR/24h) | **59.0%** |
+| mean 24h excursion | $1,486 (2.02 ATR) |
+| ≥$3,000 within 72h | 27.2% of bars — **77% of them had a goodR24 event** |
+| ≥$2,000 within 72h | 62.8% of bars — 66% had one |
+| h72t25 target (≥2.5 ATR/72h) | captures **97%** of ≥$3k/72h moves |
+
+**So the target is NOT blind to these moves** — the "wrong horizon" hypothesis is dead. The moves are visible; the *gate* wasn't opening.
+
+**⚠️ Correction to the 2026-07-24 entry.** That entry claimed realized goodR over the BTC window was **0/67, mean 0.66 ATR**, and concluded "the envelope was factually right — a low ML_WIN was accurate." That measurement used the **DAILY** ATR, while the label's `fwdMaxFavR` divides by `atrFor4H` (derived from `atrPercent`, which is the 4H ATR). Daily ATR runs ~3x the 4H ATR, so the threshold was ~3x too strict and the goodR count collapsed to zero. On the correct 4H basis the base rate is 59%, not 0%. **The part of that entry about the FRAMING hatch being unreachable stands** (that was a code-reachability finding, independent of this); the "ML was correct to read low" conclusion does not.
+
+**Root cause found, and it is not the model.** `runFullAnalysisCore` and the envelope precheck have keyed on `calibratedMlWin` since 2026-07-02 — but the NOTIFY threshold was left on the raw `mlProb`. One quantity, two decisions, two different values. With the live curve compressed (the 30-50 bucket realising ~65%), raw systematically under-reads, so the envelope would judge a bar tradeable while the notification never fired. That is precisely "routinely missing moves". Fixed: the notify gate now applies the same 35/65 blend. The curve is fetched ONCE per cron (5 buckets, universe-wide) rather than per symbol, and `/notify-debug` now reports `ml` and `mlCalibrated` side by side so the correction is visible.
+
+**Retrain verdict: not yet, and in this order.** (1) Ship this — it is a consistency bug, free, and directly targets the symptom. (2) Read the live curve via `/ml-calibration`; if it is compressed but still MONOTONIC the model ranks correctly and only its scale has drifted → **recalibrate** (isotonic refit on `ml_calibration`, hours not days, no feature work). (3) Only if the curve is non-monotonic — higher predictions realising *lower* rates — has the model genuinely decayed and earned a full retrain. Note the current 59% base rate versus v14's 50.5% training base rate is itself evidence of a regime shift that a recalibration absorbs cheaply.
+
+500/500 green. Worker-only, needs a box redeploy.
+
+### 2026-08-08c — Diagnosed from the box's own data: notify on FAVOURABLE CONDITIONS + fix a self-inflicted double trigger
+
+Ended the guessing with SQL against `/mnt/WDRED/marketscope/marketscope.db`. What it showed:
+- **Push token present, watchlist 11 symbols** on the active device — both prime suspects dead.
+- **`notifications` has rows** (ADA/XRP/SOL `ml_crossing`, ~9 over 3 days, all to the ACTIVE device + live token). So the whole conjunction — ML≥70, decisive direction, clean envelope precheck, claim won — **was firing correctly all along**.
+- **`tracked_setups` explains the silence:** eleven `flat / NO_SETUP` rows against four `setup` rows, and the BTC setups have no matching trigger row in the same window — so they came from MANUAL analyses, which had no push path at all before 88dad17. The cron's own enriched analyses produced essentially zero setups. Trigger fires → LLM declines → setup gate suppresses → silence. Working as designed; the design was the problem.
+
+**Fix 1 — a self-inflicted double trigger (mine).** `deferAutoAnalysisCross` DELETED the `notif_claims` claim. The analysis takes 30-90s, the defer dropped the claim, and the next cron tick re-claimed and logged a SECOND trigger ~1 min after the first — visible as paired rows (ADA 18:00:42 + 18:02:08, SOL 18:00:16 + 18:01:09, ADA 21:32:34 + 21:33:24). It always stopped at two because the second attempt hit the 3.5h `autorun:<sym>` guard and returned without deferring. Harmless while no-setup analyses sent nothing — but it would have double-paged the moment fix 2 shipped. The claim is now HELD: it and the autorun guard are both 3.5h, so they lapse together and the next tick does a real retry, with the resuppress key keeping `wasSuppressed` true meanwhile so no fresh ML cross is needed. (Verified separately that the claim SQL itself is sound — `changes` correctly returns 0 on a held claim under better-sqlite3.)
+
+**Fix 2 — notify on favourable conditions, carrying the reason.** When every precondition passes but the enriched analysis declines, the user is now told: `"BTC conditions favorable · no setup"` + the model's own Bottom Line. This DELIBERATELY reverses the 2026-07-14 "no setup → suppress silently" decision, with the thing that made those pushes useless fixed: the old ones said "ML 73%" and led nowhere, so they trained the user to ignore them; this one carries the REASON ("chase into extended trend", "waiting for a retest"), which is actionable. Two things also differ from July: the gate is far stricter now (ML≥70 AND unambiguous direction AND clean envelope, vs a bare ML crossing), and volume is bounded by the same 3.5h claim + guard — at most one per symbol per 3.5h. Without this the proactive path essentially never fires, since the cron produced ~0 setups in 3 days.
+
+500/500 green. Worker-only — **needs a box redeploy** (still on `dcc3fab`, now 5 commits behind).
+
+### 2026-08-08b — Notify trigger confirmed as ML≥70 AND unambiguous AND envelope-clean; added /notify-debug to end the guessing
+
+User requirement, refined: *"notification when there are favorable conditions, but not only 70% — also no ambiguity, like the conditions the AI would use to create a setup"*, then clarified: *"we need ML 70 plus other factors."* So a CONJUNCTION, with ML≥70 necessary but not sufficient.
+
+**That is already what the trigger does**, verified in code: `crossCandidate = mlProb >= ML_THRESHOLD && (crossed || wasSuppressed) && metaDirection !== 0`, then the envelope precheck gates it. And `metaDirection` is literally `notificationDirection(biasAlignment, dStochCross)` — the same union primitive the device pass uses, so the two direction gates agree (checked; they could have drifted). "No ambiguity" is covered twice over: the direction primitive returns 0 when bias and Stoch conflict, and the envelope's `auto_FLAT_active` list carries the rest (`biases_MIXED_and_ML_<70`, `ANY_KILLED`, `chase_into_extended_aligned_trend`, `macro_IMMINENT`, `ML_WIN_<50`) — the AI's own preconditions, by construction, since the precheck builds the REAL prompt.
+
+**So the requirement was not the gap.** Something in the conjunction fails at runtime, and silence looks identical whichever of the five conditions is false — which is exactly why this took several rounds of hypothesis (deferral bug, edge-vs-level, notification location, live-price entry detection) without converging.
+
+**Fix the observability, not another guess.** The symbol pass now records what each gate ACTUALLY decided per symbol per tick (`notify_debug:all` KV, 15-min TTL, one batched write per cron — same discipline as the other per-cron blobs), and new `GET /notify-debug?symbol=…` serves it joined with the per-device gates the symbol pass cannot see: push-token presence, the synced watchlist (the trigger loop iterates exactly this — an empty row means zero notifications regardless of signal quality), the `notif_claims` claim, and the `autorun:<sym>` guard. Each symbol gets **`blockedBy`** — the FIRST closed gate in evaluation order — or null when every gate is open. Recorded decisions, not a re-derivation, so it cannot disagree with what the cron did.
+
+500/500 green. Worker-only, needs a box redeploy.
+
+### 2026-08-08 — Entry-zone detection moved to LIVE price (a setup doesn't become actionable on a candle boundary)
+
+User framing, which named the design flaw exactly: *"the app used to give notifications all the time, then we decided to do it every 4 hours if there is a valid setup — but a valid setup does not necessarily happen only at 4h close."*
+
+**The flaw was real and measurable in the code.** The whole pipeline is closed-bar on purpose (ML features must match how the model was trained), and the entry-touch test inherited that: `fourHCandles` has the in-progress bar dropped, so `last4HHigh`/`last4HLow` describe the last CLOSED 4H bar. The symbol pass fetched no live price at all (zero `fetchLivePrice` calls in `computeSymbolPredictions`). Consequence: price entering your entry zone at 10:15 was invisible until the 12:00 close — up to ~4h late — and **entirely missed** if price left the zone before that close. "Is my entry reachable?" is a live-price question that was being answered with 4-hour-old data.
+
+**Fix.** The symbol pass now fetches a live tick, but ONLY for symbols in `pendingSetupSymbols` (typically 0-3), so it costs a handful of ticks per cron rather than one per archive symbol. The touch test becomes a union: live price in the zone RIGHT NOW (detected within one cron tick, ~1 min) **OR** the last closed bar's extreme reached it (retained, so a touch that happened and reversed inside that bar is still caught). The push now quotes live price against the entry — `"LONG entry $64230.00 — price is $64251.10 now"` — since "is in range" is much more actionable when you can see where price actually sits.
+
+`livePrice` is the ONE deliberately-current value on `SymbolPrediction`; everything else stays closed-bar for parity, and the comment at the field says so.
+
+500/500 green. Worker-only, needs a box redeploy.
+
+**Note on the two notification classes, which answer different questions:** *setup created* (2026-08-07) fires when an analysis produces a setup — necessarily on the analysis cadence, since a setup can't exist before one runs. *Entry zone reached* is the timely one, and is now live-driven. The analysis cadence itself is still bounded by the 3.5h autorun guard; tightening it is a pure cost dial.
+
+### 2026-08-07 — Setup notifications now fire on SETUP CREATION, not on the ML-cross chain
+
+User, after the box was confirmed running `dcc3fab` with the cron healthy and still receiving nothing: **"I want notification sent whenever the app creates a setup."** Taken literally, and it is the right design.
+
+**The problem was the trigger's location.** The only setup push came from `runAutoAnalysis`, at the far end of a ten-link chain: push token → symbol in the synced watchlist → ML ≥ 70 → decisive direction primitive → envelope not flat → `notif_claims` won → `autorun:<sym>` guard free → analysis succeeds → setup produced → APNs delivers. Any single link breaking meant silence, and most of those links have nothing to do with whether a setup exists — ML ≥ 70 alone is ~6.3% of bars. A setup from a MANUAL analysis never notified at all, because that path isn't the cron's.
+
+**Fix: notify from the choke point.** `runFullAnalysisCore` is what `/full-analysis`, `/full-analysis/async` and `runAutoAnalysis` all call, and `parseSetups` has already applied the geometry gate by then. New `notifySetupCreated` fires there whenever `setups.length > 0`, detached (`void`) so a slow APNs round-trip can't delay the analysis response. "A setup exists" is now the entire trigger; everything upstream only controls HOW OFTEN the server looks. The old `runAutoAnalysis` push was removed so cron-triggered setups don't double-page — that function keeps only its deferral bookkeeping.
+
+**Dedupe is on setup IDENTITY, not time:** `symbol:direction:entry:stopLoss` (6 significant digits), 6h TTL. Re-running an analysis that yields the same setup stays silent; a genuinely different setup always pages. Title leads with direction and entry (`BTC LONG setup · entry 64230.00`), body is the Bottom Line.
+
+Push inventory after this change — five sites, all distinct: async-job ready/failed (suppressed when the app claims the result), price alerts, **setup created (new)**, risk-state transition, entry-zone reached. 500/500 green. Worker-only, needs a box redeploy.
+
+**Still unexplained:** which of the ten links was actually breaking before. The new trigger bypasses seven of them, so the answer is now mostly moot — but if pushes still don't arrive, the remaining suspects are narrow and checkable: no `push_token` on the device row, or APNs delivery itself. `[setup-notify]` log lines on the box name which one.
+
+### 2026-08-06 — Setup notifications: trigger widened from a rising EDGE to a LEVEL (+ the deferral fix below)
+
+Follow-up to the same report, after the user clarified: **the app does generate setups — the notification is late, or never arrives.** That rules out the gates being wrong and points at the trigger's *shape*.
+
+`crossed` was a pure rising edge: `prevMl < 0.70 && mlProb >= 0.70`. Since `mlProb` only moves on a 4H close, an excursion above the threshold produced exactly **one** eligible tick. If ML crossed 70 and then sat there for a day, a setup that materialised six hours later — envelope clearing, a level coming into play — got no analysis and no push at all. Meanwhile the user could produce that same setup by hand any time, which is exactly the reported asymmetry. The trigger answered *"did volatility just jump?"*; the user needs *"does a setup exist now?"*.
+
+Now `crossed = mlProb >= ML_THRESHOLD` — a level. Every tick at or above threshold is eligible; the rising edge is kept only for logging. **No new spam risk and no new cost ceiling**, because the two existing guards are untouched and already do the bounding: the 3.5h `notif_claims` claim per (push_token, symbol) and the 3.5h `autorun:<symbol>` KV guard inside `runAutoAnalysis`. Worst case remains ~one LLM run per symbol per 3.5h (~6.8/day/symbol). Crucially, since the 2026-07-14 setup gate the push only fires when the analysis actually yields a SETUP — so the setup gate, not the ML threshold, is what keeps notifications quiet. Widening the trigger buys coverage, not noise.
+
+**Residual latency, stated honestly:** a setup appearing just after a run waits up to 3.5h for the next one. Tightening that is a pure cost dial (`NOTIFY_COOLDOWN_SEC` / the autorun guard). Separately, the analysis threshold could be decoupled from the notify threshold — analyse from ML ≥ 60 while still only pushing on a setup — which would widen coverage into the 60-70 band the v14 calibration says realises 64%. Both deferred as explicit cost decisions for the user.
+
+### 2026-08-06 — "Not getting setup notifications": the auto-analysis deferral was destroyed one tick after it was armed
+
+The 2026-07-24 defer-not-drop fix did not work. Traced tick by tick:
+1. **Tick N** — ML cross, `notif_claims` claim taken, `runAutoAnalysis` runs, analysis yields no setup → `deferAutoAnalysisCross` releases the claim and sets `notif_resuppress:<sym>`.
+2. **Tick N+1** — `wasSuppressed` true, envelope clear → `nextSuppressionState` returns `effectiveCross: true`, and the `else if (wasSuppressed)` branch called `clearSuppression()`, wiping **both** stores. The claim is re-taken, `runAutoAnalysis` is invoked — and hits its own 3.5h `autorun:<sym>` guard, set back at tick N. Silent early return: no push, and (by design) no re-defer.
+3. **Tick N+2** — deferral gone, `crossed` false → nothing.
+
+So the deferral lived exactly one tick, and that tick was *guaranteed* to be swallowed by the autorun guard. Net effect identical to before the fix — the cross dropped, one tick later — which is why setup notifications still went missing.
+
+**Root cause: two different deferrals were sharing one clear condition.** The blob (`suppressedMap`) holds an ENVELOPE-precheck deferral, which the envelope clearing genuinely resolves because the push fires on that same tick. The key (`notif_resuppress:<sym>`) holds an AUTO-ANALYSIS deferral — "the enriched analysis produced no setup" — which only a *later* analysis producing one can resolve. The envelope clearing says nothing about it.
+
+**Fix:** split the clear conditions. `clearBlobDeferral()` on envelope-clear (unchanged precheck semantics); `clearAllDeferrals()` only when ML fades below threshold; and `runAutoAnalysis` deletes the key after a push actually sends. The key otherwise persists on its 24h TTL. Now when the claim and the autorun guard both lapse at ~3.5h, the analysis genuinely re-runs and can page — the retry-every-3.5h-for-24h behaviour the original fix intended. Regression test added (12 in notify-precheck); 499/499 green.
+
+**Caveat:** this is a verified logic defect, not a confirmed diagnosis of the user's silence — setup pushes are gated on ML≥70 crossing (~6.3% of bars) AND a decisive direction AND the envelope AND the analysis yielding a setup, so genuine quiet is also possible. `GET /notifications` and `GET /scores?symbol=` distinguish them.
+
+### 2026-07-31 — Analysis pinned until replaced (the 1h cache guard was discarding it) + Now-tab visual pass
+
+**"The latest analysis disappears; keep the latest one showing until a new one is run."** The Caches→Application Support move (earlier today) fixed eviction, but a second path was still wiping analyses: `loadCache` honors the disk cache only when `result.timestamp` — the DATA timestamp — is **under 1 hour old**. Return to a symbol after >1h and the cache read returns nil, `quickFetch` stores a placeholder with `claudeAnalysis: ""`, and `refreshIndicators` then faithfully carries that emptiness forward on every cycle. The analysis was safe on disk; the freshness guard just refused to read it. That guard is RIGHT for indicator data (hour-old candles must not render as current) and WRONG for the analysis, which stays valid-to-display until a newer one replaces it. Fix: new `loadCacheAnyAge` salvages `claudeAnalysis`/`tradeSetups`/`analysisTimestamp` regardless of data age; `quickFetch` merges them into its placeholder, and `refreshIndicators` falls back to the disk copy whenever memory holds an analysis-less placeholder. The staleness banner still tells the truth — the analysis keeps its own timestamp.
+
+**Visual pass (verified by simulator screenshot):** `PriceHeaderView` now uses the shared `themedCard()` chrome (it was the last card on Now drawing its own ad-hoc 12pt background) and renders the 24h change as a `themedPill` so it reads as a sibling of the regime badge; `FavoritePillsView`'s ML numbers route through Theme (the raw `.green` was one of the last off-palette colours on the landing screen); and the **`LevelsChartView` now renders on the Now tab** under the indicators — filling the documented dead-space rough edge from the 2026-07-25 entry with the most useful thing available pre-analysis: where price sits vs S/R/VWAP/POC (no analysis needed; setup levels join automatically once one exists). Known cosmetic artifact, pre-existing: immediately after a cold start the Indicators chips can read "Daily Daily Daily" — that's the quickFetch placeholder (tf1 copied into all three slots) until the full refresh lands seconds later.
+
+iOS-only — needs a rebuild+install.
+
+### 2026-07-31 — Sub-dollar coins had no chart levels: 2dp rounding zeroed their ATR
+
+User: "on ADA I still don't see any support or resistance levels — do I need to run analysis first?" No, and running one wouldn't have helped.
+
+**Root cause.** `r2()` rounds every price-shaped value to 2 decimal places. Invisible on BTC, fatal below $1. Measured on real ADA candles (721 bars, price $0.1675): **ATR rounded to 0** (true value ~$0.0033), S/R snapped onto a 1-cent grid (~6% wide at that price), and EMA20 and EMA200 both landed on 0.17 — collapsing the trend structure entirely. A controlled test (real BTC candles rescaled, identical shape) shows the cliff: 5 supports / 3 resistances at $64k and at $64, down to 2/2 at $0.64, and at PEPE scale a single "support" at literally **$0**.
+
+The zero ATR is what empties the chart: `WatchLevels.build` opens with `guard price > 0, atr > 0 else { return [] }`, which returns before setup levels are added — so an analysed sub-dollar coin showed no entry/stop/target lines either. Roughly a third of ARCHIVE_CRYPTO trades under $1 (ADA, DOGE, XLM, VET, HBAR, ZIL, RSR, IOST, SKL, GALA, SAND, GMT, JUP, PEPE…).
+
+**Fix (the safe half).** New `rPrice()` in scoring-full.ts: at/above $1 it is byte-identical to `r2` (BTC/ETH/stock output and the prompt fixtures unchanged — verified), below $1 the grid follows the magnitude, holding ~6 significant digits. Applied in **indicators-full.ts only** — the display/prompt path, which is NOT covered by the 1e-7 ML parity suite (that tests `computeAllFeatures` in scoring-full.ts) — to S/R, Fibonacci, Bollinger, EMA20/50/200, MACD histogram and ATR. Explicitly NOT applied to scale-free values (RSI, ADX, Stoch, volumeRatio, atrPercent) where 2dp is already correct. ADA after: ATR 0 → 0.003258, 5 real supports, EMA20 ≠ EMA200. iOS `WatchLevels.build` also hardened — `??` only catches a nil ATR, never a zero one, so a zero now degrades to 1%-of-price instead of emptying the chart.
+
+**Known limitation, deliberately not fixed here.** `scoring-full.ts` still rounds ATR/EMA/VWAP with `r2` on the **ML feature** path, so `dEmaCross`, `dStackBull/Bear`, `dAboveVwap` and VP bucket sizing remain degenerate for sub-dollar symbols. Training and serving round identically (that is what the parity suite guarantees), so there is no train/serve skew — those features simply carry no information for cheap coins. Changing it would shift the distribution v14 was trained on and needs a coordinated Swift change + fixture refresh + retrain: a v15 conversation. **Labels are safe** — `fwdMaxFavR` divides by `atrFor4H = (atrPercent / 100) * price`, and `atrPercent` is computed from the RAW ATR at 4dp and is scale-invariant.
+
+499/499 worker tests green; iOS build green. Needs a box redeploy + iOS rebuild.
+
+### 2026-07-31 — Analyses stopped vanishing (Caches → Application Support) + history reachable without an analysis
+
+Two user reports, one cause each.
+
+**"The latest analysis doesn't show after some time."** Both the per-symbol analysis cache (`AnalysisService.cacheDir`) and the analysis archive (`AnalysisHistoryStore.historyDir`) lived in `.cachesDirectory` — which iOS purges under storage pressure, silently and with no opt-out. That is the correct home for re-downloadable data and the wrong one for these: an LLM analysis cost real money, describes a bar that has already passed, and can never be reproduced. Both now use **Application Support** via a new `PersistentStore` helper, which also MOVES anything still present in the old Caches location on first access (one-shot, flagged per directory in UserDefaults) so nothing that survived the last purge is lost. `OutcomeTracker`'s server snapshot stays in Caches deliberately — it genuinely is regenerable from `GET /tracked-setups`.
+
+**"To read historical analysis I have to rerun analysis to even enter the screen."** The "Analysis History" button sat inside `aiContent(result)` — i.e. inside the analysis screen — and the 2026-07-25 restructure made that screen reachable only through the verdict card's "Full read" link, which is gated on an analysis already existing. So with no analysis for the current bar there was no route to past analyses at all, and the only way in was to spend another LLM call. The archive is now a first-class action on `VerdictCard` itself, shown in every state including NOT ANALYSED — which is precisely when you want yesterday's read. The sheet is presented by the tab (via the existing `showHistory` binding) rather than by the card, because a sheet attached to a row inside a List can be dismissed by row recycling underneath it. Verified on the simulator in the no-analysis state.
+
+iOS-only — needs a rebuild+install.
+
+### 2026-07-25 — Stock 429s fixed: the /finnhub/* fan-out collapsed into the existing /market call
+
+User: "on stocks I am often getting 429." Traced to the worker's own per-device gate, and stocks were hitting it ~2.5× faster than crypto **by construction**.
+
+**The arithmetic.** Each stock enrichment cycle fired **five concurrent `/finnhub/*` requests** (recommendation/metric/earnings/news/insider) from `AnalysisService`, so a stock refresh cost ~7 worker requests (+ `/indicators`, `/ml-predict`) against crypto's 3 — crypto having been consolidated onto one `/market` call by the 2026-06-13 Phase E work. Worse, there were **TWO** such fan-outs: one in `refreshIndicators` and a second in `runFullAnalysis`, so "tap a stock, analyse it" cost ~12 requests. Against `checkRateLimit(global:<deviceId>, 60, 60)` that meant ~8 stocks touched in a minute produced a 429 storm on the stock path only.
+
+**The aggravating detail:** the gate sits at `index.ts:787`, BEFORE endpoint routing. The worker caches those Finnhub responses for 1-24h, but a cache hit costs exactly the same budget as a miss — so the caching gave zero protection against the limit it was causing.
+
+**Fix.** `fetchStockEnrichment` (enrichment.ts) already assembled all of this server-side; stocks were left on the on-device path back in June only because `/market`'s `stockInfo` was then a strict subset (no analyst/insider/news). 2026-07-02 added insider + news; this closes the last gap by fetching `/stock/recommendation` server-side (one extra CACHED call, parallel with the others) and taking `marketCap` from the Yahoo `price` module already fetched — no extra call for it. `StockInfo` gained `finnhubStrongBuy` + `marketCap`; `WorkerMarketService` gained a `stockFinnhub` field decoding that subset; both iOS fan-outs were replaced with reads from the single bundle, merged conservatively (nil keeps whatever Yahoo or the previous cycle provided, so a partial response can never blank good data). `marketBundle` is now fetched for BOTH markets rather than crypto-only. **Stock refresh: 7 worker requests → 3.** Yahoo fundamentals deliberately stay on the on-device path — Yahoo isn't geoblocked or worker-gated, so routing it through the box would ADD a request, not remove one.
+
+**Also raised the global cap 60 → 300/min.** 60 was a Cloudflare-era number from when every request cost quota against the free Workers tier. The backend is a Node process on the user's own hardware, no per-request cost, no upstream cap, one user — the gate's only real job is stopping a runaway client loop, which 300 does equally well.
+
+499/499 worker tests green; iOS build green. **Needs a box redeploy AND an iOS rebuild** — shipping only one leaves the app calling `/finnhub/*` endpoints (fine, just unfixed) or reading `stockFinnhub` fields the old worker doesn't send (fine, they decode as nil and the previous value carries forward). Neither half breaks the other.
+
+### 2026-07-25 — UI pass: verdict-first landing screen, native TabView, semantic theme, Dynamic Type
+
+The app's conclusion used to be three taps away. The screens were organised by DATA SOURCE (Overview / Chart / Market / Analysis / Alerts), so the landing screen opened with a symbol switcher and a data timestamp and never stated the answer — which is exactly how the "auto-FLAT for a week and it told me nothing" experience felt from the UI side. Reorganised around the question being asked, verified on a booted simulator (not just a green compile).
+
+- **`VerdictCard` (new, `Views/VerdictCard.swift`) leads the Now tab.** Three states — `LONG/SHORT SETUP` (with Entry/Stop/TP1/TP2 in mono columns), `NO ENTRY EDGE`, `NOT ANALYSED` — plus the ML number labelled **"move %"** rather than a bare percentage, so a direction-agnostic gauge can't be misread as directional confidence. Under it, the model's own `## Bottom Line` (parsed out of the markdown; already ≤35 words by prompt construction, so no truncation), a staleness note when price has moved since the read, and two actions. Reports only what the app knows — parsed setup, ML, the written Bottom Line — nothing inferred.
+- **Navigation: hand-rolled tab bar → native `TabView`.** The old `bottomTabBar` was an `HStack` of plain `Button`s, which silently gave up tab accessibility traits for VoiceOver, tap-active-tab-to-scroll-to-top, selection haptics, and correct safe-area/blur — and drove content through a `switch` that rebuilt each screen on every switch. Five destinations, each answering one question: **Now** (verdict, then price/indicators) · **Chart** · **Market** · **Record** · **Alerts**.
+- **The full AI read is now PUSHED from the verdict card, not a peer tab** (`AnalysisDetailScreen` wraps the unchanged `AITabContent`). Right hierarchy — you land on the answer and drill into the reasoning — and it freed the fifth slot for Record without spilling into iOS's "More" tab.
+- **`OutcomeDashboardView` promoted out of Settings into the Record tab.** 453 lines of win/loss, ML-calibration drift, per-trade debriefs and the overtrading nudge were reachable only via `SettingsView:159`. That's the app's honesty layer and its answer to "does this work?" — burying it sent the wrong signal.
+- **`Utils/Theme.swift` (new) is the single source of truth for colour + type.** Replaced ~34 ad-hoc `Color.red/.green/.orange/.purple` uses (no shared definition, so the same idea was drawn differently in every card, and dark-mode contrast had to be fixed 34 times). Roles: `bullish` / `bearish` / `caution` / `danger` / `info` / `neutral`, each an ADAPTIVE light-dark pair — SwiftUI's stock `.green`/`.red` are tuned for light backgrounds and go muddy-to-glaring on dark, which matters since the app is used mostly dark. `forChange()` reads a genuine zero as neutral instead of green. `forBias()` keeps the Strong/plain tier visible via opacity. Existing `biasColor`/`biasColorSimple` in ViewHelpers now delegate, so every old call site inherited the palette untouched. Also `themedCard(accent:)` — one radius/padding/background plus an optional 3pt leading stripe that carries a card's verdict pre-attentively — and `themedPill(_:)`. **Regime deliberately does NOT borrow bullish/bearish** (it's a state, not a direction): trending→info, ranging→caution, transitioning→neutral, retiring an off-palette purple.
+- **Dynamic Type fixed: 26 hardcoded `.font(.system(size:))` → text styles.** 11 sites were 8pt and 9 were 9pt — below the legible floor AND frozen for every user regardless of their accessibility setting, because a fixed `size:` never scales. `Theme.micro` is `.caption2.weight(.semibold)` (11pt base, scales). The four chart-internal labels stay fixed ON PURPOSE (they sit against fixed chart geometry and would overflow the plot at the larger accessibility sizes) but their floor was raised from 7-8pt to 9-10pt; the exemption is commented at each site.
+- **Hierarchy:** `IndicatorTableView` now defaults **collapsed** (`indicators_expanded = false`) — with the verdict leading, the full indicator grid is evidence you open on purpose. `FavoritePillsView` went from 4 instances to 3: the pushed analysis screen inherits its symbol, and offering a symbol switcher on a detail screen invited you to change the very thing the screen is about. Record and Alerts opt out of the symbol-scoped chrome entirely (neither is symbol-scoped).
+
+Verified by installing on a booted iPhone 16 Pro simulator and screenshotting — which is what caught the leftover purple regime badge and the harsh pure-red/green momentum pills that the build could not. **iOS-only; needs a rebuild+install.** Known rough edge left: on an un-analysed symbol the Now tab is sparse (the mini chart moved to the Chart tab in 2026-07-04 and the indicator grid now starts collapsed), so there's dead space below the fold until an analysis exists.
+
+### 2026-07-24 — Known-Issues sweep: 5 of 8 closed (pending_setups retired, archive gate, APNs route, App Group/widget, schema drift); 3 assessed
+
+Worked the "Known Remaining Issues" list. Five fixed, three left with an explicit verdict (the list above now records the reasoning, including one deliberate WON'T-DO). 499/499 worker tests green (5 new), iOS build green with the new entitlement.
+
+- **`pending_setups` RETIRED.** It held a duplicate of `tracked_setups` rows, written by `registerTrackedSetups` for no reason but to keep the cron's entry-zone-touch push working after the 2026-07-09 cutover. That push now reads `tracked_setups` directly (`kind='setup' AND state='pending' AND terminal=0 AND is_crypto=1 AND atr>0` — the filters mirror the old glue write EXACTLY, so the notification's scope is unchanged and stock conditionals stay excluded; widening it would be a product decision, not a cleanup). Removed: the glue write, the two lazy `CREATE TABLE`s, the `DELETE`-glue-on-terminal pass in `resolveTrackedSetups`, and the three `/pending-setups` POST/GET/DELETE handlers (grep-verified that no iOS or web client calls them — `WorkerPendingSetupService` was deleted 2026-07-09). Expiry needs no handling now: `stepSetup` terminalizes a pending row at the 12h window, so the query can't return a stale one. The "already notified" flag moved from the table column to KV (`entryzone:<rowId>`, 24h TTL) so no live schema change was needed — and the 2026-07-11 envelope-defer semantics are preserved (an envelope-flat touch still doesn't set the marker, so it re-fires when the envelope clears in-zone). The deployed table and its rows are left in place, unread; `DROP TABLE pending_setups;` when you're satisfied. **Known one-time edge:** a setup already notified *and* still in-zone at deploy time can page once more, since its old `notified=1` doesn't carry into KV — 12h window, one duplicate push, judged not worth transitional code for a table being deleted.
+- **Derivatives archive over-writing FIXED.** The 3.5h gate lived solely in the `deriv_archive:all` KV blob, so an eviction (or an overlapping cron reading a blob the other pass hadn't flushed) reset every symbol to "never archived" — ~9 writes/day/symbol against an intended 6.85. New exported `mergeDerivArchiveGate()` seeds the gate from D1 (`SELECT symbol, MAX(timestamp) … GROUP BY symbol`), i.e. from the thing being gated, which can't disagree with itself; KV stays a fast path and we take the LATER of the two, so an evicted blob degrades to "ask D1" rather than "re-archive everything". Verified the query is a COVERING INDEX scan on `idx_deriv_lookup` (~10ms over 122k rows). NB the unit trap it guards: D1 stores `timestamp` in SECONDS, the KV blob in ms — 5 unit tests pin the conversion, since a raw seconds value compared against ms reads as 1970 and silently never gates.
+- **APNs double round-trip FIXED.** `sendAPNs` always tried sandbox then production, so every push to a prod token paid a guaranteed wasted hop before the real one (in series, on the notification path). Now the winning endpoint is cached per token (`apns_env:<token>`, 90d) and tried first. Safe because a token belongs to exactly one environment and can't migrate — the APNs token is derived per `aps-environment`, so a debug→release rebuild yields a different token and therefore a different cache key, making a stale-wrong entry unreachable. The full fallback loop is retained, so a cache miss/eviction just costs the old behaviour; the write only happens on change, not per push. Uncached tokens keep the original sandbox-first order.
+- **App Group / blank widget FIXED — and it was worse than the one-line issue implied.** The widget has always declared `group.com.ludikure.CryptoLens` and read `widget_data` from it (`MarketScopeWidget.swift:42`), but the main app neither declared the group **nor ever wrote that key** — grep-confirmed zero writers, so the widget was permanently blank and the entitlement alone would have fixed nothing. Added the group to the main target in `project.yml` **plus** the missing writer: `Utils/WidgetDataWriter.swift` publishes the favorites snapshot (symbol/ticker/price/bias/change24h/timestamp, mirroring the widget's private `SharedAsset` decoder), called at the end of `prefetchFavorites` after both passes so it ships real prices. Skips symbols with no cached result rather than writing zeroes, caps at 6, and no-ops on a byte-identical payload (WidgetKit rations timeline reloads). Signing risk checked BEFORE editing: the group is already registered in the portal and present in both the dev and store profiles for `com.ludikure.CryptoLens`, so the entitlement is a no-op for provisioning — confirmed by a green build.
+- **Schema drift CLOSED** — `migrations/007_schema_drift.sql` adds the four `derivatives_history.large_*` columns; the `trade_outcomes.prompt_version` ALTER went into **006** rather than 007 because migrations apply in filename order and 006 indexes that column — replaying the directory into an empty DB proved a fresh bootstrap failed at 006 with `no such column`. Verified end-to-end: all 7 files now apply cleanly to an empty database and every INSERT the worker performs (derivatives_history 16-col, trade_outcomes with prompt_version, pending_setups) succeeds. `pending_setups` is deliberately NOT created by 007 — it was retired in this same change. **There is no migration runner** (nothing in `server/` applies these; they're run by hand), so on an already-deployed DB the ALTERs fail with `duplicate column name`, which is expected and documented in both files' headers.
+
+**Assessed, not fixed** (full reasoning in the Known Remaining Issues list): **cert pinning** is now a documented WON'T-DO — the box serves a 90-day Google Trust Services cert via the cloudflared tunnel, so leaf pinning would brick installs at each silent auto-renewal and CA pinning still breaks when Cloudflare switches issuer; the protected asset is a device token to a single-user backend already on public-CA TLS. **Parity fixtures** need the DEBUG capture button on a simulator (not automatable) and a stale capture date doesn't weaken the 1e-7 assertion anyway, since parity is computed from each fixture's own slices. **Backtester regen speed** is genuinely open but wants a dedicated session — its only honest validation is a full multi-hour regen.
+
+### 2026-07-24 — Code-review pass: a dropped ML cross (defer-not-drop, part 2), FLAT graded at the wrong horizon, and the auto-analysis cache wired up
+
+Targeted review of the newest worker paths (notification gating, auto-analysis, outcome resolution). Three real bugs found and fixed; two hypotheses investigated and killed. 493/493 tests green (5 new), iOS build green.
+
+**1. HIGH — a real ML cross was silently DROPPED when the enriched analysis produced no setup.** `processDeviceNotifications` takes the atomic `notif_claims` claim (3.5h) as a *precondition* of queueing a push, and `crossed` is a strict single-tick rising edge (`prevMl < 0.70 && mlProb >= 0.70`). `runAutoAnalysis` then returned silently in three cases — no setup, analysis failed, exception — with the claim already burned and the rising edge gone. The 2026-07-11 defer machinery couldn't help: `suppressedMap` is written only from the *precheck's* `envelopeFlat` verdict, and nothing rolls back a claim (verified: `notif_claims` is only deleted on device deletion / stale-token cleanup). Net effect: the precheck defers correctly, and the later enrichment-aware gate — the one that sees the auto-FLAT contributors the precheck structurally cannot, which is *why* the precheck "can only UNDER-suppress" — dropped the signal instead. Exactly the 2026-05-30 notify-window failure, reintroduced one stage later. **Fix:** new exported `deferAutoAnalysisCross(env, pushToken, symbol, why)` releases the claim and re-arms suppression via a PER-SYMBOL key (`notif_resuppress:<sym>`, `SUPPRESS_EXPIRY_SEC`) — per-symbol because this runs DETACHED and read-modify-write on the shared `notif_suppressed:all` blob would race the symbol pass that owns it. The symbol pass adopts the key into `suppressedMap` (guarded by the ML/direction preconditions so it costs one extra KV read only for symbols that could page), and both clear paths now drop BOTH stores or a leftover key would resurrect the cross forever. The `autorun:<sym>` guard still bounds LLM cost to one real run per symbol per 3.5h; the guard's own early return deliberately does NOT defer (a concurrent invocation owns that window). Two stale comments promising a "bare move-likelihood push on failure" — removed 2026-07-14 — corrected. New `SUPPRESS_EXPIRY_SEC` constant replaces the hardcoded 24h in three places.
+
+**2. MEDIUM — FLAT outcomes were graded at resolution time, not at the +24h horizon.** `stepFlat` took `points[points.length - 1]`, and `resolveTrackedSetups` always appends the live tick last (`time: now`). The horizon check is a lower bound only and the open-row query has no age filter, so any late resolution — a Stop/Start deploy, box downtime — regraded every FLAT whose window elapsed during it against the CURRENT price. A FLAT that was +0.8% at +24h (`flat_true`) but +4% two days later got recorded `flat_false`, biasing the false-flat rate the dashboard and the prompt's outcome history read. **Fix:** grade at the first point at/after `registeredAt + FLAT_HORIZON_MS`, falling back to the newest. The right bar is normally present — the candle window spans `oldestChecked - 30min` → now, so it brackets the horizon after downtime.
+
+**3. LOW — `autoanalysis:<symbol>` was written but unreadable.** Cached since 2026-07-14 with no endpoint and no reader (grep-confirmed: the write was the only reference), so tapping the push re-ran the whole LLM analysis — the exact double-spend the cache exists to prevent. **Fix:** new `GET /auto-analysis?symbol=` (auth-gated, same shape as `/full-analysis` plus `at`, 404 when empty) + iOS `WorkerFullAnalysisService.cachedAutoAnalysis` consulted in `runJob` before starting a new job (never when resuming a pending one). Accepted only if fresh (≤20 min, inside one 4H bar) and not already shown; consumption tracked LOCALLY (`autoanalysis_seen_<SYM>`) rather than by deleting server-side, so a decode failure can't destroy the result and a manual re-run still gets a genuinely fresh analysis. Fully best-effort — any failure falls through to the previous behavior. Closes follow-up (a) from the 2026-07-14 auto-analysis entry.
+
+**Investigated and cleared** (recorded so they aren't re-investigated): (a) *seconds/ms mixing in `derivatives_history`* — the cron writes seconds and the `/debug/backfill-derivatives` endpoint looked like it wrote Binance's raw ms, but `get()` normalizes to seconds (`// sec`); confirmed against the archive, 122,287 rows all seconds-scale, zero ms. (b) *immortal pending rows* — a `pending` row with a null `pending_expires_at` would never terminate; impossible, state and expiry come from the same ternary. Also re-verified both `tracked_setups` INSERT bind lists (24 placeholders + literal `0` against 25 columns) and that the `server/kv-adapter.ts` contract (text-only `get`, no `list`, no absolute `expiration`) still holds across `src/`. Two `stepSetup` behaviors judged inherent rather than buggy: same-bar BE activation followed by the BE stop on that bar's low, and skipping excursion/TP checks on the entry bar — both intra-bar ordering ambiguities 15m klines can't resolve.
+
+**Scope caveat:** targeted pass over the newest worker code, NOT the Swift app or `scoring-full.ts`.
+
+### 2026-07-24 — "Auto-FLAT all week" diagnosed: the FRAMING hatch was unreachable; 72h model was being discounted on stale grounds
+
+User report: BTC ran 62.3k → 67k → 64.1k over ~10 days at one point showing ML > 70, and the app was auto-FLAT throughout. **Investigated by replaying the real `buildUserPrompt` over all 73 4H bars of the move** (scratchpad script; Kraken XBTUSDT because Binance is 451 off-box — closes matched the box's Binance feed to within 0.03% on all 90 overlapping bars; ML_WIN stubbed per run to isolate the envelope from the model; no enrichment, so like `envelopePrecheck` it can only under-report FLAT reasons). Findings:
+- **A cliff at ML 70, not a gradient.** ML<70 → **70/73 bars auto-FLAT (96%)**, 63 of them on `biases_MIXED_and_ML_<70`. ML≥70 → **7/73 (10%)**, chase guard only. Daily bias never turned Bullish through the whole +7.5% advance (Bearish → Neutral while 4H read Strong Bullish), so alignment read MIXED nearly the entire way up. Environment Risk was ELEVATED on all 73 bars.
+- **The envelope was not miscalibrated.** Realized goodR over the window was **0/67 bars** — mean 24h max excursion **0.66 ATR**, not a single ≥1.5-ATR 24h move. The 7.5% advance was a slow grind, so a low ML_WIN was *accurate*. What the user experienced is a horizon mismatch (ML_WIN gauges a 24h burst; they trade multi-day), not a broken gate.
+- **The chase guard is working — do not touch it.** All 7 of its FLATs fired 07-13/14 blocking a SHORT into the 62.3k low; 5/7 correct (price rallied 3.2-4.3% in 24h). n=7.
+
+**Shipped (worker-only, 488/488 tests green, needs a box redeploy):**
+1. **The `FRAMING:` escape hatch is now reachable.** `prompt.ts` gated it on `autoFlat.length === 1 && autoFlat[0].startsWith('ML_WIN_')` — so it could never fire on `biases_MIXED_and_ML_<70`, by far the most common FLAT reason. Result: a bare "NO SETUP" every bar for a week with none of the honest context the line exists to give. Now fires when **every** reason is a quality-gate reason (`ML_WIN_*` or `biases_MIXED_and_ML_*`); hazard reasons (ANY_KILLED, macro_IMMINENT, divergence_escalated, chase_into_extended_aligned_trend) still suppress it, since "the trend is intact, riding it is your call" is dangerous there. `biases_MIXED_(ML_unavailable)` deliberately excluded — with no ML value we can't characterise move likelihood. A **separate mixed-bias message** avoids the original's "unlikely here" claim (ML 50-70 realizes 56-64% per the live calibration — calling that unlikely would be false) and names the mechanic: *a daily bias lagging a running 4H move is the ordinary EARLY-trend state, not a stalled tape*. Verified on the real bars: **64 of the 71 previously-silent FLATs now carry the framing; the 7 chase bars stay bare** — exactly the intended split. Still a hard FLAT — the hatch reframes, never authorizes.
+2. **Stopped discounting the retrained 72h model.** Both `prompt-system.json` market prompts described `ML Persistence` as *"(Not retrained on fresh data — treat as soft.)"* — **stale**: h72t25 was retrained on clean data 2026-06-05 and again for v14 2026-07-06 (monotone reliability, crypto top bucket 75.5% / stock 78.1%). So the prompt was discounting the one model whose 72h horizon matches a multi-day hold — the exact blind spot behind this complaint. Replaced with an accurate note that flags it as the horizon ML_WIN's 24h window cannot see.
+
+**NOT shipped — pre-declared test instead:** the `biases_MIXED` gate at 70 sits ~9pp **above** the 61% base rate of the non-aligned cell it was introduced (2026-07-06) to unlock, and ML≥70 covers only **6.3%** of crypto bars (v14 table: 9,136/145,045), so the cell is unlocked in principle and locked in practice. Since `ML_WIN<50` is already its own FLAT, the rule's only marginal effect is blocking the **50-70 band** — which realizes 55.9%/64.1%, at or above the cell's own average. Four variants (gate→60, gate→55, demote-to-MODERATE-cap, control) with a declared ship bar are written up in `docs/research/strategy-mixed-gate.md`. **Honest caveat recorded there:** with goodR 0/67 last week, loosening the gate would NOT have produced a profitable trade — this is a correctness argument, not a measured edge.
+
+**Open question:** the replay says at ML≥70 the envelope was NOT FLAT for 90% of bars (capped MODERATE at the 66.7k top), so if ML really was >70 at the peak, something my enrichment-free replay can't see (a kill condition) must have flatted it. `GET /scores?symbol=BTCUSDT` (authed) settles which reason actually fired on the live runs.
+
+### 2026-07-14 — Void phantom-loss from the invalid-geometry setup + Finnhub misconfig made diagnosable
+
+Two user-reported items. **(1) The invalid-SL SHORT was counted as a loss.** The setup with stop $62,958 BELOW its $63,732 entry (reported earlier, now blocked at registration by `isValidSetupGeometry`) had already been registered before that guard shipped — and because the wrong-side stop is breached at registration, the state machine recorded an INSTANT phantom "loss" even though the entry condition never fired, polluting the win/loss stats. New `voidInvalidGeometrySetups(env)` in `outcome-tracking.ts` (called once from the cron before `resolveTrackedSetups`, KV-gated `geometry_void_v1_done`, idempotent, fault-isolated): scans `tracked_setups`, and for any row failing `isValidSetupGeometry` marks it `state='invalidated' outcome='invalid_geometry'` (a NON-counted state → drops out of the track record) and DELETEs its linked `trade_outcomes` row (the phantom loss). Valid real losses untouched. 1 new test (in-memory D1: voids the bad SHORT + deletes its trade_outcomes row, leaves a valid SHORT loss alone, sets the flag, idempotent). **(2) Finnhub badge red.** `/finnhub/*` returns 503 "Finnhub not configured" when `FINNHUB_API_KEY` is unset on the box (a likely casualty of the Cloudflare→box secret migration), and iOS renders any non-2xx as the red `.error` state. `/health` now also returns `providers: { finnhub: bool }` (presence only, never the value) so a missing-secret misconfig is diagnosable remotely without auth — and `/health?probe=finnhub` pings EVERY endpoint FinnhubProvider calls (recommendation/metric/earnings/news/insider + market-status) for a sample stock and returns each upstream status, so a *sticky-red badge while market-status is 200* pinpoints the culprit (premium 403 on `insider`/`earnings`, or 429). **iOS badge fix (2026-07-14b):** `FinnhubProvider.fetchEndpoint` no longer flips the whole provider badge to `.error` on a 4xx (403 premium / 404 / 429) — only a 5xx or connectivity failure is a real outage; a 4xx leaves the badge as-is so a sibling call's `.ok` stands (the badge was stuck red because `insider`/`earnings` 403 on the free key while recommendation/news/market-status returned 200) — red badge + `finnhub:false` = set the key in the box env and restart. Finnhub only powers stock market-status/analyst/earnings/news, so it's cosmetic for crypto and Yahoo-covered for stocks. 486/486 green; worker-only — needs a box redeploy.
+
+### 2026-07-14 — Rejection-at-a-level → short-horizon direction: tested, REJECTED (graveyard)
+
+User asked whether a confirmed rejection at a major S/R level predicts tradeable 3-4 bar direction (never measured — `level_validation.py` only measured the hold-vs-break RATE, not execution EV). Built `ml-training/level_rejection_direction.py` on the same validated swing-level detection: at each bar, a major level poked by the wick and closed back away by ≥REJECT_ATR = a confirmed rejection → enter the continuation (resistance→SHORT / support→LONG), stop beyond the wick, measure forward 3-4 bars + a full fee cost-curve + walk-forward folds incl. 2022. **Result: coin flip.** Continuation hit-rate 50.1-50.4% both markets/horizons (loose 740k/207k events AND strict-wick 300k/80k); crypto support→LONG +1.8pp is just the known upward drift while resistance→SHORT is −1 to −1.7pp (worse than base); gross EV +0.005..+0.059% crypto / ~0 stock → break-even round-trip ≤0.06%, below Binance ~0.10%; WF 0-2/6 positive folds, negative every year. Fully consistent with the S/R subsystem finding (`strategy-levels.md`): a level is a real REACTION location (+4.3pp hold) but carries **no tradeable directional EV** — a location, not a direction signal. Filed in `docs/research/rejected-hypotheses.md`; the "observed event not a prediction" framing did not rescue it (unlike trend-continuation, this one genuinely wasn't in the graveyard — now it is). No code/product change.
+
+### 2026-07-14 — Notifications gated on an actual SETUP (fix "notification → no setup")
+
+User still got paged into no-setup analyses (e.g. "BTC 65 ML +4"). Two independent sources, both fixed:
+- **Server auto-analysis push** (`runAutoAnalysis`, `src/index.ts`): it ran the enriched analysis but pushed even when it produced ZERO setups (just retitled to "big move likely"). Now the real analysis result is the ground-truth gate — **no setup → suppress the push silently** (result still cached; envelope auto-FLAT under enrichment / no clean level / a geometry-dropped setup all correctly suppress). Errors suppress too; the bare "big move likely" fallback push is gone. The push title now leads with the setup direction.
+- **iOS-local ML-threshold notification** (the "BTC 65 ML +4" one): `AnalysisService` fired `BiasNotificationManager.sendScoreAlert` when `mlWinProbability` crossed **0.60** with a "Daily score: +N. Tap to analyze setup" alert — analyzing at ML 60-69 is below the 70 conviction gate and usually auto-FLATs, so it trained the user to chase notifications that led nowhere. REMOVED: the ML-threshold block in `AnalysisService`, `sendScoreAlert` in `BiasNotificationManager`, and the "Score Threshold Alerts" Settings toggle (`notify_score_threshold`). The setup-gated server push supersedes it. Bias-flip notification (`notify_bias_flips`) kept — it's opt-in and informational, not a "go analyze" nudge. 486/486 worker tests green; iOS build green. Server needs a box redeploy; iOS needs a rebuild.
+
+### 2026-07-14 — Automated analysis runs on favorable ML crosses (worker v1)
+
+User-requested: auto-run the full analysis when the indicator+ML picture is favorable, instead of pinging the user to open the app and spend a call. Reuses the existing notification gate as the trigger (ML rising-edge ≥70 + decisive direction primitive + envelope not auto-FLAT + 3.5h cooldown) — which already fires at the 4H close (optimal timing) and is sparse (~a few/day). New `runAutoAnalysis` (`src/index.ts`): on a survived cross, runs `runFullAnalysisCore` (the same pipeline `/full-analysis` uses) DETACHED (`void`, no await — the box is a persistent Node process so the 30-90s LLM call outlives the cron pass; awaiting would stall the minute cron), then pushes the parsed **Bottom Line** (replacing the bare "ML 73%" push, per the user's "replace" choice), auto-registers setups into `tracked_setups`, and caches the result to `autoanalysis:<symbol>` KV (1h) for an iOS pickup fast-follow. Fixed to **Sonnet 5 + extended thinking** (the user's standing pick; auto-runs don't receive the app's per-request model — option (a): if the user switches models we add `/watchlist` model-pref sync). Scope = synced watchlist/favorites (`for (symbol of watchlist)`). Cost guard: 3.5h `notif_claims` cooldown + per-symbol `autorun:<sym>` KV guard (cooldown TTL) → ~1 LLM run/symbol/3.5h; fully fault-isolated with a bare-push fallback so a cross is never silently lost. The old grouped multi-symbol push is replaced by one richer push per symbol. 485/485 tests green; worker-only — needs a box redeploy. **Follow-ups:** (a) iOS reads `autoanalysis:<symbol>` on open so the analysis appears instantly instead of re-running; (b) model-pref sync if the user ever changes models.
+
+### 2026-07-14 — Forming-bar wick reconstructed from the finer timeframe (iOS chart)
+
+User: "4H last bar makes no sense — 1H clearly went down but 4H only shows going up." Two things: (a) directionally there's no contradiction — the 4H forming bar is net-up over its whole 4-hour window while the 1H's *last hour* pulled back off a spike; (b) the real defect — the synthesized forming bar's WICK was fake. The worker serves CLOSED bars only (indicator parity), so `WorkerIndicatorsService` fabricates the in-progress bar as `open=lastClose, high=max(open,live), low=min(open,live), close=live` — which MISSES any intrabar spike/dip: a 4H bar that ran to 64.2k then fell back drew as a clean wickless green body even though the 1H plainly showed the spike. Fix: `get()` already has all three timeframes, so each coarse TF's forming bar now reconstructs its true high/low (and volume) from the finer TF's CLOSED bars in the same bucket — Daily from 4H, 4H from 1H (1H is finest fetched → keeps the open/live approximation, a 1h window is minor). `toIndicatorResult(priceOverride:subCandles:)` gained the sub-bar param; the bucket window keys off the forming bar's actual open time `t` (not a UTC floor) so it aligns for crypto (UTC) and stocks (worker 4H is ET-session-aggregated). Display-only — indicator/ML math untouched (still closed-bar server-side); self-corrects at bar close regardless. iOS build green; iOS-only, needs a rebuild+install.
+
+### 2026-07-14 — Setup geometry gate: reject directionally-invalid stops (worker)
+
+User caught a SHORT setup whose stop ($62,958) was BELOW its entry ($63,732) — on the same side as the targets, i.e. the stop sat in profit territory (unsizable: risk-per-unit points the wrong way; would mis-register in the outcome tracker). Root cause: `decodeSetups` (`src/prompt.ts`) validated field TYPES but never GEOMETRY. Two-part fix: (1) **defense** — new exported `isValidSetupGeometry` + a filter in `decodeSetups` drops any setup where the stop isn't on the losing side of entry and every target on the winning side (LONG: stop < entry < tp1/tp2; SHORT: stop > entry > tp1/tp2), logging `[setup] dropped invalid ...` so we can see the LLM's error rate. Better to show no setup than a broken one. Since parseSetups is the single choke point for the sync + async analysis AND tracked-setup registration, this protects the card, the PositionSizer, alerts, and outcome tracking at once. (2) **prevention** — added an explicit STOP GEOMETRY invariant to the "Present an Entry / Stop / TP1 / TP2 table" instruction in both crypto + stock `prompt-system.json` ("a SHORT stop must be a HIGHER price than entry … never place the stop on the same side as the targets") so the LLM stops emitting them (also fixes the residual bad table in the prose). 7 new tests incl. the exact reported case; 485/485 green. Worker-only — needs a box redeploy.
+
+### 2026-07-13 — Outcome dashboard: drop the retired direction-model + A/B prompt-version sections (iOS)
+
+User-requested ("I don't need a reference to directional model" / "Nor A/B prompt version"). `OutcomeDashboardView` no longer renders the "Direction Model — RETIRED (historical)" section, its "By Instrument — Live (crypto)" companion, or the "A/B: Prompt Version (30d)" section. Removed the `directionReport`/`versionComparison` @State, their `.task`/`.refreshable` fetches (`DirectionAccuracyService.fetch()`, `OutcomeTracker.versionStats()`), and the now-exclusive helpers (`directionSection`/`sideRow`/`directionBySymbolSection`/`pctStr` + the entire A/B helper block `hasABData`/`abSection`/`abMetricRow`×2/`pairText`/`percentText`/`rrText`/`rateColor`/`ABVerdict`/`significanceVerdict`). `statRow`/`reasonLabel` kept (still used by the setup-performance + calibration sections). **`CryptoLens/Services/DirectionAccuracyService.swift` DELETED** (orphaned on iOS after removal — only self-referenced; it hit the retracted `/direction-accuracy` endpoint) + xcodegen regenerated. The worker `/direction-accuracy` + `/ml-calibration` endpoints and `direction_signals` D1 are untouched (server-side, still logging for the record). `OutcomeTracker.versionStats()`/`VersionStats` are now unused internally but left in place — the `baseline/treatmentPromptVersion` constants there remain the stamping registry. The live ML-calibration section (ML quality drift) stays — it's not the direction model. iOS build green; iOS-only, needs a rebuild+install.
+
+### 2026-07-13 — Position sizing in Coinbase nano contracts + real account defaults (iOS)
+
+User trades Coinbase Derivatives **nano BTC/ETH perps** (screenshot: 80 nano BTC contracts, $49,844 notional @ $62,305 → 0.01 BTC/contract confirmed). `PositionSizer` now rounds the risk-based ideal quantity to WHOLE contracts for symbols with a `ContractSpec` (nano BTC = 0.01 BTC, nano ETH = 0.1 ETH; keyed on base asset, other symbols keep raw-unit sizing) and recomputes REALIZED risk/notional/leverage from the rounded count — `PositionSizing` gained `contractSpec`/`contracts`. `PositionSizeCard` leads with "N contracts (nano BTC · 0.01 BTC/contract = X BTC)"; the calculator adds a Contracts row; Settings explains the contract mapping. This is NOT the old manual `contractSize` field (removed 2026-07-09, zero readers) — it's automatic per-symbol contract math. Risk-setting defaults updated to the user's real account: **accountSize 25000→28000, max_leverage 3.0→3.5×** (registration in CryptoLensApp + every @AppStorage/initialValue fallback in Settings/Card/Calculator); riskPercent stays 2%. Verified: $28k @ 2% with a ~$700 BTC stop → 81 nano contracts (≈ the 80 traded). NOTE the app's leverage metric is notional÷**account-equity** (~1.8–2.1× here), deliberately more conservative than the broker's notional÷**posted-margin** (3.3× in the screenshot) — same position, different denominator. iOS build green; iOS-only (no worker change) — needs a rebuild+install.
+
+### 2026-07-11 — Notification envelope precheck: don't page the user into an auto-FLAT analysis
+
+User-requested: "if the condition is going to auto-FLAT there is no reason to notify me." The ML≥70 rising-edge often paged into an analysis the Conviction Envelope immediately auto-FLATted (chase into an extended trend being the most common). Fix (`src/index.ts`): on a would-notify cross (ML ≥ threshold, direction primitive ≠ 0), the symbol pass builds the REAL prompt from its own candles (`envelopePrecheck` — computeFullIndicators ×3 + `buildUserPrompt`, read-only: newState discarded) and parses `auto_FLAT_active:` (`parseAutoFlatReasons`). Flat → cross suppressed; per the 2026-05-30 lesson (the old notify-window silently DROPPED off-window crosses and lost most signals) suppression DEFERS: the pending cross re-checks every tick and fires when the envelope clears with ML still elevated (`nextSuppressionState`, KV `notif_suppressed:all`, 24h expiry), cancels silently when ML fades. Fail-open on precheck errors; enrichment-free build means it can only under-suppress. `fetchMlCalibration` extracted from `runFullAnalysisCore` so the precheck's calibrated-ML gate is byte-identical to the analysis's. 8 new tests (parse against real buildUserPrompt output + the suppression truth table); 478/478 green. Requires a box redeploy. **Follow-up (same date, user still paged into auto-FLATs):** the precheck only gated the ML-cross push — TWO more proactive push types were ungated: the risk-state transition push (COMPRESSION fires in exactly the coiled/extended tape the envelope FLATs) and the entry-zone-reached push. One `pred.envelopeFlat` verdict per symbol/tick now gates all three (risk-state: dropped outright, FYI push; entry-zone: deferred — `notified` stays 0 so it re-fires when the envelope clears in-zone). Also: `/health` now reports the running commit (`build`, GIT_SHA build-arg) — deploys were previously unverifiable remotely, and a stale box silently runs old gating. Residual honesty: a push validated at cross-time can still open into an auto-FLAT analysis HOURS later if conditions changed in between — inherent to push latency, not fixable by gating.
+
+### 2026-07-10 — Liquidation-event collector (websocket) + order-book depth snapshots — the non-backfillable series
+
+New `server/liquidations.ts`: a persistent websocket on Binance USDⓈ-M `!forceOrder@arr` (ALL symbols, one connection) archiving every FILLED forced liquidation (USDT-quoted) into a new `liquidations` D1 table (symbol, ts, liquidated side, price, qty, notional). **Why now:** this is the one derivatives series that CANNOT be backfilled (REST endpoint removed years ago; websocket-only) — every uncollected day is gone forever. Uses: (a) ground truth for the homemade liquidation heatmap whose inputs `oi_snapshots` has accumulated since 2026-06-03 (predicted clusters vs observed cascades), (b) future cascade-exhaustion/asymmetry WF tests (prior tempered by the whale-feature rejection — see graveyard), (c) an OBSERVED forced-flow line in the crypto prompt (upgrades the inferred whale-trap/squeeze reads). **Known feed cap:** Binance pushes ≤1 liquidation/s/symbol since 2021 — a sample; all sums are lower bounds (Coinglass shares this cap). **Egress:** rides gluetun's HTTP proxy via undici `WebSocket` + `ProxyAgent` dispatcher (`BINANCE_PROXY_URL`; the fetch-proxy monkey-patch does NOT cover websockets); reconnect w/ exponential backoff covers errors + Binance's 24h connection recycle; 5s batched D1 flushes; `LIQ_WS_URL` env override. Read path: `fetchLiquidationSummary` (1h/24h by side) → `buildUserPrompt.liquidations` → `LIQUIDATIONS (observed…)` prompt line with a one-sided-flow interpretation (≥$500k/1h gate); `GET /liquidations?symbol=&hours=` serves aggregates + recent events. 7 new tests (parse/flush/summary/prompt); 467/467 green. Requires a box redeploy; watch `[liq] connected` in the logs — persistent `[liq] reconnect` warnings mean the gluetun route needs attention. **Same session: `depth_snapshots`** — the third heatmap leg (oi_snapshots = where positions opened, liquidations = where they died, depth = the resting walls between). The cron's symbol pass snapshots the fapi order book (`/fapi/v1/depth?limit=500`, weight 10) every ~20 min per crypto symbol (KV gate `depth_snap:all`, same pattern as `oi_snap:all`): USD-notional bid/ask depth within ±0.5/1/2% of mid + per-side actual span (a 500-level book may not reach ±2% — the span makes truncated sums self-describing lower bounds). Pure summarizer `summarizeDepth` exported + unit-tested. 470/470 tests green.
+
+### 2026-07-09 — Outcome tracking moved SERVER-SIDE (thin-client cutover; plan: jaunty-whistling-lark)
+
+**Setup outcomes no longer need the app open** (user-requested: "the resolution should not need me opening the app"). New `marketscope-worker/src/outcome-tracking.ts` owns the full lifecycle: `/full-analysis` registers every parsed setup (+ FLAT decisions) into a new `tracked_setups` D1 table at analysis time (archetype via prompt.ts `classifyArchetype`, model/prompt versions stamped from `TRACKED_MODEL_VERSION`/`TRACKED_PROMPT_VERSION` — now the registry of record; stocks skip off-hours; conditional crypto setups also write a `pending_setups` glue row so the entry-zone APNs survive). The cron's `resolveTrackedSetups` (every ~5 min, fault-isolated, after the dirsignal block) advances open rows against **15m crypto klines** (limit sized to backfill ~10d of downtime from `last_checked_at`; 30-min overlap safe because the state machine is all max-latches) / 1h stock KV candles + a live tick — a faithful port of the iOS `trackSetupOutcomes` state machine (entry-touch direction-aware vs price_at_setup, +1R break-even, same-bar stop/TP1 open-proximity heuristic, 6h stop-tighten now candle-time-based, 12h pending expiry + simplified re-eval [ML drift/persistence/killDur from KV; the cached-analysis direction checks are dropped — cron has no LLM text], 7d untriggered prune to `not_triggered` kept as history). **Counted terminals only** (tp2_win/tp1_win/partial_be/loss) insert into `trade_outcomes` (fixes the iOS quirk of stamping tp1_win at TP1-touch and never upgrading to tp2_win). FLATs grade at a fixed **+24h horizon** (replaces the app-usage-dependent "3 refreshes"). `/full-analysis` reads Active Trade State from `tracked_setups` (body fallback for legacy builds); new `GET /tracked-setups` serves the full per-device rows; POST /outcomes gained a near-duplicate dedupe guard for the rollout overlap. **iOS `OutcomeTracker` is now a read-only display store**: `refresh()` → `WorkerTrackedSetupsService` → snapshot cache (`server_*.json`) merged with the legacy local archive (terminal rows only); `trackSetupOutcomes`/`reEvaluate`/`scanAllPendingSetups`/`registerSetup`/`syncResolvedOutcomes`/`registerFlatOutcome`/`trackFlatOutcomes`/`restoreFromServer` (which was silently broken — read camelCase keys from a snake_case response, never restored anything) and `WorkerPendingSetupService` are DELETED. 33 new worker tests (pure state machine + D1 glue on in-memory adapter); 460/460 green; iOS build green. Requires box redeploy + iOS rebuild.
+
+### 2026-07-09 — Settings audit: dead controls removed (A/B, conformal gate, contract size)
+
+Every Settings control traced to its consumer (user request: "features I never use"). **Removed as dead:** "Enable A/B experiments" (post-collapse baseline == treatment prompt version, so ON/OFF were byte-identical; `OutcomeTracker.assignedPromptVersion` kept for a future multi-user restart), "Conformal gate (crypto)" (`conformal_gate_enabled` had zero readers and iOS never sent `conformalGateEnabled` to the worker — leak-era leftover), and "Contract Size" (`contractSize` had zero readers since the legacy inline sizing block was deleted 2026-07-02; also dropped 3 dead `@AppStorage` declarations in ContentView from the same era). **Renamed:** the "Binance" status badge → "Crypto" (in thin mode crypto data comes from the box, not Binance). **Verified live (kept):** AI provider/model picker, auto-alerts, bias-flip + ML-threshold local notifications (in-app only; server push at ML≥70 covers background), theme, account/risk/max-leverage/cadence, outcome tracking. **Side-finding:** `thin_client_mode` has zero readers and its Settings toggle is gone — thin-client is unconditional now (the iOS-thin-client section's "master switch" text is superseded; stale flag-era comment in `WorkerFullAnalysisService` also fixed).
+
+### 2026-07-08/09 — Chart rewritten on LWC v5 native panes + in-page gestures (SUPERSEDES the 2026-07-05 "native chart gestures / final architecture" bullet and the 2026-07-03 v4.2 entry)
+
+Multi-session iteration with the user until "best it has been": **LWC v4.2 → v5.2.0** (`chart.html` rewritten around v5's native multi-pane — one chart, `addSeries(type, opts, paneIndex)`, native draggable separators; the v4 stacked-charts + logical-range-sync layer was the multi-pane jank and is deleted) and **the entire UIKit gesture bridge deleted** (`ChartGestureRecognizer`, `PinchAxisTracker`, `chartGeom` geometry routing, CADisplayLink coalescer — every per-touch Swift→JS hop). Gestures now live in the page: native LWC free 2D pan (with a manual-mode-on-touchstart + tap-restore dance, since LWC vertical touch-pan needs `autoScale:false`), a custom DOM pinch for time zoom (`PINCH_AMP`, Euclidean spread → simulator-testable), and a `#priceGrip` DOM strip driving price zoom through v5's `IPriceScaleApi.get/setVisibleRange` (added v5.0.7 — the API whose absence in v4 forced the drift-prone `autoscaleInfoProvider`/`coordinateToPrice` hack; anchor = last close, after range-center ran crypto-daily to the bottom and finger-focal flung 4h/1h). Key WKWebView lesson: **the scroll view's pan recognizer must stay ENABLED** — WebKit routes single-finger touchmove to the DOM through it (disabling it = dead one-finger pan on device, invisible in the simulator); only the scrollView *pinch* recognizer is disabled. A post-review hardening pass (10 verified findings) added staleness failsafes for every eaten-touchend wedge (deferred-payload flush timer, grip pid takeover, tap-vs-drag autoscale restore, third-finger handling, grip-exempt pinch, post-gesture label re-layout) and re-anchored the worker's TAGGED LEVELS + CANDIDATE SETUPS to ONE live-price geometry (`refPx`) with nearest-to-live truncation. `ChartGesturesUITests` asserts every gesture (incl. both pinch directions) via pixel-diff on real synthesized touches. Also this arc: TAGGED LEVELS ABOVE/BELOW-live tagging + anti-"squeeze" directive (user-caught geometry error, worker deploy), and glitch fixes for tab-switch + quick-scroll.
+
+### 2026-07-06 — biases_MIXED auto-FLAT ML-gated: the envelope was suppressing the best vol cell
+
+User-spotted circularity: the envelope auto-FLATted MIXED timeframes ("wait for alignment") while the 2026-07-02 symmetry fix auto-FLATs the mature aligned chase — and by the time TFs align the move is statistically spent, so the AI cited auto-FLAT nearly every run. Measured on the clean v14 regen (`ml-training/mixed_flat_test.py`, 870K crypto + 503K stock bars, pre-declared decision rule): **non-aligned bars (conflict + neutral = ~60-66% of all bars, exactly the envelope's MIXED) carry ~2× the goodR rate of aligned bars** (crypto 61/59% vs 33/30%; stocks 70/71% vs 39/35%), flat across trend age; direction remains a coin flip in every state (P(up24) 48-53%; EV of following the daily bias ±0.1 ATR). Mechanism: goodR is ATR-normalized, and non-aligned states are compression/transition tape where a ≥1.5-ATR move is more likely — the same mechanism as "goodR falls in strong trends". The unconditional MIXED auto-FLAT therefore suppressed the system's single best volatility cell AND made the Counter-Trend Reversal playbook (ML≥70 → MODERATE cap, tighter bands) unreachable — an internal contradiction. Fix (`prompt.ts`): `biases_MIXED` auto-FLATs only when calibrated ML_WIN < 70; at ML ≥ 70 the envelope emits `MIXED_HIGH_ML_WINDOW` guidance (structure-led setup only — 4H reversal or range-edge level, tight invalidation, counter-trend bands, cap MODERATE via the existing alignment highBlock; explicitly forbids "wait for alignment" framing). Regression test added; 426/426 green. This also re-validates the counter-trend edge on clean data (old 73-86% numbers were leak-era).
+
+### 2026-07-06 — v14 retrain shipped (all three models) on the full-coverage derivatives regen
+
+All three models retrained on the v14 regen (77 crypto + 159 stock symbols, 2020-01→2026-06-30, via `runBacktest.ts` — basis emitted, funding/OI/taker/long% backfilled per the 2026-07-05 audit; derivatives coverage verified 95.6%/79%/72.6% funding/OI/basis on crypto vs 1-2.5% in v11_fixed). Scripted by `calibrate_v14.py` under the audit's pre-declared ship bar (ΔAUC > +0.005 in ALL folds):
+- **24h main (ML_WIN):** incumbents HOLD on both markets. Crypto LGB d4 t150 × FULL-110 (WF AUC 0.674, top-decile 76.6%; pruned-71 Δ+0.0032 not all-folds-positive; challengers ≤ +0.0008). Stocks XGB d5 t100 × FULL-110 (AUC 0.686, top-decile 78.3%); **d6-class again beat prod 3/3 folds at Δ+0.0042-43, under the bar for the second consecutive retrain** — if a third retrain repeats this, revise the bar or ship d6. `volScalarML` dropped (110 features; serving-safe — trees evaluate by name). Calibration floors: crypto 0.2498, stock 0.3193.
+- **72h persistence (h72t25):** both markets retrained via `calibrate_horizon.py` — monotone reliability (crypto 70-85 bucket realizes 75.5%, stocks 78.1%), written directly to worker src.
+- **Tail head (crypto):** `train_tail_head.py` — OOF AUC 0.641, thresholds ELEVATED ≥0.0832 / HIGH ≥0.1024, all-zero parity ref 0.1840390879 (heads-parity test updated).
+- **Registries synced to 14:** worker outcome query `IN(10,11,12,14)` crypto / `IN(12,13,14)` stock; iOS `currentModelVersion` → 14; JSON `version: 14`. Parity fixtures refreshed via `update-fixture-ml.ts` (BTC ml 0.386→0.250, ETH 0.502→0.391, TSLA 0.524→0.511). **425/425 worker tests green; iOS + server builds green.**
+- **Deploy pending:** box redeploy (TrueNAS Stop/Start pulls `:latest` after push→GHCR build) + iOS rebuild/install for the bundled JSONs (low priority — live serving is the worker).
+
+### 2026-07-05 — Live-price anchor (AI + charts) + chart gesture fixes + 429 poll fix
+
+Three user-reported bugs, all stemming from the closed-bar-only data contract:
+- **AI told the user "if price holds over 62,900" when live was 63,700.** `/full-analysis` never fetched the live price — the whole prompt is closed-bar (training parity), so the LLM believed price = the last closed 4H bar. Fix: `runFullAnalysisCore` fetches `fetchLivePrice`, and `buildUserPrompt` (new `livePrice` input) opens with `=== LIVE PRICE (authoritative current price) ===` instructing the model to anchor all current-price/trigger/proximity statements to live and to call out already-passed triggers. Asserted in prompt-parity tests.
+- **Charts ended at different stale prices per TF.** Worker serves closed bars only, so the 4H chart's newest bar was up to 4h old. Fix (iOS `WorkerIndicatorsService`): synthesize the **forming bar** from livePrice (open = last close, close = live; wick approximate, self-corrects at close) and append to `tf.candles` + set `inProgressCandle`. Indicator math untouched (computed server-side on closed bars).
+- **Chart gestures janky (body pan + pinch) while price-axis drag was fine.** The tell: only time-scale-changing gestures were bad. Pane sync used time-based `setVisibleRange` per gesture frame (expensive + bar-snapping). Fix (`chart.html`): logical-range sync (`subscribeVisibleLogicalRangeChange`) with sub-series whitespace-padded to the candle range (`padToTimes`) so bar indices align across panes; `touch-action:none` on panes; WKWebView scrollView pan/pinch recognizers disabled + `delaysContentTouches=false` (`WebChartView`).
+- **429 killed analyses.** The global 60/min device budget was drained by the 3s result-poll (20/min) + refresh traffic, and a rate-limited POLL failed the UI while the box job kept running. Fix: `/full-analysis/result` exempt from the global budget (worker) + iOS treats poll-429 as transient and keeps polling.
+- **Chart TradingView feature batch:** drawing tools (trend line with extend-right ray toggle, **fib retracement**, **rectangle zone**, horizontal price line — all tap-to-select with draggable endpoint handles + body move, persisted per SYMBOL via `chartDrawings` message → UserDefaults → `payload.drawings`, time+price anchors render on every TF); **OHLC+change%+volume readout** (top-left, crosshair bar or last bar); **sub-pane value readouts** (RSI/MACD values in each pane label at the crosshair); **cross-pane crosshair sync** (`setCrosshairPosition`, LWC 4.1+ API); **Log-scale chip** (`chart_log` AppStorage → `payload.logScale` → priceScale mode).
+- **Native chart gestures (TradingView-grade, final architecture).** After the DOM-side fixes (logical sync, `touch-action`, recognizer/text-interaction disabling, rAF-coalesced pane sync) still trailed TradingView feel, the two hot gestures moved NATIVE: `ChartPanRecognizer` (custom, begins on first horizontal movement — no 10pt UIPan lag; yields to crosshair long-press >0.25s hold, vertical price-pan, and hands off to pinch on a second finger) and a `UIPinchGestureRecognizer`, both driving the chart via `nativePanBy/nativePanEnd(velocity→JS momentum glide)/nativePinch(focalX, scale)` in chart.html; LWC's own `horzTouchDrag`/`pinch` are OFF. Axis drags, vertical price pan, crosshair, dividers stay DOM, gated by a geometry map (`reportGeom` → `chartGeom` message handler: price-axis width, time-axis height, pane/divider rects). `cancelsTouchesInView` gives the DOM a clean touchcancel on native begin.
+- Also this session: the MetroNow Android project accidentally duplicated into `MarketScopeWidget/app/` (6,327 files staged, broke the Xcode build with "no rule to process .java") was verified byte-identical to its real repo (`/Volumes/External/metronow-android`), unstaged, deleted, and the Xcode project regenerated clean.
+
+### 2026-07-05 — Full feature+model audit (both markets): configs hold; derivatives features were never trained
+
+`ml-training/feature_model_audit.py` (pre-declared: canonical folds/weights/purge mirrored from the calibrate scripts; model bar = ΔAUC>+0.005 in ALL folds; ablation bar = ±0.005). Findings:
+- **Models keep their seats.** Crypto LGB d4/t150: no challenger passes (best +0.0015, 2/3 folds). Stocks XGB d5/t100: deeper configs (XGB/LGB d6-t200, LGB d5-t300) beat prod in **3/3 folds** at +0.0033..+0.0044 with better top-decile+Brier — under the bar, but re-validate d6-class capacity at the next stock retrain.
+- **The 20 derivatives features contributed ZERO splits — a coverage artifact, not a signal verdict.** Training data (v11_fixed): OI/taker/long%/crowding populated on only 1–2.5% of bars (30-day API window); funding 50% (yet still zero splits); `basisPct`/`basisExtreme` MISSING from the CSVs entirely → **train/serve skew** (live computes real basis; model trained on constant 0). Next regen must: emit basis, backfill funding to full history (Binance serves it retroactively), and will inherit the growing full-fidelity archive (real coverage started 2026-04).
+- **`volScalarML` ≡ `atrPercentile` (r=1.000)** — literal duplicate, drop one at next retrain.
+- **What carries crypto:** temporal group (−0.023 ablation; `dayOfWeek` is the top permutation feature +0.048 — real weekend/weekday vol seasonality) and 4H core (−0.009). Daily core near-neutral post-leak-fix. **Stocks:** `regimeCode`+`tfAlignment` dominate; `earningsProximity` earns its place; macro group is dead weight (+0.002 when dropped).
+- **~40–60 dead-weight features** (cross-market constants, 1H entry, 6-bar deltas, accel, macro-on-stocks): individually tiny, prune candidate list for next retrain (train pruned ~60 vs 111 on same folds, ship the winner). No permutation-negative features on either market (no overfit-suspects). Baselines reproduced doc numbers (crypto top-decile 0.768 ≈ 76.3%).
+
+### 2026-07-04 — Whale-trade collection fixed + Binance Vision historical backfill
+
+The `large_*` whale-flow archive (derivatives_history) had a broken definition: threshold was `0.5 × price` = 0.5 UNITS of the asset (~$30k for BTC, literal cents for DOGE-class alts), sampled from **spot** aggTrades. Fixed in `fetchLiveDerivatives` (`src/index.ts`): **futures** aggTrades (`fapi/v1/aggTrades` — where whales actually trade, same venue as the other derivatives signals) + fixed **$100k notional** threshold (`WHALE_NOTIONAL_USD` export, uniform across symbols; zero counts on illiquid alts are honest signal, not a bug). This is a definition discontinuity in the archived series — acceptable because the backfill regenerates history under the new definition.
+
+**New `scripts/backfill-whale-trades.ts`**: reconstructs per-4h-bar whale flow from **Binance Vision** (`data.binance.vision`) daily futures aggTrades dumps — free, no auth, full history. Output CSVs (`ml-training/whale_backfill/<SYM>.csv`: timestamp [4h UTC bucket open], large_buy_vol/sell_vol/buy_count/sell_count). Resumable (continues from last CSV timestamp), streams via `unzip -p` (disk holds only one day's zip), 3-retry then stop-symbol-contiguous. Smoke-tested (ETH 2026-06-28→30: $45–260M per bucket, hundreds of prints; BEL: zero prints — correct for an illiquid alt). SCALE: majors ~50–150MB/day download (2yr BTC ≈ 60–100GB, streamed) — run per-symbol/overnight. Purpose: `large_*` columns are archived but NOT among the 111 model features; the backfill makes the whale-feature hypothesis walk-forward testable NOW instead of after a year of live archiving. 425/425 tests green. **Collector fix deployed to the box 2026-07-04.** **OUTCOME (2026-07-05): whale features REJECTED as ML features** — 2yr backfill (BTC/ETH/ADA/XRP/SOL) tested via `ml-training/whale_feature_test.py` + pre-declared `whale_feature_sweep.py` (alt windows, interactions, XGBoost, 72h target): no variant passed the WF bar; standalone whale AUC ~0.57 = real but REDUNDANT with existing volume/ATR/ADX/derivatives features. Full entry: `docs/research/rejected-hypotheses.md`. Collector + backfill kept (display/whale-trap context).
+
+### 2026-07-04 — Chart tab: dedicated full-screen non-scrolling screen (TradingView-style)
+
+The interactive chart moved OFF the scrolling Overview tab into its own **Chart tab** (`ChartScreenView`, tag 4; tab bar now Overview·Chart·Market·Analysis·Alerts). Key architecture: (a) **fit-to-screen panes** — `chart.html` panes flex proportionally (main 3 : each sub 1) so any panel combination fits one screen, nothing scrolls, the chart owns every gesture; (b) **persistent pre-warmed WKWebView** (`ChartWebViewStore.shared` in `WebChartView.swift`) — created once at app launch, `warmPush` renders data into it from ContentView while other tabs are showing, survives tab switches (the old per-view WKWebView paid full web-process+JS startup every tab visit = "chart loads late"); (c) **WebKit double-tap recognizers disabled natively** post-load (they misclassified fast single-finger drags) + LWC `axisDoubleClickReset` OFF, replaced by an explicit ⟲ reset button (autoscale + default barSpacing + newest bar); (d) **data-identity reset** — payload carries `symbol|tf`; when it changes JS re-enables autoscale on all panes (a manual BTC ~60k price range left ETH ~3k off-screen) while preserving pan/zoom within the same instrument; (e) **drag-resizable panes** (dividers shift flex-grow between neighbors, min 0.25 share); (f) EMA legend (colored EMA 20/50/200, only entries with data); (g) FavoritePillsView on the Chart tab for symbol switching; (h) payload memoized behind a signature (symbol|dataTs|tf|panels|vol|dark) instead of rebuilt every SwiftUI pass; (i) `chart_tf_index` persisted (@AppStorage, shared with warmPush); (j) webview opaque (transparent WKWebView disables compositing fast paths). Overview keeps price header + indicators (IndicatorTableView now defaults expanded, `indicators_expanded` AppStorage) + analysis. TradingView attribution link on the Chart tab (Apache-2.0 requirement).
+
+### 2026-07-03 — Price chart migrated to TradingView Lightweight Charts (WKWebView); Canvas chart deleted
+
+The main price chart (Chart tab) is now **TradingView Lightweight Charts v4.2** (Apache-2.0), hosted in a `WKWebView`, replacing the hand-rolled SwiftUI Canvas `CandlestickChartView`. Plan: `docs/tradingview-chart-plan.md`. Built in phases (POC → parity → sub-panels → cutover), each validated on-device by the user:
+- **`CryptoLens/Resources/chart/`** — `lightweight-charts.standalone.production.js` (~160KB, bundled locally, offline) + `chart.html` (multi-pane port of `web/src/components/{ChartPanel,SubPanels}.tsx`, exposes `window.setChart()`).
+- **`CryptoLens/Views/WebChartView.swift`** — `UIViewRepresentable` over `WKWebView` + a Codable `ChartPayload` (candles + EMA20/50/200 + curated `WatchLevels` price-lines + volume + dynamic sub-panels). Pushes via `evaluateJavaScript`; Coordinator dedups by encoded-JSON so a re-push doesn't flicker/reset pan-zoom; series are tail-aligned to the candle window (indicator warmup).
+- **Features:** timeframe selector (Daily/4H/1H), volume histogram, watch-levels overlay (S/R, VWAP, POC/VA, Entry/SL/TP colored by role), and **toggleable sub-panels RSI/MACD/Stoch/ADX/Vol** (chips above the chart, persisted to `chart_rsi/macd/stoch/adx/vol` UserDefaults; RSI/MACD/Vol default on). Chart height is adaptive (320 + 140/enabled sub-panel). All panes time-synced via `subscribeVisibleTimeRangeChange`; shared axis on the bottom pane.
+- **Cutover (commits 8c9b884 + ee93a7e):** deleted `CandlestickChartView.swift` (951 lines: Canvas chart + Canvas sub-panels + custom pan/scrub/zoom gestures) and the `use_webview_chart` flag + Settings toggle — the WebChartView is now unconditional. `LevelsChartView` + `TradeSetupChartView` (compact SwiftUI charts under the analysis) are untouched.
+- Requires an iOS rebuild+install. **NOTE (env):** the dev Mac's Data volume hit 100% full mid-session (blocked builds) — cleared DerivedData/SwiftPM cache to recover; `~/Library/Developer/CoreSimulator` (~26GB) is the next freeable chunk if it recurs.
+
+### 2026-07-02 — Conviction Envelope symmetry: auto-FLAT the mature-aligned chase (commit 5581423)
+
+User-spotted contradiction: the envelope hard-blocked MIXED biases ("no trade — wait for alignment") but only *warned* on the opposite bad state, an aligned trend that had already run (CHASE HIGH). So it green-lit the late chase while forbidding mixed. `ml-training/trend_direction_test.py` measured that a **mature aligned trend (30-80 bars since regime change) has ~0% forward 24h EV** — the move already happened; hit rate ~47-49% at every trend age (direction stays a coin flip); the only cell with any edge is the **young/just-confirmed** window (3-10 bars, +0.245% gross ≈ break-even after costs). Fix (`prompt.ts`): hoisted `envChaseLevel` and added `chase_into_extended_aligned_trend` to the auto-FLAT list when `envChaseLevel === 'HIGH'` and biases are aligned (not MIXED/UNKNOWN). The envelope now blocks BOTH incoherent (mixed) and spent (mature-chase) states. **Deliberately MORE selective** (more FLATs) — the honest direction. **Also validated this session (all in `ml-training/`, negative/thin results — see the graveyard):** trend-following is ~coin-flip hit-rate with thin positive-skew EV that doesn't beat fees (`trend_direction_test.py`); bear+high-vol direction is STILL a coin flip, worse under strong ADX (49.4%); the annual-return projection for a $25k Binance bot is ~+5-15% in a good year with a ~40% chance of a red year, gated on the thin +0.03R edge surviving live; win rate is low purely because of the 5R:1R target geometry (a 1R:1R target gives ~49% = the coin flip); 72h hold is near-optimal via capital-turnover (net EV/trade ~flat across horizons).
+
+### 2026-07-02 — Strategy direction: fee break-even (#2) + volatility-pricing / long-gamma read (#1)
+
+The user's goal is "enter good trades." Honest framing (see the reasoning in this session): direction is a coin flip (proven, leak-retracted), so the app's ONLY surviving edge is **volatility** (ML_WIN + tail head = when a move is coming, direction-agnostic), and it's been expressed with the WRONG instrument (directional futures + stop, killed by fees + coin-flip direction). Two shipped:
+
+- **#2 Fee break-even model** (`ml-training/strategy_breakeven.py`, commit bd57c19): one WF pass → the full cost-sensitivity curve (per-trade cost is linear in round-trip %). On 20,053 tail-gated convex trades (1R stop / 5R target / 72h): **GROSS EV +0.151 R/trade, break-even round-trip = 0.238%** (mean cost multiplier 0.635 R per 1% round-trip; 5R win rate 11.8%). Coinbase Intro-1 (~0.25%) = −0.008R (just underwater); any venue under ~0.20% round-trip is solidly +EV. **Actionable: the edge is real but thin and fee-gated — a lower-fee venue (e.g. Hyperliquid ~0.035% taker) flips it from break-even to +0.04–0.06 R/trade; verify current fee schedules. Also: 11.8% win rate = ~88% of trades lose 1R, so it only works traded MECHANICALLY/completely (argues for automation, not discretionary entry).**
+- **#1 Volatility pricing — BUILT then the edge was REJECTED (commit e8d78fa built it, e9c3709 reframed it).** Added `fetchImpliedVol` (Deribit DVOL, public 30d IV) + a forecast-vs-implied "buy the straddle when vol is cheap" read. Then **validated it and it FAILED** (`ml-training/options_straddle_test.py`, 4yr BTC/ETH): the vol-risk-premium is positive (implied − realized30d = +7.5 BTC / +3.7 ETH vol pts) so buying vol is structurally −EV even at ZERO friction (−0.1 to −1.4%/trade), and the "cheap vol" gate makes it WORSE (mildly backwards — HAR-RV forecast spikes right after realized vol spikes, as vol mean-reverts). **The long-gamma path is a dead end; the only +EV vol trade is SELLING premium, which is tail-risk-heavy / not retail-safe.** The prompt line was reframed to `Options-Implied Vol (context)` — a DVOL regime read with an explicit "NOT a trade signal, buying vol is −EV" caveat. **KEY LESSON added to the graveyard: validate before trading — this cost an afternoon, not capital.**
+  - **Net strategy conclusion after #1+#2:** both retail vol-monetization paths are now closed — directional futures (coin-flip direction + thin post-fee edge) and long options (negative vol-risk-premium). The ONE validated +EV edge remaining is the **tail-gated convex perps strategy** (+0.15R gross, +~0.03R at Binance ~0.10% fees), which is thin and demands MECHANICAL/automated execution (11.8% win rate). Binance access unlocks the low fees to make it +EV; the open build is a mechanical signal export/automation (option (b)).
+
+### 2026-07-02 — "Constant auto-FLAT" fix: ML calibration drift + low-ML-in-trend reframe (commit 3bfaace)
+
+User: "no trade / auto-FLAT for two days while BTC ran 5%." Diagnosed from live `/ml-calibration` (4290 graded samples): the static isotonic ML calibration has **drifted and compressed** — predicted 30-50% bucket realizes **65%**, the whole curve sits flat ~62-67% instead of spanning 30→80% (top bucket 70-85 realizes only 67%). So the `ML_WIN < 50 → auto_FLAT` gate was firing on bars with genuinely ~65% move odds. Two fixes (worker-only, commit 3bfaace):
+1. **Recalibrated the GATE, not just the display:** `runFullAnalysisCore` computes `calibratedMlWin = 0.35·raw + 0.65·(live bucket realized rate)` when n≥100; the Conviction Envelope auto-FLAT keys on that. Symmetric (also lowers the over-confident top bucket) → a re-calibration, not a loosening. Raw ML_WIN still shown + the audited-calibration line.
+2. **Reframed the honest low-ML-in-trend case:** ML_WIN gauges a SHARP ≥1.5-ATR/24h move, so a slow trend grind is a low-ML state *by design*. When the ONLY auto-FLAT reason is ML and Environment Risk is ELEVATED/HIGH, the prompt emits a `FRAMING:` line ("no volatility-edge entry, NOT nothing happening — trend intact, riding it is your call, this tool doesn't gate that") and the system prompt honors it instead of a bare "stand aside." BTC at raw 26% (bucket realizes 36%) still flats — correctly, a slow +5%/2d isn't a vol event — but the systematic over-FLAT across the huge 30-50 bucket is fixed and the message is honest. **KEY LESSON: ML_WIN measures volatility events, not trend participation; the static calibration drifts and the live `ml_calibration` curve is the truth — consider periodic model retrains when the live curve flattens.**
+
+### 2026-07-01 — 4-agent code review: CRITICAL notification bug found + batch-1 fixes (commit 787dc40)
+
+A full 4-agent review (worker core / analysis brain / iOS services / iOS views) surfaced ~35 verified issues. Batch 1 shipped:
+
+- **CRITICAL — every ML-crossing push since the TrueNAS cutover was silently lost.** The `notif_claims` atomic claim (`index.ts` `processDeviceNotifications`) used `?N` numbered placeholders; better-sqlite3 (the box's D1 adapter) rejects them with "Too many parameter values were provided" — reproduced empirically. The throw fired only on ticks where `crossed` was true (one tick per crossing), aborting the device pass exactly when a push should have sent, and the outer catch hid it. Fixed with positional `?`; claim semantics re-verified. **Lesson recorded in `server/d1-adapter.ts` header: positional `?` only, never `?N`.**
+- **HIGH — outcome feedback loop was dead: three model-version registries disagreed.** Worker queried `model_version = 11/13`; iOS stamped 10/12; the shipped model JSONs both say `version: 12` (NOTE: the stock JSON is v12, not v13 as this doc's ML section claims — doc drift). The query matched nothing → `outcomeHistory` always []. Worker now queries `IN(10,11,12)` crypto / `IN(12,13)` stock; iOS `currentModelVersion` returns 12/12. Keep all three in sync on retrains.
+- **HIGH — fire-and-forget fixes:** iOS pendingJob staleness 180s→3600s (matches box KV TTL; the 3-min prune made push-tap recovery re-run the analysis = double LLM spend) + one final poll after the wall-clock deadline (the deadline also elapses while the app is suspended — resume-after-long-lock is the normal path, not an edge case).
+- **HIGH — `aiLoadingPhase`/`isLoading` reset unconditionally** on completion (were gated on `symbol == currentSymbol`; switching favorites mid-analysis bricked the AI buttons until relaunch).
+- **MED — failed analyses are no longer recorded as real analyses** (were saved to history, registered FLAT outcomes, and wiped the previous setup's alerts). **MED — SINCE LAST ANALYSIS baseline advances only on `llm.ok`** (failed/dry runs re-baselined it; null ML no longer erases the baseline). **MED — reentrancy guard on `runFullAnalysis`** (recovery Task + user tap could double-start → 2× LLM spend + duplicate tracked setups, since `parseSetups` mints fresh UUIDs per decode).
+
+**Batch 2 (honesty) SHIPPED 2026-07-02, commit 0cdcc69:** `/direction-accuracy` serves `backtestBaseline: null + retracted: true` (iOS section relabeled "RETIRED (historical)"); candle patterns are trend-aware (shape picks the family, 5-bar preceding trend picks the name — Hammer vs Hanging Man / stars now gated; 2 regression tests; ML features in scoring-full.ts untouched, parity unaffected); pattern significance direction-aware (bearish-at-support tagged `[counter-context]`, not promoted); Environment-Risk wording computed from ATR percentile ("deeply extended but COILED" when <40th pct — level unchanged) + stretch-only ELEVATED requires non-RANGING; Parabolic Risk revived (fresh 1H close vs PRIOR daily close — was identically 0); "(forming)" label removed; `score_history.bias` writes real biasAlignment not an ML_WIN-fabricated direction.
+
+**Review cleanup SHIPPED 2026-07-02, commits 1bac72c (worker) + 41c4628 (iOS):** the medium-severity backlog, cleared.
+- **Worker:** CVD trend sign-aware (mis-signed for negative CVD); whale-trap funding-stretched 0.01→0.03; dark-pool Z appends ≤1×/day (was ~6× → 3.3d window); heartbeat stamped on empty-watchlist early return; failed (all-zero) derivatives fetches never cached/archived (was ML-poisoning + training-poisoning); callLLM logs error bodies + effort-family max_tokens 32k→16k (undici 300s timeout); async job ownership check + stuck-pending→error; ML-UNAVAILABLE line on cache miss (was silent); stock ATR-based Expected Range fallback; trendDominates aligned to ELEVATED gate; big-move thresholds from tailRiskInfo; positional-timeframe guard.
+- **Worker stock-enrichment revival:** `fetchStockEnrichment` now populates relativeStrength1d + sectorETF + outperformingSector (Yahoo) and insiderTransactions + newsHeadlines (Finnhub) — reactivating the backtest-validated LONG_CONFIRMATION gate (was permanently "n/a") + Sector Strength / News-Thesis / Insider Cluster prompt sections.
+- **iOS:** deleted the legacy inline contracts sizing block (3-way conflict); register account/risk/leverage UserDefaults defaults at launch (fresh installs sent NO sizing to the LLM); tf2 label 4H→`tf2.label` (stocks are 1H) in LevelsChart + SanityCheck; WatchLevels setup-level cap exemption + stable id; LevelsChart candle-scaled y + hoisted bounds + label de-confliction; SanityCheck chase 0.3% tolerance; PositionSizer thousands separators; calculator local scratch state + "Save as my default"; TradeSetupChartView empty-candle guard; fire-and-forget recovery scans ALL pending jobs + didReceive push-tap handler + `AnalysisService.shared`; error banner not cleared by background refreshes.
+- **Explicitly DEFERRED (low-severity, reasoned):** `syncResolvedOutcomes` double-POST guard (needs an ioQueue in-flight flag; D1 side is idempotent-ish via id) and `restoreFromServer` timestamp threading (F-4 nudge over-counts right after a reinstall only) — both low blast-radius; PositionSizer `contractSize` rounding (broker granularity — nice-to-have); the review's insight projects (Your Leaks rollup, expected-range band on LevelsChart, portfolio correlation vs activeSetups, tappable-levels→alerts, big-move UI chip) remain as future work.
+
+**Insights batch 1 SHIPPED 2026-07-02, commit c58b0f7 (worker-only):** the prompt now carries (a) **ML Calibration (live, audited)** — realized goodR rate for the current prediction's bucket from `ml_calibration` D1 (90d, universe-wide, n≥20 gate); (b) **stop noise-hit per CANDIDATE SETUP** — `risk-engine.stopQuality()` (reflection-principle P(noise wicks the stop in 24h) at the HAR-RV σ) finally wired to the analysis path, "~34% (TIGHT — widen or skip)"; (c) **ML_WIN 24h trajectory** from `score_history` ("31→44→62% (RISING — vol regime building)"); (d) **BTC CONTEXT on every alt analysis** from the already-fetched `ml_preds:all` blob (ML_WIN / Big-Move bucket / persistence — "alt beta amplifies any BTC move"). All best-effort; each line self-describes its interpretation to the LLM.
+
+**Batch 3 (security) SHIPPED 2026-07-02, commit fbde1a3:** `/debug/*`, `/twelvedata/*`, `/finnhub/*` now behind the auth gate (the endpoint table above is correct again); Content-Length REQUIRED on POST/PUT (411) closing the chunked-encoding RAM-exhaustion bypass, `/history` hard-capped at 10MB; backfill `days` clamped [1,400].
+
+**Review backlog (not yet fixed, ranked):** (mediums) stock enrichment subset leaves LONG_CONFIRMATION permanently "n/a" on the live path; CVD trend mis-signs for negative CVD; whale-trap funding threshold fires at baseline funding; dark-pool Z window is ~3.3d not 20d (dup daily samples); dead-man's-switch false-alarms on empty watchlist; failed derivatives fetches cached+archived as zeros; Sonnet 5 32k non-streaming may hit undici's 300s header timeout (should stream); cold-launch/switched-symbol job recovery + `didReceive` push-tap handler missing; three conflicting position-size numbers on one screen (legacy inline block vs PositionSizeCard vs server); stocks' tf2 (1H) mislabeled 4H in LevelsChartView/SanityCheck; LevelsChartView label overlap + TP2 eviction by the 8-level cap. **Top insight opportunities (all from existing data):** live ML calibration into prompt+UI; `risk-engine.noiseHitProb` per candidate setup ("stop noise-hit ~34%"); derivatives-history percentiles (funding percentile vs 90d); ML_WIN trajectory from `score_history`; BTC-regime context for alts; expected-range × levels + band track record; "Your Leaks" rollup + honest realized-R expectancy; portfolio correlation vs activeSetups; iOS big-move chip + expected-range band on LevelsChartView + tappable levels→alerts.
+
+### 2026-07-01 — Claude Sonnet 5 + fire-and-forget analysis + position-size calculator
+
+Three changes shipped together.
+
+**Claude Sonnet 5 (new default).** Sonnet 5 removed the manual extended-thinking API: `thinking:{type:enabled,budget_tokens}` AND non-default `temperature`/`top_p`/`top_k` both return **400**. It uses **adaptive thinking** (on by default) with depth set by the `effort` param (`output_config.effort`, default `high`; `low`/`medium`/`high`/`xhigh`/`max`). Opus 4.7/4.8 made the same change — so the pre-existing "Opus 4.7 + Extended Thinking" picker option was already silently 400ing on the live API. Fix in `callLLM` (`marketscope-worker/src/index.ts`): split the Claude branch into an `EFFORT_MODELS` family (`claude-sonnet-5`, `claude-opus-4-7`, `claude-opus-4-8`) → `thinking:{type:adaptive}` + `output_config:{effort:high}`, NO temperature, `max_tokens` 32k (hard cap on thinking+text; Sonnet 5's tokenizer runs ~30% hotter) — vs the legacy `budget_tokens`+temperature path for Sonnet 4.6 / Opus 4.6 / Haiku 4.5. `thinkingBudget` from the client is now just an ON/OFF signal on the effort family. iOS: Sonnet 5 is the recommended default (`Constants.defaultModel` + top of `AIProvider.models`); the `@thinking-N` suffix still carries on/off, honored as a literal budget only on the legacy path. **Effort stays at `high`** (deliberately not `xhigh`): the analysis is a bounded single-shot synthesis, not a long agentic loop, and `xhigh` would add latency — worsening the very screen-lock timeout #1 below fixes — for marginal gain. Live-verified: a real `/full-analysis` returned `model: claude-sonnet-5`, 200 not 400. **Kept for reference:** Sonnet 5 is GA to all customers, same $3/$15 pricing (intro $2/$10 through 2026-08-31).
+
+**#1 Fire-and-forget analysis (permanent screen-lock fix).** The recurring "AI analysis fails when the screen turns off mid-call" bug is now fixed at the architecture level. `/full-analysis`'s pipeline was extracted into `runFullAnalysisCore()` (sync endpoint unchanged, 420/420 tests green); two new endpoints: **`POST /full-analysis/async`** mints a `jobId`, runs the ~30-90s pipeline **detached on the box's Node event loop** (persists past the HTTP response — no `ctx.waitUntil` needed since the box is a long-lived process, not a Worker isolate), returns `{jobId}` instantly, caches the result in KV on completion, and 5s later fires an APNs "ready" push UNLESS the job was already `claimed` by a foreground poll (suppresses the redundant banner; push body = the Bottom Line). **`GET /full-analysis/result?jobId=`** polls `{status, result?}` and flips `claimed`. iOS `WorkerFullAnalysisService.analyze` now starts/RESUMES a job and polls every 3s (jobId persisted per symbol <3 min → a force-kill resumes the same job, no second LLM spend); `CryptoLensApp` scenePhase `.active` triggers recovery (also where a tapped push lands). The box finishes regardless of the phone, so a screen-lock can't kill it — the poll resumes on foreground with the result waiting. **Live smoke-test of the async endpoints is pending the box redeploy.**
+
+**#2 Position-size calculator (iOS).** Correct sizing was buried in prompt text; now it's a first-class card on every setup. `PositionSizer` (`Utils/PositionSizer.swift`) computes the exact risk-based quantity **client-side** from the setup's entry/stop + account/risk settings (never the LLM's loose JSON qty): `qty = (account × risk%) / |entry-stop|`. `PositionSizeCard` shows quantity, dollars-at-risk, notional, and implied leverage with an over-cap warning; "Adjust" opens `PositionSizeCalculatorView` for a live recompute on a different fill. New `max_leverage` setting (default 3×) in Settings → Risk Management. iOS build green (xcodegen regenerated for 3 new files).
+
+Commits: Sonnet 5 `6d713b8`, worker async `2b0a63f`, iOS `11b68f2`. **Both require the iOS rebuild + a box redeploy (Stop/Start) to take effect.** Next candidates from the same product pass (not started): "Your Leaks" behavioral rollup, inline model track-record, portfolio/correlation risk view.
+
+### 2026-06-29 — Analysis prompt retune: collapse skeleton, mode switch, prior-analysis delta
+
+**Fixes the "every analysis feels the same / too long" complaint at the structural level.** Root cause was the OUTPUT FORMAT, not the content: it mandated **8 `##` sections**, three of which (Environment Risk / Move Likelihood / Regime) answered the same "how dangerous/active is the tape" question, and "use `##` headers exactly" fought "LENGTH MATCHES SUBSTANCE" — so the model emitted all 8 every time. Six changes to `marketscope-worker/src/prompt-system.json` (both crypto + stock) + plumbing in `src/prompt.ts` / `src/index.ts`:
+
+- **#1 Merged the three tape sections into one `## The Tape`** + added an explicit **SHORT vs FULL mode switch** with a concrete checkable trigger (auto-FLAT AND Env Risk MODERATE/LOW AND no HIGH/ELEVATED flag AND no IN_PLAY level AND ML_WIN < FAVORABLE AND no event AND nothing changed → SHORT = Bottom Line + What to Watch only). A binary mode beats "be as short as the tape is boring."
+- **#2 Bottom Line: hard ≤35-word plain-English cap** (was "two sentences", which let the model cram 5 hazards into two 40-word sentences).
+- **#3 Dropped the standalone `## Direction` section** (boilerplate with one word swapped) — the one-word lean now folds into the Bottom Line.
+- **#4 De-duplicated the "ML_WIN is ATR-normalized, low ≠ safe" lecture** (~5× → once); restating it trained the model to re-derive the caveat in every output, itself a source of same-y boilerplate.
+- **#5 Added two end-to-end worked examples** (quiet SHORT-mode + eventful FULL-mode) to each market, prefaced illustrative-only (don't reuse the numbers). FULL-mode word cap tightened 400→300.
+- **#6 SINCE LAST ANALYSIS delta (the structural cure for serial sameness):** `PromptState` now carries `prevMlWin` / `prevBottomLine` / `prevAnalysisMs`. `buildUserPrompt` emits a `=== SINCE LAST ANALYSIS ===` block (age, ML then→now with pp delta, prior Bottom Line) when prior state is present and <3 days old, and re-stamps `newState` with this run's ML + timestamp. `/full-analysis` extracts the fresh Bottom Line from the LLM output post-call (regex on the `## Bottom Line` section, capped 320 chars) and persists it to KV `prompt:<symbol>` so the **next** run leads with what moved. The system prompt instructs the LLM to lead the Bottom Line with the change when material (ML ≥15pp / regime flip / flag fired-cleared / level newly IN_PLAY), else "largely unchanged" + stay short.
+
+`prompt-system.json` was regenerated via a one-off build script (authoring the text as JS template literals + `JSON.stringify`, far safer than hand-escaping the `\n` in the single-line JSON values). **420/420 worker tests green** (added a #6 test; updated the systemPrompt-structure assertions for the merged section + dropped Direction header). Server bundle builds clean. Committed `5e3b41c`, pushed → GHCR Action built `ghcr.io/ludikure/marketscope:latest` (28s). **Live after a TrueNAS Update (pull_policy: always).** No iOS rebuild needed (display-only consumer of the worker analysis).
+
+### 2026-06-27 — ⚠️ NO CLOUDFLARE WORKERS: the backend runs on the TrueNAS box. NEVER `wrangler deploy`.
+
+**The live backend is the self-hosted TrueNAS box at `marketscope.ludikure.org`** (the same `src/index.ts` worker code running on Node via the `server/` adapters — KV→SQLite, D1→better-sqlite3, R2→filesystem, cron→node-cron; commit `21bc0e7`). Its KV is a local SQLite table with **no put limits**. Cloudflare is NOT in the data path.
+
+**Incident (root cause of the 2026-06-27 Cloudflare KV "put limit exceeded" email):** to ship worker prompt changes (F-1/F-2) I ran `npm run deploy` (= `wrangler deploy`), which redeployed the **full Cloudflare Worker** from the old `wrangler.toml` — **resurrecting the Cloudflare cron (`*/5`) + KV bindings** that the June 13 cutover had intentionally retired. The CF cron then wrote ~10 KV blobs every 5 min → blew the 1,000/day free-tier limit, and CF started serving app traffic directly (bypassing the box, double crons). **Fix:** redeployed the passthrough (`npx wrangler deploy -c wrangler.passthrough.toml`) → CF cron/KV stopped; deleted `wrangler.toml`; neutralized `npm run deploy` (now errors out).
+
+**Architecture now:**
+- **iOS** (`PushService.workerURL`) points **directly at the box** `https://marketscope.ludikure.org` — no Cloudflare Worker in the path. (Requires a rebuild+install to take effect on-device.)
+- **Shipping worker changes** = `tools/release-box-image.sh` (2026-08-28) — runs the suite, builds the image ON the box over SSH, switches the app via `midclt` and verifies `/health.build` from outside. No UI click, no Actions minutes. GHCR remains as the offsite copy (`--ghcr` switches back); see `marketscope-worker/DEPLOY.md`. **Never `wrangler deploy`** — `npm run deploy` is now a guard that errors with this reminder. `wrangler.toml` (the full-worker cron+KV+D1+R2 config) is deleted so it can't be redeployed.
+- **ZERO Cloudflare Workers (as of 2026-06-28).** The transitional passthrough Worker was deleted (`wrangler delete`) once the iOS app was rebuilt on the box URL; `passthrough.ts` + `wrangler.passthrough.toml` were removed from the repo. `…workers.dev` now 404s. The box (`marketscope.ludikure.org`, via the cloudflared tunnel) is the sole backend. NOTE: the frozen Cloudflare **D1 / KV / R2 resources still exist** (passive, free, no writes) — the Node-CLI training scripts (`scripts/fetchers/*`) still read the CF **D1 archive** via `wrangler d1 execute --remote`, so don't delete the D1 database without migrating that data first.
+
+**Remaining Cloudflare touchpoints (not yet removed — flagged for a decision):** (a) the **AI Gateway** indirection (`AI_GATEWAY_BASE` / `aiGatewayURL()` in `index.ts`) — inert on the box (env unset → direct LLM call), safe to delete on request; (b) the **`web/` app** is deployed to **Cloudflare Pages** (a separate client — keep or move); (c) **ingress**: how `marketscope.ludikure.org` is exposed (likely a cloudflared tunnel — free, no KV limit, ingress-only) vs. a direct DNS/TLS setup.
+
+### 2026-06-27 — Persona features F-3 (pre-trade sanity check) + F-6 (5-second decision cards)
+
+Two more iOS-side persona features, both pure-iOS off the already-loaded analysis (no worker call):
+- **F-3 pre-trade sanity check** (`Views/SanityCheckCard.swift` + `SanityCheck` logic struct): a 3-question gut check rendered above the analysis in `ContentView` whenever `result.tradeSetups` is non-empty. Derived from the loaded `AnalysisResult`: (1) pullback vs chasing (`entry` in the breakout direction vs `daily.price`), (2) stop inside/outside the noise zone (`setup.risk` vs 4H ATR; <1× = tight/likely-wicked), (3) high-impact event within 6h (`economicEvents` filtered by `isUpcoming && isHighImpact`). Color-coded; forces a 5-second pause at the impulsive moment.
+- **F-6 5-second decision cards** (`Views/WatchlistView.swift`, `decisionVerdict(for:)`): each watchlist card now leads with an at-a-glance verdict + one-line reason — CONDITIONS PRESENT (a viable setup exists → direction + ML%), STAND ASIDE (AI ran, no setup → no edge), or WATCH (indicators only, not yet analyzed → bias + ML, tap to analyze). Plain-language read without opening the chart.
+
+iOS build green. **Requires an iOS rebuild+install.** This completes the persona feature set F-1…F-6 (F-1 chase guard + F-2 whale-trap are live on the worker; F-3/F-4/F-5/F-6 are iOS).
+
+### 2026-06-27 — Persona features F-4 (overtrading guard) + F-5 (post-trade debrief)
+
+Two iOS-side persona-protection features in the Outcome dashboard, both pure-iOS off existing tracked-setup data (no worker / schema change):
+- **F-4 overtrading / cooling-off guard** (`OutcomeTracker.overtradingNudge()` / `setupsConsideredToday()`): counts setups surfaced today (local day) vs the `daily_trade_cadence` UserDefault (default 2, Stepper in Settings → Risk Management). When exceeded, `OutcomeDashboardView` shows a gentle "you've had N setups today — stepping back is usually +EV" banner. Counters the dopamine loop without hard-blocking.
+- **F-5 post-trade debrief** (`OutcomeTracker.debrief(for:)`): plain-language autopsy for each RESOLVED tracked trade — outcome (WIN/LOSS/BE), the realized excursion in R, the entry context honestly reconstructed from what was recorded (chase entry = `entry` vs `priceAtSetup` in the trade direction; ML quality; archetype), and a lesson from that archetype's own track record (`archetypeRecord`, e.g. "your counter-trend trades are 2–7 — demand stronger confirmation"). Rendered under each row in the dashboard's Recent Setups. Turns the tracker into a teacher.
+
+iOS build green. **Requires an iOS rebuild+install.** Remaining persona features: F-3 (pre-trade sanity check) and F-6 (5-second decision cards) — both benefit from a worker-emitted structured risk-flags block (not yet built).
+
+### 2026-06-27 — Analysis reliability (background URLSession) + F-2 whale-trap guard
+
+**Analysis no longer fails when the screen auto-locks mid-call.** The `/full-analysis` LLM call (Claude + extended thinking, ~30-90s) runs on `URLSession.shared`, which iOS suspends within seconds of the app backgrounding — so a screen auto-lock failed the analysis. Fix:
+- **Keep-alive** (`AnalysisService.runFullAnalysis`): disables the idle timer (no auto-lock) + holds a finite-length `beginBackgroundTask` assertion for the whole run. Ref-counted, UIKit-gated. This is the working fix for the auto-lock case.
+- **Transient retry** (`WorkerFullAnalysisService.analyze`): one retry on a transient blip (HTTP 0 / connection lost / box hiccup) so a single network stumble during a long extended-thinking call doesn't sink the analysis.
+- **Background URLSession — TRIED AND REVERTED (2026-06-27).** A `URLSessionConfiguration.background` upload-task approach (`BackgroundAnalysisService`) was built to survive full app suspension, but **upload-task responses are not delivered reliably on a background session** — it returned **HTTP 0 even with the screen ON** (the `didReceive response` delegate never fired, so status stayed 0). It was removed; the live path uses the foreground `WorkerFullAnalysisService.analyze`. Recoverable from git (commit `2fe92b7`) if revisited with on-device delegate logging. Net: the foreground + keep-alive path is the shipped solution; a manual screen-off for the full ~60s of a slow call can still time out (idle-timer only prevents *auto*-lock), which is an accepted limitation. **Requires an iOS rebuild+install.**
+
+**F-2 whale-trap detector (live worker prompt, crypto-only).** New `WHALE TRAP: HIGH/ELEVATED` flag in `buildUserPrompt` (`src/prompt.ts`, end of the DERIVATIVES POSITIONING block) that NAMES the crowding trap in plain language: fires when retail is crowded one side (`globalLong/Short ≥ 60%` or `crowdingCode`) AND ≥2 tells stack up — top traders leaning the opposite way, funding stretched in the crowd's direction, CVD diverging against the crowd, OI building. Emits "N% of retail is LONG/SHORT here — going that way means joining the crowd most exposed to a flush" + names the cascade direction. `prompt-system.json` (crypto only) instructs the LLM to surface it prominently in the Risk Map as a RISK flag, never a direction call. 2 tests added; **419/419 worker tests green.** Companion to F-1 (chase/exhaustion). **Requires a worker deploy.**
+
+### 2026-06-27 — Dead local-prompt path DELETED + F-1 chase/exhaustion guard (live worker prompt)
+
+Acted on a (heavily-stale, e1fb510-era) external review after re-validating every claim against HEAD. Most of the review was already done or superseded (CR-2 div-by-zero already guarded; CR-5 time features already pinned to `etCalendar`; CR-8 redundant `resolved` clause already removed; the entire Phase-3 "risk platform" already built as `vol.ts`/`risk-engine.ts`/`risk-states.ts`/`StressTest.tsx`). Two genuinely-actionable items shipped:
+
+**1. Completed Phase 4 step 3 — deleted the dead on-device prompt path (the real dedup payoff).** The live LLM path has been 100% server-side (`WorkerFullAnalysisService.analyze` → `/full-analysis` → `src/prompt.ts`) since the thin-client migration; the local `AnalysisPrompt.buildUserPrompt` + `systemPrompt` + `parseSetups` and the `ClaudeService`/`GeminiService`/`DeepSeekService` provider classes were unreachable. Deleted all three service files, the `AIProvider` protocol (kept the `AIProviderType` enum — still drives the Settings picker + worker provider routing), the unread `AnalysisService.aiProvider` property + its `configure()` switch, and gutted `AnalysisPrompt.swift` from **2,707 → ~64 lines** (only `classifyArchetype` survives — still used at setup-registration for OutcomeTracker archetype slicing). This also permanently removes the **leaked-94%-directional-claim** text (CR-1) that lived inside the dead `buildUserPrompt` — the live worker prompt was already clean (`prompt.ts:589` retraction). Consequence: `scripts/extract_system_prompt.py` is now **defunct** (its Swift source is gone) and `marketscope-worker/src/prompt-system.json` is the **canonical** system-prompt source, hand-maintained going forward (comment updated at `prompt.ts` top). iOS build green; no on-device fallback by design (cron dead-man's-switch covers worker uptime).
+
+**2. F-1 "buying-the-top / shorting-the-bottom" exhaustion guard (worker prompt, live path).** New direction-AGNOSTIC `CHASE / EXHAUSTION RISK: HIGH/ELEVATED` flag in `buildUserPrompt` (`src/prompt.ts`, Phase C7b, right after the Exhaustion/Continuation tally). Synthesizes signals already gathered — extension from the 200D mean (`stretch ≥ 2 ATR`), stretched RSI/Stoch, running into a level in the chase direction (resistance/VAH for longs, support/VAL for shorts within 0.6×ATR), and the existing exhaustion tally (crowded same-side, CVD divergence, rejection wick, RSI divergence). HIGH requires a CORE chase ingredient (extended OR ≥2 exhaustion signals) plus confirmation (score ≥3) so two oscillators alone can't trip it. Emits a loud plain-language directive; `prompt-system.json` (crypto + stock) instructs the LLM to lead the Risk Map with it and, if a setup is still permitted, label it a CHASE and steer toward a pullback. Aimed squarely at the target persona's #1 loss (entering after a move has already run). 2 unit tests added (HIGH-fire + quiet-tape); **417/417 worker tests green**. **Requires a worker deploy to take effect on the live box.**
+
+
+### 2026-06-13 — iOS thin client: indicators + crypto candles moved to the Worker (kills the 451)
+
+**The iOS app stopped computing indicators on-device and stopped fetching Binance directly.** Motivation: the fat client duplicated the Worker's analysis brain and, post-TrueNAS-migration, the phone's residential IP hits Binance's **HTTP 451 geoblock** (only the box, behind NordVPN/gluetun, can reach Binance) — the user asked to make iOS "as thin as possible, all calculations on the worker, ideally just a display."
+
+**What changed (all behind a master switch, default ON):**
+- ~~**`thin_client_mode` UserDefault is the master switch**~~ — **SUPERSEDED (verified 2026-07-09): thin-client is UNCONDITIONAL.** Nothing reads `thin_client_mode` anymore and the Settings kill-switch toggle no longer exists; `AnalysisService` always routes through the worker. (Historical note: the fresh key was originally chosen because the legacy `use_server_analysis` key carried a stale persisted `false` on devices that used the old "Server analysis (beta)" toggle.)
+- **New `Services/WorkerIndicatorsService.swift`** — `GET /indicators?symbol=` → tolerant DTO → `IndicatorResult` ×3 (daily/4H/1H) + livePrice. Bridges the worker JSON↔Swift shape gaps (`macd{histogram,crossover}`→macd/signal from series; bare `vwap`→`VWAPResult`; `atr` gets computed `suggestedSL*`; `volumeProfile{poc,vah,val}`→`valueAreaHigh/Low`; `obv/adLine` get `current:0`). Nested types whose keys already match (stochRSI/adx/fibonacci/supportResistance/candlePatterns/marketStructure) decode straight into the iOS `Codable` structs. Built via `IndicatorResult`'s memberwise init. Live-verified vs the deployed `/indicators` payload (every field maps).
+- **New `Services/WorkerCandlesService.swift`** — `GET /candles/crypto?interval=15m` for the OutcomeTracker wick-detection feed.
+- **`AnalysisService` rewired** (`fetchAndCompute`, `quickFetch` early-return to the worker when thin; OutcomeTracker 15m feed via the box; all geoblocked Binance/spot calls — `fetchCandles`, `fetchPremiumIndex`, ETHBTC, `SpotPressureAnalyzer`, `DerivativesService` — guarded behind `!thinClient`; local crossAsset/SPY/weekly skipped since they only fed the now-server-side prompt).
+- **Analysis was already 100% server-side** — `runFullAnalysis` already called `WorkerFullAnalysisService` unconditionally (line ~890); the old `use_server_analysis` "flag-gated OFF" comment was stale. So Phase B was a no-op beyond flipping the default + adding the UI toggle.
+- `IndicatorEngine`/`MLScoring`/provider services stay **compiled** (BacktestEngine depends on them); only the *live* path stops calling them. Pure thin / SPOF accepted — no automatic local fallback; `/cron-health` + `CronHealthService` surface box outages.
+
+**Build SUCCEEDED.** Verified headless: `/candles/crypto` + `/indicators` shapes decode. **Remaining on-device verification (user):** charts/sub-panels render from worker series, no `fapi.binance.com`/451 in console, analysis returns setups, OutcomeTracker advances. **Documented follow-ups:** ~~(a) derivatives display card is empty in thin mode~~ — RESOLVED by Phase E (see next entry); (b) Phase D — retire `AnalysisPrompt.buildUserPrompt` from the live path for the dedup payoff. Plan: `~/.claude/plans/valiant-brewing-lamport.md`.
+
+### 2026-06-13 — Provider selection (Claude/Gemini/DeepSeek) on the server-side analysis path
+
+**The Settings AI-provider picker was a no-op in thin mode** — `/full-analysis` hardcoded Anthropic Claude, so picking Gemini/DeepSeek only affected the dead local `/analyze` path. Fixed: extracted the multi-provider routing that already lived in `/analyze` into a shared `callLLM(env, {provider, model, system, prompt, thinkingBudget})` helper (`marketscope-worker/src/index.ts`) that routes Claude / Gemini / DeepSeek, allowlists the model per provider, and normalizes each response to plain text + the resolved model. `/full-analysis` now reads `body.provider` + `body.model` and calls it (Claude keeps extended-thinking default 8000; Gemini bumped to 8000 maxOutputTokens to avoid truncation). `/analyze` left unchanged (legacy local path).
+
+- **iOS:** `AnalysisService.currentModelID` (set in `configure`, persisted to `ai_model` UserDefault + restored in `autoConfigureKey`); `WorkerFullAnalysisService.analyze(symbol:provider:modelID:)` splits the iOS `@thinking-N` model-id suffix into the clean worker model + a `thinkingBudget` (Claude only; a suffix-less Claude model sends `thinkingBudget:0` to disable, Gemini/DeepSeek ignore it). `runFullAnalysis` passes `providerType.rawValue` + `currentModelID`. SettingsView restores the persisted model in the picker. All iOS-offered models are worker-allowlisted (Claude sonnet-4-6/opus-4-6/opus-4-7/haiku-4-5; Gemini 2.5 pro/flash; DeepSeek reasoner/chat).
+- Build green (iOS) + 415/415 worker tests. **Requires a worker deploy to take effect** on the live box.
+
+### 2026-06-13 — Phase E: per-symbol display enrichment via the Worker `/market` (truly thin)
+
+**Closes the last direct-provider fetches in thin mode + fixes the empty derivatives card.** In thin mode the per-symbol *display* enrichment for **crypto** now comes from ONE worker call (`GET /market?symbol=`) instead of on-device fetches: derivatives + positioning (were skipped — Binance fapi is 451 from the phone, so the card was empty), spot pressure (was guarded off — Binance spot), and CoinGecko sentiment + fear&greed (worked, but were direct provider calls). **Stock** fundamentals stay on the on-device Yahoo/Finnhub path (the worker `/market` `stockInfo` is a strict subset — no Finnhub analyst/insider/news — and Yahoo isn't geoblocked, so routing stocks through `/market` would *regress* the display). Macro stays on `/macro` (already worker-routed, shared cache). The LLM analysis was already fully enriched server-side inside `/full-analysis`; this is display-only.
+
+- **New `Services/WorkerMarketService.swift`** — `GET /market?symbol=` → tolerant DTOs → `{sentiment, fearGreed, derivatives, positioning, spotPressure, macro}` optionals, best-effort (nil on failure → caller carries forward), one 401 self-heal. The worker shapes (`src/enrichment.ts`) are **subsets** of the iOS `Codable` models, so each DTO defaults the missing fields: `DerivativesData` 11/18 (mark/index/OI-base/fundingHistory/takerSell defaulted), `SqueezeRisk.description`→"", `FearGreedIndex.classification`←worker `label`, `CoinInfo` keeps only the 4 %-change fields, `SpotPressure` is 1:1. `CrowdingState`/`OITrend` decode from their string raw values.
+- **`AnalysisService` thin crypto path rewired** — `refreshIndicators` fetches the bundle once per enrichment cycle (honors the `needsEnrichment` cadence; carries forward otherwise) and populates sentiment/fearGreed/derivData/positioning + sets `self.spotPressure`; `runFullAnalysis` does the same once per run (positioning gets recomputed locally via `PositioningAnalyzer` off the bundle's derivData, restoring the squeeze `description`). Non-thin path unchanged.
+- **Build SUCCEEDED**, no warnings. **On-device verification pending (user):** crypto derivatives + positioning + spot-pressure + fear&greed cards populate in thin mode; device logs show `/market` per crypto symbol and no CoinGecko/Binance-fapi lines.
+
+### 2026-06-05 — Calibration floor fix (no more dishonest 0%) + 72H leak-clean retrain
+
+**Calibration floor.** BTC (and every crashed major) served `ML_WIN = 0%` literally — the isotonic calibration's lowest breakpoints were `y=0.0` (overfit on a tiny low-prediction bin), and `calibrate()` clamps anything below `x[0]` to `y[0]`. A 0% calibrated prob claims a ≥1.5 ATR move is *impossible*, which is never true; in the all-crashed regime every major's raw score dipped into that bucket → all pinned at 0. Fixed by flooring the calibration `y` at the **bottom-bucket realized rate** (Wilson LB on a clean holdout): **main model crypto 0.12 / stock 0.18; h72 crypto 0.06 / stock 0.14** — all 4 main JSONs (worker + iOS) + the 2 worker-only h72 JSONs. The 0.85 cap already existed; this adds the missing floor. Isotonic monotonicity preserved (only the lowest breakpoints lifted). The repositioning meant the 0% never actually misled output (Environment Risk HIGH was the headline, ML_WIN demoted) — this just makes the secondary number honest. `calibration.floor` recorded in each JSON.
+
+**72H retrain.** The persistence model (`P(fwdMaxFavR72H ≥ 2.5 ATR)`) was trained on leak-era CSVs. Retrained crypto on `csv_exports_v11_fixed` via `calibrate_horizon.py --horizon 72 --threshold 2.5 --suffix h72t25`. Leak impact (direction-AGNOSTIC magnitude target → leak-light, as predicted): **~8pp mean per-prediction** on a clean holdout (corr 0.87); the old leaked-era model under-predicted (mean 0.513 vs true 55.3% base → new 0.557). **Stock h72 reproduced identically** — stocks were leak-*spared* (overnight gaps), `csv_exports_v13` unchanged + deterministic recipe → same model; only the floor is new for stocks. Parity fixtures' `mlPersistenceProbability` refreshed via `scripts/update-fixture-ml.ts` (BTC 0.53→0.66, ETH 0.59→0.78; TSLA unchanged — same signature). 380/380 green. Deployed a3182bd9.
+
+### 2026-06-04 — Risk repositioning: Environment Risk headline + big-move/tail head (ML_WIN demoted)
+
+**Triggered by a real failure the user caught: ML_WIN read 25–40% across 2026-05-31→06-03 while BTC fell $73k→$64k in 4.2–5.6 ATR moves (every `ml_calibration` bar resolved goodR=1).** Pulled the live D1 series to confirm, then investigated whether a better model is achievable before building.
+
+**Finding (ml-training/retrain_diagnostic.py + predictability_test.py, 141K clean OOS bars):** ML_WIN is NOT broken — it is well-calibrated even in the high-ADX/high-ATR tail (top ADX decile: actual goodR 42.8% vs predicted 43.6%). goodR genuinely *falls* in strong trends because it is **ATR-normalized** (a ≥1.5-ATR move on top of already-high vol is genuinely less likely, ~42% vs ~62% calm). So a low ML_WIN in a violent trend is *correct but misleading* as a risk signal. A monotonic-constraint retrain is **rejected** (would force goodR up with ADX — backwards). The BTC streak was a true ~40% bar resolving 1 in an autocorrelated window. BUT the huge moves are *partially* predictable: a head aimed at ≥4 ATR moves holds AUC ~0.67 (vs the ≥1.5 model's 0.63 at that target), +4–5pp catch — real but modest (rare events; top decile ~2× base).
+
+**Shipped (deployed worker d9a9210e):**
+- **Environment Risk flag** (`prompt.ts buildUserPrompt`): HIGH/ELEVATED/MODERATE/LOW from regime + ADX(daily,4H) + price-stretch-from-200D-in-ATR — a *non-ATR-normalized* trend-danger read. Now the **output headline** (`prompt-system.json`, both markets); ML_WIN demoted to "Move Likelihood (secondary)" with an `ML_WIN Context` line (ATR-normalized, correctly-but-misleadingly low in trends; never "safe").
+- **Big-move/tail head** (`ml-training/train_tail_head.py`): LightGBM d4 t150, target `P(fwdMaxFavR>=4 ATR in 24h)`, clean `csv_exports_v11_fixed`, WF-OOF isotonic (cap 0.60), OOF AUC 0.646, monotonic calibration (20%+ bucket → 23.7% realized, 3.7× base). Embedded as `heads.tail` in the **clean** `ml-model-crypto.json` (worker + iOS) — separate from the leak-era heads file. `mlPredictTail()` + `tailRiskBucket()` in `ml-predict.ts` (1e-6 Python parity, all-zero ref 0.1654135338). Crypto-only (stocks → null). Cron writes `bigMoveProb` into `ml_preds:all`; `/ml-predict` + `/full-analysis` (`ml.bigMove`) serve it; folds into Environment Risk (a HIGH tail bucket escalates the headline — the "ML_WIN calm but outsized move brewing" case). Verified live: all 76 crypto symbols populated. **iOS/web "Big-move risk" UI label is the remaining step.** 379/379 worker tests green.
 
 ### 2026-06-02 — 🚨 DATA LEAK FOUND: crypto direction model DROPPED, honest ML_WIN retrained + deployed
 

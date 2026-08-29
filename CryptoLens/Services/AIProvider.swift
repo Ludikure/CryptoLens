@@ -1,11 +1,8 @@
 import Foundation
 
-/// Abstraction for AI analysis providers (Claude, Gemini, etc.)
-protocol AIProvider {
-    var displayName: String { get }
-    func analyze(indicators: [IndicatorResult], sentiment: CoinInfo?, symbol: String, market: Market, stockInfo: StockInfo?, derivatives: DerivativesData?, positioning: PositioningSnapshot?, stockSentiment: StockSentimentData?, economicEvents: [EconomicEvent], macro: MacroSnapshot?, weeklyContext: String?, spyContext: String?, spotPressure: SpotPressure?, dataQuality: DataQuality?, crossAsset: CrossAssetContext?, outcomeHistory: [(direction: String, entry: Double, outcome: String, mlProb: Double?, conviction: String?)]) async throws -> ClaudeAnalysisResponse
-}
-
+/// AI provider selection. The actual analysis call runs server-side via the Worker
+/// `/full-analysis` endpoint (see `WorkerFullAnalysisService`); this enum only carries
+/// the user's provider/model choice and the per-provider model allowlist + key lookups.
 enum AIProviderType: String, Codable, CaseIterable, Identifiable {
     case claude = "claude"
     case gemini = "gemini"
@@ -29,8 +26,13 @@ enum AIProviderType: String, Codable, CaseIterable, Identifiable {
     /// cost than the next tier up.
     var models: [(id: String, name: String)] {
         switch self {
+        // NB: the "@thinking-N" suffix is now just an ON/OFF signal. On Sonnet 5 / Opus 4.7 the
+        // worker uses adaptive thinking + `effort: high` (manual budget_tokens 400s on those); the
+        // number is only honored on the legacy Sonnet 4.6 / Opus 4.6 budget path.
         case .claude: return [
-            ("claude-sonnet-4-6@thinking-8000", "Sonnet 4.6 + Extended Thinking (recommended)"),
+            ("claude-sonnet-5@thinking-8000", "Sonnet 5 + Extended Thinking (recommended)"),
+            ("claude-sonnet-5", "Sonnet 5 (faster, no thinking)"),
+            ("claude-sonnet-4-6@thinking-8000", "Sonnet 4.6 + Extended Thinking"),
             ("claude-sonnet-4-6", "Sonnet 4.6 (faster, no thinking)"),
             ("claude-opus-4-7@thinking-10000", "Opus 4.7 + Extended Thinking (max quality)"),
             ("claude-opus-4-7", "Opus 4.7"),

@@ -51,6 +51,7 @@ function fullCryptoInput(): BuildPromptInput {
       { direction: 'LONG', entry: 100, risk: 3, tp1: 105, mlProbability: 0.7, entryHitTimeMs: NOW - 30 * H1, maxFavorable: 4, maxAdverse: 1, tp1Hit: false, partialTaken: false, breakevenActivated: false },
     ],
     prevState: { regime: 'RANGING' }, settings: { accountSize: 25000, riskPercent: 2 },
+    livePrice: 104.2,
   };
 }
 
@@ -59,6 +60,8 @@ describe('prompt parity — structural completeness', () => {
     const { prompt } = buildUserPrompt(fullCryptoInput());
     const required = [
       'Symbol: BTCUSDT',
+      '=== LIVE PRICE (authoritative current price) ===',
+      'LIVE price right now: $104.20',
       '=== PRE-COMPUTED FLAGS',
       'STOCH_CROSS (momentum context only, NOT directional)',
       'POSITION SIZING:',

@@ -25,7 +25,7 @@ struct AnalysisSnapshotView: View {
 
                 HStack(spacing: 8) {
                     Text(Formatters.formatPrice(result.daily.price))
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(Theme.headlineNumber)
                         .foregroundStyle(.white)
 
                     if let change = result.sentiment?.priceChangePercentage24h {

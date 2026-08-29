@@ -18,17 +18,17 @@ enum Constants {
     static let yahooBaseURL = "https://query1.finance.yahoo.com"
     static let claudeAPIURL = "https://api.anthropic.com/v1/messages"
     static let claudeAPIVersion = "2023-06-01"
-    // Default: Sonnet 4.6 + extended thinking. Best quality-per-dollar for our rule-based prompt
-    // (checkbox conviction calibration + 7-point self-check). The "@thinking-N" suffix is parsed
-    // by ClaudeService — see AIProvider.swift `models` doc comment.
-    static let defaultModel = "claude-sonnet-4-6@thinking-8000"
+    // Default: Sonnet 5 + adaptive thinking (a drop-in capability upgrade over Sonnet 4.6 at the
+    // same price). The "@thinking-N" suffix is now an ON/OFF signal — the worker maps Sonnet 5 to
+    // adaptive thinking + `effort: high` (manual budget_tokens 400s on it). See AIProvider.swift.
+    static let defaultModel = "claude-sonnet-5@thinking-8000"
     static let haikuModel = "claude-haiku-4-5-20251001"
 
     // MARK: - Crypto
 
     /// Aligned with Coinbase Advanced perpetuals as of 2026-05-05. Each coin must satisfy
-    /// both: (1) Coinbase has an active perp product, (2) BacktestEngine.cryptoSymbols
-    /// includes it (so ML predictions and feature parity are wired). Removed POL/UNI/APT/
+    /// both: (1) Coinbase has an active perp product, (2) the worker's trained crypto symbol
+    /// set includes it (so ML predictions are wired). Removed POL/UNI/APT/
     /// ARB/OP/FIL/ATOM (no Coinbase perp) and added ZEC/XLM/HBAR/BCH/PEPE (perp + trained).
     /// PEPE is "1000PEPE PERP" on Coinbase (1 unit = 1000 PEPE tokens) — the underlying
     /// chart prices and ML signals are on plain PEPEUSDT; only the dollar-quote magnitude

@@ -188,14 +188,25 @@ class FinnhubProvider {
         PushService.addAuthHeaders(&request)
 
         guard let (data, response) = try? await session.data(for: request),
-              let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode)
-        else {
+              let http = response as? HTTPURLResponse else {
+            // Couldn't reach the worker/Finnhub at all — a genuine connectivity failure.
             await MainActor.run { ConnectionStatus.shared.finnhub = .error }
             return nil
         }
 
-        await MainActor.run { ConnectionStatus.shared.finnhub = .ok }
-        return data
+        if (200...299).contains(http.statusCode) {
+            await MainActor.run { ConnectionStatus.shared.finnhub = .ok }
+            return data
+        }
+
+        // Reached Finnhub but THIS endpoint errored. A 4xx (403 premium/not-on-plan, 404, 429
+        // rate-limit) means Finnhub is UP and serving other endpoints — it must NOT flip the whole
+        // provider badge to "down" (the badge was sticky-red because `insider`/`earnings` 403 on a
+        // free key while recommendation/news/market-status all return 200). Only a 5xx is a real
+        // server-side outage. On a 4xx we leave the badge as-is (a sibling call's .ok stands).
+        if http.statusCode >= 500 {
+            await MainActor.run { ConnectionStatus.shared.finnhub = .error }
+        }
+        return nil
     }
 }

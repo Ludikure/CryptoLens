@@ -51,6 +51,35 @@ struct WatchlistView: View {
     }
 }
 
+// MARK: - F-6 decision verdict
+
+private struct DecisionVerdict {
+    let label: String
+    let reason: String
+    let color: Color
+    let icon: String
+}
+
+/// At-a-glance per-symbol verdict from the cached analysis. CONDITIONS PRESENT = a viable setup
+/// exists; STAND ASIDE = AI analysis ran and found no edge; WATCH = indicators only, not yet
+/// analyzed. Plain-language, no chart needed — respects that the busy user doesn't have time to
+/// read nine paragraphs.
+private func decisionVerdict(for result: AnalysisResult) -> DecisionVerdict {
+    if let setup = result.tradeSetups.first {
+        var reason = "\(setup.direction) setup"
+        if let ml = result.daily.mlWinCalibrated ?? result.daily.mlWinProbability { reason += " · ML \(Int((ml * 100).rounded()))%" }
+        return DecisionVerdict(label: "CONDITIONS PRESENT", reason: reason, color: .blue, icon: "scope")
+    }
+    if result.analysisTimestamp != nil {
+        return DecisionVerdict(label: "STAND ASIDE", reason: "Analysis found no setup — no edge to enter", color: .secondary, icon: "hand.raised")
+    }
+    let bias = shortBias(result.daily.bias)
+    if let ml = result.daily.mlWinCalibrated ?? result.daily.mlWinProbability {
+        return DecisionVerdict(label: "WATCH", reason: "\(bias) · ML \(Int((ml * 100).rounded()))% — tap to analyze", color: .orange, icon: "eye")
+    }
+    return DecisionVerdict(label: "WATCH", reason: "\(bias) — tap to analyze", color: .orange, icon: "eye")
+}
+
 // MARK: - Card
 
 private struct WatchlistCard: View {
@@ -85,7 +114,7 @@ private struct WatchlistCard: View {
                     .fontWeight(.bold)
                 Spacer()
                 Text(cardShortBias)
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(Theme.micro)
                     .foregroundStyle(cardBiasColor)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
@@ -93,9 +122,21 @@ private struct WatchlistCard: View {
             }
 
             if let result {
+                // F-6 — 5-second decision verdict: the at-a-glance call so the busy user gets a
+                // plain read without opening the chart.
+                let v = decisionVerdict(for: result)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 3) {
+                        Image(systemName: v.icon).font(Theme.micro.weight(.bold))
+                        Text(v.label).font(Theme.micro.weight(.heavy))
+                    }
+                    .foregroundStyle(v.color)
+                    Text(v.reason).font(Theme.micro).foregroundStyle(.secondary).lineLimit(2)
+                }
+
                 // Price
                 Text(Formatters.formatPrice(result.daily.price))
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .font(.system(.title3, design: .rounded).weight(.bold))
                     .monospacedDigit()
 
                 // Sparkline

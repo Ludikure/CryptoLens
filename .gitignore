@@ -22,3 +22,22 @@ ml-training/crypto_candles_4h.csv.gz
 ml-training/daily_candles_crypto.csv.gz
 ml-training/daily_candles_stock.csv.gz
 ml-training/cg_data/
+ml-training/whale_backfill/
+ml-training/vision_cache/
+
+# stray sqlite files from a mis-pathed sqlite3 invocation
+marketscope.db
+marketscope.db-shm
+marketscope.db-wal
+
+# Envelope verdict exports — regenerable from marketscope-worker/scripts/exportEnvelope.ts
+# (~40 min against marketscope.db). 129 MB; provenance lives in the files themselves.
+ml-training/envelope_exports/
+
+# v15 regen scratch — regenerable, and not reproducible without the D1 archive + Yahoo VIX3M
+ml-training/csv_exports_v15/
+
+# Seeded design canvas — 2.4 MB because the editor is baked into the page. Regenerable:
+# design/trade-opportunities/assemble.sh + one seed-canvas.mjs call rebuilds it from the
+# 68 KB of sources beside it. The published copy is the artifact.
+design/trade-opportunities/trade-opportunities.html

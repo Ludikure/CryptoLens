@@ -1,16 +1,16 @@
-// Derivatives resolver: merges Binance fapi history with the D1 archive, then computes
+// Derivatives resolver: merges Binance Vision history with the D1 archive, then computes
 // per-bar `DerivativesSignals` (the discrete -1/0/+1 signals + raw values) using the
 // same logic the worker cron applies live (index.ts:2149-2168).
 //
 // Strategy: D1 wins for any field it has (it's the higher-fidelity source — captured
-// at cron time with full extended fields). Binance fapi backfills funding for the
-// older history beyond D1's ~7-month window, plus OI/LS/Taker for the last 30 days.
+// at cron time with full extended fields). Binance Vision (data.binance.vision dumps —
+// fetchers/vision.ts) supplies the deep history: funding ffilled from 2020, basisPct from
+// premium-index klines (2020-03+), OI/LS/Taker from daily metrics (2021-12+). The old
+// fapi fetcher (fetchers/derivatives-binance.ts) is retired from this path — fapi is
+// HTTP-451 geoblocked from the dev Mac, and Vision's history is strictly deeper anyway.
 
-import {
-    fetchDerivativesHistory,
-    round4H,
-    type DerivativesHistory,
-} from './fetchers/derivatives-binance.js';
+import { round4H } from './fetchers/derivatives-binance.js';
+import { visionDerivHistory } from './fetchers/vision.js';
 import { type D1DerivativesArchive } from './fetchers/derivatives-d1.js';
 import type { DerivativesSignals } from '../src/scoring-full.js';
 
@@ -26,34 +26,25 @@ export interface MergedDerivBar {
 
 export type MergedDerivativesHistory = Map<number, MergedDerivBar>;
 
-/// Pull both sources for a symbol and merge. Binance fapi is fetched fresh; D1 is
-/// passed in as a pre-loaded map (one D1 dump covers all symbols, no need to re-query).
+/// Pull both sources for a symbol and merge. Vision history is fetched (disk-cached); D1
+/// is passed in as a pre-loaded map (one D1 dump covers all symbols, no need to re-query).
 export async function loadMergedDerivatives(
     symbol: string, startMs: number, endMs: number, d1: D1DerivativesArchive | null,
 ): Promise<MergedDerivativesHistory> {
-    const fapi = await fetchDerivativesHistory(symbol, startMs, endMs);
-    const merged: MergedDerivativesHistory = new Map();
-    for (const [k, b] of fapi) {
-        merged.set(k, {
-            fundingRate: b.fundingRate,
-            openInterest: b.openInterest,
-            longPercent: b.longPercent,
-            takerRatio: b.takerBuySellRatio,
-        });
-    }
+    const merged = await visionDerivHistory(symbol, startMs, endMs);
     const d1Sym = d1?.get(symbol);
     if (d1Sym) {
         for (const [k, b] of d1Sym) {
             const existing = merged.get(k) ?? {};
-            // D1 stores fundingRate as raw decimal; fapi merge stores rate × 100. Convert
-            // D1's value to the same convention before overlaying.
+            // D1 stores fundingRate as raw decimal; the Vision merge stores rate × 100.
+            // Convert D1's value to the same convention before overlaying.
             const d1Funding = b.fundingRate !== undefined ? b.fundingRate * 100 : undefined;
             merged.set(k, {
                 fundingRate: d1Funding ?? existing.fundingRate,
                 openInterest: b.openInterest ?? existing.openInterest,
                 longPercent: b.longPercent ?? existing.longPercent,
                 takerRatio: b.takerRatio ?? existing.takerRatio,
-                basisPct: b.basisPct,
+                basisPct: b.basisPct ?? existing.basisPct,
             });
         }
     }

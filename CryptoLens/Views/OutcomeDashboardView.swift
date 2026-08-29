@@ -5,14 +5,38 @@ struct OutcomeDashboardView: View {
     @EnvironmentObject var service: AnalysisService
     @State private var stats: OutcomeStats?
     @State private var liveSetups: [TrackedSetup] = []
-    @State private var versionComparison: [String: VersionStats] = [:]
-    @State private var directionReport: DirectionAccuracyService.Report?
     @State private var calibration: MLCalibrationService.Report?
     @State private var cronStale: Bool?
+    @State private var overtradingNudge: String?              // F-4
+    @State private var debriefs: [UUID: String] = [:]          // F-5, keyed by setup id
+    @State private var attribution: WorkerJournalService.Attribution?   // Phase 3
+    @State private var attributionLoaded = false
+    @State private var closing: WorkerJournalService.Entry?
+    @State private var paper: WorkerPaperService.State?       // the bot on the box
+    @State private var paperLoaded = false
+    @State private var paperBusy = false
 
     var body: some View {
         List {
+            // The paper bot leads. It is the thing the November decision is judged on: the same
+            // scanner, filled against the real Coinbase book, with fees and slippage included.
+            paperSection
+
+            // Phase 3 — YOUR record, above the system's. The one question this tab could not
+            // answer before: when you act, does it beat not acting?
+            journalSection
+            if let a = attribution, !a.entries.isEmpty { yourTradesSection(a) }
+
             if let stats {
+                // F-4 — overtrading / cooling-off nudge. Only surfaces when today's surfaced
+                // setups exceed the user's stated cadence.
+                if let nudge = overtradingNudge {
+                    Section {
+                        Label(nudge, systemImage: "cup.and.saucer.fill")
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                }
+
                 // Pipeline health (dead-man's-switch). Only surfaces when stale — a healthy
                 // cron is the silent default.
                 if cronStale == true {
@@ -39,21 +63,6 @@ struct OutcomeDashboardView: View {
                             }
                         }
                     }
-                }
-
-                // Live forward track record of the dual-gate direction model (crypto).
-                // Worker-logged across the whole universe, graded 24h later — the
-                // out-of-sample test of the backtest's ~94.7%.
-                if let dir = directionReport, (dir.resolved > 0 || dir.pending > 0) {
-                    directionSection(dir)
-                    if !dir.bySymbol.isEmpty {
-                        directionBySymbolSection(dir)
-                    }
-                }
-
-                // A/B comparison — baseline vs treatment slice of the same archive
-                if hasABData {
-                    abSection
                 }
 
                 // Setup performance — generated vs counted
@@ -126,19 +135,26 @@ struct OutcomeDashboardView: View {
             }
         }
         .navigationTitle("Outcome Tracking")
+        .sheet(item: $closing) { e in
+            JournalEntrySheet(mode: .close(e)) { Task { await loadAttribution() } }
+        }
         .task {
+            await OutcomeTracker.refresh()   // pull server-resolved setups before computing stats
             stats = OutcomeTracker.stats()
-            versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
-            directionReport = await DirectionAccuracyService.fetch()
+            loadPersonaInsights()
+            await loadPaper()
+            await loadAttribution()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
         }
         .refreshable {
+            await OutcomeTracker.refresh()
             stats = OutcomeTracker.stats()
-            versionComparison = OutcomeTracker.versionStats()
             loadLiveSetups()
-            directionReport = await DirectionAccuracyService.fetch()
+            loadPersonaInsights()
+            await loadPaper()
+            await loadAttribution()
             calibration = await MLCalibrationService.fetch()
             cronStale = await CronHealthService.isStale()
         }
@@ -151,6 +167,312 @@ struct OutcomeDashboardView: View {
                         Image(systemName: "doc.on.doc")
                     }
                     ShareLink(item: shareText(s), preview: SharePreview("Outcome Tracking"))
+                }
+            }
+        }
+    }
+
+    // MARK: - Paper bot
+
+    private func loadPaper() async {
+        paper = await WorkerPaperService.fetch()
+        paperLoaded = true
+    }
+
+    private func paperCommand(_ cmd: WorkerPaperService.Command) {
+        Task {
+            paperBusy = true
+            _ = await WorkerPaperService.send(cmd)
+            await loadPaper()
+            paperBusy = false
+        }
+    }
+
+    private func money(_ v: Double, signed: Bool = true) -> String {
+        let s = String(format: "%@$%@", v < 0 ? "−" : (signed && v > 0 ? "+" : ""),
+                       Int(abs(v).rounded()).formatted(.number))
+        return s
+    }
+    private func tick(_ s: String) -> String { s.hasSuffix("USDT") ? String(s.dropLast(4)) : s }
+    private func hoursLeft(_ expiresMs: Double) -> String {
+        let h = (expiresMs / 1000 - Date().timeIntervalSince1970) / 3600
+        return h <= 0 ? "expiring" : h < 1 ? "\(Int((h * 60).rounded()))m left" : "\(Int(h.rounded()))h left"
+    }
+
+    private var paperSection: some View {
+        Section {
+            if let p = paper {
+                // Equity and its change since the bot started. Paper money is not money that
+                // exists, so it never takes the green that open real positions take.
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("$\(Int(p.equity.rounded()).formatted(.number))").font(Theme.answer)
+                        let d = p.equity - p.startEquity
+                        Text("\(money(d)) since start").font(Theme.caption)
+                            .foregroundStyle(d < 0 ? Theme.bearish : .secondary)
+                        Spacer()
+                        Toggle("", isOn: Binding(get: { p.enabled }, set: { paperCommand(.init(enabled: $0)) }))
+                            .labelsHidden().tint(Theme.info).disabled(paperBusy)
+                    }
+                    Text(paperStatusLine(p)).font(Theme.frame)
+                        .foregroundStyle(paperStatusColor(p))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let h = p.halted, !h.isEmpty {
+                        HStack {
+                            Text("Halted: \(h)").font(Theme.frame).foregroundStyle(Theme.danger)
+                            Spacer()
+                            Button("Clear halt") { paperCommand(.init(clearHalt: true)) }
+                                .font(Theme.micro).buttonStyle(.bordered).disabled(paperBusy)
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+
+                // Record so far, beside the number it has to match.
+                if let s = p.stats, s.n > 0 {
+                    recordLine("Closed", paperRecordLine(s, reference: p.backtestReference))
+                    recordLine("Costs", "worst dip \(money(-s.maxDrawdownUsd, signed: false)) · fees $\(Int(s.feesUsd.rounded()))"
+                               + (s.avgEntrySlippageBps.map { String(format: " · entry slippage %.1f bps", $0) } ?? ""))
+                } else {
+                    recordLine("Closed", "none yet — the backtest reference is \(String(format: "%+.2fR", p.backtestReference.meanR)) a trade")
+                }
+
+                // Open positions, each with a live mark.
+                ForEach(p.open) { o in
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(tick(o.symbol)).font(.caption).fontWeight(.bold)
+                                Text("SHORT").themedPill(Theme.bearish)
+                                Text("\(Int(o.contracts)) × \(o.productId)").font(Theme.frame).foregroundStyle(.tertiary)
+                            }
+                            Text("in \(Formatters.formatPrice(o.entryPrice)) · stop \(Formatters.formatPrice(o.stopPrice)) · target \(Formatters.formatPrice(o.targetPrice))")
+                                .font(Theme.frame).foregroundStyle(.secondary)
+                            Text("risk $\(Int(o.riskUsd.rounded())) · \(hoursLeft(o.expiresAt))"
+                                 + (o.mark.map { " · mark \(Formatters.formatPrice($0))" } ?? ""))
+                                .font(Theme.frame).foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 2) {
+                            if let u = o.unrealizedUsd {
+                                Text(money(u)).font(Theme.mono).foregroundStyle(u < 0 ? Theme.bearish : .primary)
+                            }
+                            Button("Close") { paperCommand(.init(closeId: o.id)) }
+                                .font(Theme.micro).buttonStyle(.bordered).disabled(paperBusy)
+                        }
+                    }
+                }
+
+                // The last few closed, newest first, so a fill can be sanity-checked by eye.
+                ForEach(p.closed.prefix(5)) { c in
+                    HStack {
+                        Text(tick(c.symbol)).font(.caption).fontWeight(.bold)
+                        Text((c.exitReason ?? "closed").replacingOccurrences(of: "_", with: " "))
+                            .font(Theme.frame).foregroundStyle(.secondary)
+                        Text("\(Formatters.formatPrice(c.entryPrice)) → \(Formatters.formatPrice(c.exitPrice ?? 0))")
+                            .font(Theme.frame).foregroundStyle(.tertiary)
+                        Spacer()
+                        if let r = c.realizedR {
+                            Text(String(format: "%+.2fR", r)).font(Theme.mono)
+                                .foregroundStyle(r < 0 ? Theme.bearish : .primary)
+                        }
+                    }
+                }
+            } else if paperLoaded {
+                Text("Couldn't reach the bot.").font(Theme.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Loading the bot…").font(Theme.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Paper bot")
+        } footer: {
+            Text("Runs on the box: the scanner's shorts, filled against the real Coinbase order book at each 4H close, "
+                 + "with stops and targets driven by live prints. Fees and slippage are real; the money is not. "
+                 + "It is the record the November decision is judged on.")
+                .font(Theme.frame)
+        }
+    }
+
+    private func paperRecordLine(_ s: WorkerPaperService.Stats, reference: WorkerPaperService.Reference) -> String {
+        var parts = ["\(s.n) \(s.n == 1 ? "trade" : "trades")"]
+        if let m = s.meanR { parts.append(String(format: "avg %+.2fR", m)) }
+        if let w = s.winRate { parts.append("\(Int((w * 100).rounded()))% won") }
+        parts.append(money(s.pnlUsd))
+        var line = parts.joined(separator: " · ")
+        line += String(format: " — backtest reference %+.2fR", reference.meanR)
+        if s.n < 10 { line += " (too few to judge yet)" }
+        return line
+    }
+
+    private func paperStatusLine(_ p: WorkerPaperService.State) -> String {
+        guard p.running, let st = p.status else { return "Bot process is not running on the box." }
+        if !p.enabled { return "Paused — no new entries. Open positions still managed." }
+        let feed = st.feedHealthy ? "Feed live" : "Feed DOWN (\(st.state))"
+        let live = st.contracts.values.compactMap { $0 }.count
+        var s = "\(feed) · \(live) contracts"
+        if let at = st.lastSignalRunAt {
+            let d = Date(timeIntervalSince1970: at / 1000)
+            s += " · last run \(d.formatted(date: .omitted, time: .shortened))"
+        } else {
+            s += " · first run at the next 4H close"
+        }
+        if let e = st.lastError, !e.isEmpty { s += " · last error: \(e)" }
+        return s
+    }
+
+    private func paperStatusColor(_ p: WorkerPaperService.State) -> Color {
+        guard p.running, let st = p.status else { return Theme.danger }
+        if !p.enabled { return Theme.caution }
+        return st.feedHealthy ? .secondary : Theme.caution
+    }
+
+    // MARK: - Phase 3: your record
+
+    private func loadAttribution() async {
+        attribution = await WorkerJournalService.fetch()
+        attributionLoaded = true
+    }
+
+    private func rStr(_ r: Double) -> String { String(format: "%+.2fR", r) }
+    private func ciStr(_ ci: [Double]?) -> String {
+        guard let ci, ci.count == 2 else { return "" }
+        return String(format: " [%+.2f, %+.2f]", ci[0], ci[1])
+    }
+
+    /// "12 trades (~7 independent) · avg +0.40R · 58% won · 2 still open"
+    private func groupLine(_ g: WorkerJournalService.GroupStats) -> String {
+        guard g.n > 0 else { return "none yet" }
+        var parts = ["\(g.n) \(g.n == 1 ? "trade" : "trades") (~\(g.effectiveN) independent)"]
+        if let e = g.expectancyR {
+            var avg = "avg \(rStr(e))"
+            if let money = OpportunityCopy.money(forR: e) { avg += " (\(money))" }
+            parts.append(avg)
+        }
+        if let w = g.winRate, g.graded > 0 { parts.append("\(Int((w * 100).rounded()))% won") }
+        if g.graded < g.n { parts.append("\(g.n - g.graded) not graded yet") }
+        return parts.joined(separator: " · ")
+    }
+
+    private var journalSection: some View {
+        Section {
+            if let a = attribution {
+                // The headline says exactly what the data can support — and below the bar, that
+                // is only the counts. No verdict word is rendered until taken >= 10 AND skipped >= 10.
+                if a.verdict.status == "insufficient" {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Not enough to judge yet.").font(Theme.answer)
+                        Text("\(a.taken.graded) taken and \(a.skipped.graded) skipped have been graded. "
+                             + "This needs \(WorkerJournalService.minTaken) of each before it will say whether your picks beat the list, "
+                             + "or whether skipping paid.")
+                            .font(Theme.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 2)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let sel = a.verdict.selection, let r = a.selectionR {
+                            Text(selectionText(sel, r) + ciStr(a.selectionCI))
+                                .font(Theme.answer)
+                                .foregroundStyle(sel == "list_beat_picks" ? Theme.caution : .primary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let ab = a.verdict.abstention, let r = a.abstentionR {
+                            Text(abstentionText(ab, r) + ciStr(a.abstentionCI))
+                                .font(Theme.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+
+                recordRow("You took", a.taken)
+                recordRow("You skipped", a.skipped)
+                recordRow("System proposed", a.proposed)
+                if a.executionN > 0, let d = a.executionDragR {
+                    recordLine("Entry drag",
+                               "your fills \(d < 0 ? "cost" : "gained") \(rStr(d)) vs the proposed entry (\(a.executionN) closed)")
+                }
+            } else if attributionLoaded {
+                Text("Couldn't load your record right now.").font(Theme.caption).foregroundStyle(.secondary)
+            } else {
+                Text("Loading your record…").font(Theme.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Your record")
+        } footer: {
+            if let a = attribution {
+                Text(a.note).font(Theme.frame)
+            } else {
+                Text("Tap \"I took this\" on a scanner card, or \"Took it\" on a setup, and this tab starts comparing what you take with what you skip.")
+            }
+        }
+    }
+
+    private func recordRow(_ label: String, _ g: WorkerJournalService.GroupStats) -> some View {
+        recordLine(label, groupLine(g))
+    }
+
+    private func recordLine(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(Theme.micro).foregroundStyle(.tertiary)
+            Text(value).font(Theme.caption).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 1)
+    }
+
+    private func selectionText(_ v: String, _ r: Double) -> String {
+        switch v {
+        case "picks_beat_list": return "Your picks beat the list by \(rStr(r)) a trade."
+        case "list_beat_picks": return "The list beat your picks by \(rStr(-r)) a trade."
+        default:                return "No difference yet between your picks and the list (\(rStr(r)))."
+        }
+    }
+
+    private func abstentionText(_ v: String, _ r: Double) -> String {
+        switch v {
+        case "skipping_helped": return "Skipping paid: the trades you left alone averaged \(rStr(r))."
+        case "skipped_winners": return "You skipped winners: the trades you left alone averaged \(rStr(r))."
+        default:                return "The trades you skipped came out about even (\(rStr(r)))."
+        }
+    }
+
+    private func yourTradesSection(_ a: WorkerJournalService.Attribution) -> some View {
+        Section("Your trades") {
+            ForEach(a.entries) { e in
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(e.symbol.hasSuffix("USDT") ? String(e.symbol.dropLast(4)) : e.symbol)
+                                .font(.caption).fontWeight(.bold)
+                            Text(e.direction).themedPill(e.direction == "LONG" ? Theme.bullish : Theme.bearish)
+                            Text(e.source == "opportunity" ? "scanner" : e.source == "setup" ? "analysis" : "manual")
+                                .font(Theme.micro).foregroundStyle(.tertiary)
+                        }
+                        Text("filled \(Formatters.formatPrice(e.fillPrice))"
+                             + (e.exitPrice.map { " · closed \(Formatters.formatPrice($0))" } ?? "")
+                             + (e.exitReason.map { " · \($0.replacingOccurrences(of: "_", with: " "))" } ?? ""))
+                            .font(Theme.frame).foregroundStyle(.secondary)
+                        if let n = e.note, !n.isEmpty {
+                            Text(n).font(Theme.frame).foregroundStyle(.tertiary).lineLimit(2)
+                        }
+                    }
+                    Spacer()
+                    if e.status == "closed" {
+                        if let r = e.realizedR {
+                            Text(rStr(r)).font(Theme.mono)
+                                .foregroundStyle(r >= 0 ? Theme.bullish : Theme.bearish)
+                        } else {
+                            Text("closed").font(Theme.frame).foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Button("Close") { closing = e }
+                            .font(Theme.micro).buttonStyle(.bordered)
+                    }
+                }
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) {
+                        Task { if await WorkerJournalService.delete(id: e.id) { await loadAttribution() } }
+                    } label: { Label("Delete", systemImage: "trash") }
                 }
             }
         }
@@ -194,248 +516,6 @@ struct OutcomeDashboardView: View {
         }
     }
 
-    // MARK: - Direction model live track record
-
-    @ViewBuilder
-    private func directionSection(_ dir: DirectionAccuracyService.Report) -> some View {
-        Section {
-            if let acc = dir.accuracy, dir.resolved > 0 {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Live Accuracy").foregroundStyle(.secondary)
-                    Spacer()
-                    Text(String(format: "%.0f%%", acc))
-                        .font(.title3).fontWeight(.bold)
-                        .foregroundStyle(acc >= 70 ? .green : acc >= 55 ? .orange : .red)
-                    Text("vs \(String(format: "%.0f%%", dir.backtestBaseline)) backtest")
-                        .font(.caption2).foregroundStyle(.tertiary)
-                }
-                .font(.subheadline)
-                statRow("Graded signals", value: "\(dir.resolved)")
-            } else {
-                statRow("Live Accuracy", value: "pending", color: .secondary)
-            }
-            // Per-side accuracy — graded longs vs shorts separately. Shows "pending"
-            // until at least one signal on that side resolves.
-            sideRow("Long", dir.longSide)
-            sideRow("Short", dir.shortSide)
-            if dir.pending > 0 {
-                statRow("Awaiting 24h grade", value: "\(dir.pending)", color: .blue)
-            }
-
-            // Accuracy by the model's own confidence band — does higher conviction
-            // actually mean higher accuracy live, the way it does in the backtest?
-            ForEach(dir.byConfidence.filter { $0.n > 0 }) { band in
-                HStack {
-                    Text("  pUp \(band.band)").font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(String(format: "%.0f%% (n=%d)", band.accuracy, band.n))
-                        .font(.caption2)
-                        .foregroundStyle(band.accuracy >= 70 ? .green : .secondary)
-                }
-            }
-        } header: {
-            Text("Direction Model — Live (crypto)")
-        } footer: {
-            Text("Every dual-gate signal (ML Win ≥70% + direction model ≥70% confident) logged across all crypto symbols and graded on the realized 24h direction. Long and short tracked separately. Forward, out-of-sample — pre-cost, like the backtest. Builds up over time.")
-        }
-    }
-
-    // One per-side accuracy row. "pending" until a signal on that side is graded.
-    @ViewBuilder
-    private func sideRow(_ label: String, _ side: DirectionAccuracyService.SideStats?) -> some View {
-        if let s = side, s.n > 0 {
-            HStack {
-                Text(label).foregroundStyle(.secondary)
-                Spacer()
-                Text(String(format: "%.0f%%", s.accuracy))
-                    .fontWeight(.semibold)
-                    .foregroundStyle(s.accuracy >= 70 ? .green : s.accuracy >= 55 ? .orange : .red)
-                Text("(n=\(s.n))").font(.caption2).foregroundStyle(.tertiary)
-            }
-            .font(.subheadline)
-        } else {
-            statRow(label, value: "pending", color: .secondary)
-        }
-    }
-
-    // Per-instrument accuracy — which coins the model reads well, most-evidenced first.
-    // Each row: symbol, overall accuracy + n, and the long/short split underneath.
-    @ViewBuilder
-    private func directionBySymbolSection(_ dir: DirectionAccuracyService.Report) -> some View {
-        Section {
-            ForEach(dir.bySymbol) { s in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack {
-                        Text(s.symbol.replacingOccurrences(of: "USDT", with: ""))
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Text(String(format: "%.0f%%", s.accuracy))
-                            .fontWeight(.semibold)
-                            .foregroundStyle(s.accuracy >= 70 ? .green : s.accuracy >= 55 ? .orange : .red)
-                        Text("(\(s.correct)/\(s.n))").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                    .font(.subheadline)
-                    HStack(spacing: 10) {
-                        if s.longs > 0 {
-                            Text("L \(s.longCorrect)/\(s.longs) (\(pctStr(s.longCorrect, s.longs)))")
-                                .foregroundStyle(.secondary)
-                        }
-                        if s.shorts > 0 {
-                            Text("S \(s.shortCorrect)/\(s.shorts) (\(pctStr(s.shortCorrect, s.shorts)))")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.caption2)
-                }
-            }
-        } header: {
-            Text("By Instrument — Live (crypto)")
-        } footer: {
-            Text("Graded dual-gate signals per symbol (correct/total), with the long (L) and short (S) split. Most-evidenced symbols first. Small samples swing — weight by n.")
-        }
-    }
-
-    private func pctStr(_ correct: Int, _ total: Int) -> String {
-        total > 0 ? String(format: "%.0f%%", Double(correct) / Double(total) * 100) : "—"
-    }
-
-    // MARK: - A/B comparison
-
-    private var hasABData: Bool {
-        let b = versionComparison[OutcomeTracker.baselinePromptVersion]
-        let t = versionComparison[OutcomeTracker.treatmentPromptVersion]
-        return (b?.countedSetups ?? 0) + (t?.countedSetups ?? 0) > 0
-    }
-
-    @ViewBuilder
-    private var abSection: some View {
-        let baseline = versionComparison[OutcomeTracker.baselinePromptVersion]
-        let treatment = versionComparison[OutcomeTracker.treatmentPromptVersion]
-
-        Section {
-            // Header row
-            HStack {
-                Text("").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Baseline")
-                    .font(.caption2).fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 80, alignment: .trailing)
-                Text("Treatment")
-                    .font(.caption2).fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 80, alignment: .trailing)
-            }
-            abMetricRow("Counted", baseline?.countedSetups, treatment?.countedSetups)
-            abMetricRow("Resolved", baseline?.resolvedSetups, treatment?.resolvedSetups)
-            abMetricRow("Wins / Losses",
-                        baselineText: pairText(baseline?.wins, baseline?.losses),
-                        treatmentText: pairText(treatment?.wins, treatment?.losses))
-            abMetricRow("Win Rate",
-                        baselineText: percentText(baseline?.winRate, samples: baseline?.resolvedSetups),
-                        treatmentText: percentText(treatment?.winRate, samples: treatment?.resolvedSetups),
-                        baselineColor: rateColor(baseline?.winRate, samples: baseline?.resolvedSetups),
-                        treatmentColor: rateColor(treatment?.winRate, samples: treatment?.resolvedSetups))
-            abMetricRow("Avg R Achieved",
-                        baselineText: rrText(baseline?.avgRRAchieved, samples: baseline?.resolvedSetups),
-                        treatmentText: rrText(treatment?.avgRRAchieved, samples: treatment?.resolvedSetups))
-
-            // Significance verdict (only when both sides have enough samples)
-            if let verdict = significanceVerdict(baseline: baseline, treatment: treatment) {
-                HStack {
-                    Image(systemName: verdict.icon)
-                        .foregroundStyle(verdict.color)
-                    Text(verdict.label)
-                        .font(.caption)
-                        .foregroundStyle(verdict.color)
-                }
-            }
-        } header: {
-            HStack {
-                Text("A/B: Prompt Version (30d)")
-                Spacer()
-            }
-        } footer: {
-            Text("Setups split deterministically by (device, day). Counted = entry triggered; Resolved = terminal state reached.")
-                .font(.caption2)
-        }
-    }
-
-    private func abMetricRow(_ label: String, _ baselineVal: Int?, _ treatmentVal: Int?) -> some View {
-        abMetricRow(label,
-                    baselineText: baselineVal.map { "\($0)" } ?? "—",
-                    treatmentText: treatmentVal.map { "\($0)" } ?? "—")
-    }
-
-    private func abMetricRow(_ label: String,
-                              baselineText: String, treatmentText: String,
-                              baselineColor: Color = .primary, treatmentColor: Color = .primary) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(baselineText).fontWeight(.semibold).foregroundStyle(baselineColor)
-                .frame(width: 80, alignment: .trailing)
-            Text(treatmentText).fontWeight(.semibold).foregroundStyle(treatmentColor)
-                .frame(width: 80, alignment: .trailing)
-        }
-        .font(.subheadline)
-    }
-
-    private func pairText(_ a: Int?, _ b: Int?) -> String {
-        guard a != nil || b != nil else { return "—" }
-        return "\(a ?? 0)/\(b ?? 0)"
-    }
-
-    private func percentText(_ rate: Double?, samples: Int?) -> String {
-        guard let rate, let samples, samples > 0 else { return "—" }
-        return String(format: "%.0f%%", rate)
-    }
-
-    private func rrText(_ rr: Double?, samples: Int?) -> String {
-        guard let rr, let samples, samples > 0 else { return "—" }
-        return String(format: "%.2fR", rr)
-    }
-
-    private func rateColor(_ rate: Double?, samples: Int?) -> Color {
-        guard let rate, let samples, samples >= 10 else { return .secondary }
-        return rate >= 50 ? .green : .red
-    }
-
-    private struct ABVerdict {
-        let label: String
-        let color: Color
-        let icon: String
-    }
-
-    /// 2x2 chi-square on (wins/losses, baseline/treatment). Requires both sides to
-    /// have >= 30 resolved setups for the test to be meaningful. p < 0.05 ↔ chi² > 3.841.
-    private func significanceVerdict(baseline: VersionStats?, treatment: VersionStats?) -> ABVerdict? {
-        guard let b = baseline, let t = treatment else { return nil }
-        let a = Double(b.wins), c = Double(b.losses)
-        let d = Double(t.wins), e = Double(t.losses)
-        let nBaseline = b.resolvedSetups, nTreatment = t.resolvedSetups
-        if nBaseline < 30 || nTreatment < 30 {
-            return ABVerdict(label: "Need ≥30 resolved per side for significance (\(nBaseline)/\(nTreatment) so far)",
-                              color: .secondary, icon: "hourglass")
-        }
-        let n = a + c + d + e
-        let denom = (a + c) * (d + e) * (a + d) * (c + e)
-        guard denom > 0 else {
-            return ABVerdict(label: "Insufficient variance to test", color: .secondary, icon: "minus.circle")
-        }
-        let chi2 = pow((a * e - c * d), 2) * n / denom
-        let treatmentBetter = (t.winRate > b.winRate)
-        if chi2 > 3.841 {
-            return ABVerdict(label: treatmentBetter
-                                ? "Treatment wins (p < 0.05)"
-                                : "Baseline wins (p < 0.05)",
-                              color: treatmentBetter ? .green : .red,
-                              icon: "checkmark.circle.fill")
-        } else {
-            return ABVerdict(label: "Not significant (χ² = \(String(format: "%.2f", chi2)))",
-                              color: .secondary, icon: "equal.circle")
-        }
-    }
-
     private func statRow(_ label: String, value: String, color: Color = .primary) -> some View {
         HStack {
             Text(label).foregroundStyle(.secondary)
@@ -465,11 +545,11 @@ struct OutcomeDashboardView: View {
                     .foregroundStyle(tracked.setup.direction == "LONG" ? .green : .red)
                 if tracked.setupType == .conditional {
                     Text("COND")
-                        .font(.system(size: 8, weight: .bold))
+                        .font(Theme.micro.weight(.bold))
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .foregroundStyle(.purple)
-                        .background(Color.purple.opacity(0.15), in: Capsule())
+                        .background(Theme.info.opacity(0.15), in: Capsule())
                 }
                 Spacer()
                 Text(tracked.outcome.result)
@@ -505,6 +585,14 @@ struct OutcomeDashboardView: View {
 
             Text(tracked.timestamp, format: .dateTime.month(.abbreviated).day().hour().minute())
                 .font(.caption2).foregroundStyle(.tertiary)
+
+            // F-5 — plain-language debrief for resolved trades.
+            if let debrief = debriefs[tracked.id] {
+                Text(debrief)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+            }
         }
         .padding(.vertical, 2)
     }
@@ -515,6 +603,16 @@ struct OutcomeDashboardView: View {
             live.append(contentsOf: OutcomeTracker.activeSetups(symbol: sym))
         }
         liveSetups = live.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// F-4 + F-5: the overtrading nudge and per-trade debriefs for the recent-setups list.
+    private func loadPersonaInsights() {
+        overtradingNudge = OutcomeTracker.overtradingNudge()
+        var d: [UUID: String] = [:]
+        for t in (stats?.recentSetups ?? []) {
+            if let text = OutcomeTracker.debrief(for: t) { d[t.id] = text }
+        }
+        debriefs = d
     }
 
     private func pendingTradeRow(_ tracked: TrackedSetup) -> some View {
@@ -536,7 +634,7 @@ struct OutcomeDashboardView: View {
                     .font(.caption2).fontWeight(.bold)
                     .foregroundStyle(tracked.setup.direction == "LONG" ? .green : .red)
                 Text("PENDING")
-                    .font(.system(size: 8, weight: .bold))
+                    .font(Theme.micro.weight(.bold))
                     .padding(.horizontal, 4)
                     .padding(.vertical, 1)
                     .foregroundStyle(.blue)

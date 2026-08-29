@@ -32,7 +32,13 @@ struct FavoritePillsView: View {
                                     Text(asset.ticker)
                                         .font(.caption)
                                         .fontWeight(isSelected ? .semibold : .regular)
-                                    if let mlProb = service.resultsBySymbol[asset.id]?.tf1.mlWinProbability {
+                                    // Show the number the app's own gates act on: the live-calibrated
+                                    // value, falling back to raw only when no curve could be fitted.
+                                    // The raw scale drifted well below the calibrated one (auto-FLAT
+                                    // at calibrated 50 is raw < 30.3%), so a raw badge beside a
+                                    // permitted setup read as a contradiction.
+                                    if let tf = service.resultsBySymbol[asset.id]?.tf1,
+                                       let mlProb = tf.mlWinCalibrated ?? tf.mlWinProbability {
                                         Text("\(Int(mlProb * 100))")
                                             .font(.caption2)
                                             .fontWeight(.medium)
@@ -65,11 +71,13 @@ struct FavoritePillsView: View {
     }
 
     private func mlProbColor(_ prob: Double, isSelected: Bool) -> Color {
-        if prob >= 0.70 { return .green }
+        // Theme-routed (2026-07-31): the raw .green here was the stock light-mode green, one of the
+        // last two off-palette colours on the landing screen.
+        if prob >= 0.70 { return isSelected ? .white : Theme.bullish }
         // The selected pill's background is .accentColor (blue); gray text on blue is
         // unreadable, so swap to a softened white for the low-probability case there
-        // and keep gray only for the unselected case where it sits on systemGray5.
-        if prob < 0.50 { return isSelected ? Color.white.opacity(0.75) : .gray }
+        // and keep the muted tone only for the unselected case where it sits on systemGray5.
+        if prob < 0.50 { return isSelected ? Color.white.opacity(0.75) : Theme.neutral }
         return isSelected ? .white : .primary
     }
 }

@@ -155,7 +155,19 @@ struct IndicatorResult: Identifiable, Codable {
     let biasScore: Int             // Signed score: positive=bullish, negative=bearish
     var marketStructure: MarketStructureResult?
     var volScalar: Double?
-    var mlWinProbability: Double?   // v9 goodR: calibrated P(>= 1.5 ATR favorable move in 24h)
+    /// RAW model output — P(>= 1.5 ATR favorable move in 24h). The comment here used to say
+    /// "calibrated"; it never was. The raw scale is what the mandate tier and the `ML Bucket` line
+    /// read, and it is what the model itself says.
+    var mlWinProbability: Double?
+    /// The LIVE-CALIBRATED value, which is what every envelope gate keys on.
+    ///
+    /// The two have drifted apart and the gap is large: the live base rate runs ~58% against v14's
+    /// 50.5% training base, so the PAV curve lifts raw upward and the auto-FLAT at calibrated 50
+    /// corresponds to raw < 30.3%. Displaying the raw number beside a permitted setup meant the
+    /// badge and the decision were on different scales, with no way to reconcile them.
+    ///
+    /// nil when the worker could not fit a curve — the UI then falls back to raw and labels it.
+    var mlWinCalibrated: Double?
     var mlPersistenceProbability: Double?  // h72t25: calibrated P(>= 2.5 ATR favorable move in 72h) — runner-hold confidence
     // Phase 1/2 additive heads (crypto-only; nil otherwise). Runtime-only (not persisted).
     var mlMetaProbability: Double?  // P(triple-barrier win | mlMetaDirection) — direction-conditioned
@@ -163,6 +175,9 @@ struct IndicatorResult: Identifiable, Codable {
     var mlConfident: Bool?          // conformal abstention gate (true = trade-worthy)
     var mlMetaDirection: Int?       // +1/-1/0 the meta head was conditioned on
     var mlDirectionUp: Double?      // direction model: calibrated P(up in 24h), crypto-only
+    // Big-move/tail head (crypto-only; nil otherwise). Relative outsized-move risk.
+    var mlBigMoveBucket: String?    // "HIGH" / "ELEVATED" / "NORMAL"
+    var mlBigMoveMultiple: Double?  // prob ÷ ~6.4% base rate ("1.7x normal")
 
     init(timeframe: String, label: String, price: Double, rsi: Double?, stochRSI: StochRSIResult?, macd: MACDResult?, adx: ADXResult?, bollingerBands: BollingerResult?, atr: ATRResult?, ema20: Double?, ema50: Double?, ema200: Double?, sma50: Double?, sma200: Double?, vwap: VWAPResult?, fibonacci: FibResult?, supportResistance: SRResult, candlePatterns: [PatternResult], volumeRatio: Double?, divergence: String?, bias: String, bullPercent: Double, obv: OBVResult? = nil, adLine: ADLineResult? = nil, smaCross: SMACrossResult? = nil, gap: GapResult? = nil, addv: ADDVResult? = nil, candles: [Candle] = [], inProgressCandle: Candle? = nil, rsiSeries: [Double] = [], stochKSeries: [Double] = [], stochDSeries: [Double] = [], macdHistSeries: [Double] = [], macdLineSeries: [Double] = [], macdSignalSeries: [Double] = [], adxSeries: [Double] = [], plusDISeries: [Double] = [], minusDISeries: [Double] = [], volumeRatioSeries: [Double] = [], ema20Series: [Double] = [], ema50Series: [Double] = [], ema200Series: [Double] = [], atrPercentile: Double? = nil, atrPercentileLabel: String? = nil, momentumOverride: String? = nil, biasScore: Int = 0, marketStructure: MarketStructureResult? = nil, volScalar: Double? = nil) {
         self.id = UUID()
@@ -270,4 +285,33 @@ struct IndicatorResult: Identifiable, Codable {
         marketStructure = try container.decodeIfPresent(MarketStructureResult.self, forKey: .marketStructure)
         volScalar = try container.decodeIfPresent(Double.self, forKey: .volScalar)
     }
+}
+
+// MARK: - Worker-supplied indicator subtypes
+//
+// These Codable result types were formerly declared in the on-device indicator
+// computation modules (VolumeProfile.swift, MarketStructure.swift). Those compute
+// modules were removed when the app became a pure thin client; the Worker now sends
+// these shapes in the `/indicators` payload, so the model types live here.
+
+/// Volume Profile: POC, Value Area High, Value Area Low.
+struct VolumeProfileResult: Codable {
+    let poc: Double
+    let valueAreaHigh: Double
+    let valueAreaLow: Double
+}
+
+/// A support/resistance level with its test count and recency.
+struct LevelTest: Codable {
+    let price: Double
+    let tests: Int
+    let candlesAgo: Int
+}
+
+/// Pre-computed market structure labels (HH/HL/LL/LH) + swing points.
+struct MarketStructureResult: Codable {
+    let label: String           // "HH/HL (bullish)", "LL/LH (bearish)", "HH/LL (expanding)", "Range"
+    let swingHighs: [Double]    // Last 2-3 swing highs (newest first)
+    let swingLows: [Double]     // Last 2-3 swing lows (newest first)
+    let levelTests: [LevelTest] // S/R with test count + recency
 }

@@ -1,0 +1,44 @@
+  /* Tokens verbatim from CryptoLens/Utils/Theme.swift, dark side. */
+  :root{
+    --bullish:#33D499; --bearish:#F77070; --caution:#FA913D;
+    --danger:#FF6B6B;  --info:#61A6FA;
+    --neutral:rgba(235,235,245,.6); --ter:rgba(235,235,245,.32);
+    --label:#fff; --screen:#000; --card:#1C1C1E; --border:rgba(255,255,255,.06);
+    --sf:-apple-system,"SF Pro Text",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+    --round:ui-rounded,"SF Pro Rounded",-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--screen);color:var(--label);font-family:var(--sf);
+       -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+  .screen{display:flex;flex-direction:column;padding:0 0 30px}
+  .g{padding-left:14px;padding-right:14px}
+
+  /* THREE TYPE REGISTERS. Nothing else. This is what removes the need for a legend. */
+  .dateline{font-size:11px;font-weight:600;letter-spacing:.062em;color:var(--neutral);text-transform:uppercase}
+  .answer{font-family:var(--round);font-size:20px;font-weight:600;color:var(--label);line-height:1.28;letter-spacing:-.01em}
+  .frame{font-size:11px;font-weight:400;color:var(--neutral);line-height:1.55}
+
+  .row{display:flex;align-items:center;gap:8px}
+  .col{display:flex;flex-direction:column}
+  svg{display:block;flex:none}
+  .mono{font-family:var(--mono);font-size:13px}
+  .sec{color:var(--neutral)} .t3{color:var(--ter)}
+
+  /* A CARD IS A PROPOSAL YOU COULD START. Its stripe is only ever info blue.
+     Open positions get no stripe — you are already in them. */
+  .card{position:relative;background:var(--card);border-radius:14px;padding:14px;
+        border:.5px solid var(--border)}
+  .card.live::before{content:"";position:absolute;left:1px;top:6px;bottom:6px;width:3px;
+        border-radius:2px;background:var(--info)}
+  .pill{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;
+        font-size:11px;font-weight:600;color:var(--c);
+        background:color-mix(in srgb,var(--c) 14%,transparent);white-space:nowrap}
+
+  .sect{font-size:11px;font-weight:600;letter-spacing:.062em;color:var(--neutral);text-transform:uppercase}
+  .lede{font-size:12px;font-weight:400;color:var(--neutral);line-height:1.5}
+  .m11{font-size:11px;font-weight:400;line-height:1.5}
+
+  /* The crash gauge gets a full-width hairline, deliberately a DIFFERENT geometry to the
+     leading stripe, so a hazard reading can never be misread as something to act on. */
+  .rule{height:.5px;background:rgba(250,145,61,.35)}

@@ -1,0 +1,104 @@
+[backtest] 77 symbol(s), concurrency=4
+[backtest] window: 2020-01-01 → 2026-06-30
+[backtest] out: /Volumes/External/CryptoLens/ml-training/csv_exports_v14
+[backtest] D1 archive: 77 symbols in 6.3s
+[backtest] global context fetched in 8.4s
+[APEUSDT] ✓ 7895 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/APEUSDT.csv (236.4s)
+[ADAUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ADAUSDT.csv (1023.1s)
+[AAVEUSDT] ✓ 11003 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/AAVEUSDT.csv (1645.4s)
+
+> backtest
+> tsx scripts/backtest.ts --symbols AAVEUSDT,ADAUSDT,ALGOUSDT,APEUSDT,APTUSDT,ARBUSDT,ATOMUSDT,AVAXUSDT,AXSUSDT,BANDUSDT,BATUSDT,BCHUSDT,BELUSDT,BNBUSDT,BTCUSDT,COMPUSDT,CRVUSDT,DASHUSDT,DOGEUSDT,DOTUSDT,DYDXUSDT,EGLDUSDT,ENJUSDT,ETCUSDT,ETHUSDT,FILUSDT,GALAUSDT,GMTUSDT,GRTUSDT,HBARUSDT,ICPUSDT,ICXUSDT,IMXUSDT,INJUSDT,IOSTUSDT,IOTAUSDT,JUPUSDT,KAVAUSDT,KNCUSDT,KSMUSDT,LDOUSDT,LINKUSDT,LTCUSDT,MANAUSDT,MATICUSDT,NEARUSDT,NEOUSDT,OPUSDT,PENDLEUSDT,PEPEUSDT,POLUSDT,QTUMUSDT,RLCUSDT,RSRUSDT,RUNEUSDT,SANDUSDT,SEIUSDT,SKLUSDT,SNXUSDT,SOLUSDT,STORJUSDT,SUIUSDT,SUSHIUSDT,THETAUSDT,TIAUSDT,TRBUSDT,TRXUSDT,UNIUSDT,VETUSDT,XLMUSDT,XMRUSDT,XRPUSDT,XTZUSDT,YFIUSDT,ZECUSDT,ZILUSDT,ZRXUSDT --start 2020-01-01 --end 2026-06-30 --out /Volumes/External/CryptoLens/ml-training/csv_exports_v14 --concurrency 4
+
+[backtest] 77 symbol(s), concurrency=4
+[backtest] window: 2020-01-01 → 2026-06-30
+[backtest] out: /Volumes/External/CryptoLens/ml-training/csv_exports_v14
+[backtest] resume: skipping 3 symbol(s) already present (use --no-resume to force re-run)
+[backtest] D1 archive: 77 symbols in 6.9s
+[backtest] global context fetched in 0.4s
+[ALGOUSDT] ✓ 13889 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ALGOUSDT.csv (824.1s)
+[ARBUSDT] ✓ 5669 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ARBUSDT.csv (1038.4s)
+[APTUSDT] ✓ 6599 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/APTUSDT.csv (1576.2s)
+[ATOMUSDT] ✓ 14212 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ATOMUSDT.csv (2526.5s)
+[AVAXUSDT] ✓ 11142 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/AVAXUSDT.csv (2152.8s)
+[AXSUSDT] ✓ 10883 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/AXSUSDT.csv (2489.1s)
+[BANDUSDT] ✓ 13361 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/BANDUSDT.csv (2602.1s)
+[BATUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/BATUSDT.csv (2507.8s)
+[BCHUSDT] ✓ 12935 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/BCHUSDT.csv (2763.1s)
+[BTCUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/BTCUSDT.csv (1668.0s)
+[BELUSDT] ✓ 11183 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/BELUSDT.csv (3694.4s)
+[BNBUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/BNBUSDT.csv (3768.1s)
+[COMPUSDT] ✓ 11675 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/COMPUSDT.csv (2778.7s)
+[CRVUSDT] ✓ 11369 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/CRVUSDT.csv (2388.1s)
+[DASHUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/DASHUSDT.csv (2740.1s)
+[DOGEUSDT] ✓ 13811 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/DOGEUSDT.csv (2980.5s)
+[DOTUSDT] ✓ 11351 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/DOTUSDT.csv (3133.8s)
+[DYDXUSDT] ✓ 9029 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/DYDXUSDT.csv (3022.0s)
+[ENJUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ENJUSDT.csv (2314.0s)
+[EGLDUSDT] ✓ 11255 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/EGLDUSDT.csv (3809.2s)
+[ETCUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ETCUSDT.csv (3085.3s)
+[ETHUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ETHUSDT.csv (3308.6s)
+[FILUSDT] ✓ 11003 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/FILUSDT.csv (2564.3s)
+[GALAUSDT] ✓ 9005 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/GALAUSDT.csv (2292.1s)
+[GMTUSDT] ✓ 7943 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/GMTUSDT.csv (1536.0s)
+[GRTUSDT] ✓ 10625 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/GRTUSDT.csv (1260.6s)
+[ICPUSDT] ✓ 9755 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ICPUSDT.csv (957.2s)
+[HBARUSDT] ✓ 13295 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/HBARUSDT.csv (1726.9s)
+[ICXUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ICXUSDT.csv (1969.2s)
+
+> backtest
+> tsx scripts/backtest.ts --symbols AAVEUSDT,ADAUSDT,ALGOUSDT,APEUSDT,APTUSDT,ARBUSDT,ATOMUSDT,AVAXUSDT,AXSUSDT,BANDUSDT,BATUSDT,BCHUSDT,BELUSDT,BNBUSDT,BTCUSDT,COMPUSDT,CRVUSDT,DASHUSDT,DOGEUSDT,DOTUSDT,DYDXUSDT,EGLDUSDT,ENJUSDT,ETCUSDT,ETHUSDT,FILUSDT,GALAUSDT,GMTUSDT,GRTUSDT,HBARUSDT,ICPUSDT,ICXUSDT,IMXUSDT,INJUSDT,IOSTUSDT,IOTAUSDT,JUPUSDT,KAVAUSDT,KNCUSDT,KSMUSDT,LDOUSDT,LINKUSDT,LTCUSDT,MANAUSDT,MATICUSDT,NEARUSDT,NEOUSDT,OPUSDT,PENDLEUSDT,PEPEUSDT,POLUSDT,QTUMUSDT,RLCUSDT,RSRUSDT,RUNEUSDT,SANDUSDT,SEIUSDT,SKLUSDT,SNXUSDT,SOLUSDT,STORJUSDT,SUIUSDT,SUSHIUSDT,THETAUSDT,TIAUSDT,TRBUSDT,TRXUSDT,UNIUSDT,VETUSDT,XLMUSDT,XMRUSDT,XRPUSDT,XTZUSDT,YFIUSDT,ZECUSDT,ZILUSDT,ZRXUSDT --start 2020-01-01 --end 2026-06-30 --out ../ml-training/csv_exports_v14 --concurrency 4
+
+[backtest] 77 symbol(s), concurrency=4
+[backtest] window: 2020-01-01 → 2026-06-30
+[backtest] out: /Volumes/External/CryptoLens/ml-training/csv_exports_v14
+[backtest] resume: skipping 32 symbol(s) already present (use --no-resume to force re-run)
+[backtest] D1 archive: 77 symbols in 5.2s
+[backtest] global context fetched in 0.4s
+[IMXUSDT] ✓ 8291 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/IMXUSDT.csv (238.2s)
+[INJUSDT] ✓ 10967 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/INJUSDT.csv (798.6s)
+[IOSTUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/IOSTUSDT.csv (1681.6s)
+[IOTAUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/IOTAUSDT.csv (2522.3s)
+[JUPUSDT] ✓ 3785 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/JUPUSDT.csv (2384.1s)
+[KAVAUSDT] ✓ 13139 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/KAVAUSDT.csv (2629.9s)
+[KNCUSDT] ✓ 11753 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/KNCUSDT.csv (2242.4s)
+[KSMUSDT] ✓ 11249 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/KSMUSDT.csv (1874.7s)
+[LDOUSDT] ✓ 7577 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/LDOUSDT.csv (2050.5s)
+[LINKUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/LINKUSDT.csv (2163.2s)
+[LTCUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/LTCUSDT.csv (2553.7s)
+[MANAUSDT] ✓ 11423 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/MANAUSDT.csv (2664.2s)
+[MATICUSDT] ✓ 10283 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/MATICUSDT.csv (3164.3s)
+[NEARUSDT] ✓ 11009 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/NEARUSDT.csv (2735.8s)
+[NEOUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/NEOUSDT.csv (2692.8s)
+[OPUSDT] ✓ 7439 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/OPUSDT.csv (2311.1s)
+[PENDLEUSDT] ✓ 5057 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/PENDLEUSDT.csv (1678.5s)
+[PEPEUSDT] ✓ 5411 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/PEPEUSDT.csv (1288.8s)
+[POLUSDT] ✓ 2429 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/POLUSDT.csv (493.7s)
+[QTUMUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/QTUMUSDT.csv (851.6s)
+[RLCUSDT] ✓ 13019 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/RLCUSDT.csv (1184.6s)
+[RSRUSDT] ✓ 11297 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/RSRUSDT.csv (1419.8s)
+[RUNEUSDT] ✓ 11249 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/RUNEUSDT.csv (1702.5s)
+[SANDUSDT] ✓ 11375 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/SANDUSDT.csv (1507.9s)
+[SEIUSDT] ✓ 4799 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/SEIUSDT.csv (1137.2s)
+[SKLUSDT] ✓ 10721 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/SKLUSDT.csv (1110.8s)
+[SNXUSDT] ✓ 11591 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/SNXUSDT.csv (1133.4s)
+[SOLUSDT] ✓ 11393 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/SOLUSDT.csv (1128.1s)
+[STORJUSDT] ✓ 11465 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/STORJUSDT.csv (1394.0s)
+[SUIUSDT] ✓ 5423 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/SUIUSDT.csv (1173.0s)
+[SUSHIUSDT] ✓ 11267 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/SUSHIUSDT.csv (1161.4s)
+[THETAUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/THETAUSDT.csv (1335.2s)
+[TIAUSDT] ✓ 4337 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/TIAUSDT.csv (1053.4s)
+[TRBUSDT] ✓ 11285 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/TRBUSDT.csv (1309.6s)
+[TRXUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/TRXUSDT.csv (1513.4s)
+[UNIUSDT] ✓ 11171 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/UNIUSDT.csv (1333.1s)
+[VETUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/VETUSDT.csv (1810.5s)
+[XLMUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/XLMUSDT.csv (2008.0s)
+[XMRUSDT] ✓ 9065 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/XMRUSDT.csv (1928.7s)
+[XRPUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/XRPUSDT.csv (2124.9s)
+[XTZUSDT] ✓ 13325 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/XTZUSDT.csv (2051.9s)
+[YFIUSDT] ✓ 11399 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/YFIUSDT.csv (1871.7s)
+[ZECUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ZECUSDT.csv (1933.4s)
+[ZILUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ZILUSDT.csv (1929.0s)
+[ZRXUSDT] ✓ 14230 rows → /Volumes/External/CryptoLens/ml-training/csv_exports_v14/ZRXUSDT.csv (1991.3s)
+
+[backtest] 45/45 succeeded in 20138.7s

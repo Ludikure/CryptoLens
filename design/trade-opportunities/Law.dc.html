@@ -1,0 +1,170 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+  /* Tokens verbatim from CryptoLens/Utils/Theme.swift, dark side. */
+  :root{
+    --bullish:#33D499; --bearish:#F77070; --caution:#FA913D;
+    --danger:#FF6B6B;  --info:#61A6FA;
+    --neutral:rgba(235,235,245,.6); --ter:rgba(235,235,245,.32);
+    --label:#fff; --screen:#000; --card:#1C1C1E; --border:rgba(255,255,255,.06);
+    --sf:-apple-system,"SF Pro Text",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
+    --round:ui-rounded,"SF Pro Rounded",-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--screen);color:var(--label);font-family:var(--sf);
+       -webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+  .screen{display:flex;flex-direction:column;padding:0 0 30px}
+  .g{padding-left:14px;padding-right:14px}
+
+  /* THREE TYPE REGISTERS. Nothing else. This is what removes the need for a legend. */
+  .dateline{font-size:11px;font-weight:600;letter-spacing:.062em;color:var(--neutral);text-transform:uppercase}
+  .answer{font-family:var(--round);font-size:20px;font-weight:600;color:var(--label);line-height:1.28;letter-spacing:-.01em}
+  .frame{font-size:11px;font-weight:400;color:var(--neutral);line-height:1.55}
+
+  .row{display:flex;align-items:center;gap:8px}
+  .col{display:flex;flex-direction:column}
+  svg{display:block;flex:none}
+  .mono{font-family:var(--mono);font-size:13px}
+  .sec{color:var(--neutral)} .t3{color:var(--ter)}
+
+  /* A CARD IS A PROPOSAL YOU COULD START. Its stripe is only ever info blue.
+     Open positions get no stripe — you are already in them. */
+  .card{position:relative;background:var(--card);border-radius:14px;padding:14px;
+        border:.5px solid var(--border)}
+  .card.live::before{content:"";position:absolute;left:1px;top:6px;bottom:6px;width:3px;
+        border-radius:2px;background:var(--info)}
+  .pill{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;
+        font-size:11px;font-weight:600;color:var(--c);
+        background:color-mix(in srgb,var(--c) 14%,transparent);white-space:nowrap}
+
+  .sect{font-size:11px;font-weight:600;letter-spacing:.062em;color:var(--neutral);text-transform:uppercase}
+  .lede{font-size:12px;font-weight:400;color:var(--neutral);line-height:1.5}
+  .m11{font-size:11px;font-weight:400;line-height:1.5}
+
+  /* The crash gauge gets a full-width hairline, deliberately a DIFFERENT geometry to the
+     leading stripe, so a hazard reading can never be misread as something to act on. */
+  .rule{height:.5px;background:rgba(250,145,61,.35)}
+  </style>
+</helmet>
+<div class="screen">
+
+  <div class="g" style="padding-top:18px">
+    <div class="dateline">THE DESIGN, IN ONE PAGE</div>
+  </div>
+
+  <div class="g" style="padding-top:10px">
+    <div class="answer">Colour means one thing each.</div>
+  </div>
+
+  <div class="g" style="padding-top:12px">
+    <div class="frame">This is the rule that removes the need for a legend inside the app.
+      If a colour ever has to be explained on the screen it is being used wrongly.</div>
+  </div>
+
+  <div class="g" style="padding-top:16px;display:flex;flex-direction:column;gap:11px">
+
+    <div class="row" style="align-items:flex-start;gap:11px">
+      <div style="width:3px;height:34px;border-radius:2px;background:var(--info);flex:none;margin-top:2px"></div>
+      <div class="col" style="gap:2px;flex:1">
+        <div class="m11" style="font-weight:600;color:var(--info)">Blue &mdash; something you could start</div>
+        <div class="m11 sec">The leading stripe on a card, and the edge number. Nothing prospective
+          is ever green: a proposal is not money.</div>
+      </div>
+    </div>
+
+    <div class="row" style="align-items:flex-start;gap:11px">
+      <div style="width:3px;height:34px;border-radius:2px;background:var(--bullish);flex:none;margin-top:2px"></div>
+      <div class="col" style="gap:2px;flex:1">
+        <div class="m11" style="font-weight:600;color:var(--bullish)">Green &mdash; money that already exists</div>
+        <div class="m11 sec">Only on an open position, only on realised R. It appears nowhere else
+          on the screen, which is what keeps it meaning something.</div>
+      </div>
+    </div>
+
+    <div class="row" style="align-items:flex-start;gap:11px">
+      <div style="width:3px;height:34px;border-radius:2px;background:var(--caution);flex:none;margin-top:2px"></div>
+      <div class="col" style="gap:2px;flex:1">
+        <div class="m11" style="font-weight:600;color:var(--caution)">Orange &mdash; a hazard that changes what you would do</div>
+        <div class="m11 sec">A size cut, a drawdown reading. It gets a full-width hairline rather than
+          a leading stripe, so it can never be mistaken for something to act on.</div>
+      </div>
+    </div>
+
+    <div class="row" style="align-items:flex-start;gap:11px">
+      <div style="width:3px;height:34px;border-radius:2px;background:var(--neutral);flex:none;margin-top:2px"></div>
+      <div class="col" style="gap:2px;flex:1">
+        <div class="m11" style="font-weight:600;color:var(--neutral)">Grey &mdash; unranked, or unmodelled</div>
+        <div class="m11 sec">Longs, no-view assets, everything the envelope stopped. No card, no
+          columns &mdash; the shape says "not a candidate" before you read a word.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="g" style="padding-top:20px">
+    <div class="sect">Three type sizes, not six</div>
+    <div style="padding-top:11px;display:flex;flex-direction:column;gap:12px">
+      <div class="col" style="gap:3px">
+        <div class="dateline">TUE 26 AUG &middot; 14:20 &middot; 24 SCANNED</div>
+        <div class="m11 t3">11px caps, tracked &mdash; the denominator, so the answer never carries it</div>
+      </div>
+      <div class="col" style="gap:3px">
+        <div class="answer">Two shorts clear the +0.05R floor.</div>
+        <div class="m11 t3">20px rounded, white &mdash; the only white sentence, and always a
+          threshold rather than a verdict</div>
+      </div>
+      <div class="col" style="gap:3px">
+        <div class="frame">Net of the 0.171% round trip. 1R is $560 at your 2% risk.</div>
+        <div class="m11 t3">11px sentence, grey &mdash; properties of the structure, stated once
+          above the rows and never repeated inside one</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="g" style="padding-top:20px">
+    <div class="sect">A row is five numbers</div>
+    <div class="m11 sec" style="padding-top:7px">Win probability, gross edge, the fee, the second
+      target and the raw branch percentages are all absent. They live one tap away.</div>
+    <div style="padding-top:11px">
+      <div class="card live">
+        <div class="row">
+          <div style="font-size:13px;font-weight:600">SOL</div>
+          <div class="pill" style="--c:var(--bearish)">SHORT</div>
+          <div class="col" style="margin-left:auto;align-items:flex-end;gap:1px">
+            <div class="mono" style="font-weight:500;color:var(--info)">+0.073R</div>
+            <div class="m11 t3">about +$41 a trade</div>
+          </div>
+        </div>
+        <div class="mono" style="padding-top:7px;color:var(--neutral)">
+          <span style="color:var(--label)">186.40</span> <span class="t3">&rarr;</span> 176.20
+          <span class="t3">&middot;</span> stop 190.35, 2.1%
+        </div>
+      </div>
+    </div>
+    <div class="m11 t3" style="padding-top:9px">Entry white because it is the only number you act on.
+      R carries its money underneath, because R is jargon and dollars are not &mdash; but the average
+      alone would mislead, so the frame above states the shape that produces it.</div>
+  </div>
+
+  <div class="g" style="padding-top:20px">
+    <div style="height:.5px;background:var(--border);margin-bottom:10px"></div>
+    <div class="m11 t3">Every reason string is translated before it is shown.
+      <span class="mono" style="font-size:11px">alignment_MIXED_not_full</span> becomes
+      &ldquo;Timeframes disagree&rdquo;. No machine token reaches a surface.</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"$preview":{"width":402,"height":1180}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>

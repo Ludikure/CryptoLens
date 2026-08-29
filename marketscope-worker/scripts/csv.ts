@@ -8,7 +8,12 @@ import type { FullFeatures } from '../src/scoring-full.js';
 
 export interface BarOutput {
     symbol: string;
+    /// The bar's OPEN, in ms. Kept as the row key for continuity with every existing consumer.
     timestampMs: number;
+    /// The bar's CLOSE, in ms — the instant every value on this row first exists. See the
+    /// `barCloseTimestampMs` comment in CSV_HEADER: this is the column a price-path join must
+    /// anchor on, and recording it is what makes the anchor a fact rather than an inference.
+    barCloseTimestampMs: number;
     price: number;
     dailyScore: number;
     fourHScore: number;
@@ -47,6 +52,9 @@ export interface BarOutput {
     /// 24h direction matches 48h/72h direction.
     fwdReturn48H: number;
     fwdReturn72H: number;
+    /// Actual elapsed clock hours of the fwd*24H window. 24 on crypto; a median of 120 on stocks,
+    /// because the forward columns count BARS and a stock 4H bar is ET-session aggregated.
+    fwdSpanHours: number;
 }
 
 export const CSV_HEADER = [
@@ -94,6 +102,27 @@ export const CSV_HEADER = [
     'fwdMaxFavR48H', 'fwdMaxFavR72H',
     // Direction-aware horizons (signed close-to-close pct return).
     'fwdReturn48H', 'fwdReturn72H',
+    // Basis features (2026-07-05): computed by computeAllFeatures since v11 but never
+    // serialized — the audit found them MISSING from training CSVs (train/serve skew:
+    // live serving computes real basis, the model trained on nothing). Appended at the
+    // END so index-based readers of the existing columns are unaffected.
+    'basisPct', 'basisExtreme',
+    // GROUND TRUTH FOR THE ANCHOR (2026-08-26, plan step 4.2). `timestamp` is the 4H bar's OPEN,
+    // but every value on this row — `price` above all — is known only at its CLOSE. That distinction
+    // was inferred rather than recorded, and inferring it wrong is what produced a four-hour
+    // lookahead in twelve simulation scripts and a thirteenth in this exporter: a study indexed
+    // price paths from `timestamp` and so scanned three hours that had already happened.
+    //
+    // Recording the close removes the inference. A consumer joining a price path should anchor on
+    // THIS column, not on `timestamp`. Appended at the END per the convention established by
+    // basisPct above, so index-based readers of the existing columns are unaffected.
+    'barCloseTimestampMs',
+    // The ACTUAL elapsed clock hours of the `fwd*24H` window on this row. The forward columns are
+    // counted in BARS, and a stock "4H" bar is ET-session aggregated, so six of them is a median of
+    // 120 HOURS on stocks against exactly 24 on crypto. See `computeFwdWindow24H` for the measured
+    // table. Recording the span makes the units a fact rather than an inference from a column name,
+    // and makes the end-of-series truncation self-describing.
+    'fwdSpanHours',
 ].join(',');
 
 const f1 = (v: number) => v.toFixed(1);
@@ -220,5 +249,9 @@ export function rowToCSV(o: BarOutput): string {
         f4(o.fwdMaxFavR72H),
         f4(o.fwdReturn48H),
         f4(o.fwdReturn72H),
+        f4(v('basisPct', 0)),
+        String(v('basisExtreme', 0)),
+        String(o.barCloseTimestampMs),
+        f1(o.fwdSpanHours),
     ].join(',');
 }

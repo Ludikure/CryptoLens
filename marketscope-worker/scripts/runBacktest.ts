@@ -16,7 +16,7 @@ import {
     type SentimentSignals,
 } from '../src/scoring-full.js';
 import { aggregate1HTo4H_ET } from '../src/aggregation.js';
-import { fetchBinanceKlines } from './fetchers/candles-binance.js';
+import { visionKlines } from './fetchers/vision.js';
 import { fetchD1Candles } from './fetchers/candles-d1.js';
 import { fetchYahooDaily, fetchYahoo1H } from './fetchers/yahoo.js';
 import { lookupDarkPool } from './fetchers/dark-pool.js';
@@ -216,7 +216,7 @@ interface TradeSimResult {
     maxAdverse: number;
 }
 
-function simulateTrade(
+export function simulateTrade(
     alignment: string, isCrypto: boolean, fourHPrice: number, atrFor4H: number,
     oneHCandles: Candle[], firstFutureOneHIdx: number,
 ): TradeSimResult {
@@ -272,14 +272,34 @@ function simulateTrade(
 }
 
 /// First 1H candle index strictly after `evalTime`. Mirrors Swift's `oneHIdx` semantics
-/// (it's pre-advanced to the next bar before each iteration's trade scan).
-function firstOneHIndexAfter(oneHCandles: Candle[], evalTime: number): number {
-    let lo = 0, hi = oneHCandles.length;
-    while (lo < hi) {
+const FOUR_H_MS = 4 * 3_600_000;
+
+/**
+ * Index of the 1H bar OPENING exactly at `targetMs`, or -1 when the archive has no such bar.
+ *
+ * THE ANCHOR (fixed 2026-08-26, plan step 1.5). `simulateTrade` derives its entry from
+ * `fourHAll[i].close` — the price at T+4h — but was handed the index of the
+ * first bar strictly after `evalTime`, which is the bar at T+1h. So it scanned for stops and targets across three hours that had already
+ * happened when the entry price came into existence: a stop could be "hit" by a low that occurred
+ * BEFORE the trade could have been placed. This is the same defect that inverted the entry-discipline
+ * finding in the Python layer, in TypeScript, and it contaminates the `trade*` columns of every v14
+ * CSV.
+ *
+ * Not live damage — v14 excludes `trade*` from the feature list — but a loaded gun in the export.
+ *
+ * Exact match rather than "first at or after": if the hour that should open the trade is MISSING
+ * from the archive, the honest answer is that this bar cannot be simulated. Snapping to a neighbour
+ * would silently place the entry at a different time than the price it was priced from.
+ */
+export function oneHIndexAtExact(oneHCandles: Candle[], targetMs: number): number {
+    let lo = 0, hi = oneHCandles.length - 1;
+    while (lo <= hi) {
         const mid = (lo + hi) >>> 1;
-        if (oneHCandles[mid].time <= evalTime) lo = mid + 1; else hi = mid;
+        const t = oneHCandles[mid].time;
+        if (t === targetMs) return mid;
+        if (t < targetMs) lo = mid + 1; else hi = mid - 1;
     }
-    return lo;
+    return -1;
 }
 
 /// Direction-aware fwdMaxFavR matching BacktestEngine.swift:1022-1026. For aligned
@@ -322,9 +342,35 @@ function fwdReturnAtBars(fourHCandles: Candle[], i: number, bars: number): numbe
 /// 24h-specific maxUp / maxDown / fwd return helper. Returns the same metrics that
 /// BacktestEngine columns expose: maxHigh-price (%), price-maxLow (%), and the close-
 /// to-close fwd return at the lookahead horizon.
+/**
+ * Forward windows, counted in BARS — which is not the same thing as the hours in their names.
+ *
+ * MEASURED (2026-08-26, plan step 4.4) on the box archive, span from bar i to bar i+6:
+ *
+ *     BTCUSDT   median  24h   (p10  24h, p90  24h)   6 x 4h, exactly as the name says
+ *     AAPL      median 120h   (p10  72h, p90 144h)   5 DAYS
+ *     MSFT / JPM / XOM / SPY   identical to AAPL
+ *
+ * A stock "4H" bar is ET-session aggregated — two per 6.5h session — so six of them is three
+ * TRADING sessions, which is 72-240 clock hours depending on weekends and holidays. `fwdReturn24H`
+ * therefore measures a one-day return on crypto and a FIVE-day return on stocks, under one name and
+ * one column index.
+ *
+ * Two consequences, both of which had already caused damage:
+ *   - No crypto-vs-stock comparison of any forward metric is valid. Part 8's "the only finding that
+ *     replicates across markets" compared a 24h crypto number against a 120h stock one.
+ *   - `goodR = fwdMaxFavR >= 1.5` is the stock model's TARGET, so that model predicts a 1.5-ATR
+ *     excursion within ~5 days, not within 24 hours as the docs and the prompt both said.
+ *
+ * NOT converted here. Changing the window would change every stock label and force a retrain, which
+ * is a decision with its own evidence requirements. What ships instead is `fwdSpanHours`: the actual
+ * elapsed clock time of each row's window, so the units are a recorded FACT rather than an inference
+ * from a column name. That also makes the end-of-series truncation below self-describing — those
+ * rows carry a visibly short span instead of silently reporting a clamped return.
+ */
 function computeFwdWindow24H(
     fourHCandles: Candle[], i: number,
-): { maxUpPct: number; maxDownPct: number; r4H: number; r12H: number; r24H: number } {
+): { maxUpPct: number; maxDownPct: number; r4H: number; r12H: number; r24H: number; spanHours: number } {
     const last = fourHCandles.length - 1;
     const price = fourHCandles[i].close;
     const r = (j: number) => {
@@ -341,6 +387,7 @@ function computeFwdWindow24H(
         maxUpPct: ((maxHigh - price) / price) * 100,
         maxDownPct: ((price - minLow) / price) * 100,
         r4H: r(1), r12H: r(3), r24H: r(6),
+        spanHours: (fourHCandles[Math.min(i + 6, last)].time - fourHCandles[i].time) / 3_600_000,
     };
 }
 
@@ -362,10 +409,12 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
     let oneHAll: Candle[];
     let derivHistory: Awaited<ReturnType<typeof loadMergedDerivatives>> | null = null;
     if (isCrypto) {
+        // Candles from Binance Vision dumps (fetchers/vision.ts) — api.binance.com is
+        // HTTP-451 geoblocked from the dev Mac; Vision has full history + disk cache.
         const [d, h, o, dh] = await Promise.all([
-            fetchBinanceKlines(symbol, '1d', fetchStartMs, endMs),
-            fetchBinanceKlines(symbol, '4h', fetchStartMs, endMs),
-            fetchBinanceKlines(symbol, '1h', fetchStartMs, endMs),
+            visionKlines(symbol, '1d', fetchStartMs, endMs),
+            visionKlines(symbol, '4h', fetchStartMs, endMs),
+            visionKlines(symbol, '1h', fetchStartMs, endMs),
             loadMergedDerivatives(symbol, fetchStartMs, endMs, opts.d1Derivatives ?? null),
         ]);
         dailyAll = d; fourHAll = h; oneHAll = o; derivHistory = dh;
@@ -494,10 +543,12 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
 
         // Trade simulation — only fires on aligned bars; matches Swift's
         // tradeResult == nil semantics on neutral/conflict.
-        const firstOneH = firstOneHIndexAfter(oneHAll, evalTime);
-        const tradeSim = simulateTrade(
-            biasAlignmentStr, isCrypto, price, atrFor4H, oneHAll, firstOneH,
-        );
+        // The trade opens at the CLOSE of this 4H bar, so the first hour it can be exposed to is the
+        // one opening at T+4h — not T+1h, which is inside the signal bar itself.
+        const firstOneH = oneHIndexAtExact(oneHAll, evalTime + FOUR_H_MS);
+        const tradeSim = firstOneH < 0
+            ? { outcome: 'NONE', pnlPct: 0, barsToOutcome: 0, maxFavorable: 0, maxAdverse: 0 }
+            : simulateTrade(biasAlignmentStr, isCrypto, price, atrFor4H, oneHAll, firstOneH);
 
         const w24 = computeFwdWindow24H(fourHAll, i);
         // Direction-aware fwdMaxFavR mirrors BacktestEngine.swift:1022-1026 — long
@@ -511,6 +562,13 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
         const out: BarOutput = {
             symbol,
             timestampMs: evalTime,
+            // The 4H bar closes where the NEXT one opens. Taken from the series rather than computed
+            // as `evalTime + 4h` because a stock "4H" bar is ET-session aggregated and is not four
+            // clock hours long — assuming it is would reintroduce the very inference this column
+            // exists to remove.
+            barCloseTimestampMs: i + 1 < fourHAll.length
+                ? fourHAll[i + 1].time
+                : evalTime + FOUR_H_MS,
             price,
             dailyScore: dailyBR.score, fourHScore: fourHBR.score, oneHScore: oneHBR.score,
             dailyBias: dailyBR.bias, fourHBias: fourHBR.bias, oneHBias: oneHBR.bias,
@@ -532,6 +590,7 @@ export async function runBacktest(opts: RunOpts): Promise<{ symbol: string; bars
             fwdMaxFavR72H: fwdMaxFavR72,
             fwdReturn48H: fwdR48H,
             fwdReturn72H: fwdR72H,
+            fwdSpanHours: w24.spanHours,
         };
         lines.push(rowToCSV(out));
         updateState(state, features);

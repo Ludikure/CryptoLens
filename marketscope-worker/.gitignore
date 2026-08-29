@@ -1,0 +1,29 @@
+# Secret-bearing + bulky migration artifacts — never commit these.
+# (Comments must be on their own line — an inline # does NOT start a comment in .gitignore.)
+
+# holds real API keys once filled in
+truenas-compose.yml
+# APNs auth keys
+*.p8
+*.env
+.dev.vars
+.dev.vars.local
+
+# Local migration data (huge, regenerable)
+dump.sql
+*.sql
+# ...but migrations/ IS the schema of record and must be committed. The blanket `*.sql` above was
+# aimed at dump.sql and local scratch SQL, and it silently swallowed NEW migration files: git only
+# ignores untracked paths, so 001-006 kept working (already tracked) while 007_schema_drift.sql was
+# invisible to `git add` with no error. Caught 2026-07-24 — the migration had to be force-added.
+!migrations/*.sql
+marketscope.db
+marketscope.db-*
+*.db
+*.db-shm
+*.db-wal
+models/
+
+# Build output
+dist/
+node_modules/

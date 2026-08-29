@@ -1,0 +1,8 @@
+vision_backfill/
+candlefeed/
+.candlefeed_key
+stock_klines/
+*.pkl.gz
+*.pkl
+stj_cache/
+stj_confirm/

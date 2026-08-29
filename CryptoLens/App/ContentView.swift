@@ -2,101 +2,126 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var service: AnalysisService
-    @EnvironmentObject var alertsStore: AlertsStore
     @EnvironmentObject var coordinator: NavigationCoordinator
     @AppStorage("colorSchemeOverride") private var colorSchemeOverride = "system"
+    @Environment(\.colorScheme) private var systemScheme
     @State private var showPicker = false
     @State private var showWatchlist = false
     @State private var showHistory = false
 
+    /// Effective dark-mode for the chart web view (honors the in-app override).
+    private var chartDark: Bool {
+        colorSchemeOverride == "dark" || (colorSchemeOverride != "light" && systemScheme == .dark)
+    }
+
+    /// Render fresh data into the persistent chart web view even while another tab is showing —
+    /// so opening the Chart tab presents an already-drawn chart instead of a late-loading one.
+    private func warmChart() {
+        if let r = service.currentResult { ChartWebViewStore.warmPush(result: r, dark: chartDark) }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Content area
-            Group {
-                if coordinator.selectedTab == 3 {
-                    NavigationStack {
-                        AlertsView()
-                    }
-                } else {
-                    NavigationStack {
-                        assetContent
-                            .modifier(AssetToolbarModifier(showPicker: $showPicker, showWatchlist: $showWatchlist))
-                            .sheet(isPresented: $showPicker) {
-                                CoinPickerView(selectedSymbol: Binding(
-                                    get: { service.currentSymbol ?? Constants.allCoins[0].id },
-                                    set: { newSymbol in selectSymbol(newSymbol) }
-                                ))
-                            }
-                            .sheet(isPresented: $showWatchlist) {
-                                WatchlistView(selectedSymbol: Binding(
-                                    get: { service.currentSymbol ?? Constants.allCoins[0].id },
-                                    set: { newSymbol in selectSymbol(newSymbol) }
-                                ))
-                            }
-                            .sheet(isPresented: $coordinator.showSettings) {
-                                SettingsView()
-                            }
-                            .sheet(isPresented: $showHistory) {
-                                AnalysisHistoryView(
-                                    symbol: service.currentSymbol ?? Constants.allCoins[0].id,
-                                    currentPrice: service.currentResult?.daily.price
-                                )
-                            }
+        // Native TabView (2026-07-25). This replaced a hand-rolled HStack of plain Buttons, which
+        // silently gave up everything the platform provides for free: proper tab accessibility
+        // traits for VoiceOver, tap-the-active-tab-to-scroll-to-top, selection haptics, and correct
+        // safe-area/blur behaviour. It also drove content through a `switch` that rebuilt each
+        // screen from scratch on every switch.
+        //
+        // Five destinations, each answering ONE question — the previous set was organised by data
+        // source, which is why the app's own conclusion wasn't on the screen you land on:
+        //   Scan    — is there anything worth doing right now? (NOT symbol-scoped; the landing screen)
+        //   Symbol  — what's the read on this one? (verdict first, then price/indicators)
+        //   Chart   — show me the tape
+        //   Market  — the surrounding context (derivatives, macro, calendar, sentiment)
+        //   Record  — is this system actually working? (was buried in Settings)
+        //
+        // SCAN LEADS since the corrected spec's §42 reordering. The app used to open on a symbol
+        // switcher, which presumes you have already chosen to trade something — the question a
+        // scanner asks comes first, and on most days its answer is "nothing", which is a result.
+        //
+        // The full AI analysis is no longer a peer tab: it's PUSHED from the verdict card on Symbol,
+        // which is both the right hierarchy (you land on the answer, tap for the reasoning) and what
+        // keeps five destinations from spilling into iOS's "More" tab.
+        TabView(selection: $coordinator.selectedTab) {
+            // Deliberately NOT `symbolScopedTab`. The scanner's whole premise is that it is not
+            // about a symbol, and a first build wrapped it in the shared chrome — which put a
+            // star, a watchlist grid and a "BTC ⌄" picker across the top of a screen that scans 24
+            // assets, and replaced its title with the name of one of them. Settings is carried on
+            // its own so the landing tab is not the one place you cannot reach it from.
+            NavigationStack {
+                OpportunitiesView(onOpenSymbol: { symbol in
+                    service.switchToSymbol(symbol)
+                    coordinator.openSymbol(symbol)
+                })
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button { coordinator.showSettings = true } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .accessibilityLabel("Settings")
                     }
                 }
+                .sheet(isPresented: $coordinator.showSettings) { SettingsView() }
             }
+            .tabItem { Label("Scan", systemImage: "scope") }
+            .tag(NavigationCoordinator.Tab.opportunities.rawValue)
 
-            // Bottom tab bar
-            bottomTabBar
+            symbolScopedTab { ChartTabContent(showHistory: $showHistory) }
+                .tabItem { Label("Symbol", systemImage: "bolt.horizontal.circle") }
+                .tag(NavigationCoordinator.Tab.symbol.rawValue)
+
+            symbolScopedTab { ChartScreenView() }
+                .tabItem { Label("Chart", systemImage: "chart.xyaxis.line") }
+                .tag(NavigationCoordinator.Tab.chart.rawValue)
+
+            symbolScopedTab { MarketTabContent() }
+                .tabItem { Label("Market", systemImage: "building.columns") }
+                .tag(NavigationCoordinator.Tab.market.rawValue)
+
+            NavigationStack {
+                OutcomeDashboardView()
+            }
+            .tabItem { Label("Record", systemImage: "checkmark.seal") }
+            .tag(NavigationCoordinator.Tab.record.rawValue)
         }
         .preferredColorScheme(colorSchemeOverride == "light" ? .light : colorSchemeOverride == "dark" ? .dark : nil)
+        .task {
+            ChartWebViewStore.prewarm()   // web-process + JS startup at launch, not on first tab-open
+            warmChart()
+        }
+        .onChange(of: service.currentResult?.timestamp) { warmChart() }
     }
 
+    /// The three symbol-scoped tabs share one chrome: a NavigationStack plus the asset toolbar and
+    /// its sheets. Record deliberately opts out — it is not scoped to a symbol, so the
+    /// symbol picker there would be meaningless.
     @ViewBuilder
-    private var assetContent: some View {
-        switch coordinator.selectedTab {
-        case 0:
-            ChartTabContent()
-        case 1:
-            MarketTabContent()
-        case 2:
-            AITabContent(showHistory: $showHistory)
-        default:
-            EmptyView()
+    private func symbolScopedTab<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        NavigationStack {
+            content()
+                .modifier(AssetToolbarModifier(showPicker: $showPicker, showWatchlist: $showWatchlist))
+                .sheet(isPresented: $showPicker) {
+                    CoinPickerView(selectedSymbol: Binding(
+                        get: { service.currentSymbol ?? Constants.allCoins[0].id },
+                        set: { newSymbol in selectSymbol(newSymbol) }
+                    ))
+                }
+                .sheet(isPresented: $showWatchlist) {
+                    WatchlistView(selectedSymbol: Binding(
+                        get: { service.currentSymbol ?? Constants.allCoins[0].id },
+                        set: { newSymbol in selectSymbol(newSymbol) }
+                    ))
+                }
+                .sheet(isPresented: $coordinator.showSettings) {
+                    SettingsView()
+                }
+                .sheet(isPresented: $showHistory) {
+                    AnalysisHistoryView(
+                        symbol: service.currentSymbol ?? Constants.allCoins[0].id,
+                        currentPrice: service.currentResult?.daily.price
+                    )
+                }
         }
-    }
-
-    private var bottomTabBar: some View {
-        HStack(spacing: 0) {
-            tabBarItem(icon: "chart.xyaxis.line", label: "Chart", tag: 0)
-            tabBarItem(icon: "building.columns", label: "Market", tag: 1)
-            tabBarItem(icon: "brain", label: "Analysis", tag: 2)
-            tabBarItem(
-                icon: alertsStore.activeAlerts.isEmpty ? "bell" : "bell.badge",
-                label: "Alerts",
-                tag: 3
-            )
-        }
-        .padding(.top, 8)
-        .padding(.bottom, 2)
-        .background(.bar)
-    }
-
-    private func tabBarItem(icon: String, label: String, tag: Int) -> some View {
-        Button {
-            coordinator.selectedTab = tag
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: icon)
-                    .font(.system(size: 18))
-                    .frame(height: 22)
-                Text(label)
-                    .font(.system(size: 10))
-            }
-            .frame(maxWidth: .infinity)
-            .foregroundStyle(coordinator.selectedTab == tag ? Color.accentColor : .secondary)
-        }
-        .buttonStyle(.plain)
     }
 
     private func selectSymbol(_ symbol: String) {
@@ -109,6 +134,7 @@ struct ContentView: View {
 struct ChartTabContent: View {
     @EnvironmentObject var service: AnalysisService
     @EnvironmentObject var favorites: FavoritesStore
+    @Binding var showHistory: Bool
     @State private var biasChanges: [String] = []
     @State private var activeSetups: [TrackedSetup] = []
     @State private var tradesExpanded = false
@@ -143,15 +169,71 @@ struct ChartTabContent: View {
         }
     }
 
+    @State private var newsFeed: WorkerNewsService.Feed?
+    @State private var basis: WorkerBasisService.Snapshot?
+    @State private var recentSetups: [TrackedSetup] = []
+
+    /// Best-effort and non-blocking: headlines are context, so a failure just hides the card.
+    private func loadNews(for symbol: String) async {
+        newsFeed = await WorkerNewsService.fetch(isCrypto: symbol.hasSuffix("USDT"))
+    }
+
+    /// Carry + fee context. Both are best-effort and symbol-independent, so they load once per
+    /// appearance rather than on every symbol switch.
+    // The ranked book moved to the Scan tab, which now owns `/opportunities` outright. Two screens
+    // fetching the same book was a second network call per appearance and, worse, a second place the
+    // same drawdown numbers could be drawn in a different visual language. (The call here also read
+    // `account_size`, a key that does not exist, so every book it fetched was sized against the
+    // worker's 25,000 default rather than the user's equity.)
+    private func loadCostContext() async {
+        basis = await WorkerBasisService.fetch()
+        recentSetups = await OutcomeTracker.allSetupsAsync()
+    }
+
     var body: some View {
         List {
             Section {
                 FavoritePillsView()
                     .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
 
+                // The answer, first. Everything below it is supporting evidence.
+                if let result = service.currentResult {
+                    VerdictCard(result: result, isStale: service.isAIStale,
+                                onRunAnalysis: { Task { await service.runFullAnalysis(symbol: result.symbol) } },
+                                onShowHistory: { showHistory = true })
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 8, trailing: 16))
+                }
+
                 if NetworkMonitor.shared.isOffline {
                     offlineBanner
                 }
+
+                // What the model was TOLD, shown whether or not it cited any of it. The analysis
+                // only names a headline that explains the current tape (and is forbidden from
+                // reaching for one otherwise), so on a quiet day it correctly stays silent — which
+                // is indistinguishable from "the feature is broken" without this card.
+                if let feed = newsFeed {
+                    NewsCard(feed: feed)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                }
+
+                // The two cards the 2026-08-23 research arc earned. Both answer "what is this
+                // costing me / paying me", which is the app's validated function — every
+                // directional hypothesis tested measured as a coin flip, while fee drag and the
+                // carry were the two effects that reliably showed up in the numbers.
+                if let b = basis {
+                    BasisCard(snapshot: b)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                }
+
+                if !recentSetups.isEmpty {
+                    FeeDragCard(setups: recentSetups)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 8, trailing: 16))
+                }
+
+                // Drawdown warnings live on the Scan tab's gauge now — one place per idea. This
+                // screen is symbol-scoped and the gauge is not; drawing it here as well meant the
+                // same evidence in two visual languages, which is what `Theme` exists to prevent.
 
                 if let result = service.currentResult {
                     TimestampBar(dataTimestamp: result.timestamp, analysisTimestamp: result.analysisTimestamp)
@@ -186,9 +268,6 @@ struct ChartTabContent: View {
         .refreshable {
             await service.refreshIndicators(symbol: selectedSymbol)
             service.macroSnapshot = await service.macroData.fetchMacroSnapshot()
-            if service.marketFor(selectedSymbol) == .crypto {
-                service.spotPressure = await SpotPressureAnalyzer.analyze(symbol: selectedSymbol)
-            }
             HapticManager.notification(.success)
         }
         .task {
@@ -198,6 +277,8 @@ struct ChartTabContent: View {
             }
             recomputeBiasChanges()
             activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
+            await loadNews(for: selectedSymbol)
+            await loadCostContext()
         }
         .onChange(of: service.currentResult?.timestamp) {
             recomputeBiasChanges()
@@ -205,6 +286,9 @@ struct ChartTabContent: View {
         }
         .onChange(of: service.currentSymbol) {
             activeSetups = OutcomeTracker.activeSetups(symbol: selectedSymbol)
+            // Crypto sees macro + crypto sources; stocks see macro primaries only, so the feed
+            // has to be re-fetched when the market changes, not just the symbol.
+            Task { await loadNews(for: selectedSymbol) }
         }
     }
 
@@ -219,7 +303,7 @@ struct ChartTabContent: View {
             .foregroundStyle(.orange)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
-            .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            .background(Theme.caution.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
         }
 
@@ -236,7 +320,7 @@ struct ChartTabContent: View {
             .padding(.vertical, 4)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.orange.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+            .background(Theme.caution.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
             .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
         }
 
@@ -297,7 +381,7 @@ struct ChartTabContent: View {
                                 Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
                                     .font(.caption)
                                 Text("PENDING")
-                                    .font(.system(size: 8, weight: .bold))
+                                    .font(Theme.micro.weight(.bold))
                                     .padding(.horizontal, 4)
                                     .padding(.vertical, 1)
                                     .foregroundStyle(.blue)
@@ -321,16 +405,16 @@ struct ChartTabContent: View {
                             let held = Int(Date().timeIntervalSince(active.outcome.entryHitTime ?? active.timestamp) / 3600)
 
                             HStack(spacing: 6) {
-                                Circle().fill(pnl >= 0 ? Color.green : Color.red).frame(width: 8)
+                                Circle().fill(pnl >= 0 ? Theme.bullish : Theme.bearish).frame(width: 8)
                                 Text("\(active.setup.direction) \(Formatters.formatPrice(active.setup.entry))")
                                     .font(.caption)
                                 if active.outcome.breakevenActivated {
                                     Text("BE")
-                                        .font(.system(size: 8, weight: .bold))
+                                        .font(Theme.micro.weight(.bold))
                                         .padding(.horizontal, 4)
                                         .padding(.vertical, 1)
                                         .foregroundStyle(.orange)
-                                        .background(Color.orange.opacity(0.2), in: Capsule())
+                                        .background(Theme.caution.opacity(0.2), in: Capsule())
                                 }
                                 Spacer()
                                 Text(String(format: "%+.1f%%", pnl))
@@ -354,10 +438,9 @@ struct ChartTabContent: View {
             .padding(.vertical, 4)
         }
 
-        if !result.tf1.candles.isEmpty {
-            CandlestickChartView(results: [result.tf1, result.tf2, result.tf3], activeSetup: result.tradeSetups.first)
-                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
-        }
+        // The interactive price chart lives in its own full-screen, non-scrolling Chart tab
+        // (ChartScreenView) so its pan/zoom/axis gestures never fight this page's scroll. This
+        // Overview tab keeps the price header, indicators, and analysis stack.
 
         IndicatorTableView(
             results: [result.tf1, result.tf2, result.tf3],
@@ -365,6 +448,20 @@ struct ChartTabContent: View {
             spotPressure: service.spotPressure
         )
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+        // Where price sits relative to the levels that matter (2026-07-31). Fills what used to be
+        // dead space below the fold on an un-analysed symbol — the mini chart moved to the Chart
+        // tab in July and the indicator grid defaults collapsed, so this tab could end after two
+        // cards. WatchLevels needs no analysis (S/R, VWAP, POC come from /indicators); when an
+        // analysis exists its entry/stop/targets join automatically. Duplicated deliberately on the
+        // analysis screen — there it supports the prose; here it answers "am I near anything?"
+        let nowLevels = WatchLevels.build(result: result)
+        let nowCandles: [Candle] = result.tf2.candles.isEmpty ? result.daily.candles : result.tf2.candles
+        if !nowLevels.isEmpty, !nowCandles.isEmpty {
+            LevelsChartView(candles: nowCandles, currentPrice: result.daily.price,
+                            levels: nowLevels, timeframeLabel: result.tf2.candles.isEmpty ? result.daily.label : result.tf2.label)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
 
         Spacer().frame(height: 20).listRowInsets(EdgeInsets())
     }
@@ -377,7 +474,7 @@ struct ChartTabContent: View {
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity)
         .padding(.vertical, 6)
-        .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
+        .background(Theme.bearish.opacity(0.8), in: RoundedRectangle(cornerRadius: 8))
         .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 2, trailing: 16))
     }
 
@@ -393,10 +490,139 @@ struct ChartTabContent: View {
 
     private var emptyView: some View {
         VStack(spacing: 12) {
-            Image(systemName: "chart.bar.xaxis").font(.system(size: 44)).foregroundStyle(.tertiary)
+            Image(systemName: "chart.bar.xaxis").font(Theme.emptyGlyph).foregroundStyle(.tertiary)
             Text("Pull down to load data").font(.subheadline).foregroundStyle(.tertiary)
         }
         .padding(.vertical, 60)
+    }
+}
+
+// MARK: - Chart tab (dedicated full-screen, non-scrolling)
+
+/// A TradingView-style dedicated chart screen. It does NOT scroll — the main chart + enabled
+/// sub-panels flex to fill the exact screen height (see chart.html), so the WKWebView owns every
+/// gesture (pan / pinch / axis-stretch) without fighting a page ScrollView. The Overview tab
+/// (ChartTabContent) keeps the price/indicators/analysis stack; this tab is purely the chart.
+struct ChartScreenView: View {
+    @EnvironmentObject var service: AnalysisService
+    @Environment(\.colorScheme) private var colorScheme
+    // Persisted (not @State): survives tab switches, and warmPush reads the same key so the
+    // pre-rendered chart matches what this tab builds.
+    @AppStorage("chart_tf_index") private var chartTFIndex = 1  // 0=Daily, 1=4H(crypto)/1H(stock), 2=1H
+    @State private var chartPayload: ChartPayload?   // memoized; rebuilt only when inputs change
+    // Toggleable sub-panels (persisted; shared keys with the classic panel switches).
+    @AppStorage("chart_rsi") private var chRsi = true
+    @AppStorage("chart_macd") private var chMacd = true
+    @AppStorage("chart_stoch") private var chStoch = false
+    @AppStorage("chart_adx") private var chAdx = false
+    @AppStorage("chart_vol") private var chVol = true
+    @AppStorage("chart_log") private var chLog = false
+
+    private var selectedSymbol: String { service.currentSymbol ?? Constants.allCoins[0].id }
+
+    private var panelsList: [String] {
+        [chRsi ? "rsi" : nil, chMacd ? "macd" : nil, chStoch ? "stoch" : nil, chAdx ? "adx" : nil].compactMap { $0 }
+    }
+
+    /// A cheap signature of everything the chart payload depends on — the heavy ChartPayload.build
+    /// (candle mapping + series alignment + JSON) runs only when THIS changes, not on every SwiftUI
+    /// pass, so a live-price publish doesn't re-encode the whole candle set on the main thread.
+    private var chartSignature: String {
+        let r = service.currentResult
+        let ts = r.map { Int($0.timestamp.timeIntervalSince1970) } ?? 0
+        return "\(r?.symbol ?? "")|\(ts)|\(chartTFIndex)|\(panelsList.joined(separator: ","))|\(chVol)|\(chLog)|\(colorScheme == .dark)"
+    }
+
+    private func rebuildChart() {
+        guard let result = service.currentResult, !result.tf1.candles.isEmpty else { chartPayload = nil; return }
+        let tfs = [result.tf1, result.tf2, result.tf3]
+        let selected = tfs[min(max(chartTFIndex, 0), tfs.count - 1)]
+        chartPayload = ChartPayload.build(
+            tf: selected.candles.isEmpty ? result.tf1 : selected,
+            symbol: result.symbol,
+            watchLevels: WatchLevels.build(result: result),
+            dark: colorScheme == .dark, panels: panelsList, showVolume: chVol, logScale: chLog)
+    }
+
+    /// A small toggle chip for a chart sub-panel (RSI/MACD/Stoch/ADX/Vol).
+    @ViewBuilder private func panelChip(_ title: String, _ isOn: Binding<Bool>) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: {
+            Text(title)
+                .font(.caption2).fontWeight(.medium)
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(isOn.wrappedValue ? Color.accentColor.opacity(0.22) : Color(.systemGray5))
+                .foregroundStyle(isOn.wrappedValue ? Color.accentColor : .secondary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            // Instrument picker — same favorites pill row as Overview (tap to switch symbols).
+            FavoritePillsView()
+
+            if let result = service.currentResult, !result.tf1.candles.isEmpty {
+                // Timeframe selector + panel toggles (price lives on the Overview tab, not here).
+                Picker("Timeframe", selection: $chartTFIndex) {
+                    Text(result.tf1.label).tag(0)
+                    Text(result.tf2.label).tag(1)
+                    Text(result.tf3.label).tag(2)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 12)
+
+                HStack(spacing: 6) {
+                    panelChip("RSI", $chRsi); panelChip("MACD", $chMacd); panelChip("Stoch", $chStoch)
+                    panelChip("ADX", $chAdx); panelChip("Vol", $chVol); panelChip("Log", $chLog)
+                    // ⟲ reset (native — the chart page takes no touches): autoscale + newest bar.
+                    Button { ChartWebViewStore.shared.reset() } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(Theme.micro)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 26, height: 22)
+                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Link("TradingView", destination: URL(string: "https://www.tradingview.com")!)
+                        .font(Theme.micro).foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 12)
+
+                // Fills all remaining height → the chart + panels divide it (chart.html flex; panes
+                // are drag-resizable). Rendered from the memoized payload, not rebuilt inline.
+                if let payload = chartPayload {
+                    WebChartView(payload: payload)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Color.clear.frame(maxHeight: .infinity)
+                }
+            } else {
+                Spacer()
+                if service.isLoading {
+                    ProgressView("Loading chart…").tint(.secondary)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "chart.xyaxis.line").font(Theme.emptyGlyph).foregroundStyle(.tertiary)
+                        Text("No chart data").font(.subheadline).foregroundStyle(.tertiary)
+                        Button("Load") { Task { await service.refreshIndicators(symbol: selectedSymbol) } }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+                Spacer()
+            }
+        }
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground))
+        .task {
+            if service.currentSymbol == nil {
+                await service.selectSymbol(Constants.allCoins[0].id)
+            }
+            rebuildChart()
+        }
+        .onChange(of: chartSignature) { rebuildChart() }
     }
 }
 
@@ -433,9 +659,6 @@ struct MarketTabContent: View {
             let symbol = service.currentSymbol ?? Constants.allCoins[0].id
             await service.refreshIndicators(symbol: symbol)
             service.macroSnapshot = await service.macroData.fetchMacroSnapshot()
-            if service.marketFor(symbol) == .crypto {
-                service.spotPressure = await SpotPressureAnalyzer.analyze(symbol: symbol)
-            }
             HapticManager.notification(.success)
         }
     }
@@ -478,9 +701,6 @@ struct AITabContent: View {
     @EnvironmentObject var service: AnalysisService
     @Binding var showHistory: Bool
     @State private var historyCount: Int = 0
-    @AppStorage("accountSize") private var accountSize: Double = 25000
-    @AppStorage("riskPercent") private var riskPercent: Double = 2.0
-    @AppStorage("contractSize") private var contractSize: Double = 0.01
 
     private var selectedSymbol: String {
         service.currentSymbol ?? Constants.allCoins[0].id
@@ -489,9 +709,9 @@ struct AITabContent: View {
     var body: some View {
         List {
             Section {
-                FavoritePillsView()
-                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-
+                // No FavoritePillsView here: this is now a screen PUSHED from the verdict card, so it
+                // inherits the symbol from Now. Rendering a switcher on a detail screen invited you
+                // to change the very thing the screen is about.
                 if let result = service.currentResult {
                     aiContent(result)
                 } else if service.aiLoadingPhase != .idle {
@@ -529,22 +749,19 @@ struct AITabContent: View {
 
     @ViewBuilder
     private func aiContent(_ result: AnalysisResult) -> some View {
-        // Setup summary card with position sizing
+        // Setup summary card (Entry/SL/TP). Position sizing lives in the dedicated
+        // PositionSizeCard below — the legacy inline "contracts" block was removed 2026-07-02
+        // (it showed a THIRD, conflicting size story alongside the card + the server prompt,
+        // used a hardcoded $500 fallback the card doesn't, and split 50%@1R/25%@TP1 which
+        // contradicts the documented execution model of 50% off at TP1 + BE + runner to TP2).
         if let setup = result.tradeSetups.first {
-            let risk = setup.risk
-            let riskDollars = accountSize > 0 && riskPercent > 0 ? accountSize * riskPercent / 100.0 : 500.0
-            let positionSize = risk > 0 ? riskDollars / risk : 0  // in base units (e.g. BTC)
-            let totalContracts = contractSize > 0 ? Int(positionSize / contractSize) : 0
-            let partialAt1R = totalContracts / 2        // 50% off at +1.0 R:R
-            let atTP1 = totalContracts / 4              // 25% at TP1
-            let runner = totalContracts - partialAt1R - atTP1  // remainder to TP2
 
             HStack(spacing: 12) {
                 Text(setup.direction)
                     .font(.caption.bold())
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(setup.direction == "LONG" ? Color.green.opacity(0.2) : Color.red.opacity(0.2))
+                    .background(setup.direction == "LONG" ? Theme.bullish.opacity(0.2) : Theme.bearish.opacity(0.2))
                     .foregroundStyle(setup.direction == "LONG" ? .green : .red)
                     .clipShape(Capsule())
 
@@ -572,31 +789,6 @@ struct AITabContent: View {
                                 .foregroundStyle(.green)
                         }
                     }
-                    // Position sizing
-                    if totalContracts > 0 {
-                        HStack(spacing: 0) {
-                            Text("\(totalContracts) contracts")
-                                .fontWeight(.semibold)
-                            Text(" \u{2022} ")
-                                .foregroundStyle(.secondary)
-                            Text("\(partialAt1R)")
-                                .foregroundStyle(.orange)
-                            Text("@1R ")
-                                .foregroundStyle(.secondary)
-                            Text("\(atTP1)")
-                                .foregroundStyle(.green)
-                            Text("@TP1 ")
-                                .foregroundStyle(.secondary)
-                            Text("\(runner)")
-                                .foregroundStyle(.blue)
-                            Text(" run")
-                                .foregroundStyle(.secondary)
-                        }
-                        .font(.caption2)
-                        Text("Risk \(Formatters.formatPrice(riskDollars)) (\(String(format: "%.1f", riskPercent))%)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
                 }
             }
             .padding(10)
@@ -606,10 +798,32 @@ struct AITabContent: View {
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
         }
 
+        // F-3 — pre-trade gut check, shown above the analysis whenever there's a setup to weigh.
+        if !result.tradeSetups.isEmpty {
+            SanityCheckCard(result: result)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+            // #2 — exact risk-based position size for each setup (tap "Adjust" for a live calculator).
+            ForEach(result.tradeSetups) { setup in
+                PositionSizeCard(symbol: result.symbol, setup: setup)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            }
+        }
+
         ClaudeAnalysisView(markdown: result.claudeAnalysis, aiLoadingPhase: service.aiLoadingPhase, isStale: service.isAIStale, analysisTimestamp: result.analysisTimestamp, onRunAnalysis: {
             Task { await service.runFullAnalysis(symbol: selectedSymbol) }
         })
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+
+        // Chart of the levels the analysis is watching — S/R, VWAP, POC/value area, and the setup's
+        // entry/stop/targets — so you can see where price sits relative to what the text discusses.
+        let watchLevels = WatchLevels.build(result: result)
+        let levelCandles: [Candle] = result.tf2.candles.isEmpty ? result.daily.candles : result.tf2.candles
+        if !watchLevels.isEmpty, !levelCandles.isEmpty {
+            LevelsChartView(candles: levelCandles, currentPrice: result.daily.price,
+                            levels: watchLevels, timeframeLabel: result.tf2.candles.isEmpty ? result.daily.label : result.tf2.label)
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+        }
 
         Button {
             showHistory = true
@@ -631,13 +845,18 @@ struct AITabContent: View {
         }
         .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
 
+        // Guard against empty candles (thin-mode fetch hiccup) — TradeSetupChartView's price
+        // range falls back to 0 with no candles, squashing every line to the top.
         ForEach(result.tradeSetups) { setup in
-            TradeSetupChartView(
-                candles: result.tf3.candles,
-                setup: setup,
-                currentPrice: result.daily.price
-            )
-            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            let setupCandles = result.tf3.candles.isEmpty ? result.tf2.candles : result.tf3.candles
+            if !setupCandles.isEmpty {
+                TradeSetupChartView(
+                    candles: setupCandles,
+                    setup: setup,
+                    currentPrice: result.daily.price
+                )
+                .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+            }
         }
 
         if !result.claudeAnalysis.isEmpty && !result.claudeAnalysis.contains("not configured") {

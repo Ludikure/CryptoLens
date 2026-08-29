@@ -5,11 +5,12 @@
 // fetches ETH/BTC at "4h" — the "6 bars back" in ethBtcDelta6 means 24h, not 6 days.
 // Daily lookback gave a ~40pp drift on the parity diff (sample 19.17 vs 0.78).
 
-import { fetchBinanceKlines } from './candles-binance.js';
+import { visionKlines } from './vision.js';
 import type { Candle } from '../../src/scoring-full.js';
 
 export async function fetchEthBtcFourH(startMs: number, endMs: number): Promise<Candle[]> {
-    return fetchBinanceKlines('ETHBTC', '4h', startMs, endMs);
+    // Binance Vision dumps (api.binance.com is 451-geoblocked from the dev Mac).
+    return visionKlines('ETHBTC', '4h', startMs, endMs);
 }
 
 /// Find the latest ETH/BTC 4H close at or before evalMs and the 6-bar (= 24h)

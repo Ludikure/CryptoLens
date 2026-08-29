@@ -1,0 +1,9 @@
+source: /Volumes/External/CryptoLens/ml-training/csv_exports_v14 (77 symbols)
+145,045 bars, tail(>= 4.0 ATR) base=6.3%
+OOF AUC=0.641, 90 cal breakpoints
+
+PARITY REFERENCE (all-zero input): mlPredictTail = 0.1840390879
+BUCKET THRESHOLDS: ELEVATED >= 0.0832, HIGH >= 0.1024
+  base tail rate 6.3% | NORMAL<0.083 | ELEVATED [0.083,0.102) | HIGH>=0.102
+  wrote heads.tail -> /Volumes/External/CryptoLens/marketscope-worker/src/ml-model-crypto.json (150 trees)
+  wrote heads.tail -> /Volumes/External/CryptoLens/CryptoLens/ML/ml-model-crypto.json (150 trees)

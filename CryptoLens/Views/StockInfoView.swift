@@ -110,7 +110,7 @@ struct StockInfoView: View {
                     ForEach(Array(txs.prefix(3).enumerated()), id: \.offset) { _, tx in
                         HStack(spacing: 4) {
                             Circle()
-                                .fill(tx.isBuy ? Color.green : Color.red)
+                                .fill(tx.isBuy ? Theme.bullish : Theme.bearish)
                                 .frame(width: 5, height: 5)
                             Text(tx.name)
                                 .font(.caption2).lineLimit(1)

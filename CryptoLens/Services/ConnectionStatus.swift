@@ -19,7 +19,6 @@ class ConnectionStatus: ObservableObject {
     @Published var finnhub: SourceState = .idle
     @Published var macro: SourceState = .idle
     @Published var ai: SourceState = .idle
-    @Published var alertSync: SourceState = .ok
     @Published var pendingOfflineChanges = false
 
     @Published var yahooFinance: SourceState = .idle

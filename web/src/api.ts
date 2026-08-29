@@ -59,6 +59,38 @@ export async function getIndicators(symbol: string): Promise<IndicatorsResponse>
   return res.json();
 }
 
+export interface RiskResponse {
+  symbol: string; price: number; entry: number; horizon: string;
+  range: { sigma: number; s1: [number, number]; s2: [number, number]; s99: [number, number] };
+  risk: {
+    sigma: number;
+    stop: { noiseHit: number; rating: 'TIGHT' | 'OK' | 'WIDE'; distSigma: number } | null;
+    var: { var95: number; var99: number; es95: number; var95emp: number; var99emp: number };
+    liq: { liqPrice: number; sigmaMult: number } | null;
+    fees: { roundTrip: number; label: string } | null;
+  };
+}
+export async function getRisk(symbol: string, p: {
+  entry?: number; stop?: number; size?: number; leverage?: number; dir?: 'long' | 'short'; venue?: string;
+}): Promise<RiskResponse> {
+  const q = new URLSearchParams({ symbol });
+  for (const [k, v] of Object.entries(p)) if (v != null && v !== '' && !Number.isNaN(v as number)) q.set(k, String(v));
+  const res = await authedFetch(`/risk?${q.toString()}`);
+  if (!res.ok) { let m = `risk failed (${res.status})`; try { const e = await res.json(); if (e?.error) m = e.error; } catch { /* */ } throw new Error(m); }
+  return res.json();
+}
+
+export interface CorrelationResponse {
+  benchmark: string; symbols: string[]; matrix: number[][];
+  avgCorrToBenchmark: number; avgPairwise: number; effectivePositions: number;
+  betaToBenchmark: Record<string, number>;
+}
+export async function getCorrelation(symbols: string[]): Promise<CorrelationResponse> {
+  const res = await authedFetch(`/correlation?symbols=${symbols.map(encodeURIComponent).join(',')}`);
+  if (!res.ok) { let m = `correlation failed (${res.status})`; try { const e = await res.json(); if (e?.error) m = e.error; } catch { /* */ } throw new Error(m); }
+  return res.json();
+}
+
 export async function runFullAnalysis(symbol: string, opts?: { accountSize?: number; riskPercent?: number }): Promise<FullAnalysisResponse> {
   const res = await authedFetch('/full-analysis', {
     method: 'POST',

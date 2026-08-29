@@ -4,9 +4,22 @@
 // Stock fundamentals / sentiment / cross-asset / economic events are layered in subsequently.
 
 import type { DerivativesData, PositioningSnapshot, MacroSnapshot, SpotPressure, CoinInfo, CrossAssetContext, StockInfo, StockSentimentData } from './prompt';
-import { emaArray } from './scoring-full';
+import { emaArray, sectorETFForSymbol } from './scoring-full';
 
-interface Env { ALERTS: KVNamespace; }
+const FINNHUB_BASE = 'https://finnhub.io/api/v1';
+
+// 1-day % return from a daily-close series (last vs prior). null when insufficient data.
+function pct1d(closes: number[]): number | null {
+  if (closes.length < 2) return null;
+  const a = closes[closes.length - 2], b = closes[closes.length - 1];
+  return a > 0 ? (b - a) / a * 100 : null;
+}
+
+// Local structural view of the real `Env`. `FINNHUB_API_KEY` was READ below but not declared
+// here, so a typo or a removed binding would have been invisible — and a missing key is
+// exactly what left the Finnhub badge stuck red on 2026-07-14. Optional because the box may
+// legitimately run without it; the call sites already guard.
+interface Env { ALERTS: KVNamespace; FINNHUB_API_KEY?: string; }
 
 const YAHOO = 'https://query1.finance.yahoo.com';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)';
@@ -99,6 +112,24 @@ export function analyzePositioning(d: DerivativesData): PositioningSnapshot {
   return { fundingSentiment, oiTrend, crowding, crowdingCode, smartMoneyBias, takerPressure, squeezeRisk, signals };
 }
 
+// Finnhub GET with a 12h KV cache. Best-effort — null on any failure or when unconfigured.
+async function fetchFinnhubJSON(env: Env, pathAndQuery: string): Promise<any> {
+  if (!env.FINNHUB_API_KEY) return null;
+  const cacheKey = `cache:fhenrich:${pathAndQuery}`;
+  try {
+    const cached = await env.ALERTS.get(cacheKey);
+    if (cached) { const p = JSON.parse(cached); if (Date.now() - p.timestamp < 43200_000) return p.data; }
+  } catch { /* ignore */ }
+  try {
+    const sep = pathAndQuery.includes('?') ? '&' : '?';
+    const r = await fetch(`${FINNHUB_BASE}${pathAndQuery}${sep}token=${env.FINNHUB_API_KEY}`, { headers: { 'User-Agent': UA } });
+    if (!r.ok) return null;
+    const data = await r.json();
+    try { await env.ALERTS.put(cacheKey, JSON.stringify({ data, timestamp: Date.now() }), { expirationTtl: 43200 }); } catch { /* ignore */ }
+    return data;
+  } catch { return null; }
+}
+
 // Fetch raw derivatives (reuse the /derivatives 5-min cache; fetch + cache on miss), then build
 // the DerivativesData + PositioningSnapshot pair. Returns null for non-crypto or on failure.
 export async function fetchDerivativesEnrichment(env: Env, symbol: string): Promise<{ derivatives: DerivativesData; positioning: PositioningSnapshot } | null> {
@@ -149,7 +180,13 @@ export function computeSpotPressure(klines: any[], depth: any): SpotPressure | n
   const half = Math.floor(deltas.length / 2);
   const firstHalf = deltas.slice(0, half).reduce((a, b) => a + b, 0);
   const secondHalf = deltas.slice(deltas.length - half).reduce((a, b) => a + b, 0);
-  const cvdTrend = secondHalf > firstHalf * 1.2 ? 'Rising' : secondHalf < firstHalf * 0.8 ? 'Falling' : 'Flat';
+  // Sign-aware trend compare (2026-07-02): the old multiplicative compare (second > first*1.2)
+  // mis-signed for NEGATIVE CVD — with firstHalf = -500, a WORSENING -590 satisfied
+  // -590 > -600 → "Rising", and the Flat band was empty for negatives. Compare by difference
+  // against a 20%-of-magnitude threshold instead (feeds cvd_divergence_* exhaustion signals,
+  // WHALE TRAP cvdAgainst, and the LIQUIDATION_SETUP risk state).
+  const cvdThr = 0.2 * Math.abs(firstHalf);
+  const cvdTrend = secondHalf - firstHalf > cvdThr ? 'Rising' : firstHalf - secondHalf > cvdThr ? 'Falling' : 'Flat';
   let bookRatio: number | null = null, bookLabel: string | null = null;
   const bids = depth?.bids, asks = depth?.asks;
   if (Array.isArray(bids) && Array.isArray(asks)) {
@@ -163,15 +200,40 @@ export function computeSpotPressure(klines: any[], depth: any): SpotPressure | n
   }
   return { takerBuyRatio: buyRatio, takerBuyLabel: buyLabel, cvd24h: cvd, cvdTrend, bookRatio, bookLabel };
 }
-export async function fetchSpotPressureEnrichment(symbol: string): Promise<SpotPressure | null> {
+// Instrumented fetch so a spot-pressure MISS is diagnosable instead of silent. We log the failure
+// CLASS so the box logs reveal WHY CVD/spot gaps happen and which fix is warranted:
+//   http:429 / http:418 → Binance IP rate-limit/ban  → a second VPN exit doubles the weight budget
+//   http:451             → geoblock                    → PROXIED_HOSTS routing is wrong (config)
+//   net:<code>           → timeout / connection reset  → retry + backoff, NOT a VPN problem
+//   shape / empty        → upstream returned no data    → not a reachability issue
+// Behavior is UNCHANGED — still returns null on any miss; this only adds a console line per failure
+// (failure-only, so log volume == the real failure rate we want to measure). No fix yet: measure first.
+async function fetchSpotJson(url: string, label: string, symbol: string): Promise<any | null> {
   try {
-    const [klines, depth] = await Promise.all([
-      fetch(`${BINANCE_DATA}/klines?symbol=${symbol}&interval=1h&limit=24`).then(r => r.ok ? r.json() : null).catch(() => null),
-      fetch(`${BINANCE_DATA}/depth?symbol=${symbol}&limit=20`).then(r => r.ok ? r.json() : null).catch(() => null),
-    ]);
-    if (!Array.isArray(klines)) return null;
-    return computeSpotPressure(klines, depth);
-  } catch { return null; }
+    const r = await fetch(url);
+    if (!r.ok) { console.log(`[spot] ${symbol} ${label} miss: http:${r.status}`); return null; }
+    const data = await r.json().catch(() => null);
+    if (data == null) { console.log(`[spot] ${symbol} ${label} miss: shape:non-json`); return null; }
+    return data;
+  } catch (e: any) {
+    const cause = String(e?.cause?.code || e?.code || e?.name || e?.message || e).slice(0, 60);
+    console.log(`[spot] ${symbol} ${label} miss: net:${cause}`);
+    return null;
+  }
+}
+
+export async function fetchSpotPressureEnrichment(symbol: string): Promise<SpotPressure | null> {
+  // klines is row-critical (CVD + taker ratio); depth is optional (computeSpotPressure tolerates null).
+  const [klines, depth] = await Promise.all([
+    fetchSpotJson(`${BINANCE_DATA}/klines?symbol=${symbol}&interval=1h&limit=24`, 'klines', symbol),
+    fetchSpotJson(`${BINANCE_DATA}/depth?symbol=${symbol}&limit=20`, 'depth', symbol),
+  ]);
+  if (!Array.isArray(klines)) {
+    if (klines != null) console.log(`[spot] ${symbol} klines miss: shape:not-array`);  // null already logged
+    return null;
+  }
+  if (klines.length === 0) { console.log(`[spot] ${symbol} klines miss: empty`); return null; }
+  return computeSpotPressure(klines, depth);
 }
 
 // ── Sentiment (CoinInfo, crypto) — CoinGecko coin market_data → the 4 fields the prompt prints ──
@@ -301,6 +363,27 @@ export async function fetchEconomicEvents(nowMs: number): Promise<EconomicEventO
   } catch { return []; }
 }
 
+// Implied volatility from Deribit's DVOL index (30-day annualized IV, %). Public market data, no
+// auth (US-accessible for DATA even though Deribit doesn't serve US *trading*). BTC/ETH only —
+// the only liquid crypto options markets. Feeds the VOLATILITY PRICING read: the app's own move
+// FORECAST (HAR-RV) vs what options are PRICING → is a coming move cheap (long-gamma favorable) or
+// already expensive (rich vol, the move is expected). This is how you monetize a direction-agnostic
+// volatility edge with a direction-agnostic instrument.
+export async function fetchImpliedVol(currency: 'BTC' | 'ETH'): Promise<number | null> {
+  const end = Date.now(), start = end - 6 * 3600 * 1000;
+  const url = `https://www.deribit.com/api/v2/public/get_volatility_index_data?currency=${currency}&start_timestamp=${start}&end_timestamp=${end}&resolution=3600`;
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': UA } });
+    if (!r.ok) return null;
+    const j = await r.json() as any;
+    const data = j?.result?.data;
+    if (!Array.isArray(data) || !data.length) return null;
+    const last = data[data.length - 1];   // [timestamp, open, high, low, close]
+    const dvol = Array.isArray(last) ? Number(last[4]) : null;
+    return (dvol != null && isFinite(dvol) && dvol > 0) ? dvol : null;
+  } catch { return null; }
+}
+
 // Crypto Fear & Greed index (alternative.me). Returns {value 0-100, label}.
 export async function fetchFearGreed(): Promise<{ value: number; label: string } | null> {
   try {
@@ -372,6 +455,59 @@ export async function fetchStockEnrichment(env: Env, symbol: string): Promise<{ 
   const dy = rawNum(sd.dividendYield);
   const revG = rawNum(fd.revenueGrowth), earnG = rawNum(fd.earningsGrowth);
 
+  // Relative strength + sector + insider + news (2026-07-02): these revive the backtest-validated
+  // LONG_CONFIRMATION gate (needs relativeStrength1d) + Sector Strength, News-Thesis Conflict, and
+  // Insider Cluster prompt sections — all previously dead because fetchStockEnrichment never
+  // populated them. All best-effort and parallel; any failure just leaves that field null.
+  const sectorETF = sectorETFForSymbol(symbol);
+  const symChangePct = rawNum(price.regularMarketChangePercent);
+  // recommendationRaw added 2026-07-25: the analyst buy/hold/sell breakdown was the last field the
+  // iOS client still had to fetch itself, and it was doing so with FIVE separate /finnhub/* worker
+  // calls per stock (recommendation/metric/earnings/news/insider). Every one of those counted
+  // against the 60/min per-device budget — even when the worker served it from its own 1-24h cache,
+  // because the rate gate runs BEFORE endpoint routing. Serving the breakdown from here lets stocks
+  // use the single /market call crypto already uses: 7 worker requests per stock refresh down to 3.
+  const [spyCloses, sectorCloses, insiderRaw, newsRaw, recommendationRaw] = await Promise.all([
+    fetchYahooDailyCloses('SPY'),
+    sectorETF ? fetchYahooDailyCloses(sectorETF) : Promise.resolve([] as number[]),
+    fetchFinnhubJSON(env, `/stock/insider-transactions?symbol=${symbol}`),
+    fetchFinnhubJSON(env, `/company-news?symbol=${symbol}&from=${new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10)}&to=${new Date().toISOString().slice(0, 10)}`),
+    fetchFinnhubJSON(env, `/stock/recommendation?symbol=${symbol}`),
+  ]);
+  // Finnhub returns newest-first; strongBuy/strongSell fold into buy/sell the way the iOS client
+  // did it, with strongBuy kept separately for the "N Strong Buy" line.
+  const recTop = Array.isArray(recommendationRaw) && recommendationRaw.length ? recommendationRaw[0] : null;
+  const finnhubStrongBuy = recTop ? (rawNum(recTop.strongBuy) ?? 0) : null;
+  const finnhubBuy = recTop ? (rawNum(recTop.buy) ?? 0) + (finnhubStrongBuy ?? 0) : null;
+  const finnhubHold = recTop ? rawNum(recTop.hold) : null;
+  const finnhubSell = recTop ? (rawNum(recTop.sell) ?? 0) + (rawNum(recTop.strongSell) ?? 0) : null;
+  const spyPct = pct1d(spyCloses);
+  const relativeStrength1d = (symChangePct != null && spyPct != null) ? symChangePct - spyPct : null;
+  const sectorPct = pct1d(sectorCloses);
+  const outperformingSector = (symChangePct != null && sectorPct != null) ? symChangePct > sectorPct : null;
+
+  // Insider transactions → InsiderTx[] (Finnhub returns change<0 = sell). Last ~6 months.
+  let insiderTransactions: Array<{ date: number; isBuy: boolean; name: string; shares: number; value: number }> | null = null;
+  let insiderBuyCount6m: number | null = null, insiderSellCount6m: number | null = null;
+  if (Array.isArray(insiderRaw?.data)) {
+    const cutoff = Date.now() - 182 * 86400_000;
+    const txs = insiderRaw.data
+      .map((t: any) => {
+        const dateMs = t.transactionDate ? Date.parse(t.transactionDate) : NaN;
+        const change = rawNum(t.change) ?? 0, priceP = rawNum(t.transactionPrice) ?? 0;
+        return { date: dateMs, isBuy: change > 0, name: String(t.name ?? '').slice(0, 40), shares: Math.abs(change), value: Math.abs(change) * priceP };
+      })
+      .filter((t: any) => Number.isFinite(t.date) && t.date >= cutoff && t.shares > 0);
+    if (txs.length) {
+      insiderTransactions = txs.slice(0, 40);
+      insiderBuyCount6m = txs.filter((t: any) => t.isBuy).length;
+      insiderSellCount6m = txs.filter((t: any) => !t.isBuy).length;
+    }
+  }
+  const newsHeadlines: string[] | null = Array.isArray(newsRaw)
+    ? newsRaw.slice(0, 8).map((n: any) => String(n?.headline ?? '').slice(0, 140)).filter(Boolean)
+    : null;
+
   const stockInfo: StockInfo = {
     marketState,
     peRatio: rawNum(sd.trailingPE),
@@ -390,6 +526,15 @@ export async function fetchStockEnrichment(env: Env, symbol: string): Promise<{ 
     exDividendDate: exDivSec != null ? exDivSec * 1000 : null,
     dividendRate: rawNum(sd.dividendRate),
     exDividendWarning: exDivSec != null ? (exDivSec * 1000 - Date.now()) / 86400000 <= 5 && exDivSec * 1000 >= Date.now() : null,
+    // 2026-07-02 additions — revive LONG_CONFIRMATION + Sector Strength + Insider + News.
+    sectorETF, relativeStrength1d, outperformingSector,
+    insiderTransactions, insiderBuyCount6m, insiderSellCount6m,
+    insiderNetBuying: (insiderBuyCount6m != null && insiderSellCount6m != null) ? insiderBuyCount6m > insiderSellCount6m : null,
+    newsHeadlines,
+    // 2026-07-25 — the last two fields that kept iOS on its own /finnhub/* fan-out. marketCap comes
+    // free from the Yahoo `price` module already fetched above; no extra call for it.
+    finnhubBuy, finnhubHold, finnhubSell, finnhubStrongBuy,
+    marketCap: rawNum(price.marketCap),
   };
 
   // VIX from the macro cache; 52w position + short interest from Yahoo.

@@ -41,7 +41,7 @@ struct FearGreedView: View {
                     .frame(width: 48, height: 48)
                     .rotationEffect(.degrees(-90))
                 Text("\(index.value)")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .font(.system(.callout, design: .rounded).weight(.bold))
                     .monospacedDigit()
             }
 
@@ -77,11 +77,11 @@ struct FearGreedView: View {
                 .frame(width: 80, height: 6)
                 HStack(spacing: 0) {
                     Text("Fear")
-                        .font(.system(size: 8))
+                        .font(Theme.micro)
                         .foregroundStyle(.red.opacity(0.6))
                     Spacer()
                     Text("Greed")
-                        .font(.system(size: 8))
+                        .font(Theme.micro)
                         .foregroundStyle(.green.opacity(0.6))
                 }
                 .frame(width: 80)

@@ -4,7 +4,9 @@ struct IndicatorTableView: View {
     let results: [IndicatorResult]
     var putCallRatio: Double? = nil
     var spotPressure: SpotPressure? = nil
-    @State private var expanded = false
+    // Defaults CLOSED since 2026-07-25: the verdict card now leads the Now tab, so the full
+    // indicator grid is evidence you open on purpose rather than the first thing in your way.
+    @AppStorage("indicators_expanded") private var expanded = false
 
     private var hasStockIndicators: Bool {
         results.contains { $0.obv != nil }
@@ -29,7 +31,7 @@ struct IndicatorTableView: View {
                         HStack(spacing: 4) {
                             ForEach(results) { r in
                                 Text(r.label.replacingOccurrences(of: " (Trend)", with: "").replacingOccurrences(of: " (Bias)", with: "").replacingOccurrences(of: " (Entry)", with: ""))
-                                    .font(.system(size: 9, weight: .semibold))
+                                    .font(Theme.micro)
                                     .foregroundStyle(biasColorSimple(r.bias))
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 2)
@@ -65,14 +67,15 @@ struct IndicatorTableView: View {
                 .background(Color(.systemGray5))
 
                 // Rows
-                row("ML Win", tooltip: "Trade-or-not gate. Calibrated probability of ≥1.5 ATR favorable move within 24h. Direction-agnostic — LLM determines direction. ≥70% = TOP bucket (high probability), <50% = no trade.") { r in
-                    if let ml = r.mlWinProbability {
+                row("ML Win", tooltip: "Trade-or-not gate: probability of a ≥1.5 ATR favorable move within 24h, direction-agnostic. The figure shown is the LIVE-CALIBRATED value, which is what the conviction gates key on; the raw model output is in brackets when it differs. They drifted apart because the live base rate runs above the model's training base — auto-FLAT at calibrated 50 is roughly raw 30. ≥70% = TOP bucket, <50% = no trade.") { r in
+                    if let ml = r.mlWinCalibrated ?? r.mlWinProbability {
                         let pct = Int(ml * 100)
                         let color: Color = pct >= 70 ? .green :
-                                           pct >= 60 ? Color.green.opacity(0.7) :
+                                           pct >= 60 ? Theme.bullish.opacity(0.7) :
                                            pct >= 50 ? .secondary :
                                            .red
-                        Text("\(pct)%")
+                        let rawPct = r.mlWinCalibrated != nil ? r.mlWinProbability.map { Int($0 * 100) } : nil
+                        Text(rawPct != nil && abs(rawPct! - pct) >= 3 ? "\(pct)%  (raw \(rawPct!)%)" : "\(pct)%")
                             .fontWeight(pct >= 70 ? .bold : .regular)
                             .foregroundStyle(color)
                     } else { dash }
@@ -81,27 +84,29 @@ struct IndicatorTableView: View {
                     if let mlH72 = r.mlPersistenceProbability {
                         let pct = Int(mlH72 * 100)
                         let color: Color = pct >= 70 ? .green :
-                                           pct >= 60 ? Color.green.opacity(0.7) :
+                                           pct >= 60 ? Theme.bullish.opacity(0.7) :
                                            pct >= 50 ? .secondary :
                                            .red
+                        // ML Persistence (h72t25) has its OWN scale and is NOT run through the
+                        // ML_WIN calibration curve — showing that raw value here would be a
+                        // different number about a different model.
                         Text("\(pct)%")
                             .fontWeight(pct >= 70 ? .bold : .regular)
                             .foregroundStyle(color)
                     } else { dash }
                 }
-                // Direction model — crypto only (returns nil for stocks, where 24h
-                // direction is unpredictable; the row shows "—" there).
-                if results.contains(where: { $0.mlDirectionUp != nil }) {
-                    row("Direction", tooltip: "Crypto-only ML direction head. Calibrated P(up over 24h). At ML Win ≥70% this is ~95% accurate (94.7% holdout, holds through the 2022 bear). ≥65% → strong long, ≤35% → strong short, mid = no directional edge. Stocks show — (direction unpredictable). Separate from ML Win, which only answers trade-or-not.") { r in
-                        if let up = r.mlDirectionUp {
-                            let pct = Int(up * 100)
-                            let lean: String = up >= 0.65 ? "↑ Long" : up <= 0.35 ? "↓ Short" :
-                                               up >= 0.55 ? "↑ lean" : up <= 0.45 ? "↓ lean" : "flat"
-                            let color: Color = up >= 0.65 ? .green : up <= 0.35 ? .red :
-                                               up >= 0.55 ? Color.green.opacity(0.7) :
-                                               up <= 0.45 ? Color.red.opacity(0.7) : .secondary
-                            Text("\(pct)% \(lean)")
-                                .fontWeight(up >= 0.65 || up <= 0.35 ? .bold : .regular)
+                // Big-move / tail risk — crypto only (nil for stocks). Shows the relative
+                // bucket + x-base multiple, not the raw (rare-event) probability. Replaced the
+                // former Direction row, whose ~94.7% claim was a data-leak artifact (retired).
+                if results.contains(where: { $0.mlBigMoveBucket != nil }) {
+                    row("Big-Move Risk", tooltip: "Crypto-only tail head: probability of an outsized (≥4 ATR) move in 24h vs the ~6.4% base rate. Shown as a relative bucket because these are rare events — HIGH ≈ top 10% of bars (~2× the normal odds of a huge move), not a 90% certainty. Direction-agnostic (either way). This is the gauge ML Win can't be: ML Win targets ≥1.5 ATR and can read ~40% even into a violent move.") { r in
+                        if let bucket = r.mlBigMoveBucket {
+                            let mult = r.mlBigMoveMultiple ?? 0
+                            let color: Color = bucket == "HIGH" ? .red :
+                                               bucket == "ELEVATED" ? .orange : .secondary
+                            let label = mult > 0 ? "\(bucket) · \(String(format: "%.1f", mult))× norm" : bucket
+                            Text(label)
+                                .fontWeight(bucket == "NORMAL" ? .regular : .bold)
                                 .foregroundStyle(color)
                         } else { dash }
                     }

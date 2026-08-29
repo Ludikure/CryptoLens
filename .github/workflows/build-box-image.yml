@@ -1,0 +1,71 @@
+name: Build box image
+
+# Builds the self-hosted "box" image (marketscope-worker/Dockerfile) and pushes it to the
+# GitHub Container Registry (GHCR) on every change to the worker code. This removes the manual
+# SSH + `docker build` deploy: the box just pulls ghcr.io/ludikure/marketscope:latest and restarts.
+#
+# One-time TrueNAS setup to start using it: see marketscope-worker/DEPLOY.md.
+
+on:
+  push:
+    branches: [thin-client-worker, main]
+    paths:
+      - 'marketscope-worker/src/**'
+      - 'marketscope-worker/server/**'
+      - 'marketscope-worker/package.json'
+      - 'marketscope-worker/package-lock.json'
+      - 'marketscope-worker/Dockerfile'
+      - 'marketscope-worker/.dockerignore'
+      - '.github/workflows/build-box-image.yml'
+  workflow_dispatch: {}   # adds a "Run workflow" button for manual rebuilds
+
+jobs:
+  # Added 2026-08-26. Until now this workflow checked out, built and pushed to `latest` with NO
+  # test step: the suite only ever ran on a developer machine, by choice. That made this the
+  # channel through which several broken prompts reached production on 2026-08-25 — CLAUDE.md
+  # documents a `predeploy` hook, but that belongs to `wrangler deploy`, which this box does not
+  # use. A red suite must now mean no image, so the box cannot pull a build that never passed.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: marketscope-worker/package-lock.json
+      - run: npm ci
+        working-directory: marketscope-worker
+      - run: npm test
+        working-directory: marketscope-worker
+
+  build-and-push:
+    needs: test           # no image is published unless the suite is green
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write       # lets GITHUB_TOKEN push to GHCR
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: marketscope-worker
+          file: marketscope-worker/Dockerfile
+          push: true
+          # `latest` is what TrueNAS pulls; the commit-sha tag is an immutable record per build.
+          tags: |
+            ghcr.io/ludikure/marketscope:latest
+            ghcr.io/ludikure/marketscope:${{ github.sha }}
+          # Baked into the image so /health can report which commit is actually running —
+          # the only way to verify a TrueNAS pull-and-restart deployed what you think it did.
+          build-args: |
+            GIT_SHA=${{ github.sha }}

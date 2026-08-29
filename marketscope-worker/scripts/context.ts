@@ -131,8 +131,23 @@ export interface BarContext {
 export function resolveBarContext(global: GlobalContext, evalMs: number): BarContext {
     const fg = lookupFearGreed(global.fearGreed, evalMs);
     const eb = lookupEthBtc(global.ethBtcFourH, evalMs);
-    const vix = lookupClose(global.vixDaily, evalMs) || 20;
-    const dxyAboveEma20 = computeDxyAboveEma20Swift(global, evalMs);
+    // LEAK FIX 2026-08-26 (plan step 4.1). Every DAILY cross-asset series below was sliced at
+    // `evalMs`, the 4H bar's OPEN. A daily candle is stamped at its open, so at any intraday bar the
+    // CURRENT day's candle was included — and that candle's OHLC spans the whole day, including the
+    // hours AFTER this bar. SPY's close for a day is not knowable at 10am on that day.
+    //
+    // This is the same defect as the symbol's own daily slice, which `runBacktest.ts:416` fixed on
+    // 2026-06-02 after it produced the retracted 94% direction claim. The cross-asset series were
+    // missed, and unlike the `trade*` columns these features SHIP: relStrengthVsSpy,
+    // relStrengthVsSector, iwmSpyRatio, beta, vixLevelCode, vixTermStructure, dxyMomentum and
+    // dxyAboveEma20 are all in the live `ml-model-stock.json` feature list.
+    //
+    // Subtracting one day keeps only days fully closed before this bar, which is exactly what live
+    // does: `dropInProgress` discards a daily candle while `open + 24h > now`. Verified equivalent
+    // at both an intraday bar and a midnight bar.
+    const closedMs = evalMs - 86_400_000;
+    const vix = lookupClose(global.vixDaily, closedMs) || 20;
+    const dxyAboveEma20 = computeDxyAboveEma20Swift(global, closedMs);
 
     return {
         sentiment: {
@@ -146,10 +161,10 @@ export function resolveBarContext(global: GlobalContext, evalMs: number): BarCon
             basisPct: 0,
         },
         macro: { vix, dxyAboveEma20 },
-        dxyCandlesSlice: sliceUpToTime(global.dxyDaily, evalMs),
-        vix3mPrice: lookupClose(global.vix3mDaily, evalMs) || 0,
-        spyCandlesSlice: sliceUpToTime(global.spyDaily, evalMs),
-        iwmCandlesSlice: sliceUpToTime(global.iwmDaily, evalMs),
+        dxyCandlesSlice: sliceUpToTime(global.dxyDaily, closedMs),
+        vix3mPrice: lookupClose(global.vix3mDaily, closedMs) || 0,
+        spyCandlesSlice: sliceUpToTime(global.spyDaily, closedMs),
+        iwmCandlesSlice: sliceUpToTime(global.iwmDaily, closedMs),
         // Pass the full per-ETF map untouched — the stock runner slices to evalMs after
         // looking up its symbol's sector. Slicing all sectors here would waste work for
         // every bar across every symbol.
@@ -167,7 +182,9 @@ export function sliceSectorETF(
     if (!etf) return [];
     const all = ctx.sectorETFCandles.get(etf);
     if (!all) return [];
-    return sliceUpToTime(all, evalMs);
+    // Same -1 day guard as `resolveBarContext`; see the comment there. Applied here too because the
+    // sector map is passed through untouched and sliced by the caller.
+    return sliceUpToTime(all, evalMs - 86_400_000);
 }
 
 export { lookupDarkPool };
@@ -178,6 +195,11 @@ export { lookupDarkPool };
 /// the feature value across ~50% of bars (Swift's check compares close[t] vs EMA at
 /// close[t+19] which is effectively an inverted trend filter — the model was trained
 /// on this interpretation, so live serving must reproduce it for now).
+/// NOTE (2026-08-26): the caller now passes `evalMs - 1 day`, so `evalDay` is the last FULLY CLOSED
+/// ET day rather than the in-progress one — the same leak fix applied to the other daily series.
+/// This is independent of, and does not fix, the deliberate off-by-19 EMA-index quirk documented
+/// below: that one is a train/serve CONTRACT (the model was fit on it), whereas including the
+/// in-progress day was simply a lookahead. They are different problems and only one is addressed.
 function computeDxyAboveEma20Swift(global: GlobalContext, evalMs: number): number {
     const candles = global.dxyDaily;
     const emaList = global.dxyEma20List;

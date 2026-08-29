@@ -1,0 +1,22 @@
+{
+  "script": "phase2_oof.py",
+  "git_sha": "1632848",
+  "feat_dir": "csv_exports_v14",
+  "model_feature_source": "../marketscope-worker/src/ml-model-crypto.json",
+  "n_features": 110,
+  "target": "goodR = fwdMaxFavR >= 1.5",
+  "folds": 3,
+  "purge": 48,
+  "rows_total": 870170,
+  "rows_oof": 521958,
+  "symbols": 77,
+  "fold_aucs": [
+    0.6771,
+    0.6757,
+    0.6772
+  ],
+  "mean_auc": 0.6767,
+  "calibrated": false,
+  "known_caveat": "features carry the Phase 4.1 cross-asset leak (|corr| <= 0.016)",
+  "seconds": 6.4
+}

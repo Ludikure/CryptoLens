@@ -1,0 +1,225 @@
+# Pre-declared: does an LLM choosing take/skip beat taking everything the scanner proposes?
+
+**Status: PRE-DECLARATION. Written and committed before any judge call was made.** Sample
+construction, judge prompt (verbatim), arms, bar and predictions are fixed here.
+
+Related: [[journal-attribution]] (the live version of this question, with the user in the seat),
+[[excursion-model]] (the proposal source), [[edge-methodology]], [[rejected-hypotheses]].
+
+## The question
+
+The live journal puts the user in the seat and needs ~10 taken and ~10 skipped before it says
+anything, and ~200 each side before it can see a plausible ±0.3R effect. The same question can be
+asked of an AI judge over the historical tape with **n = 2,000 in one evening**, which is the only
+reason to run it as a backtest: power, not novelty.
+
+> When an LLM decides which of the scanner's proposals to take, does E[R | taken] beat
+> E[R | all proposed] — and does it beat the number already on the card?
+
+## The population — exactly what the scanner would have shown
+
+Rows of `excursion_dataset.pkl.gz` (23 symbols, 2020-01 → 2026-06, `bar_close` anchor) scored
+the way `src/trading/` scores them today:
+
+- **SHORT** P(5R) from a walk-forward LightGBM (same params as `excursion_ev.py`, purged, expanding
+  yearly folds — every scored row is out-of-fold). **LONG** at the measured base rate, because the
+  LONG head is refused in production (`headIsShippable`). At base rate the LONG three-way EV is
+  −0.04R before fees, so **no LONG ever clears the floor: the population is SHORT-only**, exactly
+  as the live book is.
+- Three-way EV per `opportunity.ts`: `pt·5 + stop·(−1) + timeout·1.431`, timeout share 0.205
+  capped at `1 − pt`. Net of fee `0.171 / atrPercent` (a 1 ATR stop, so ATR% IS the stop%).
+- Proposed = net EV ≥ 0.05 (`MIN_DISPLAY_EV_R`) and direction gap ≥ 0.05 (`chooseDirection`).
+- Greed cancels SHORT (Fear & Greed > 60), as the app does.
+- **Not applied: the envelope precheck.** It needs the full prompt builder and it measured
+  +0.0012R against a coverage-matched random gate. Every judge sees the same population, so its
+  absence cannot favour one arm over another. Stated, not hidden.
+
+Sample: **2,000 proposals, stratified by half-year** (equal counts per half-year so period
+consistency is measurable), **at most one per (symbol, UTC day)** to thin the overlap. Seed fixed.
+
+## The judges
+
+| judge | what it sees | why |
+|---|---|---|
+| **take-all** | nothing — takes every proposal | the list as-is; the baseline every arm is measured against |
+| **card number** | net EV rank; takes the top half of the sample | the number already on the card. If the LLM cannot beat this, it adds nothing |
+| **DeepSeek v4-pro** | the blinded dossier | cheap judge, full 2,000 |
+| **Claude Sonnet 5** | the same dossier | the app's actual model, full 2,000 |
+
+Both LLMs get the **same prompt, temperature 0**, and never see the EV number, the symbol, the
+date, the absolute price, or anything forward. This is the June blinded harness
+(`build_blinded_rich.py`) reframed from "call the direction" to "take or skip this SHORT".
+
+## The prompt — verbatim, committed here, not to be edited after a result is seen
+
+System:
+
+> You are the final risk check on a systematic crypto SHORT. A model has already selected this
+> setup; your only job is to decide whether to TAKE it or SKIP it. You see an anonymised technical
+> dossier: symbol, date and absolute price are withheld so you cannot recall what happened.
+> Answer in JSON only: {"decision":"TAKE"|"SKIP","confidence":0-100,"reason":"<=12 words"}.
+
+User: the dossier (28 indexed 4H closes, daily/4H indicators, regime, derivatives, volume profile,
+context — identical fields to `build_blinded_rich.py`) followed by:
+
+> PROPOSED TRADE: SHORT at the current price. Stop 1 ATR above entry. Target 5 ATR below entry
+> (5R). Time limit 72 hours. Historically about 1 in 10 of these reach the target, about 6 in 10
+> stop out at −1R, and about 1 in 4 time out near +1.5R — which nets to roughly +0.2R per trade
+> after fees, so the structure itself is profitable on average. The question is not whether this
+> structure pays; it is whether THIS setup looks better or worse than the typical one. You are
+> expected to TAKE a meaningful share of setups; skipping everything is abstention, not selection.
+> Decide: TAKE or SKIP.
+
+*(Amended twice before the run — amendments 1 and 4 below. The original read "1 in 13 … most
+stop out … 1 in 5 near +1.4R. Decide: TAKE or SKIP.")*
+
+The base-rate sentence is deliberate: a judge that does not know the payoff shape will skip
+everything, and "skips everything" is not a selection strategy, it is abstention.
+
+## Metrics — Tier 1 only
+
+Per arm: n, **effective n** (trades on one symbol with overlapping 72h windows are one
+observation, greedy), mean **net** R, win rate, profit factor, coverage (share of proposals
+taken), and mean net R by half-year.
+
+**Selection gap** = mean R(taken) − mean R(all proposed), with a 95% bootstrap CI that resamples
+**UTC days** (all rows on a day move together, because they share the market), B = 2000, seeded.
+**Abstention** = mean R(skipped).
+
+## Ship bar — pre-declared
+
+An LLM judge becomes an automatic take/skip gate on the scanner only if **all five**:
+
+1. **Magnitude**: selection gap ≥ **+0.05R** — one display floor's worth. A judge that cannot add
+   what the floor demands is not adding a mechanism.
+2. **Significance**: the day-clustered CI excludes 0.
+3. **Period consistency**: the gap is positive in ≥ **8 of 11** half-years (counting half-years
+   with ≥ 20 rows in both arms). *(Amended from 9 of 13 before any call — see below.)*
+4. **Beats the card**: the gap exceeds the card-number judge's gap. The LLM must add information
+   over the number already displayed.
+5. **Coverage** ≥ 20% of proposals taken. Below that the arm is too thin to evaluate — the same
+   floor that disqualified `continuation < 3` (Part 9).
+
+Partial support does not ship. Two LLM judges agreeing is not a criterion; it is a consistency
+check reported alongside.
+
+## Predictions, recorded in advance
+
+1. **Neither LLM clears the bar.** The models already consume the same 110 features the dossier
+   is printed from; every rule that claimed judgment has measured flat or inverted; the blinded
+   direction test in June was never even written up, which is its own tell.
+2. If anything shows, it shows on **abstention** — the SKIP pile averaging below the population —
+   not on selection. Avoiding the worst tape is an easier task than finding the best.
+3. **The card-number judge will post a positive gap** (the model ranks; cross-sectional AUC 0.62
+   is measured), and it will be small — on the order of +0.02 to +0.05R.
+4. The two LLMs will agree on most rows and their gaps will be within noise of each other.
+5. Coverage: both LLMs will take between 30% and 70%. A judge outside that range has a prior it
+   is applying regardless of the dossier.
+
+## Cost, stated before spending
+
+Dossier ≈ 1.3k tokens, answer ≈ 60 tokens (JSON, no reasoning requested). 2,000 calls:
+DeepSeek v4-pro ≈ **$3–7**, Sonnet 5 ≈ **$10–13**. Account balance $36. Hard cap $30 in the runner,
+priced at peak rates so it can only come in under.
+
+## Pre-run amendments — made after building the sample, BEFORE any judge call
+
+Three corrections, each forced by looking at the sample rather than by any result:
+
+1. **Base-rate sentence.** The prompt said "1 in 13 reach the target … 1 in 5 time out near
+   +1.4R" — the pooled excursion numbers. The PROPOSAL population (post floor, post greed cancel)
+   measures **target 10.5%, stop 63.9%, timeout 25.6% at +1.50R**. The sentence now says "1 in 10 …
+   6 in 10 … 1 in 4 near +1.5R". A judge told the wrong base rate is being nudged toward SKIP.
+2. **Period bar.** The OOF population spans **11 half-years** (2021H1–2026H1; 2020 is the first
+   training block), not 13. "≥ 9 of 13" becomes **≥ 8 of 11** — the same 73%. 2024H1 holds only 43
+   proposals in the whole population (80% of its bars were greed-cancelled) and will not reach the
+   20-row minimum on either arm; it simply does not count.
+3. **Candle source.** The 4H archive starts 2021-12-20, which silently dropped all of 2021H1 and
+   most of 2021H2 on the first build (1,825 → 1,472 dossiers). The hourly Vision klines (2020-10
+   onward) are resampled to 4H instead. And `fundingRateRaw` is already in percent in the dataset
+   (median 0.01); the dossier had multiplied it by 100 again, printing "+50.000%".
+
+4. **The base-rate sentence failed at its one job, on a 3-call pilot.** Sonnet skipped 3 of 3
+   with the identical reason *"poor EV: low hit rate"* — it read "1 in 10 reach the target" as a
+   losing trade without multiplying through the 5R payoff. That is the skip-everything failure the
+   sentence was written to prevent. The sentence now states the net EV outright (+0.2R after fees,
+   from the measured population) and says explicitly that skipping everything is abstention, not
+   selection. **This was changed after seeing three pilot outputs and is recorded as such.** It is
+   a fix to the instrument — it changes whether the judge selects at all, not which rows it
+   selects — and the pilot rows are excluded from the run. The DeepSeek pilot returned 5 of 5
+   unparseable: v4-pro is a reasoning model and spent the 200-token cap thinking. Thinking is
+   disabled for both judges (Sonnet's was already off), so both answer without deliberation.
+
+## RESULT — NOT SUPPORTED, both judges. The number already on the card beat them both.
+
+Run 2026-08-28 evening. 1,825 blinded proposals, 11 half-years (10 evaluable — 2024H1 fell under
+the 20-row floor exactly as amendment 2 predicted). DeepSeek v4-pro: 1,824 parsed, **$2.20** at peak
+list. Claude Sonnet 5: 1,821 parsed, **$12.11**. Population mean net R **+0.324**, target rate 12.7%,
+effective n 1,301 over 698 days.
+
+| arm | n | coverage | mean net R | gap vs take-all | 95% CI (day-clustered) | periods+ |
+|---|---:|---:|---:|---:|---|---:|
+| take-all | 1,825 | 100% | +0.324 | — | — | — |
+| **card number** (top half by EV) | 913 | 50% | **+0.444** | **+0.120** | [−0.028, +0.277] | **8/10** |
+| DeepSeek TAKE | 548 | 30% | +0.331 | +0.007 | [−0.186, +0.216] | 7/10 |
+| DeepSeek SKIP | 1,276 | 70% | +0.322 | −0.003 | [−0.090, +0.079] | 3/10 |
+| Sonnet TAKE | 90 | **5%** | +0.301 | −0.023 | [−0.428, +0.401] | 0 evaluable |
+| Sonnet SKIP | 1,731 | 95% | +0.326 | +0.001 | [−0.021, +0.022] | 6/10 |
+
+| criterion | DeepSeek | Sonnet |
+|---|---|---|
+| gap ≥ +0.05R | **fail** (+0.007) | **fail** (−0.023) |
+| CI excludes 0 | fail | fail |
+| ≥ 8 of 11 periods | fail (7/10) | fail (0 evaluable) |
+| beats the card (+0.120) | **fail** | **fail** |
+| coverage ≥ 20% | pass (30%) | **fail (5%)** |
+
+**DeepSeek's picks are the population.** +0.007R over taking everything, and its skip pile is
+also the population (−0.003R). Whatever it read in the dossier, it did not sort rows by outcome
+in either direction. **Sonnet declined to select at all**: 90 takes in 1,825, after being told
+in the prompt that the structure nets +0.2R and that skipping everything is abstention. Its 90
+did slightly worse than the list. The two agreed on 68% of rows — almost entirely shared SKIPs.
+
+**The card number — the excursion model's own net EV, which the app already shows — is the only
+arm with a signal**: +0.12R at 8 of 10 half-years. It was not a judged arm and it does not clear
+the bar either (the day-clustered CI touches zero), but it is what the LLMs had to beat and
+neither came close. The model that ranks on 110 features outperforms a language model reading a
+printout of the same features. That is the expected direction; the size of the gap is not.
+
+### Predictions scored
+
+| # | prediction | outcome |
+|---|---|---|
+| 1 | neither LLM clears the bar | **held** |
+| 2 | if anything shows, it is on abstention | **failed** — both skip piles equal the population |
+| 3 | card number posts a small positive gap, +0.02–0.05 | sign held, **magnitude wrong** (+0.12), CI spans 0 |
+| 4 | the LLMs agree and their gaps are within noise of each other | held (68%, both ≈ 0) |
+| 5 | coverage 30–70% for both | **half-failed** — DeepSeek 30% on the line, Sonnet 5% |
+
+### Why Sonnet skipped — its own words
+
+Reason vocabulary across 1,731 skips: *short, bullish, 4h, oversold, bounce, against, thesis,
+structure, uptrend, support*. It applied mean-reversion priors against every short — "4H oversold,
+bounce risk", "bullish structure against the thesis" — which is textbook TA, and which this
+project has measured as non-predictive nine separate ways. DeepSeek's vocabulary is
+trend-following (*momentum, bearish, rsi, adx, edge*) and produced a coin flip. Two different
+priors, the same absence of information.
+
+### Exploratory, post-hoc, NOT a finding
+
+DeepSeek's skips split by its own stated confidence: **skips at ≥ 70% confidence (n=720) averaged
++0.16R; skips under 70% (n=555) averaged +0.53R.** Its picks carry nothing, but its certainty
+about skipping tracks worse rows. This slice was not pre-declared and is exactly the kind of
+after-the-fact cut the vault forbids acting on. If anyone wants it, it is a different hypothesis
+— "veto only when the judge is ≥ 70% sure" — for a different pre-declared test on a fresh sample.
+
+### What this changes
+
+Nothing ships. The scanner keeps ranking on net EV and the take/skip decision stays with the
+user, measured by the journal ([[journal-attribution]]). The LLM analysis remains context, not a
+gate. And the standing conclusion sharpens: **an LLM reading the indicators does not add
+selection information over a model trained on them** — on this population, at this cost, at n
+where a ±0.1R effect would have been visible.
+
+Total spend: ~$14 at peak list prices, ~$13 actual (DeepSeek ran off-peak). Decisions committed
+as `ml-training/llm_selection/decisions_{deepseek,anthropic}.jsonl`.

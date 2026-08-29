@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; overscroll-behavior: none;
+    font-family: -apple-system, system-ui, sans-serif; }
+  /* touch-action:none — the page never scrolls/zooms natively; LWC handles every touch itself. */
+  #container { position: absolute; inset: 0; touch-action: none; }
+  #chartRoot { position: absolute; inset: 0; }
+  /* EMA legend, top-left of the price pane (TradingView-style): colored name per overlay line. */
+  #legend { position: absolute; top: 3px; left: 44px; z-index: 3; pointer-events: none;
+    font-size: 10px; font-weight: 600; display: flex; gap: 10px; }
+  #legend span::before { content: '—'; margin-right: 3px; font-weight: 700; }
+  /* Sub-pane readout labels (RSI/MACD name + last value), absolutely positioned over each pane. */
+  .paneLbl { position: absolute; left: 6px; z-index: 3; pointer-events: none; font-size: 10px;
+    color: #9aa4b2; font-variant-numeric: tabular-nums; white-space: nowrap; }
+</style>
+<script src="lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+<div id="container"><div id="chartRoot"></div></div>
+<script>
+// TradingView Lightweight Charts v5 (upgraded 2026-07-08 from v4.2). v5 has NATIVE multi-pane
+// support: ONE chart hosts the main price pane plus each indicator sub-pane, all sharing one time
+// scale. This replaced the v4 approach of stacking N SEPARATE chart instances and syncing their
+// visible ranges every frame (subscribeVisibleLogicalRangeChange → rAF applySync) — that sync +
+// N-chart re-render was the multi-pane jank. Native panes render as one chart → smooth. Pane
+// separators are native + draggable (layout.panes.enableResize), so the custom DOM dividers are
+// gone too. Gestures are all native LWC (see opts) except the price-axis ZOOM, which LWC's touch
+// layer won't drive, handled by the #priceGrip DOM strip. window.setChart(payload) is the Swift
+// entry point (WebChartView); the payload contract is unchanged from v4.
+var chart = null, candle = null, vol = null, emaSeries = [], priceLines = [], subs = [],
+    structKey = null, pending = null, dataKey = null, lastClose = null,
+    deferredPayload = null, fingersDown = 0, lastTouchMs = 0;   // gesture state — see the unified
+                                                                // touch-state machine at file end
+
+function opts(dark) {
+  return {
+    layout: {
+      background: { type: 'solid', color: dark ? '#0b0e14' : '#ffffff' }, textColor: dark ? '#9aa4b2' : '#4a5568',
+      // Native pane separators — draggable to resize (replaces the old custom DOM dividers).
+      panes: { separatorColor: dark ? '#1c2230' : '#e2e5ea', separatorHoverColor: 'rgba(120,130,150,0.25)', enableResize: true },
+    },
+    grid: { vertLines: { color: dark ? '#141a25' : '#eef0f3' }, horzLines: { color: dark ? '#141a25' : '#eef0f3' } },
+    rightPriceScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', scaleMargins: { top: 0.08, bottom: 0.08 } },
+    // rightOffset leaves ~8 bars of space so the newest candle isn't jammed against the axis; FIXED
+    // barSpacing keeps bar thickness constant across timeframes (scroll for history).
+    timeScale: { borderColor: dark ? '#1c2230' : '#e2e5ea', timeVisible: true, secondsVisible: false, rightOffset: 8, barSpacing: 7 },
+    // Crosshair hidden — the page is a pure renderer; no DOM input moves a crosshair.
+    crosshair: { vertLine: { visible: false, labelVisible: false }, horzLine: { visible: false, labelVisible: false } },
+    autoSize: true,
+    // NATIVE LWC TOUCH (see WebChartView file-top comment): one finger = free 2D pan (time + price
+    // follow the finger); two fingers = time zoom; price-axis zoom = the #priceGrip DOM strip;
+    // flick = momentum. vertTouchDrag only pans price while the price scale is in MANUAL mode, so a
+    // capture-phase touchstart (bottom of this file) forces manual mode on every body touch.
+    handleScroll: { mouseWheel: true, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: true },
+    // pinch OFF — a custom DOM pinch (bottom of file) drives the time zoom instead: it registers on
+    // the first move (no native threshold) and is amplified (PINCH_AMP) so it zooms faster.
+    handleScale: { mouseWheel: true, pinch: false, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: true },
+    kineticScroll: { touch: true, mouse: false },
+  };
+}
+function clean(pts) { return (pts || []).filter(function (p) { return p && isFinite(p.value); }); }
+function structKeyOf(p) { return (p.dark ? 'd' : 'l') + '|' + (p.subpanels || []).map(function (s) { return s.id; }).join(','); }
+
+// Build the chart + all panes (persistent series). Called only when structKey changes (theme or
+// the enabled sub-panel set), so data updates in place with no flash.
+function buildStructure(p) {
+  if (chart) { try { chart.remove(); } catch (e) {} }
+  emaSeries = []; priceLines = []; subs = []; chart = null; candle = null; vol = null;
+  removePaneLabels();
+
+  var dark = !!p.dark, sp = p.subpanels || [];
+  chart = LightweightCharts.createChart(document.getElementById('chartRoot'), opts(dark));
+
+  // Main pane (index 0): candles + volume + 3 EMA lines.
+  candle = chart.addSeries(LightweightCharts.CandlestickSeries, {
+    upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  }, 0);
+  vol = chart.addSeries(LightweightCharts.HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'vol' }, 0);
+  chart.priceScale('vol', 0).applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+  ['#5b8def', '#f0a020', '#b06be8'].forEach(function (col) {
+    emaSeries.push(chart.addSeries(LightweightCharts.LineSeries, { color: col, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }, 0));
+  });
+
+  // Sub-panes (index 1..N): one native pane per enabled indicator.
+  while (chart.panes().length < sp.length + 1) chart.addPane();
+  sp.forEach(function (spec, idx) {
+    var paneIndex = idx + 1;
+    var pf = { type: 'price', precision: spec.precision || 1, minMove: Math.pow(10, -(spec.precision || 1)) };
+    var entry = { hist: null, lines: [], name: spec.id, precision: spec.precision || 1, paneIndex: paneIndex, lastVals: [], lblEl: null };
+    if (spec.histogram != null) entry.hist = chart.addSeries(LightweightCharts.HistogramSeries, { priceLineVisible: false, lastValueVisible: false, priceFormat: pf }, paneIndex);
+    (spec.lines || []).forEach(function (ln, i) {
+      var ls = chart.addSeries(LightweightCharts.LineSeries, { color: ln.color, lineWidth: ln.width, priceLineVisible: false, lastValueVisible: i === 0, crosshairMarkerVisible: false, priceFormat: pf }, paneIndex);
+      entry.lines.push(ls);
+      if (i === 0 && spec.guides) spec.guides.forEach(function (g) { ls.createPriceLine({ price: g, color: '#2c3b4a', lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: String(g) }); });
+    });
+    subs.push(entry);
+  });
+
+  // Pane heights: main 3 : each sub 1 (TradingView-mobile proportion). Native separators let the
+  // user re-drag these; resetView restores the ratio.
+  applyStretch();
+  positionPriceGrip();
+  requestAnimationFrame(function () { positionPriceGrip(); layoutPaneLabels(); });
+}
+
+function applyStretch() {
+  if (!chart) return;
+  var panes = chart.panes();
+  panes.forEach(function (pane, i) { try { pane.setStretchFactor(i === 0 ? 3 : 1); } catch (e) {} });
+}
+
+// ── Sub-pane readout labels (name + last value), positioned over each native pane ──────────────
+function removePaneLabels() {
+  Array.prototype.slice.call(document.querySelectorAll('.paneLbl')).forEach(function (el) { el.parentNode.removeChild(el); });
+}
+function layoutPaneLabels() {
+  if (!chart) return;
+  var container = document.getElementById('container');
+  var top = 0;
+  // Pane 0 is the main price pane (its label is the EMA legend); sub-panes start at index 1.
+  var panes = chart.panes();
+  for (var i = 0; i < panes.length; i++) {
+    var h = 0; try { h = panes[i].getHeight() || 0; } catch (e) {}
+    if (i >= 1) {
+      var e2 = subs[i - 1];
+      if (e2) {
+        if (!e2.lblEl) { e2.lblEl = document.createElement('div'); e2.lblEl.className = 'paneLbl'; container.appendChild(e2.lblEl); }
+        e2.lblEl.style.top = (top + 3) + 'px';
+        renderPaneLabel(e2);
+      }
+    }
+    top += h;
+  }
+}
+function renderPaneLabel(e2) {
+  if (!e2.lblEl) return;
+  var parts = [e2.name];
+  (e2.lastVals || []).forEach(function (vm) {
+    if (vm.v != null && isFinite(vm.v)) parts.push('<b style="color:' + vm.color + '">' + vm.v.toFixed(e2.precision) + '</b>');
+  });
+  e2.lblEl.innerHTML = parts.join(' ');
+}
+
+// ── Price-axis vertical ZOOM (DOM grip) ─────────────────────────────────────────────────────
+// LWC's touch axis-scaling drives the TIME axis but not the PRICE axis, so a transparent strip
+// over the main pane's price scale captures single-finger vertical drags and scales the price.
+// Lives on the axis strip only, so LWC's native body pan + two-finger time zoom are untouched.
+//
+// v5 exposes IPriceScaleApi.getVisibleRange()/setVisibleRange() — a PROPER price-range API that
+// v4 lacked. So we read the EXACT current range and set the new one directly: no coordinateToPrice
+// pixel rounding (which caused the drift), no autoscaleInfoProvider hack, no scale-margin juggling.
+function priceScale0() { try { return chart.priceScale('right', 0); } catch (e) { return null; } }
+function priceRange0() {
+  var ps = priceScale0(); if (!ps) return null;
+  var r = ps.getVisibleRange(); if (!r) return null;
+  var lo = Math.min(r.from, r.to), hi = Math.max(r.from, r.to);
+  return hi > lo ? { min: lo, max: hi } : null;
+}
+// Scale the price range around the CURRENT PRICE (last close) — that's where the candles live in
+// every timeframe/market, so pinning it keeps the bars in place and just stretches around them.
+// Anchoring on the range center ran crypto-daily to the bottom (center far below the candles in a
+// months-wide range); anchoring on the finger's grab point flung 4h/1h candles to the edge when
+// you grabbed away from them. Fall back to the range center only if the last price is off-screen.
+function priceZoomStep(dy) {
+  var ps = priceScale0(), r = priceRange0();
+  if (!ps || !r || !dy) return;
+  var factor = Math.exp(dy / 200);   // drag down (dy>0) → zoom OUT, up → zoom IN (bars taller)
+  var f = (lastClose != null && lastClose > r.min && lastClose < r.max) ? lastClose : (r.min + r.max) / 2;
+  var newMin = f - (f - r.min) * factor;
+  var newMax = f + (r.max - f) * factor;
+  if (newMax - newMin > 1e-9) { try { ps.setVisibleRange({ from: newMin, to: newMax }); } catch (e) {} }
+}
+function positionPriceGrip() {
+  if (!chart) return;
+  var grip = document.getElementById('priceGrip');
+  if (!grip) {
+    grip = document.createElement('div'); grip.id = 'priceGrip';
+    // Full-height right strip (top:0..bottom:0) so a price-axis drag is ALWAYS caught and zooms,
+    // never falling through to the body (which would pan the chart). Depending on paneSize(0)
+    // height was fragile — before layout / wide daily labels left part of the strip uncovered, so
+    // "scrolling up on the price moved the bars" (a fall-through body pan). z-index above the chart.
+    grip.style.cssText = 'position:absolute;top:0;bottom:0;right:0;z-index:10;touch-action:none;background:transparent;';
+    document.getElementById('container').appendChild(grip);
+    attachPriceGrip(grip);
+  }
+  var w = 0;
+  try { w = chart.priceScale('right', 0).width() || 0; } catch (e) {}
+  // A hair wider than the measured axis, generous minimum — covers the full price labels (daily
+  // shows wide numbers) even if width() is momentarily stale.
+  grip.style.width = Math.max(w + 8, 56) + 'px';
+}
+function attachPriceGrip(grip) {
+  var pid = null, lastY = 0, lastGripMs = 0;
+  grip.addEventListener('pointerdown', function (e) {
+    // Stale-latch recovery: an interrupted drag (tab switch / incoming call eats the pointerup)
+    // would leave pid set forever, dead-locking price zoom for the whole app session — the grip
+    // is the ONLY price-zoom input and this webview lives for the process lifetime. A pid with
+    // no recent activity is stale: adopt the new pointer instead of rejecting it.
+    if (pid !== null && performance.now() - lastGripMs < 1500) return;
+    pid = e.pointerId; lastY = e.clientY; lastGripMs = performance.now();
+    var ps = priceScale0(); if (ps) { try { ps.setAutoScale(false); } catch (err) {} }  // manual mode for setVisibleRange
+    try { grip.setPointerCapture(pid); } catch (err) {}
+    e.preventDefault();
+  });
+  grip.addEventListener('pointermove', function (e) {
+    if (e.pointerId !== pid) return;
+    var dy = e.clientY - lastY; lastY = e.clientY; lastGripMs = performance.now();
+    priceZoomStep(dy);
+    e.preventDefault();
+  });
+  function end(e) { if (e.pointerId === pid) pid = null; }
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
+  grip.addEventListener('lostpointercapture', end);   // belt-and-braces for eaten pointerups
+}
+
+// ⟲ reset (native SwiftUI chip → window.nativeReset): autoscale every pane, restore default bar
+// spacing + pane split, snap to the newest bar.
+window.nativeReset = function () { resetView(); };
+function resetView() {
+  if (!chart) return;
+  chart.panes().forEach(function (pane, i) { try { pane.priceScale('right').setAutoScale(true); } catch (e) {} });
+  applyStretch();
+  try { chart.timeScale().applyOptions({ barSpacing: 7, rightOffset: 8 }); } catch (e) {}
+  try { chart.timeScale().scrollToRealTime(); } catch (e) {}
+  requestAnimationFrame(function () { positionPriceGrip(); layoutPaneLabels(); });
+}
+
+// Update data on the existing series (no teardown → no flash; preserves the user's zoom).
+function update(p, fit) {
+  var data = (p.candles || []).map(function (c) { return { time: c.time, open: c.open, high: c.high, low: c.low, close: c.close }; })
+                              .sort(function (a, b) { return a.time - b.time; });
+  candle.setData(data);
+  if (!data.length) return;
+  lastClose = data[data.length - 1].close;   // price-zoom anchor (see priceZoomStep)
+  candle.applyOptions({ priceFormat: { type: 'price', precision: p.precision || 2, minMove: Math.pow(10, -(p.precision || 2)) } });
+  try { chart.priceScale('right', 0).applyOptions({ mode: p.logScale ? 1 : 0 }); } catch (e) {}
+
+  var lines = p.lines || [];
+  emaSeries.forEach(function (s, i) { s.setData(lines[i] ? clean(lines[i].points) : []); });
+  vol.setData(p.volume || []);
+
+  // EMA legend (top-left of the main pane) — only entries that actually have data.
+  var legend = document.getElementById('legend');
+  if (!legend) { legend = document.createElement('div'); legend.id = 'legend'; document.getElementById('container').appendChild(legend); }
+  legend.innerHTML = '';
+  lines.forEach(function (ln) {
+    if (!ln || !clean(ln.points).length) return;
+    var s = document.createElement('span'); s.style.color = ln.color; s.textContent = ln.label || ''; legend.appendChild(s);
+  });
+
+  // Watch-level price lines on the candle series (remove + re-add; no full-chart flash).
+  priceLines.forEach(function (pl) { try { candle.removePriceLine(pl); } catch (e) {} });
+  priceLines = [];
+  (p.priceLines || []).forEach(function (l) {
+    priceLines.push(candle.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: l.dashed ? 2 : 0, axisLabelVisible: true, title: l.title }));
+  });
+
+  // Sub-pane data + last-value readouts. Series share the chart's time scale, so shorter (warmup-
+  // trimmed) series need no padding — LWC aligns them by time natively.
+  (p.subpanels || []).forEach(function (spec, idx) {
+    var e = subs[idx]; if (!e) return;
+    if (e.hist && spec.histogram) e.hist.setData(clean(spec.histogram));
+    e.lastVals = [];
+    (spec.lines || []).forEach(function (ln, i) {
+      var pts = clean(ln.points);
+      if (e.lines[i]) e.lines[i].setData(pts);
+      e.lastVals.push({ color: ln.color, v: pts.length ? pts[pts.length - 1].value : null });
+    });
+  });
+
+  // Reset the view when the DATA IDENTITY (symbol|timeframe) changes so the previous instrument's
+  // manual price range / pan doesn't leave the new one off-screen. Re-enable autoscale + snap to
+  // newest. Also on a fresh structure build (fit=true).
+  var key = (p.symbol || '') + '|' + (p.tf || '');
+  var identityChanged = key !== dataKey; dataKey = key;
+  if (fit || identityChanged) {
+    chart.panes().forEach(function (pane) { try { pane.priceScale('right').setAutoScale(true); } catch (e) {} });
+    try { chart.timeScale().scrollToRealTime(); } catch (e) {}
+  }
+  requestAnimationFrame(function () { positionPriceGrip(); layoutPaneLabels(); });
+}
+
+function render(p) {
+  document.body.style.background = p.dark ? '#0b0e14' : '#ffffff';
+  var k = structKeyOf(p);
+  if (k !== structKey) { buildStructure(p); structKey = k; update(p, true); }
+  else { update(p, false); }
+}
+
+// Defer-while-gesturing with a STALENESS failsafe. A tab switch can eat a gesture's touchend
+// (fingersDown never returns to 0); without the failsafe that wedged setChart into deferring
+// every payload until the next physical touch — warmPush/symbol switches silently swallowed
+// (and Swift's lastJSON dedup never re-pushes). So: only defer while the gesture is demonstrably
+// LIVE (recent touch event), and schedule a flush that renders anyway once it goes stale.
+var flushTimer = null;
+function gestureLive() { return fingersDown > 0 && (performance.now() - lastTouchMs) < 1200; }
+function scheduleDeferredFlush() {
+  if (flushTimer) return;
+  flushTimer = setTimeout(function () {
+    flushTimer = null;
+    if (!deferredPayload) return;
+    if (gestureLive()) { scheduleDeferredFlush(); return; }   // genuinely mid-gesture — check again
+    fingersDown = 0;                                          // stale (eaten touchend) — recover
+    var p = deferredPayload; deferredPayload = null;
+    try { render(p); } catch (e) {}
+  }, 700);
+}
+window.setChart = function (payload) {
+  try {
+    var p = (typeof payload === 'string') ? JSON.parse(payload) : payload;
+    if (!(window.LightweightCharts && document.getElementById('chartRoot'))) { pending = p; return; }
+    // Never run setData() while a finger is actively down — a background refresh (crypto live-
+    // price ticks especially) would re-render mid-scroll and stutter the gesture. Stash the
+    // latest payload; it's applied on last-finger-up (endTouch) or by the staleness failsafe.
+    if (gestureLive()) { deferredPayload = p; scheduleDeferredFlush(); return; }
+    render(p);
+  } catch (e) { /* best-effort */ }
+};
+window.addEventListener('load', function () { if (pending) { render(pending); pending = null; } });
+window.addEventListener('resize', function () { requestAnimationFrame(function () { positionPriceGrip(); layoutPaneLabels(); }); });
+
+// ── Custom two-finger TIME zoom (pure DOM, faster than LWC's native pinch) ──────────────────
+// LWC's native pinch is off (see opts). We detect the two-finger spread here and drive the time
+// scale via setVisibleLogicalRange in the web process — no Swift↔JS round-trip, so it's smooth,
+// and it registers on the FIRST move (LWC's native pinch has a startup threshold that felt slow).
+// Euclidean finger distance → any-direction spread zooms (also makes it simulator-testable, unlike
+// LWC's horizontal-only native pinch). PINCH_AMP amplifies the rate — bump it to zoom faster.
+var PINCH_AMP = 1.7;
+function pinchZoomTime(centerX, scale) {
+  if (!chart || !(scale > 0) || scale === 1) return;
+  var ts = chart.timeScale();
+  var r = ts.getVisibleLogicalRange(); if (!r) return;
+  var w = 0; try { w = (chart.paneSize(0) || {}).width || 0; } catch (e) {}
+  if (w < 10) return;
+  var W = r.to - r.from; if (!(W > 0)) return;
+  var minW = Math.max(2, w / 60), maxW = w / 0.4;      // barSpacing clamp [~0.4px, ~60px]
+  var newW = Math.min(maxW, Math.max(minW, W / scale)); // spread (scale>1) → fewer bars = wider
+  var f = Math.min(1, Math.max(0, centerX / w));
+  var center = r.from + f * W, from = center - f * newW;
+  try { ts.setVisibleLogicalRange({ from: from, to: from + newW }); } catch (e) {}
+}
+
+// ── Unified touch-state machine (capture phase, never consumes LWC's touches) ───────────────
+// One block owns ALL container touch bookkeeping: fingersDown/lastTouchMs (setChart deferral),
+// the 2D-pan manual-mode switch (with tap restore), the two-finger pinch, third-finger handling,
+// deferred-payload flush, and post-gesture label re-layout.
+//
+// 2D-pan manual mode: LWC only lets a one-finger VERTICAL drag move the price while the MAIN
+// pane's price scale is MANUAL (autoScale:false). It starts auto-fit, and it must flip BEFORE LWC
+// handles the drag — so we flip on touchstart. But a bare TAP must not permanently kill autoscale
+// (live ticks would walk the candles out of a frozen viewport), so the flip is (a) limited to
+// touches starting in the MAIN pane body, and (b) UNDONE on finger-up if no movement happened.
+(function () {
+  var c = document.getElementById('container'), lastD = 0, active = false;
+  var startX = 0, startY = 0, moved = false;              // tap-vs-drag for the autoscale restore
+  var wasAutoScale = false, forcedManual = false;
+  function dist(t) { var dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY; return Math.sqrt(dx * dx + dy * dy); }
+  function midX(t) { return (t[0].clientX + t[1].clientX) / 2; }
+  function anyTouchOnGrip(e) {
+    var g = document.getElementById('priceGrip'); if (!g) return false;
+    for (var i = 0; i < e.touches.length; i++) if (e.touches[i].target === g) return true;
+    return false;
+  }
+  // While two fingers are down we OWN the gesture: turn LWC's touch-scroll off so it can't pan-
+  // fight the zoom, and back on when a finger lifts. We do NOT stopPropagation — that corrupted
+  // LWC's touch state (it saw a touchstart but no moves/end) and broke the one-finger pan
+  // afterwards. Toggling handleScroll keeps LWC's state clean; it simply does nothing meanwhile.
+  function setScroll(on) { try { chart.applyOptions({ handleScroll: { horzTouchDrag: on, vertTouchDrag: on } }); } catch (e) {} }
+  c.addEventListener('touchstart', function (e) {
+    fingersDown = e.touches.length; lastTouchMs = performance.now();
+    if (!chart) return;
+    if (e.touches.length === 1) {
+      // Stale-pinch recovery: a fresh single-finger gesture with `active` still set means a prior
+      // pinch was interrupted (e.g. a tab switch ate its touchend) and left LWC's scroll OFF —
+      // recover here, BEFORE the pan starts.
+      if (active) { active = false; lastD = 0; setScroll(true); }
+      moved = false; startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+      forcedManual = false;
+      // Manual mode ONLY for touches starting in the MAIN pane body: the grip zooms instead, and
+      // sub-pane / separator / time-axis touches must not freeze the main pane's autoscale.
+      if (!anyTouchOnGrip(e)) {
+        var paneH = 0; try { paneH = (chart.paneSize(0) || {}).height || 0; } catch (err) {}
+        if (paneH > 0 && startY <= paneH) {
+          var ps = priceScale0();
+          try {
+            wasAutoScale = !!(ps && ps.options().autoScale);
+            if (ps) { ps.setAutoScale(false); forcedManual = true; }
+          } catch (err) {}
+        }
+      }
+    } else if (e.touches.length === 2) {
+      // A second finger while the price grip is engaged belongs to the PRICE zoom — don't start
+      // a simultaneous time zoom (both axes lurching at once).
+      if (anyTouchOnGrip(e)) return;
+      lastD = dist(e.touches); active = true; setScroll(false);
+    } else if (active) {
+      // 3+ fingers (palm graze): keep pinch ownership + scroll OFF; pause zoom until back to two
+      // fingers, then re-seed (lastD=0 → next move seeds instead of jumping).
+      lastD = 0;
+    }
+  }, { passive: false, capture: true });
+  c.addEventListener('touchmove', function (e) {
+    lastTouchMs = performance.now();
+    if (!moved && e.touches.length >= 1) {
+      var mdx = e.touches[0].clientX - startX, mdy = e.touches[0].clientY - startY;
+      if (mdx * mdx + mdy * mdy > 64) moved = true;   // >8px = a drag, not a tap
+    }
+    if (e.touches.length !== 2 || !active) return;
+    var d = dist(e.touches);
+    if (!lastD) { lastD = d; return; }                // re-seed after a third-finger interlude
+    if (d > 0) pinchZoomTime(midX(e.touches), Math.pow(d / lastD, PINCH_AMP));
+    lastD = d;
+    e.preventDefault();
+  }, { passive: false, capture: true });
+  function endTouch(e) {
+    fingersDown = e.touches ? e.touches.length : 0; lastTouchMs = performance.now();
+    if (fingersDown < 2 && active) { active = false; lastD = 0; setScroll(true); }
+    else if (fingersDown === 2 && active) { lastD = 0; }   // 3→2 fingers: re-seed, don't jump
+    if (fingersDown === 0) {
+      // A bare tap must not leave price autoscale off — restore what the touchstart flipped.
+      if (forcedManual && !moved && wasAutoScale) {
+        var ps = priceScale0(); if (ps) { try { ps.setAutoScale(true); } catch (err) {} }
+      }
+      forcedManual = false;
+      // Apply any data update that was held back during the gesture.
+      if (deferredPayload) { var p = deferredPayload; deferredPayload = null; try { render(p); } catch (e2) {} }
+      // A separator drag may have resized panes — re-anchor the sub-pane labels.
+      requestAnimationFrame(layoutPaneLabels);
+    }
+  }
+  c.addEventListener('touchend', endTouch, { passive: false, capture: true });
+  c.addEventListener('touchcancel', endTouch, { passive: false, capture: true });
+})();
+</script>
+</body>
+</html>

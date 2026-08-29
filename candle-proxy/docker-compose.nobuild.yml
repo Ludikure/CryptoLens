@@ -1,0 +1,36 @@
+# Build-free variant for the TrueNAS "Custom App → Install via YAML" route (Electric Eel 24.10+).
+# No Dockerfile/build — uses the stock node image and mounts the one script. You only need
+# server.js on a dataset. Routes all Binance traffic through NordVPN (gluetun); your home/US IP
+# is Binance-blocked so this is required. The cloudflared app (separate) handles inbound.
+#
+# BEFORE pasting: replace /mnt/POOL/apps/candle-proxy below with the REAL dataset path where you
+# put server.js, and fill the three values (or set them in the Custom App's env section):
+#   PROXY_SECRET   = openssl rand -hex 32   (same value you'll give the Worker)
+#   NORD_WG_KEY    = your NordLynx (WireGuard) private key  (Nord dashboard → Manual setup)
+#   NORD_COUNTRY   = a region that works on your phone, e.g. Germany
+services:
+  vpn:
+    image: qmcgaw/gluetun
+    container_name: marketscope-vpn
+    cap_add: [NET_ADMIN]
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    environment:
+      - VPN_SERVICE_PROVIDER=nordvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=PUT_NORD_WG_KEY_HERE
+      - SERVER_COUNTRIES=Germany
+    ports: ["8787:8787"]
+    restart: unless-stopped
+  candle-proxy:
+    image: node:20-alpine
+    container_name: marketscope-candle-proxy
+    network_mode: "service:vpn"
+    volumes:
+      - /mnt/POOL/apps/candle-proxy/server.js:/app/server.js:ro
+    working_dir: /app
+    command: ["node", "server.js"]
+    environment:
+      - PORT=8787
+      - PROXY_SECRET=PUT_PROXY_SECRET_HERE
+    depends_on: [vpn]
+    restart: unless-stopped

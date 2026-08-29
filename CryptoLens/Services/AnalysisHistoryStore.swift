@@ -6,10 +6,7 @@ enum AnalysisHistoryStore {
     private static let ioQueue = DispatchQueue(label: "com.ludikure.CryptoLens.historyIO")
 
     private static var historyDir: URL {
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("analysis_history", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        PersistentStore.directory(named: "analysis_history")
     }
 
     /// Save an analysis result to history. Only call when AI analysis was generated.
@@ -110,5 +107,43 @@ enum AnalysisHistoryStore {
               let history = try? JSONDecoder().decode([AnalysisResult].self, from: data)
         else { return [] }
         return history
+    }
+}
+
+
+/// Where the app keeps data it CANNOT regenerate.
+///
+/// Analyses and their history used to live in `.cachesDirectory` — which iOS purges whenever the
+/// device comes under storage pressure, with no warning and no way to opt out. That is correct for
+/// something re-downloadable and wrong for these: an LLM analysis cost real money, describes a bar
+/// that has already passed, and can never be reproduced. Losing it is the "my latest analysis
+/// disappeared after a while" report. Application Support is the documented home for exactly this
+/// (app-owned data the user would miss, not user-facing documents).
+///
+/// Existing files are MOVED on first access, so nothing that survived the last purge is lost.
+enum PersistentStore {
+    static func directory(named name: String) -> URL {
+        let fm = FileManager.default
+        let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent(name, isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        migrateFromCachesIfNeeded(name: name, into: dir, fm: fm)
+        return dir
+    }
+
+    /// One-shot: relocate anything the system hasn't already evicted. Keyed per directory so it
+    /// runs once, not on every access.
+    private static func migrateFromCachesIfNeeded(name: String, into dir: URL, fm: FileManager) {
+        let flag = "migrated_from_caches_\(name)"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        UserDefaults.standard.set(true, forKey: flag)
+        guard let old = fm.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent(name, isDirectory: true),
+              let files = try? fm.contentsOfDirectory(at: old, includingPropertiesForKeys: nil) else { return }
+        for f in files {
+            let dest = dir.appendingPathComponent(f.lastPathComponent)
+            if !fm.fileExists(atPath: dest.path) { try? fm.moveItem(at: f, to: dest) }
+        }
+        try? fm.removeItem(at: old)
     }
 }

@@ -102,6 +102,35 @@ table.indicators td:last-child { border-right: none; }
 .analyze-bar .run:disabled { opacity: 0.6; cursor: default; }
 
 .analysis { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.corr-matrix { border-collapse: collapse; font-size: 13px; margin-top: 4px; }
+.corr-matrix th, .corr-matrix td { padding: 5px 9px; text-align: center; border: 1px solid var(--line); }
+.corr-matrix th { color: var(--muted); font-weight: 500; }
+.risk-states { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.rs-chip { font-size: 11px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); cursor: help; }
+.rs-chip.rs-high { background: rgba(229,72,77,0.15); color: #e5484d; border-color: rgba(229,72,77,0.4); }
+.rs-chip.rs-medium { background: rgba(245,166,35,0.12); color: #f5a623; border-color: rgba(245,166,35,0.35); }
+.rs-chip.rs-low { color: var(--muted); }
+.risk-calc { padding: 4px 2px; }
+.risk-calc h3 { margin: 8px 0 12px; }
+.risk-inputs { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.risk-inputs label { display: flex; flex-direction: column; font-size: 11px; color: var(--muted); gap: 3px; }
+.risk-inputs input, .risk-inputs select { width: 92px; padding: 6px 8px; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; }
+.risk-inputs button { padding: 7px 16px; }
+.risk-err { color: #e5484d; padding: 8px 0; }
+.risk-out { display: flex; flex-direction: column; gap: 1px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.risk-row { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px; background: rgba(127,127,127,0.04); }
+.risk-row > span:first-child { width: 130px; color: var(--muted); font-size: 13px; }
+.risk-row b { font-size: 15px; }
+.risk-row b.bad { color: #e5484d; } .risk-row b.warn { color: #f5a623; } .risk-row b.good { color: #30a46c; }
+.risk-row .muted { font-size: 12px; color: var(--muted); }
+.risk-note { font-size: 12px; margin-top: 10px; }
+.vol-range { padding: 10px 12px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(127,127,127,0.05); }
+.vol-range-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 3px; }
+.vol-range-bands { font-size: 15px; }
+.vol-range-bands b { font-size: 16px; }
+.vol-range-bands .muted { color: var(--muted); font-size: 12px; }
+.vol-range-sep { margin: 0 8px; color: var(--muted); }
+.vol-sigma { margin-left: 10px; }
 .ml-card { display: flex; gap: 18px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .ml-card div { display: flex; flex-direction: column; }
 .ml-card span { color: var(--muted); font-size: 12px; }

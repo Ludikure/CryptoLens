@@ -39,7 +39,7 @@ struct DerivativesCardView: View {
                 ForEach(Array(snapshot.signals.enumerated()), id: \.offset) { _, signal in
                     HStack(alignment: .top, spacing: 6) {
                         Circle()
-                            .fill(signal.strength == "Strong" ? Color.red : Color.orange)
+                            .fill(signal.strength == "Strong" ? Theme.bearish : Theme.caution)
                             .frame(width: 6, height: 6)
                             .padding(.top, 5)
                         Text(signal.message)
@@ -152,7 +152,7 @@ struct DerivativesCardView: View {
         .foregroundStyle(.white)
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(snapshot.squeezeRisk.level == "HIGH" ? Color.red.opacity(0.85) : Color.orange.opacity(0.85))
+        .background(snapshot.squeezeRisk.level == "HIGH" ? Theme.bearish.opacity(0.85) : Theme.caution.opacity(0.85))
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
