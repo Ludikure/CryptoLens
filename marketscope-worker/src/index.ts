@@ -10,6 +10,7 @@ import { computeFullIndicators } from './indicators-full';
 import { buildUserPrompt, systemPrompt, parseSetups, type PromptIndicator, type PromptState } from './prompt';
 import { registerTrackedSetups, resolveTrackedSetups, readActiveSetupsForPrompt, readTrackedSetups, voidInvalidGeometrySetups } from './outcome-tracking';
 import { logOpportunities, resolveOpportunityLog, createJournalEntry, updateJournalEntry, deleteJournalEntry, computeAttribution } from './journal';
+import { paperStats } from './paper/sim';
 import { forecastVol, bandMultipliers } from './vol';
 import { positionRisk } from './risk-engine';
 import { computeRiskStates } from './risk-states';
@@ -820,6 +821,115 @@ async function fetchLiveDerivatives(symbol: string): Promise<any> {
   }
   return { fundingRate, openInterest, topTraderLongPct, takerBuyVol, takerSellVol, takerRatio, longPct, markPrice, indexPrice, basisPct, largeBuyVol, largeSellVol, largeBuyCount, largeSellCount };
 }
+
+/** Thrown when EVERY asset failed with an error — a systemic outage, not a quiet market. */
+export class OpportunityPipelineError extends Error {
+  constructor(public detail: Array<{ asset: string; reasons: string[] }>) {
+    super('opportunity pipeline failed for every asset');
+  }
+}
+
+/**
+ * The scanner, as a callable. Extracted from the `/opportunities` handler on 2026-08-28 so the
+ * paper trader runs EXACTLY the code the app runs — same envelope precheck, same 800-bar vol
+ * window, same liquidity, same allocation — rather than a second copy that drifts. The handler
+ * calls this and serialises; nothing about its behaviour changed.
+ */
+export async function buildOpportunityBook(env: Env, args: {
+  symbols: string[]; equity: number; structure: typeof DEFAULT_STRUCTURE; limits: typeof DEFAULT_LIMITS; nowMs: number;
+}) {
+  const { symbols, equity, structure, limits, nowMs } = args;
+  const preds = JSON.parse((await env.ALERTS.get('ml_preds:all')) ?? '{}');
+  const assets: AssetInput[] = [];
+  const closesByAsset: Record<string, number[]> = {};
+  const unavailable: Array<{ asset: string; reasons: string[] }> = [];
+
+  for (const sym of symbols) {
+    const p = preds[sym];
+    if (!p) { unavailable.push({ asset: sym, reasons: ['no cached prediction'] }); continue; }
+    try {
+      const isC = sym.endsWith('USDT');
+      if (!isC) { unavailable.push({ asset: sym, reasons: ['vol model is crypto-only'] }); continue; }
+
+      // THE BOOK MUST RESPECT THE SAME GUARDS THE ANALYSIS USES.
+      //
+      // Without this the two halves of the Now tab contradict each other: the book offered an
+      // ETH SHORT while the AI on the same screen said do not enter. The AI was applying the
+      // Conviction Envelope — chase into an extended trend, kill conditions, macro IMMINENT,
+      // mixed biases below the calibrated gate — and the book was applying none of them.
+      //
+      // The envelope encodes validated guards; an EV number does not override them. So a
+      // symbol the envelope would auto-FLAT is dropped here, carrying the envelope's own
+      // reason so the card can say WHY rather than silently omitting it.
+      const tfAll = await fetchAllTimeframesCached(env, sym, true);
+      const flatReasons = await envelopePrecheck(
+        env, sym, true, typeof p.probability === 'number' ? p.probability : 0,
+        tfAll.daily, tfAll.fourH as any, tfAll.oneH as any, []);
+      if (flatReasons && flatReasons.length) {
+        unavailable.push({ asset: sym, reasons: [`analysis says stand aside: ${flatReasons.join(', ')}`] });
+        continue;
+      }
+
+      // 800 bars, NOT the shared 300-bar cache. `forecastVol` needs comp_bars['30d'] = 720
+      // one-hour bars for its 30-day component and returns null if ANY component is short --
+      // with 300 bars every asset silently reported "no volatility forecast".
+      const oneH = await fetchBinanceKlines(sym, '1h', 800);
+      const closes = (oneH ?? []).map(k => k.close).filter(x => x > 0);
+      if (closes.length < VOL_MIN_1H_BARS) {
+        unavailable.push({ asset: sym,
+          reasons: [`need ${VOL_MIN_1H_BARS} 1h bars for the 30d vol component, got ${closes.length}`] });
+        continue;
+      }
+      const price = closes[closes.length - 1];
+      const atrPct = p.features?.atrPercent;
+      if (!(atrPct > 0)) { unavailable.push({ asset: sym, reasons: ['no ATR in cached features'] }); continue; }
+      closesByAsset[sym] = closes;
+      assets.push({
+        asset: sym, closes1h: closes, price, atr: (atrPct / 100) * price,
+        mlWin: typeof p.probability === 'number' ? p.probability : null,
+        // The 110 serving features the excursion model reads. Without them the pipeline
+        // falls back to measured base rates, whose EV is negative -- i.e. no trade.
+        features: p.features && typeof p.features === 'object' ? p.features : undefined,
+        // null defers to the crash model, which the service runs from these same features.
+        // It is NOT "no overlay" — that was true before 2026-08-24 and the comment outlived it.
+        crashProbability: null,
+        // REAL 24h traded notional from the last 24 hourly bars, not a flat 50M placeholder.
+        // With a constant, the liquidity cap was the same generous number for BTC and for a
+        // thin alt, so it could never bind where it actually matters.
+        liquidityUsd24h: oneH.slice(-24).reduce((sum, k) => sum + k.close * k.volume, 0),
+        isCrypto: isC,
+        dataTimestamp: p.timestamp ?? nowMs,
+      });
+    } catch (e) {
+      unavailable.push({ asset: sym, reasons: [String(e)] });
+    }
+  }
+
+  // A SYSTEMIC failure must not look like "nothing qualifies". The first live call to this
+  // endpoint returned 200 with an empty book while every asset had thrown ReferenceError --
+  // indistinguishable, from the outside, from a genuinely quiet market. If nothing was
+  // scoreable AND every failure looks like a thrown error, say so loudly instead.
+  const threw = unavailable.filter(u => u.reasons.some(r => /Error|error:/i.test(r)));
+  if (assets.length === 0 && threw.length > 0 && threw.length === unavailable.length) {
+    console.error(`[opportunities] SYSTEMIC failure: all ${threw.length} assets threw`, threw[0].reasons);
+    throw new OpportunityPipelineError(threw.slice(0, 3));
+  }
+
+  // REAL pairwise correlations from the 1h returns already fetched. Passing `{}` here made
+  // `effectiveBets` compute n/(1+(n-1)*0) = n, so a book of five correlated crypto positions
+  // reported "5 independent bets" — the precise opposite of what that number exists to say
+  // (T7 measured crypto rho-bar at 0.62, which makes five positions ~1.5 real bets). It also
+  // made the correlated-exposure limit unable to bind, since every lookup returned 0.
+  const correlations = pairwiseCorrelations(closesByAsset);
+
+  const result = computeOpportunities(
+    assets, { equity, openNotionalByAsset: {}, correlations }, nowMs, structure, limits);
+
+
+  return { result, assets, unavailable, correlations, preds };
+}
+
+function safeParse(v: any): any { try { return typeof v === 'string' ? JSON.parse(v) : v; } catch { return v; } }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -2378,6 +2488,51 @@ export default {
       return json(rows.results);
     }
 
+    // === Paper trader (2026-08-28): MarketScope signal → simulated order → real Coinbase book ===
+    // Read-only over public market data; the process lives in server/paper-trader.ts and publishes
+    // its state on a global so this portable handler needs no Node import. Positions and events
+    // are in D1 (paper_positions / paper_events).
+    if (path === '/paper' && request.method === 'GET') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      const g = (globalThis as any).__marketscopePaper;
+      try {
+        const enabled = ((await env.ALERTS.get('paper:enabled')) ?? '1') === '1';
+        const halt = await env.ALERTS.get('paper:halt');
+        let closed: any[] = [], stats: any = null, startEquity = 25_000;
+        try {
+          const r = await env.DB.prepare("SELECT data FROM paper_positions WHERE status = 'closed' ORDER BY exit_at DESC").all();
+          closed = ((r.results || []) as any[]).map(x => JSON.parse(x.data));
+          startEquity = g?.startEquity ?? startEquity;
+          stats = paperStats(closed, startEquity);
+        } catch { /* table not created yet */ }
+        const events = await env.DB.prepare('SELECT at, kind, symbol, detail FROM paper_events ORDER BY at DESC LIMIT 50').all().catch(() => ({ results: [] }));
+        return json({
+          running: !!g, enabled, halted: halt ?? null,
+          status: g?.status?.() ?? null,
+          symbols: g?.symbols ?? null, risk: g?.risk ?? null, startEquity,
+          equity: stats ? stats.equity : startEquity,
+          open: g?.open?.() ?? [],
+          books: g?.books?.() ?? {},
+          closed: closed.slice(0, 100),
+          stats,
+          backtestReference: { meanR: 0.22, note: 'walk-forward backtest on these symbols, max 3 open, 2021-2026H1 — the reference the paper line is drawn beside, not a promise' },
+          events: ((events as any).results || []).map((e: any) => ({ ...e, detail: safeParse(e.detail) })),
+        });
+      } catch (e) { return json({ error: String(e) }, 500); }
+    }
+    if (path === '/paper' && request.method === 'POST') {
+      if (!deviceId) return json({ error: 'Missing device ID' }, 400);
+      try {
+        const b = await request.json() as any;
+        const g = (globalThis as any).__marketscopePaper;
+        if (typeof b.enabled === 'boolean') await env.ALERTS.put('paper:enabled', b.enabled ? '1' : '0');
+        if (b.clearHalt === true) await env.ALERTS.delete('paper:halt');
+        if (typeof b.closeId === 'string' && g?.closeManual) await g.closeManual(b.closeId);
+        if (b.runNow === true && g?.runSignalsNow) void g.runSignalsNow();
+        return json({ ok: true, enabled: ((await env.ALERTS.get('paper:enabled')) ?? '1') === '1' });
+      } catch { return json({ error: 'Invalid request' }, 400); }
+    }
+
     // === Journal + attribution (Phase 3, 2026-08-28) ===
     // What the user DID, set against what the system PROPOSED. Definitions are pre-declared in
     // docs/research/journal-attribution.md; the verdict rule renders nothing until the bar is met.
@@ -2725,91 +2880,8 @@ export default {
           ? { ...DEFAULT_LIMITS, id: `${DEFAULT_LIMITS.id}|risk${riskRaw}`, maxRiskPerTrade: riskRaw }
           : DEFAULT_LIMITS;
 
-        const preds = JSON.parse((await env.ALERTS.get('ml_preds:all')) ?? '{}');
-        const assets: AssetInput[] = [];
-        const closesByAsset: Record<string, number[]> = {};
-        const unavailable: Array<{ asset: string; reasons: string[] }> = [];
-
-        for (const sym of symbols) {
-          const p = preds[sym];
-          if (!p) { unavailable.push({ asset: sym, reasons: ['no cached prediction'] }); continue; }
-          try {
-            const isC = sym.endsWith('USDT');
-            if (!isC) { unavailable.push({ asset: sym, reasons: ['vol model is crypto-only'] }); continue; }
-
-            // THE BOOK MUST RESPECT THE SAME GUARDS THE ANALYSIS USES.
-            //
-            // Without this the two halves of the Now tab contradict each other: the book offered an
-            // ETH SHORT while the AI on the same screen said do not enter. The AI was applying the
-            // Conviction Envelope — chase into an extended trend, kill conditions, macro IMMINENT,
-            // mixed biases below the calibrated gate — and the book was applying none of them.
-            //
-            // The envelope encodes validated guards; an EV number does not override them. So a
-            // symbol the envelope would auto-FLAT is dropped here, carrying the envelope's own
-            // reason so the card can say WHY rather than silently omitting it.
-            const tfAll = await fetchAllTimeframesCached(env, sym, true);
-            const flatReasons = await envelopePrecheck(
-              env, sym, true, typeof p.probability === 'number' ? p.probability : 0,
-              tfAll.daily, tfAll.fourH as any, tfAll.oneH as any, []);
-            if (flatReasons && flatReasons.length) {
-              unavailable.push({ asset: sym, reasons: [`analysis says stand aside: ${flatReasons.join(', ')}`] });
-              continue;
-            }
-
-            // 800 bars, NOT the shared 300-bar cache. `forecastVol` needs comp_bars['30d'] = 720
-            // one-hour bars for its 30-day component and returns null if ANY component is short --
-            // with 300 bars every asset silently reported "no volatility forecast".
-            const oneH = await fetchBinanceKlines(sym, '1h', 800);
-            const closes = (oneH ?? []).map(k => k.close).filter(x => x > 0);
-            if (closes.length < VOL_MIN_1H_BARS) {
-              unavailable.push({ asset: sym,
-                reasons: [`need ${VOL_MIN_1H_BARS} 1h bars for the 30d vol component, got ${closes.length}`] });
-              continue;
-            }
-            const price = closes[closes.length - 1];
-            const atrPct = p.features?.atrPercent;
-            if (!(atrPct > 0)) { unavailable.push({ asset: sym, reasons: ['no ATR in cached features'] }); continue; }
-            closesByAsset[sym] = closes;
-            assets.push({
-              asset: sym, closes1h: closes, price, atr: (atrPct / 100) * price,
-              mlWin: typeof p.probability === 'number' ? p.probability : null,
-              // The 110 serving features the excursion model reads. Without them the pipeline
-              // falls back to measured base rates, whose EV is negative -- i.e. no trade.
-              features: p.features && typeof p.features === 'object' ? p.features : undefined,
-              // null defers to the crash model, which the service runs from these same features.
-              // It is NOT "no overlay" — that was true before 2026-08-24 and the comment outlived it.
-              crashProbability: null,
-              // REAL 24h traded notional from the last 24 hourly bars, not a flat 50M placeholder.
-              // With a constant, the liquidity cap was the same generous number for BTC and for a
-              // thin alt, so it could never bind where it actually matters.
-              liquidityUsd24h: oneH.slice(-24).reduce((sum, k) => sum + k.close * k.volume, 0),
-              isCrypto: isC,
-              dataTimestamp: p.timestamp ?? nowMs,
-            });
-          } catch (e) {
-            unavailable.push({ asset: sym, reasons: [String(e)] });
-          }
-        }
-
-        // A SYSTEMIC failure must not look like "nothing qualifies". The first live call to this
-        // endpoint returned 200 with an empty book while every asset had thrown ReferenceError --
-        // indistinguishable, from the outside, from a genuinely quiet market. If nothing was
-        // scoreable AND every failure looks like a thrown error, say so loudly instead.
-        const threw = unavailable.filter(u => u.reasons.some(r => /Error|error:/i.test(r)));
-        if (assets.length === 0 && threw.length > 0 && threw.length === unavailable.length) {
-          console.error(`[opportunities] SYSTEMIC failure: all ${threw.length} assets threw`, threw[0].reasons);
-          return json({ error: 'opportunity pipeline failed for every asset', detail: threw.slice(0, 3) }, 500);
-        }
-
-        // REAL pairwise correlations from the 1h returns already fetched. Passing `{}` here made
-        // `effectiveBets` compute n/(1+(n-1)*0) = n, so a book of five correlated crypto positions
-        // reported "5 independent bets" — the precise opposite of what that number exists to say
-        // (T7 measured crypto rho-bar at 0.62, which makes five positions ~1.5 real bets). It also
-        // made the correlated-exposure limit unable to bind, since every lookup returned 0.
-        const correlations = pairwiseCorrelations(closesByAsset);
-
-        const result = computeOpportunities(
-          assets, { equity, openNotionalByAsset: {}, correlations }, nowMs, structure, limits);
+        const { result, assets, unavailable, correlations, preds } =
+          await buildOpportunityBook(env, { symbols, equity, structure, limits, nowMs });
 
         // THE CLOSEST MISS IS THE MOST INSTRUCTIVE ROW ON A QUIET DAY, and it was being thrown away
         // by the display filter below. "Nothing qualifies" and "the best candidate missed the floor
@@ -2950,6 +3022,7 @@ export default {
           skipped: [...result.skipped, ...unavailable],
         });
       } catch (e) {
+        if (e instanceof OpportunityPipelineError) return json({ error: e.message, detail: e.detail }, 500);
         return json({ error: String(e) }, 500);
       }
     }
@@ -3151,6 +3224,23 @@ type APNsResult = 'sent' | 'unregistered' | 'failed';
 const APNS_SANDBOX = 'https://api.sandbox.push.apple.com';
 const APNS_PROD = 'https://api.push.apple.com';
 const APNS_ENV_TTL_SEC = 90 * 24 * 60 * 60;
+
+/**
+ * Push one message to every registered device with a token and recent activity. For server-side
+ * processes (the paper trader) that have no device context of their own. Best-effort.
+ */
+export async function pushToActiveDevices(env: Env, title: string, body: string): Promise<number> {
+  let sent = 0;
+  try {
+    const rows = await env.DB.prepare(
+      "SELECT DISTINCT push_token FROM devices WHERE push_token IS NOT NULL AND push_token <> '' AND last_seen >= datetime('now', '-30 days')"
+    ).all();
+    for (const r of (rows.results || []) as any[]) {
+      try { const res = await sendAPNs(env, r.push_token, title, body); if ((res as any)?.ok !== false) sent++; } catch { /* next */ }
+    }
+  } catch (e) { console.log(`[push] broadcast failed: ${e}`); }
+  return sent;
+}
 
 async function sendAPNs(env: Env, deviceToken: string, title: string, body: string): Promise<APNsResult> {
   // Endpoint order. Historically this was ALWAYS sandbox-then-production, so every push to a
