@@ -118,9 +118,7 @@ SYSTEM = ("You are the final risk check on a systematic crypto SHORT. A model ha
           "dossier: symbol, date and absolute price are withheld so you cannot recall what happened. "
           "Answer in JSON only: {\"decision\":\"TAKE\"|\"SKIP\",\"confidence\":0-100,\"reason\":\"<=12 words\"}.")
 
-TAIL = ("\n\nPROPOSED TRADE: SHORT at the current price. Stop 1 ATR above entry. Target 5 ATR below entry "
-        "(5R). Time limit 72 hours. Historically about 1 in 10 of these reach the target, about 6 in 10 stop "
-        "out at -1R, and about 1 in 4 time out near +1.5R. Decide: TAKE or SKIP.")
+TAIL = ('\n\nPROPOSED TRADE: SHORT at the current price. Stop 1 ATR above entry. Target 5 ATR below entry (5R). Time limit 72 hours. Historically about 1 in 10 of these reach the target, about 6 in 10 stop out at -1R, and about 1 in 4 time out near +1.5R - which nets to roughly +0.2R per trade after fees, so the structure itself is profitable on average. The question is not whether this structure pays; it is whether THIS setup looks better or worse than the typical one. You are expected to TAKE a meaningful share of setups; skipping everything is abstention, not selection. Decide: TAKE or SKIP.')
 
 
 def dossier(r, closes):

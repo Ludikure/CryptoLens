@@ -64,10 +64,14 @@ context — identical fields to `build_blinded_rich.py`) followed by:
 
 > PROPOSED TRADE: SHORT at the current price. Stop 1 ATR above entry. Target 5 ATR below entry
 > (5R). Time limit 72 hours. Historically about 1 in 10 of these reach the target, about 6 in 10
-> stop out at −1R, and about 1 in 4 time out near +1.5R. Decide: TAKE or SKIP.
+> stop out at −1R, and about 1 in 4 time out near +1.5R — which nets to roughly +0.2R per trade
+> after fees, so the structure itself is profitable on average. The question is not whether this
+> structure pays; it is whether THIS setup looks better or worse than the typical one. You are
+> expected to TAKE a meaningful share of setups; skipping everything is abstention, not selection.
+> Decide: TAKE or SKIP.
 
-*(Base-rate sentence corrected to the measured proposal population before any call — amendment 1
-below. The original read "1 in 13 … most stop out … 1 in 5 near +1.4R".)*
+*(Amended twice before the run — amendments 1 and 4 below. The original read "1 in 13 … most
+stop out … 1 in 5 near +1.4R. Decide: TAKE or SKIP.")*
 
 The base-rate sentence is deliberate: a judge that does not know the payoff shape will skip
 everything, and "skips everything" is not a selection strategy, it is abstention.
@@ -134,6 +138,17 @@ Three corrections, each forced by looking at the sample rather than by any resul
    most of 2021H2 on the first build (1,825 → 1,472 dossiers). The hourly Vision klines (2020-10
    onward) are resampled to 4H instead. And `fundingRateRaw` is already in percent in the dataset
    (median 0.01); the dossier had multiplied it by 100 again, printing "+50.000%".
+
+4. **The base-rate sentence failed at its one job, on a 3-call pilot.** Sonnet skipped 3 of 3
+   with the identical reason *"poor EV: low hit rate"* — it read "1 in 10 reach the target" as a
+   losing trade without multiplying through the 5R payoff. That is the skip-everything failure the
+   sentence was written to prevent. The sentence now states the net EV outright (+0.2R after fees,
+   from the measured population) and says explicitly that skipping everything is abstention, not
+   selection. **This was changed after seeing three pilot outputs and is recorded as such.** It is
+   a fix to the instrument — it changes whether the judge selects at all, not which rows it
+   selects — and the pilot rows are excluded from the run. The DeepSeek pilot returned 5 of 5
+   unparseable: v4-pro is a reasoning model and spent the 200-token cap thinking. Thinking is
+   disabled for both judges (Sonnet's was already off), so both answer without deliberation.
 
 ## RESULT
 
